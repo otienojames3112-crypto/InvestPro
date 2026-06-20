@@ -1,6 +1,7 @@
 import { useAuth } from "@/_core/hooks/useAuth";
 import { getLoginUrl } from "@/const";
 import { cn } from "@/lib/utils";
+import { useDepositDrawer } from "@/contexts/DepositDrawerContext";
 import {
   BarChart3,
   BookOpen,
@@ -20,7 +21,6 @@ import { Skeleton } from "./ui/skeleton";
 
 const navItems = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/deposits", label: "Record Deposits", icon: ArrowDownCircle },
   { href: "/ledger", label: "Month Ledger", icon: BookOpen },
   { href: "/contributions", label: "Contributions", icon: TrendingUp },
   { href: "/securities", label: "CBK Securities", icon: Landmark },
@@ -31,6 +31,7 @@ const navItems = [
 export function AppShell({ children }: { children: React.ReactNode }) {
   const { user, loading, isAuthenticated, logout } = useAuth();
   const [location] = useLocation();
+  const { openDrawer } = useDepositDrawer();
 
   if (loading) {
     return (
@@ -108,6 +109,24 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             Navigation
           </p>
           <ul className="space-y-0.5">
+            {/* Record Deposits — opens drawer, not a page */}
+            <li>
+              <button
+                onClick={openDrawer}
+                className={cn(
+                  "w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-150 cursor-pointer group",
+                  "text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+                )}
+              >
+                <ArrowDownCircle
+                  className="w-4 h-4 shrink-0 transition-colors text-muted-foreground group-hover:text-sidebar-accent-foreground"
+                />
+                <span className="flex-1 text-left">Record Deposits</span>
+                <span className="text-xs bg-primary/20 text-primary px-1.5 py-0.5 rounded font-medium">Live</span>
+              </button>
+            </li>
+
+            {/* Regular nav items */}
             {navItems.map(({ href, label, icon: Icon }) => {
               const isActive = location === href;
               return (

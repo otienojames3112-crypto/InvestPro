@@ -45,6 +45,7 @@ import {
   Info,
 } from "lucide-react";
 import { Link } from "wouter";
+import { useDepositDrawer } from "@/contexts/DepositDrawerContext";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 
@@ -141,6 +142,7 @@ export default function Dashboard() {
     onError: () => toast.error("Failed to update target"),
   });
 
+  const { openDrawer } = useDepositDrawer();
   const [targetDialogOpen, setTargetDialogOpen] = useState(false);
   const [targetInput, setTargetInput] = useState("");
 
@@ -301,10 +303,36 @@ export default function Dashboard() {
               <span>{formatKESCompact(targetAmount * 0.75)}</span>
               <span>{formatKESCompact(targetAmount)}</span>
             </div>
-            <p className="text-xs text-muted-foreground mt-2">
-              The bar shows how far your projected final value ({formatKESCompact(projectedFinalValue)}) reaches toward your {formatKES(targetAmount)} goal.
-              A full bar means the plan hits the target.
-            </p>
+            {/* Surplus / shortfall callout */}
+            {!projLoading && projectedFinalValue > 0 && (
+              <div className={`mt-3 rounded-lg px-4 py-3 text-xs flex items-start gap-2 ${
+                willHitTarget
+                  ? "bg-emerald-500/10 border border-emerald-500/20 text-emerald-300"
+                  : "bg-red-500/10 border border-red-500/20 text-red-300"
+              }`}>
+                {willHitTarget ? (
+                  <CheckCircle2 className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                ) : (
+                  <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                )}
+                <span>
+                  {willHitTarget ? (
+                    <>
+                      <strong>Your plan overshoots the target by {formatKES(surplusOrShortfall)}.</strong>{" "}
+                      This is because your contribution step-ups and compound interest naturally produce more than your {formatKES(targetAmount)} goal.
+                      The extra {formatKES(surplusOrShortfall)} is a buffer — it protects you if rates fall or you miss a few contributions.
+                      The bucket balances above show where all {formatKES(projectedFinalValue)} will be sitting at Year 10.
+                    </>
+                  ) : (
+                    <>
+                      <strong>Your plan is {formatKES(Math.abs(surplusOrShortfall))} short of the target.</strong>{" "}
+                      Consider increasing your step-up amount or adjusting your goal. Use the{" "}
+                      <Link href="/scenarios"><span className="underline cursor-pointer">Scenarios</span></Link> page to find the right step-up.
+                    </>
+                  )}
+                </span>
+              </div>
+            )}
           </CardContent>
         </Card>
 
@@ -525,11 +553,9 @@ export default function Dashboard() {
                   These figures are based on the deposits you have actually recorded. They reflect real money, not projections.
                 </p>
               </div>
-              <Link href="/deposits">
-                <span className="text-xs text-primary hover:underline flex items-center gap-1 cursor-pointer">
-                  Record a deposit <ArrowRight className="w-3 h-3" />
-                </span>
-              </Link>
+              <button onClick={openDrawer} className="text-xs text-primary hover:underline flex items-center gap-1">
+                Record a deposit <ArrowRight className="w-3 h-3" />
+              </button>
             </div>
           </CardHeader>
           <CardContent className="p-4 pt-0">
@@ -538,9 +564,7 @@ export default function Dashboard() {
                 <PiggyBank className="w-5 h-5 shrink-0 opacity-50" />
                 <span>
                   No deposits recorded yet.{" "}
-                  <Link href="/deposits">
-                    <span className="text-primary underline cursor-pointer">Record your first deposit</span>
-                  </Link>{" "}
+                  <button onClick={openDrawer} className="text-primary underline">Record your first deposit</button>{" "}
                   to see your live actuals here.
                 </span>
               </div>

@@ -116,3 +116,8 @@
 - [x] Fix: second target-change attempt fails with "failed to change target amount" error
 - [x] Fix: bucket balance cards (MMF/T-Bills/IFB/FXD) do not update when target changes — now show % of target so they visually respond to goal changes
 - [x] Full end-to-end system test of every page and feature before publish — 52 tests pass, 0 TS errors, all 7 pages render correctly
+
+## Round 4 Fixes
+- [ ] Clarify projected total vs target: show surplus/deficit clearly; explain that compounding overshoot is expected and desirable
+- [ ] When target changes, projected amounts should reflect the new target context (progress bar, milestone status, surplus/deficit all sync)
+- [ ] Move Record Deposits from a separate /deposits route to an inline sidebar page (same pattern as Dashboard, Ledger, etc.)

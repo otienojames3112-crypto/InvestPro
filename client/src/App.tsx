@@ -4,6 +4,7 @@ import NotFound from "@/pages/NotFound";
 import { Route, Switch } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
+import { DepositDrawerProvider } from "./contexts/DepositDrawerContext";
 import Dashboard from "./pages/Dashboard";
 import Ledger from "./pages/Ledger";
 import Contributions from "./pages/Contributions";
@@ -33,8 +34,10 @@ function App() {
     <ErrorBoundary>
       <ThemeProvider defaultTheme="dark">
         <TooltipProvider>
-          <Toaster />
-          <Router />
+          <DepositDrawerProvider>
+            <Toaster />
+            <Router />
+          </DepositDrawerProvider>
         </TooltipProvider>
       </ThemeProvider>
     </ErrorBoundary>

@@ -11,7 +11,6 @@ import Contributions from "./pages/Contributions";
 import Settings from "./pages/Settings";
 import Securities from "./pages/Securities";
 import Scenarios from "./pages/Scenarios";
-import Deposits from "./pages/Deposits";
 
 function Router() {
   return (
@@ -21,7 +20,6 @@ function Router() {
       <Route path="/contributions" component={Contributions} />
       <Route path="/securities" component={Securities} />
       <Route path="/scenarios" component={Scenarios} />
-      <Route path="/deposits" component={Deposits} />
       <Route path="/settings" component={Settings} />
       <Route path="/404" component={NotFound} />
       <Route component={NotFound} />

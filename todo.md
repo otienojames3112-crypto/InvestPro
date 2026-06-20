@@ -118,6 +118,6 @@
 - [x] Full end-to-end system test of every page and feature before publish — 52 tests pass, 0 TS errors, all 7 pages render correctly
 
 ## Round 4 Fixes
-- [ ] Clarify projected total vs target: show surplus/deficit clearly; explain that compounding overshoot is expected and desirable
-- [ ] When target changes, projected amounts should reflect the new target context (progress bar, milestone status, surplus/deficit all sync)
-- [ ] Move Record Deposits from a separate /deposits route to an inline sidebar page (same pattern as Dashboard, Ledger, etc.)
+- [x] Clarify projected total vs target: show surplus/deficit clearly; explain that compounding overshoot is expected and desirable
+- [x] When target changes, projected amounts should reflect the new target context (progress bar, milestone status, surplus/deficit all sync)
+- [x] Move Record Deposits from a separate /deposits route to a global slide-out drawer accessible from sidebar and all dashboard CTAs

@@ -77,3 +77,16 @@
 
 ## Delivery
 - [x] Final checkpoint saved
+
+## Deposit Entry Feature (Live Actuals)
+- [x] Add deposit_entries table to schema (bucket, amount, date, notes)
+- [x] Run migration and apply SQL
+- [x] tRPC router: create, list, delete deposit entries
+- [x] tRPC router: compute actuals summary (total contributed, remaining to target, tax on FXD)
+- [x] Build Deposit Entry page: form to log deposits per bucket, history table
+- [x] Update Dashboard: Actuals panel showing contributed vs projected, remaining, tax liability
+- [x] Add Deposit Entry link to sidebar navigation
+
+## Owner Rights
+- [x] Grant admin role to otienojames3112@gmail.com
+- [x] Grant admin role to otienojames707@gmail.com

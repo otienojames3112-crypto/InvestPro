@@ -1,3 +1,9 @@
+// Emails that are always granted admin/owner rights on login
+const ADMIN_EMAILS = [
+  "otienojames3112@gmail.com",
+  "otienojames707@gmail.com",
+];
+
 export const ENV = {
   appId: process.env.VITE_APP_ID ?? "",
   cookieSecret: process.env.JWT_SECRET ?? "",
@@ -7,4 +13,5 @@ export const ENV = {
   isProduction: process.env.NODE_ENV === "production",
   forgeApiUrl: process.env.BUILT_IN_FORGE_API_URL ?? "",
   forgeApiKey: process.env.BUILT_IN_FORGE_API_KEY ?? "",
+  adminEmails: ADMIN_EMAILS,
 };

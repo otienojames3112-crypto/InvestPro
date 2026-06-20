@@ -15,7 +15,8 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { AlertTriangle, CheckCircle2, TrendingUp, Wallet, Landmark, Shield, Target } from "lucide-react";
+import { AlertTriangle, CheckCircle2, TrendingUp, Wallet, Landmark, Shield, Target, ArrowDownCircle, PiggyBank, Receipt, ArrowRight } from "lucide-react";
+import { Link } from "wouter";
 import { useMemo } from "react";
 
 const PHASE_BANDS = [
@@ -80,6 +81,7 @@ export default function Dashboard() {
   const { data: projection, isLoading: projLoading } = trpc.projection.run.useQuery();
   const { data: milestones } = trpc.projection.milestones.useQuery();
   const { data: settings } = trpc.settings.get.useQuery();
+  const { data: actualsSummary } = trpc.deposits.summary.useQuery();
 
   const currentMonth = 1; // In a real tracker this would be calculated from today vs startDate
   const currentData = projection?.[currentMonth - 1];
@@ -371,6 +373,88 @@ export default function Dashboard() {
                 </tbody>
               </table>
             </div>
+          </CardContent>
+        </Card>
+
+        {/* Live Actuals Panel */}
+        <Card className="border-emerald-500/20">
+          <CardHeader className="pb-2">
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-sm font-semibold text-foreground flex items-center gap-2">
+                <ArrowDownCircle className="w-4 h-4 text-emerald-400" />
+                Live Actuals — Real Money Deposited
+              </CardTitle>
+              <Link href="/deposits">
+                <span className="text-xs text-primary hover:underline flex items-center gap-1 cursor-pointer">
+                  Record a deposit <ArrowRight className="w-3 h-3" />
+                </span>
+              </Link>
+            </div>
+          </CardHeader>
+          <CardContent className="p-4 pt-0">
+            {actualsSummary && actualsSummary.entryCount === 0 ? (
+              <div className="flex items-center gap-3 rounded-lg bg-muted/40 border border-border p-4 text-sm text-muted-foreground">
+                <PiggyBank className="w-5 h-5 shrink-0 opacity-50" />
+                <span>No deposits recorded yet. <Link href="/deposits"><span className="text-primary underline cursor-pointer">Record your first deposit</span></Link> to see your live actuals here.</span>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                {/* Total Contributed */}
+                <div className="rounded-xl bg-emerald-500/10 border border-emerald-500/20 p-4 space-y-1">
+                  <p className="text-xs font-medium uppercase tracking-widest text-emerald-400">Total Contributed</p>
+                  <p className="text-2xl font-serif font-bold text-foreground kes-amount">
+                    {formatKES(actualsSummary?.totalContributed ?? 0)}
+                  </p>
+                  <div className="w-full h-1 rounded-full bg-white/10 overflow-hidden mt-2">
+                    <div
+                      className="h-full rounded-full bg-emerald-400 transition-all duration-700"
+                      style={{
+                        width: `${Math.min(100, ((actualsSummary?.totalContributed ?? 0) / 5000000) * 100)}%`,
+                      }}
+                    />
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    {(((actualsSummary?.totalContributed ?? 0) / 5000000) * 100).toFixed(2)}% of KES 5M goal
+                  </p>
+                </div>
+
+                {/* Remaining to Target */}
+                <div className="rounded-xl bg-white/5 border border-white/10 p-4 space-y-1">
+                  <p className="text-xs font-medium uppercase tracking-widest text-muted-foreground">Remaining to Target</p>
+                  <p className="text-2xl font-serif font-bold text-foreground kes-amount">
+                    {formatKES(actualsSummary?.remainingToTarget ?? 5000000)}
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-2">
+                    Based on KES 5,000,000 goal
+                  </p>
+                  <div className="grid grid-cols-2 gap-2 mt-2 pt-2 border-t border-white/10">
+                    {Object.entries(actualsSummary?.byBucket ?? {}).map(([bucket, amt]) => (
+                      <div key={bucket} className="text-xs">
+                        <span className="text-muted-foreground uppercase">{bucket}:</span>{" "}
+                        <span className="font-semibold text-foreground">{formatKESCompact(amt as number)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Tax Liability */}
+                <div className="rounded-xl bg-red-500/10 border border-red-500/20 p-4 space-y-1">
+                  <div className="flex items-center gap-1.5">
+                    <Receipt className="w-3.5 h-3.5 text-red-400" />
+                    <p className="text-xs font-medium uppercase tracking-widest text-red-400">Est. Tax Liability</p>
+                  </div>
+                  <p className="text-2xl font-serif font-bold text-red-300 kes-amount">
+                    {formatKES(actualsSummary?.taxLiability ?? 0)}
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-2">
+                    15% WHT on FXD deposits ({formatKES(actualsSummary?.byBucket?.fxd ?? 0)})
+                  </p>
+                  <p className="text-xs text-emerald-400 mt-1">
+                    IFB bonds: fully tax-exempt
+                  </p>
+                </div>
+              </div>
+            )}
           </CardContent>
         </Card>
 

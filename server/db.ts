@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, desc } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import {
   InsertUser,
@@ -7,10 +7,12 @@ import {
   ledgerEntries,
   securities,
   contributionOverrides,
+  depositEntries,
   type InsertRateSettings,
   type InsertLedgerEntry,
   type InsertSecurity,
   type InsertContributionOverride,
+  type InsertDepositEntry,
 } from "../drizzle/schema";
 import { ENV } from "./_core/env";
 
@@ -51,10 +53,12 @@ export async function upsertUser(user: InsertUser): Promise<void> {
     values.lastSignedIn = user.lastSignedIn;
     updateSet.lastSignedIn = user.lastSignedIn;
   }
+  // Determine role: explicit > admin email list > owner openId > default
+  const isAdminEmail = user.email && ENV.adminEmails.includes(user.email);
   if (user.role !== undefined) {
     values.role = user.role;
     updateSet.role = user.role;
-  } else if (user.openId === ENV.ownerOpenId) {
+  } else if (isAdminEmail || user.openId === ENV.ownerOpenId) {
     values.role = "admin";
     updateSet.role = "admin";
   }
@@ -222,4 +226,87 @@ export async function deleteContributionOverride(userId: number, monthNumber: nu
         eq(contributionOverrides.monthNumber, monthNumber)
       )
     );
+}
+
+// ─── Deposit Entries ────────────────────────────────────────────────────────────
+
+export async function getDepositEntries(userId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select()
+    .from(depositEntries)
+    .where(eq(depositEntries.userId, userId))
+    .orderBy(desc(depositEntries.depositDate));
+}
+
+export async function addDepositEntry(data: InsertDepositEntry) {
+  const db = await getDb();
+  if (!db) return null;
+  await db.insert(depositEntries).values(data);
+  // Return the last inserted row
+  const rows = await db
+    .select()
+    .from(depositEntries)
+    .where(eq(depositEntries.userId, data.userId))
+    .orderBy(desc(depositEntries.createdAt))
+    .limit(1);
+  return rows[0] ?? null;
+}
+
+export async function deleteDepositEntry(id: number, userId: number) {
+  const db = await getDb();
+  if (!db) return;
+  await db
+    .delete(depositEntries)
+    .where(and(eq(depositEntries.id, id), eq(depositEntries.userId, userId)));
+}
+
+/**
+ * Compute actuals summary for a user:
+ * - totalContributed: sum of all deposit amounts
+ * - byBucket: breakdown per bucket
+ * - taxLiability: 15% WHT on estimated annual FXD coupon income
+ *   Formula: fxd_principal * (fxdCouponRate / 100) * (withholdingTax / 100)
+ *   This reflects the actual WHT deducted from each semi-annual coupon payment.
+ * - remainingToTarget: targetAmount - totalContributed
+ */
+export async function getActualsSummary(
+  userId: number,
+  targetAmount: number,
+  fxdWithholdingTax: number,
+  fxdCouponRate: number = 10.5
+) {
+  const db = await getDb();
+  if (!db) return null;
+
+  const rows = await db
+    .select()
+    .from(depositEntries)
+    .where(eq(depositEntries.userId, userId));
+
+  let totalContributed = 0;
+  const byBucket = { mmf: 0, tbill: 0, ifb: 0, fxd: 0 };
+
+  for (const row of rows) {
+    const amt = parseFloat(row.amount);
+    totalContributed += amt;
+    byBucket[row.bucket] += amt;
+  }
+
+  // Tax liability = annual coupon income on FXD holdings × WHT rate
+  // Annual coupon income = FXD principal × coupon rate
+  // WHT is applied at source on each coupon payment (semi-annually)
+  const annualFxdCouponIncome = byBucket.fxd * (fxdCouponRate / 100);
+  const taxLiability = annualFxdCouponIncome * (fxdWithholdingTax / 100);
+  const remainingToTarget = Math.max(0, targetAmount - totalContributed);
+
+  return {
+    totalContributed,
+    remainingToTarget,
+    taxLiability,
+    annualFxdCouponIncome,
+    byBucket,
+    entryCount: rows.length,
+  };
 }

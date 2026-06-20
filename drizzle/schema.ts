@@ -113,3 +113,21 @@ export const contributionOverrides = mysqlTable("contribution_overrides", {
 
 export type ContributionOverride = typeof contributionOverrides.$inferSelect;
 export type InsertContributionOverride = typeof contributionOverrides.$inferInsert;
+
+/**
+ * Deposit entries — real money deposited into each investment bucket.
+ * This is the "live" record of actual contributions made.
+ */
+export const depositEntries = mysqlTable("deposit_entries", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("userId").notNull(),
+  bucket: mysqlEnum("bucket", ["mmf", "tbill", "ifb", "fxd"]).notNull(),
+  amount: decimal("amount", { precision: 14, scale: 2 }).notNull(),
+  depositDate: date("depositDate").notNull(),
+  notes: text("notes"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type DepositEntry = typeof depositEntries.$inferSelect;
+export type InsertDepositEntry = typeof depositEntries.$inferInsert;

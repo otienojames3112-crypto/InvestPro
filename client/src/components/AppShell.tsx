@@ -11,6 +11,7 @@ import {
   LogOut,
   Settings,
   TrendingUp,
+  ArrowDownCircle,
 } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { Button } from "./ui/button";
@@ -19,6 +20,7 @@ import { Skeleton } from "./ui/skeleton";
 
 const navItems = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/deposits", label: "Record Deposits", icon: ArrowDownCircle },
   { href: "/ledger", label: "Month Ledger", icon: BookOpen },
   { href: "/contributions", label: "Contributions", icon: TrendingUp },
   { href: "/securities", label: "CBK Securities", icon: Landmark },

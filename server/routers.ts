@@ -15,6 +15,10 @@ import {
   getContributionOverrides,
   upsertContributionOverride,
   deleteContributionOverride,
+  getDepositEntries,
+  addDepositEntry,
+  deleteDepositEntry,
+  getActualsSummary,
 } from "./db";
 import {
   runProjection,
@@ -259,6 +263,58 @@ export const appRouter = router({
         await deleteSecurity(input.id);
         return { success: true };
       }),
+  }),
+
+  // ─── Deposit Entries (Live Actuals) ──────────────────────────────────────────
+  deposits: router({
+    list: protectedProcedure.query(async ({ ctx }) => {
+      return getDepositEntries(ctx.user.id);
+    }),
+
+    add: protectedProcedure
+      .input(
+        z.object({
+          bucket: z.enum(["mmf", "tbill", "ifb", "fxd"]),
+          amount: z.number().positive(),
+          depositDate: z.string(),
+          notes: z.string().optional(),
+        })
+      )
+      .mutation(async ({ ctx, input }) => {
+        const entry = await addDepositEntry({
+          userId: ctx.user.id,
+          bucket: input.bucket,
+          amount: String(input.amount),
+          depositDate: new Date(input.depositDate),
+          notes: input.notes,
+        });
+        return { success: true, entry };
+      }),
+
+    delete: protectedProcedure
+      .input(z.object({ id: z.number() }))
+      .mutation(async ({ ctx, input }) => {
+        await deleteDepositEntry(input.id, ctx.user.id);
+        return { success: true };
+      }),
+
+    summary: protectedProcedure.query(async ({ ctx }) => {
+      const dbSettings = await getRateSettings(ctx.user.id);
+      const settings = dbSettingsToEngine(dbSettings);
+      const summary = await getActualsSummary(
+        ctx.user.id,
+        settings.targetAmount,
+        settings.withholdingTax,
+        settings.fxdCouponRate
+      );
+      return summary ?? {
+        totalContributed: 0,
+        remainingToTarget: settings.targetAmount,
+        taxLiability: 0,
+        byBucket: { mmf: 0, tbill: 0, ifb: 0, fxd: 0 },
+        entryCount: 0,
+      };
+    }),
   }),
 
   // ─── Contribution Overrides ───────────────────────────────────────────────────

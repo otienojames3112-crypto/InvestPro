@@ -21,6 +21,8 @@ import {
   getActualsSummary,
   addRateHistorySnapshot,
   getRateHistory,
+  getAccountStatuses,
+  upsertAccountStatus,
 } from "./db";
 import {
   runProjection,
@@ -160,13 +162,36 @@ export const appRouter = router({
     run: protectedProcedure.query(async ({ ctx }) => {
       const dbSettings = await getRateSettings(ctx.user.id);
       const settings = dbSettingsToEngine(dbSettings);
+      // Attach startDate to settings for time-locked rate history
+      const rawDate = dbSettings?.startDate;
+      if (rawDate) {
+        settings.startDate = rawDate instanceof Date
+          ? rawDate.toISOString().split("T")[0]
+          : String(rawDate).split("T")[0];
+      } else {
+        settings.startDate = "2026-07-01";
+      }
       const overrides = await getContributionOverrides(ctx.user.id);
       const mappedOverrides = overrides.map((o) => ({
         monthNumber: o.monthNumber,
         overrideAmount: o.overrideAmount ? parseFloat(String(o.overrideAmount)) : undefined,
         lumpSum: o.lumpSum ? parseFloat(String(o.lumpSum)) : undefined,
       }));
-      const results = runProjection(settings, mappedOverrides);
+      // Fetch rate history for time-locked per-month rates
+      const rateHistoryRows = await getRateHistory(ctx.user.id);
+      const rateHistory = rateHistoryRows.map((r) => ({
+        effectiveDate: r.effectiveDate instanceof Date
+          ? r.effectiveDate.toISOString().split("T")[0]
+          : String(r.effectiveDate).split("T")[0],
+        mmfYield: parseFloat(String(r.mmfYield)),
+        tbill91Rate: parseFloat(String(r.tbill91Rate)),
+        tbill182Rate: parseFloat(String(r.tbill182Rate)),
+        tbill364Rate: parseFloat(String(r.tbill364Rate)),
+        ifbCouponRate: parseFloat(String(r.ifbCouponRate)),
+        fxdCouponRate: parseFloat(String(r.fxdCouponRate)),
+        withholdingTax: parseFloat(String(r.withholdingTax)),
+      }));
+      const results = runProjection(settings, mappedOverrides, rateHistory);
       return results;
     }),
 
@@ -427,6 +452,50 @@ export const appRouter = router({
         createdAt: r.createdAt,
       }));
     }),
+  }),
+
+  // ─── Account Status (Getting Started) ─────────────────────────────────────────
+  accountStatus: router({
+    list: protectedProcedure.query(async ({ ctx }) => {
+      const rows = await getAccountStatuses(ctx.user.id);
+      return rows.map((r) => ({
+        id: r.id,
+        accountType: r.accountType,
+        isOpened: r.isOpened,
+        accountNumber: r.accountNumber,
+        accountName: r.accountName,
+        dateOpened: r.dateOpened instanceof Date
+          ? r.dateOpened.toISOString().split("T")[0]
+          : r.dateOpened ? String(r.dateOpened).split("T")[0] : null,
+        phoneNumber: r.phoneNumber,
+        notes: r.notes,
+        updatedAt: r.updatedAt,
+      }));
+    }),
+
+    upsert: protectedProcedure
+      .input(z.object({
+        accountType: z.enum(["mmf", "dhowcsd"]),
+        isOpened: z.boolean(),
+        accountNumber: z.string().optional(),
+        accountName: z.string().optional(),
+        dateOpened: z.string().optional(),
+        phoneNumber: z.string().optional(),
+        notes: z.string().optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        await upsertAccountStatus({
+          userId: ctx.user.id,
+          accountType: input.accountType,
+          isOpened: input.isOpened,
+          accountNumber: input.accountNumber ?? null,
+          accountName: input.accountName ?? null,
+          dateOpened: input.dateOpened ? new Date(`${input.dateOpened}T12:00:00.000Z`) : null,
+          phoneNumber: input.phoneNumber ?? null,
+          notes: input.notes ?? null,
+        });
+        return { success: true };
+      }),
   }),
 });
 

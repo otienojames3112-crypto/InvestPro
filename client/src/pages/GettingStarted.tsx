@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { toast } from "sonner";
+import { trpc } from "@/lib/trpc";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -29,21 +30,18 @@ interface AccountState {
   details: AccountDetails;
 }
 
-const STORAGE_KEY = "kes5m_account_states";
-
-function loadAccountStates(): { mmf: AccountState; dhow: AccountState } {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) return JSON.parse(raw);
-  } catch {}
+// Convert DB row to local AccountState
+function dbRowToState(row: { isOpened: boolean; accountNumber?: string | null; phoneNumber?: string | null; notes?: string | null; dateOpened?: string | null } | undefined): AccountState {
+  if (!row) return { status: "not_started", details: {} };
   return {
-    mmf: { status: "not_started", details: {} },
-    dhow: { status: "not_started", details: {} },
+    status: row.isOpened ? "opened" : "not_started",
+    details: {
+      accountNumber: row.accountNumber ?? undefined,
+      phoneNumber: row.phoneNumber ?? undefined,
+      notes: row.notes ?? undefined,
+      openedDate: row.dateOpened ?? undefined,
+    },
   };
-}
-
-function saveAccountStates(states: { mmf: AccountState; dhow: AccountState }) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(states));
 }
 
 // ─── Step Component ───────────────────────────────────────────────────────────
@@ -101,13 +99,14 @@ function Step({
 // ─── Account Status Dialog ────────────────────────────────────────────────────
 
 function AccountStatusDialog({
-  open, onClose, accountType, state, onSave,
+  open, onClose, accountType, state, onSave, isSaving,
 }: {
   open: boolean;
   onClose: () => void;
   accountType: "mmf" | "dhow";
   state: AccountState;
   onSave: (newState: AccountState) => void;
+  isSaving?: boolean;
 }) {
   const isMmf = accountType === "mmf";
   const title = isMmf ? "SanlamAllianz MMF Account" : "CBK DhowCSD Account";
@@ -219,7 +218,7 @@ function AccountStatusDialog({
 
         <DialogFooter>
           <Button variant="outline" size="sm" onClick={onClose}>Cancel</Button>
-          <Button size="sm" onClick={handleSave}>Save Status</Button>
+          <Button size="sm" onClick={handleSave} disabled={isSaving}>{isSaving ? "Saving..." : "Save Status"}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -253,17 +252,38 @@ function StatusBadge({ status }: { status: AccountStatus }) {
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export default function GettingStarted() {
-  const [states, setStates] = useState(loadAccountStates);
   const [openDialog, setOpenDialog] = useState<"mmf" | "dhow" | null>(null);
+  const utils = trpc.useUtils();
+
+  // Load account statuses from database
+  const { data: dbStatuses = [], isLoading: statusLoading } = trpc.accountStatus.list.useQuery();
+  const upsertMutation = trpc.accountStatus.upsert.useMutation({
+    onSuccess: () => {
+      utils.accountStatus.list.invalidate();
+      toast.success("Account status saved.");
+      setOpenDialog(null);
+    },
+    onError: (err) => {
+      toast.error(`Failed to save: ${err.message}`);
+    },
+  });
+
+  const mmfRow = dbStatuses.find((s) => s.accountType === "mmf");
+  const dhowRow = dbStatuses.find((s) => s.accountType === "dhowcsd");
+  const mmf = dbRowToState(mmfRow);
+  const dhow = dbRowToState(dhowRow);
 
   function updateState(type: "mmf" | "dhow", newState: AccountState) {
-    const next = { ...states, [type]: newState };
-    setStates(next);
-    saveAccountStates(next);
+    const dbType = type === "dhow" ? "dhowcsd" : "mmf";
+    upsertMutation.mutate({
+      accountType: dbType,
+      isOpened: newState.status === "opened",
+      accountNumber: newState.details.accountNumber,
+      phoneNumber: newState.details.phoneNumber,
+      dateOpened: newState.details.openedDate,
+      notes: newState.details.notes,
+    });
   }
-
-  const mmf = states.mmf;
-  const dhow = states.dhow;
 
   return (
     <AppShell>

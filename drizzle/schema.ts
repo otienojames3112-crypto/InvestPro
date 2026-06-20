@@ -154,3 +154,24 @@ export const rateHistory = mysqlTable("rate_history", {
 
 export type RateHistory = typeof rateHistory.$inferSelect;
 export type InsertRateHistory = typeof rateHistory.$inferInsert;
+
+/**
+ * Account status — tracks whether the user has opened each investment account
+ * (SanlamAllianz MMF and CBK DhowCSD), and stores their account details.
+ */
+export const accountStatus = mysqlTable("account_status", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("userId").notNull(),
+  accountType: mysqlEnum("accountType", ["mmf", "dhowcsd"]).notNull(),
+  isOpened: boolean("isOpened").notNull().default(false),
+  accountNumber: varchar("accountNumber", { length: 100 }),
+  accountName: varchar("accountName", { length: 200 }),
+  dateOpened: date("dateOpened"),
+  phoneNumber: varchar("phoneNumber", { length: 20 }),
+  notes: text("notes"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type AccountStatus = typeof accountStatus.$inferSelect;
+export type InsertAccountStatus = typeof accountStatus.$inferInsert;

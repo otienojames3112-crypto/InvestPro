@@ -123,9 +123,16 @@
 - [x] Move Record Deposits from a separate /deposits route to a global slide-out drawer accessible from sidebar and all dashboard CTAs
 
 ## Round 5 Fixes & Features
-- [ ] Fix target amount language: everywhere say "the amount you will HOLD at Month 120" not "total contributions"
-- [ ] Implement time-locked rate changes: rate_history table with effective_date; engine uses rate valid at each month
-- [ ] Build Getting Started guide page with SanlamAllianz MMF + CBK DhowCSD step-by-step setup
-- [ ] Account status tracker: click to mark account as opened, store account details (account number, name, date opened)
-- [ ] Add Getting Started to sidebar navigation after Rate Settings
-- [ ] Full pre-publish sync verification across all pages
+- [x] Fix target amount language: everywhere say "the amount you will HOLD at Month 120" not "total contributions"
+- [x] Implement time-locked rate changes: rate_history table with effective_date; engine uses rate valid at each month
+- [x] Build Getting Started guide page with SanlamAllianz MMF + CBK DhowCSD step-by-step setup
+- [x] Account status tracker: click to mark account as opened, store account details (account number, name, date opened)
+- [x] Add Getting Started to sidebar navigation after Rate Settings
+- [x] Full pre-publish sync verification across all pages — 58 tests pass, 0 TS errors, all 7 pages render correctly
+
+## Round 6 — Remaining Gaps Before Publish
+- [ ] Wire rate_history into projection engine: each month uses the rate snapshot effective on that month's date
+- [ ] Add regression tests: changing rates today does not alter past months' projections
+- [ ] Persist Getting Started account status/details in database (tRPC create/update/read)
+- [ ] Bind Getting Started UI to stored database state (not local state)
+- [ ] End-to-end sync verification: change settings → confirm dashboard/ledger/scenarios/deposits all update

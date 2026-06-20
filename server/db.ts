@@ -9,12 +9,14 @@ import {
   contributionOverrides,
   depositEntries,
   rateHistory,
+  accountStatus,
   type InsertRateSettings,
   type InsertLedgerEntry,
   type InsertSecurity,
   type InsertContributionOverride,
   type InsertDepositEntry,
   type InsertRateHistory,
+  type InsertAccountStatus,
 } from "../drizzle/schema";
 import { ENV } from "./_core/env";
 
@@ -375,4 +377,37 @@ export async function getActualsSummary(
     byBucket,
     entryCount: rows.length,
   };
+}
+
+// ─── Account Status ───────────────────────────────────────────────────────────
+
+export async function getAccountStatuses(userId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(accountStatus).where(eq(accountStatus.userId, userId));
+}
+
+export async function upsertAccountStatus(data: InsertAccountStatus) {
+  const db = await getDb();
+  if (!db) return;
+  const existing = await db
+    .select()
+    .from(accountStatus)
+    .where(and(eq(accountStatus.userId, data.userId), eq(accountStatus.accountType, data.accountType)))
+    .limit(1);
+  if (existing.length > 0) {
+    await db
+      .update(accountStatus)
+      .set({
+        isOpened: data.isOpened,
+        accountNumber: data.accountNumber ?? null,
+        accountName: data.accountName ?? null,
+        dateOpened: data.dateOpened ?? null,
+        phoneNumber: data.phoneNumber ?? null,
+        notes: data.notes ?? null,
+      })
+      .where(and(eq(accountStatus.userId, data.userId), eq(accountStatus.accountType, data.accountType)));
+  } else {
+    await db.insert(accountStatus).values(data);
+  }
 }

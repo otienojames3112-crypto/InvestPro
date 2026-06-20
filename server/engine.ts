@@ -26,6 +26,21 @@
  *   In the final 18 months (M103–120) no new long bonds are purchased.
  */
 
+/**
+ * A rate snapshot from rate_history: rates effective from a specific date forward.
+ * Used to apply time-locked rates to each month in the projection.
+ */
+export interface RateSnapshot {
+  effectiveDate: string; // YYYY-MM-DD
+  mmfYield: number;
+  tbill91Rate: number;
+  tbill182Rate: number;
+  tbill364Rate: number;
+  ifbCouponRate: number;
+  fxdCouponRate: number;
+  withholdingTax: number;
+}
+
 export interface EngineSettings {
   /** Gross annual MMF yield % (e.g. 8.78). WHT is applied internally. */
   mmfYield: number;
@@ -46,6 +61,8 @@ export interface EngineSettings {
   stepUpMonths: number;
   safetyFloor: number;
   targetAmount: number;
+  /** Plan start date in YYYY-MM-DD format (e.g. "2026-07-01"). Used for time-locked rate history. */
+  startDate?: string;
 }
 
 export interface MonthlyContributionOverride {
@@ -193,6 +210,24 @@ export function getScheduledContribution(
 }
 
 /**
+ * Get the rates applicable for a given month date from the rate history.
+ * Returns the most recent snapshot with effectiveDate <= monthDate.
+ * Falls back to current settings if no snapshot covers that date.
+ */
+export function getRatesForMonth(
+  monthDate: Date,
+  rateHistory: RateSnapshot[],
+  currentSettings: EngineSettings
+): Pick<EngineSettings, "mmfYield" | "tbill91Rate" | "tbill182Rate" | "tbill364Rate" | "ifbCouponRate" | "fxdCouponRate" | "withholdingTax"> {
+  if (!rateHistory || rateHistory.length === 0) return currentSettings;
+  const monthStr = monthDate.toISOString().split("T")[0];
+  // Sort descending by effectiveDate, find the most recent one <= monthStr
+  const sorted = [...rateHistory].sort((a, b) => b.effectiveDate.localeCompare(a.effectiveDate));
+  const snapshot = sorted.find(s => s.effectiveDate <= monthStr);
+  return snapshot ?? currentSettings;
+}
+
+/**
  * Run the full 120-month projection simulation.
  *
  * Key corrections vs previous version:
@@ -203,26 +238,17 @@ export function getScheduledContribution(
  *    so FXD bonds actually accumulate during the Growth and De-risking phases.
  * 5. Sweep threshold: MMF must exceed safetyFloor + 50,000 before a sweep occurs,
  *    and after the sweep MMF must remain >= safetyFloor.
+ * 6. Rate history: if rateHistory is provided, each month uses the rate snapshot
+ *    effective on that month's date, so past months are never retroactively affected
+ *    by future rate changes.
  */
 export function runProjection(
   settings: EngineSettings,
-  overrides: MonthlyContributionOverride[] = []
+  overrides: MonthlyContributionOverride[] = [],
+  rateHistory: RateSnapshot[] = []
 ): MonthResult[] {
   const overrideMap = new Map<number, MonthlyContributionOverride>();
   for (const o of overrides) overrideMap.set(o.monthNumber, o);
-
-  // Net yields after WHT
-  const mmfNetAnnual   = netYield(settings.mmfYield, settings.withholdingTax);
-  const tbillNetAnnual = netYield(settings.tbill364Rate, settings.withholdingTax);
-  const mmfMonthly     = monthlyRate(mmfNetAnnual);
-  const tbillMonthly   = monthlyRate(tbillNetAnnual);
-
-  // IFB is tax-exempt — use gross rate
-  const ifbMonthly = monthlyRate(settings.ifbCouponRate);
-
-  // FXD net of WHT
-  const fxdNetAnnual = netYield(settings.fxdCouponRate, settings.withholdingTax);
-  const fxdMonthly   = monthlyRate(fxdNetAnnual);
 
   const results: MonthResult[] = [];
 
@@ -240,7 +266,25 @@ export function runProjection(
   let sweepCount = 0;
   let lastPhase: string = "";
 
+  // Parse start date from settings
+  const startDate = new Date(settings.startDate ?? new Date().toISOString().split("T")[0] + "T12:00:00Z");
+
   for (let m = 1; m <= 120; m++) {
+    // Compute the calendar date for this month
+    const monthDate = new Date(startDate);
+    monthDate.setMonth(monthDate.getMonth() + (m - 1));
+
+    // Get rates applicable for this month (time-locked)
+    const rates = getRatesForMonth(monthDate, rateHistory, settings);
+
+    // Compute per-month rates from the applicable snapshot
+    const mmfNetAnnual   = netYield(rates.mmfYield, rates.withholdingTax);
+    const tbillNetAnnual = netYield(rates.tbill364Rate, rates.withholdingTax);
+    const mmfMonthly     = monthlyRate(mmfNetAnnual);
+    const tbillMonthly   = monthlyRate(tbillNetAnnual);
+    const ifbMonthly     = monthlyRate(rates.ifbCouponRate);
+    const fxdNetAnnual   = netYield(rates.fxdCouponRate, rates.withholdingTax);
+    const fxdMonthly     = monthlyRate(fxdNetAnnual);
     const phase = getPhase(m);
     const override = overrideMap.get(m);
 
@@ -264,26 +308,26 @@ export function runProjection(
     let cbkCashIn = 0;
     const cbkActions: string[] = [];
 
-    // IFB semi-annual coupon — tax-exempt, paid every 6 months
+    // IFB semi-annual coupon — tax-exempt, paid every 6 months (use time-locked rate)
     if (m % 6 === 0 && ifbFaceValue > 0) {
-      const coupon = (settings.ifbCouponRate / 100 / 2) * ifbFaceValue;
+      const coupon = (rates.ifbCouponRate / 100 / 2) * ifbFaceValue;
       cbkCashIn += coupon;
       cbkActions.push(`IFB coupon KES ${Math.round(coupon).toLocaleString()} (tax-exempt)`);
     }
 
-    // FXD semi-annual coupon — 15% WHT deducted at source, offset by 3 months
+    // FXD semi-annual coupon — 15% WHT deducted at source, offset by 3 months (use time-locked rate)
     if (m % 6 === 3 && fxdFaceValue > 0) {
-      const grossCoupon = (settings.fxdCouponRate / 100 / 2) * fxdFaceValue;
-      const netCoupon   = grossCoupon * (1 - settings.withholdingTax / 100);
+      const grossCoupon = (rates.fxdCouponRate / 100 / 2) * fxdFaceValue;
+      const netCoupon   = grossCoupon * (1 - rates.withholdingTax / 100);
       cbkCashIn += netCoupon;
       cbkActions.push(`FXD coupon KES ${Math.round(netCoupon).toLocaleString()} (net of 15% WHT)`);
     }
 
     // T-bill: model as annual maturity returning net interest (WHT already applied)
-    // Principal is rolled over (stays in tbill balance); only net interest comes to MMF
+    // Principal is rolled over (stays in tbill balance); only net interest comes to MMF (use time-locked rate)
     if (m % 12 === 0 && tbillFaceValue > 0) {
-      const grossInterest = (settings.tbill364Rate / 100) * tbillFaceValue;
-      const netInterest   = grossInterest * (1 - settings.withholdingTax / 100);
+      const grossInterest = (rates.tbill364Rate / 100) * tbillFaceValue;
+      const netInterest   = grossInterest * (1 - rates.withholdingTax / 100);
       cbkCashIn += netInterest;
       cbkActions.push(`T-bill maturity interest KES ${Math.round(netInterest).toLocaleString()} (net of 15% WHT)`);
     }

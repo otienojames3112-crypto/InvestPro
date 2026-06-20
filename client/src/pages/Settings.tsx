@@ -60,6 +60,8 @@ export default function Settings() {
       utils.projection.run.invalidate();
       utils.projection.scenarios.invalidate();
       utils.projection.contributionSchedule.invalidate();
+      utils.projection.milestones.invalidate();
+      utils.deposits.summary.invalidate();
     },
     onError: () => toast.error("Failed to save settings"),
   });

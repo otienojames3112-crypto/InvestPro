@@ -111,3 +111,8 @@
 - [x] Add a quick-edit target amount control on the dashboard (click to change, saves to settings)
 - [x] When target changes: milestones, progress bar, scenarios, deposits remaining-to-target all sync
 - [x] Show "What this means" section on dashboard explaining the engine projection in simple terms
+
+## Bug Fixes (Round 3)
+- [ ] Fix: second target-change attempt fails with "failed to change target amount" error
+- [ ] Fix: bucket balance cards (MMF/T-Bills/IFB/FXD) do not update when target changes
+- [ ] Full end-to-end system test of every page and feature before publish

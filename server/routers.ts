@@ -95,9 +95,20 @@ export const appRouter = router({
     get: protectedProcedure.query(async ({ ctx }) => {
       const s = await getRateSettings(ctx.user.id);
       if (!s) return { ...DEFAULT_SETTINGS, startDate: "2026-07-01" };
+      // Normalise startDate: MySQL DATE may come back as a Date object or string
+      const rawDate = s.startDate;
+      let startDate = "2026-07-01";
+      if (rawDate) {
+        if (rawDate instanceof Date) {
+          startDate = rawDate.toISOString().split("T")[0];
+        } else {
+          // String like "2026-07-01" or "2026-07-01T00:00:00.000Z"
+          startDate = String(rawDate).split("T")[0];
+        }
+      }
       return {
         ...dbSettingsToEngine(s),
-        startDate: s.startDate ?? "2026-07-01",
+        startDate,
       };
     }),
 
@@ -116,7 +127,12 @@ export const appRouter = router({
         stepUpMonths: input.stepUpMonths,
         safetyFloor: String(input.safetyFloor),
         targetAmount: String(input.targetAmount),
-        startDate: new Date(input.startDate ?? "2026-07-01"),
+        // Store as a plain Date at noon UTC to avoid timezone-off-by-one issues
+        startDate: (() => {
+          const d = input.startDate ?? "2026-07-01";
+          const clean = d.split("T")[0]; // ensure no time part
+          return new Date(`${clean}T12:00:00.000Z`);
+        })(),
       });
       return { success: true };
     }),
@@ -192,8 +208,17 @@ export const appRouter = router({
       }));
       const results = runProjection(settings, mappedOverrides);
 
-      // Build start date
-      const startDate = new Date(dbSettings?.startDate ?? "2026-07-01");
+      // Build start date — normalise to noon UTC to avoid timezone off-by-one
+      const rawStartDate = dbSettings?.startDate;
+      let startDateStr = "2026-07-01";
+      if (rawStartDate) {
+        if (rawStartDate instanceof Date) {
+          startDateStr = rawStartDate.toISOString().split("T")[0];
+        } else {
+          startDateStr = String(rawStartDate).split("T")[0];
+        }
+      }
+      const startDate = new Date(`${startDateStr}T12:00:00.000Z`);
 
       const entries = results.map((r) => {
         const entryDate = new Date(startDate);

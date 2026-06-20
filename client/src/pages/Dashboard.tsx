@@ -156,10 +156,16 @@ export default function Dashboard() {
       return;
     }
     if (!settings) return;
+    // Normalise startDate to plain YYYY-MM-DD before sending
+    const rawSD = settings.startDate;
+    let cleanSD = "2026-07-01";
+    if (rawSD) {
+      cleanSD = String(rawSD).split("T")[0];
+    }
     saveMutation.mutate({
       ...settings,
       targetAmount: val,
-      startDate: settings.startDate ? String(settings.startDate).split("T")[0] : "2026-07-01",
+      startDate: cleanSD,
     });
   }
 
@@ -308,43 +314,50 @@ export default function Dashboard() {
             <Info className="w-3 h-3" />
             These are the <strong className="text-foreground">projected balances in each bucket at Month 120</strong> — how your money is spread across the four investment instruments at the end of the 10-year plan.
           </p>
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
             {projLoading ? (
               Array.from({ length: 4 }).map((_, i) => (
-                <Card key={i}><CardContent className="p-5"><Skeleton className="h-16 w-full" /></CardContent></Card>
+                <Card key={i}><CardContent className="p-5"><Skeleton className="h-20 w-full" /></CardContent></Card>
               ))
             ) : (
-              <>
-                <StatCard
-                  title="MMF Balance"
-                  value={formatKESCompact(lastData?.mmfEnd ?? 0)}
-                  subtitle="SanlamAllianz MMF"
-                  icon={Wallet}
-                  accent
-                  tooltip="Your SanlamAllianz Money Market Fund balance at Year 10. This is your liquid cash buffer — money you can access any time. It earns daily interest (net ~7.5% p.a. after 15% WHT)."
-                />
-                <StatCard
-                  title="T-Bills"
-                  value={formatKESCompact(lastData?.tbillEnd ?? 0)}
-                  subtitle="CBK Treasury Bills"
-                  icon={TrendingUp}
-                  tooltip="Your total invested in CBK Treasury Bills at Year 10. T-bills are short-term (91–364 days), very safe government instruments. You earn a discount return (net ~7.5% p.a. after 15% WHT deducted at source)."
-                />
-                <StatCard
-                  title="IFB Holdings"
-                  value={formatKESCompact(lastData?.ifbEnd ?? 0)}
-                  subtitle="Tax-exempt bonds"
-                  icon={Shield}
-                  tooltip="Your total invested in Infrastructure Finance Bonds at Year 10. IFBs pay a semi-annual coupon (e.g. 12.5% p.a.) and are 100% tax-exempt — you keep every shilling of interest earned."
-                />
-                <StatCard
-                  title="FXD Bonds"
-                  value={formatKESCompact(lastData?.fxdEnd ?? 0)}
-                  subtitle="Fixed coupon bonds"
-                  icon={Landmark}
-                  tooltip="Your total invested in Fixed Coupon Bonds at Year 10. FXDs pay a semi-annual coupon (e.g. 12.35% gross, ~10.5% net after 15% WHT). They provide predictable income but the WHT is deducted before you receive the coupon."
-                />
-              </>
+              [
+                { title: "MMF Balance", key: "mmfEnd" as const, subtitle: "SanlamAllianz MMF", icon: Wallet, accent: true, tooltip: "Your SanlamAllianz Money Market Fund balance at Year 10. This is your liquid cash buffer — money you can access any time. It earns daily interest (net ~7.5% p.a. after 15% WHT)." },
+                { title: "T-Bills", key: "tbillEnd" as const, subtitle: "CBK Treasury Bills", icon: TrendingUp, accent: false, tooltip: "Your total invested in CBK Treasury Bills at Year 10. T-bills are short-term (91–364 days), very safe government instruments. You earn a discount return (net ~7.5% p.a. after 15% WHT deducted at source)." },
+                { title: "IFB Holdings", key: "ifbEnd" as const, subtitle: "Tax-exempt bonds", icon: Shield, accent: false, tooltip: "Your total invested in Infrastructure Finance Bonds at Year 10. IFBs pay a semi-annual coupon (e.g. 12.5% p.a.) and are 100% tax-exempt — you keep every shilling of interest earned." },
+                { title: "FXD Bonds", key: "fxdEnd" as const, subtitle: "Fixed coupon bonds", icon: Landmark, accent: false, tooltip: "Your total invested in Fixed Coupon Bonds at Year 10. FXDs pay a semi-annual coupon (e.g. 12.35% gross, ~10.5% net after 15% WHT). They provide predictable income but the WHT is deducted before you receive the coupon." },
+              ].map(({ title, key, subtitle, icon, accent, tooltip }) => {
+                const bucketValue = lastData?.[key] ?? 0;
+                const pctOfTarget = targetAmount > 0 ? ((bucketValue / targetAmount) * 100).toFixed(1) : "0.0";
+                return (
+                  <Card key={title} className={`card-hover ${accent ? "border-primary/30 gold-glow" : ""}`}>
+                    <CardContent className="p-5">
+                      <div className="flex items-start justify-between">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-1.5 mb-1">
+                            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">{title}</p>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <HelpCircle className="w-3 h-3 text-muted-foreground/60 cursor-help shrink-0" />
+                              </TooltipTrigger>
+                              <TooltipContent side="top" className="max-w-xs text-xs">{tooltip}</TooltipContent>
+                            </Tooltip>
+                          </div>
+                          <p className={`text-2xl font-bold kes-amount ${accent ? "gradient-text" : "text-foreground"}`}>
+                            {formatKESCompact(bucketValue)}
+                          </p>
+                          <p className="text-xs text-muted-foreground mt-1">{subtitle}</p>
+                          <p className="text-xs text-muted-foreground/70 mt-0.5">
+                            {pctOfTarget}% of {formatKESCompact(targetAmount)} goal
+                          </p>
+                        </div>
+                        <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ml-3 ${accent ? "bg-primary/15" : "bg-muted"}`}>
+                          {(() => { const Icon = icon; return <Icon className={`w-5 h-5 ${accent ? "text-primary" : "text-muted-foreground"}`} />; })()}
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+                );
+              })
             )}
           </div>
         </div>

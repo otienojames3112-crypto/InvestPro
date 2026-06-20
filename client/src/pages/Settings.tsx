@@ -71,7 +71,7 @@ export default function Settings() {
       tbill182Rate: 8.7782,
       tbill364Rate: 8.9746,
       ifbCouponRate: 12.5,
-      fxdCouponRate: 10.5,
+      fxdCouponRate: 12.35,  // gross; net ≈ 10.5% after 15% WHT
       withholdingTax: 15,
       startingContribution: 2500,
       stepUpAmount: 3000,
@@ -122,8 +122,9 @@ export default function Settings() {
           <Info className="w-4 h-4 text-primary shrink-0 mt-0.5" />
           <div className="text-xs text-muted-foreground leading-relaxed">
             <strong className="text-foreground">Live CBK rates as of June 2026:</strong> 91-day T-bill 8.82%, 182-day 8.78%, 364-day 8.97%.
-            IFB bonds offer 12–18% tax-exempt coupons. FXD bonds 10–14% with 15% withholding tax.
-            SanlamAllianz MMF effective annual yield: 8.78%.
+            IFB bonds offer 12–18% tax-exempt coupons. FXD bonds 10–14% gross (15% WHT deducted at source).
+            SanlamAllianz MMF effective annual yield: 8.78% gross (15% WHT deducted at source).
+            <br /><strong className="text-foreground">All rates entered here are gross rates.</strong> The engine automatically deducts 15% WHT on MMF, T-Bill, and FXD income. IFB coupons remain tax-exempt.
           </div>
         </div>
 
@@ -135,13 +136,14 @@ export default function Settings() {
                 <SettingsIcon className="w-4 h-4 text-primary" />
                 SanlamAllianz MMF Settings
               </CardTitle>
+              <p className="text-xs text-muted-foreground mt-1">15% WHT is deducted at source — enter the gross yield shown by SanlamAllianz.</p>
             </CardHeader>
             <CardContent className="p-4 pt-0 grid grid-cols-1 sm:grid-cols-2 gap-4">
               <RateField
-                label="MMF Annual Yield"
+                label="MMF Annual Yield (Gross)"
                 name="mmfYield"
                 register={register}
-                description="Effective annual yield. Default: 8.78%"
+                description="Gross yield before 15% WHT. Default: 8.78% → net ≈ 7.46%"
               />
             </CardContent>
           </Card>
@@ -150,11 +152,12 @@ export default function Settings() {
           <Card>
             <CardHeader className="pb-3">
               <CardTitle className="text-sm font-semibold">CBK Treasury Bill Rates</CardTitle>
+              <p className="text-xs text-muted-foreground mt-1">15% WHT deducted at source on the discount amount — enter the gross auction rate.</p>
             </CardHeader>
             <CardContent className="p-4 pt-0 grid grid-cols-1 sm:grid-cols-3 gap-4">
-              <RateField label="91-Day T-Bill" name="tbill91Rate" register={register} description="Default: 8.82%" />
-              <RateField label="182-Day T-Bill" name="tbill182Rate" register={register} description="Default: 8.78%" />
-              <RateField label="364-Day T-Bill" name="tbill364Rate" register={register} description="Default: 8.97%" />
+              <RateField label="91-Day T-Bill (Gross)" name="tbill91Rate" register={register} description="Gross rate. Default: 8.82% → net ≈ 7.50%" />
+              <RateField label="182-Day T-Bill (Gross)" name="tbill182Rate" register={register} description="Gross rate. Default: 8.78% → net ≈ 7.46%" />
+              <RateField label="364-Day T-Bill (Gross)" name="tbill364Rate" register={register} description="Gross rate. Default: 8.97% → net ≈ 7.62%" />
             </CardContent>
           </Card>
 
@@ -162,25 +165,26 @@ export default function Settings() {
           <Card>
             <CardHeader className="pb-3">
               <CardTitle className="text-sm font-semibold">CBK Bond Rates</CardTitle>
+              <p className="text-xs text-muted-foreground mt-1">Enter gross coupon rates. IFB coupons are tax-exempt; FXD coupons have 15% WHT deducted.</p>
             </CardHeader>
             <CardContent className="p-4 pt-0 grid grid-cols-1 sm:grid-cols-3 gap-4">
               <RateField
-                label="IFB Coupon Rate"
+                label="IFB Coupon Rate (Gross = Net)"
                 name="ifbCouponRate"
                 register={register}
-                description="Tax-exempt. Default: 12.5%"
+                description="Tax-exempt — no WHT. Default: 12.5%"
               />
               <RateField
-                label="FXD Coupon Rate"
+                label="FXD Coupon Rate (Gross)"
                 name="fxdCouponRate"
                 register={register}
-                description="Subject to 15% WHT. Default: 10.5%"
+                description="Gross rate before 15% WHT. Default: 12.35% → net ≈ 10.5%"
               />
               <RateField
-                label="Withholding Tax (FXD only)"
+                label="Withholding Tax Rate"
                 name="withholdingTax"
                 register={register}
-                description="Applied to FXD coupons only. Default: 15%"
+                description="Applied to MMF, T-Bill, and FXD income. Default: 15%"
               />
             </CardContent>
           </Card>

@@ -60,15 +60,15 @@ const BUCKET_META: Record<
     label: "SanlamAllianz MMF",
     color: "text-[#4ade80]",
     icon: <Wallet className="w-4 h-4" />,
-    description: "Money Market Fund — daily accrual, 8.78% p.a.",
-    taxNote: "No withholding tax",
+    description: "Money Market Fund — daily accrual, 8.78% p.a. gross",
+    taxNote: "15% WHT deducted at source (final tax)",
   },
   tbill: {
     label: "CBK T-Bills",
     color: "text-[#60a5fa]",
     icon: <TrendingUp className="w-4 h-4" />,
     description: "Treasury Bills — 91/182/364-day discount instruments",
-    taxNote: "No withholding tax",
+    taxNote: "15% WHT on discount (final tax)",
   },
   ifb: {
     label: "IFB Bonds",
@@ -149,6 +149,7 @@ export default function Deposits() {
   const totalContributed = summary?.totalContributed ?? 0;
   const remainingToTarget = summary?.remainingToTarget ?? 5000000;
   const taxLiability = summary?.taxLiability ?? 0;
+  const taxBreakdown = summary?.taxBreakdown ?? { mmf: 0, tbill: 0, ifb: 0, fxd: 0 };
   const byBucket = summary?.byBucket ?? { mmf: 0, tbill: 0, ifb: 0, fxd: 0 };
   const targetAmount = totalContributed + remainingToTarget;
   const progressPct = targetAmount > 0 ? Math.min(100, (totalContributed / targetAmount) * 100) : 0;
@@ -215,19 +216,19 @@ export default function Deposits() {
             <div className="group relative">
               <Info className="w-3 h-3 text-muted-foreground cursor-help" />
               <div className="absolute bottom-5 left-0 z-10 hidden group-hover:block w-56 rounded-lg bg-popover border border-border p-3 text-xs text-muted-foreground shadow-xl">
-                15% WHT estimated on your FXD bond deposits. IFB bonds are tax-exempt. MMF and T-bills have no WHT.
+15% WHT is deducted at source on MMF interest, T-Bill discount, and FXD coupons — all are final taxes for resident individuals. IFB bonds are fully tax-exempt.
               </div>
             </div>
           </div>
           <p className="text-2xl font-serif font-bold text-red-400">
             {formatKES(taxLiability)}
           </p>
-          <p className="text-xs text-muted-foreground">
-            15% WHT on annual FXD coupon income
-          </p>
-          <p className="text-xs text-muted-foreground">
-            FXD principal: {formatKES(byBucket.fxd)}
-          </p>
+          <div className="text-xs text-muted-foreground space-y-0.5">
+            {taxBreakdown.mmf > 0 && <p>MMF: {formatKES(taxBreakdown.mmf)}</p>}
+            {taxBreakdown.tbill > 0 && <p>T-Bill: {formatKES(taxBreakdown.tbill)}</p>}
+            {taxBreakdown.fxd > 0 && <p>FXD: {formatKES(taxBreakdown.fxd)}</p>}
+            {taxLiability === 0 && <p>No deposits recorded yet</p>}
+          </div>
         </div>
       </div>
 

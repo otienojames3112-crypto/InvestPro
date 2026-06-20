@@ -274,8 +274,10 @@ export async function deleteDepositEntry(id: number, userId: number) {
 export async function getActualsSummary(
   userId: number,
   targetAmount: number,
-  fxdWithholdingTax: number,
-  fxdCouponRate: number = 10.5
+  withholdingTax: number,
+  fxdCouponRate: number = 12.35,
+  mmfYield: number = 8.78,
+  tbillRate: number = 8.97
 ) {
   const db = await getDb();
   if (!db) return null;
@@ -291,20 +293,40 @@ export async function getActualsSummary(
   for (const row of rows) {
     const amt = parseFloat(row.amount);
     totalContributed += amt;
-    byBucket[row.bucket] += amt;
+    byBucket[row.bucket as keyof typeof byBucket] += amt;
   }
 
-  // Tax liability = annual coupon income on FXD holdings × WHT rate
-  // Annual coupon income = FXD principal × coupon rate
-  // WHT is applied at source on each coupon payment (semi-annually)
+  const wht = withholdingTax / 100;
+
+  // MMF: 15% WHT on annual interest income (final tax for resident individuals)
+  const annualMmfInterest = byBucket.mmf * (mmfYield / 100);
+  const mmfTax = annualMmfInterest * wht;
+
+  // T-Bills: 15% WHT on the discount amount (final tax for resident individuals)
+  const annualTbillDiscount = byBucket.tbill * (tbillRate / 100);
+  const tbillTax = annualTbillDiscount * wht;
+
+  // IFB: Tax-exempt — no WHT
+  const ifbTax = 0;
+
+  // FXD: 15% WHT on annual coupon income
   const annualFxdCouponIncome = byBucket.fxd * (fxdCouponRate / 100);
-  const taxLiability = annualFxdCouponIncome * (fxdWithholdingTax / 100);
+  const fxdTax = annualFxdCouponIncome * wht;
+
+  // Total estimated annual WHT across all buckets
+  const taxLiability = mmfTax + tbillTax + ifbTax + fxdTax;
   const remainingToTarget = Math.max(0, targetAmount - totalContributed);
 
   return {
     totalContributed,
     remainingToTarget,
     taxLiability,
+    taxBreakdown: {
+      mmf: Math.round(mmfTax * 100) / 100,
+      tbill: Math.round(tbillTax * 100) / 100,
+      ifb: 0,
+      fxd: Math.round(fxdTax * 100) / 100,
+    },
     annualFxdCouponIncome,
     byBucket,
     entryCount: rows.length,

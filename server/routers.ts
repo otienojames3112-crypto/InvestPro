@@ -36,7 +36,7 @@ const DEFAULT_SETTINGS: EngineSettings = {
   tbill182Rate: 8.7782,
   tbill364Rate: 8.9746,
   ifbCouponRate: 12.5,
-  fxdCouponRate: 10.5,
+  fxdCouponRate: 12.35,  // gross; net ≈ 10.5% after 15% WHT
   withholdingTax: 15,
   startingContribution: 2500,
   stepUpAmount: 3000,
@@ -305,12 +305,16 @@ export const appRouter = router({
         ctx.user.id,
         settings.targetAmount,
         settings.withholdingTax,
-        settings.fxdCouponRate
+        settings.fxdCouponRate,
+        settings.mmfYield,
+        settings.tbill364Rate
       );
       return summary ?? {
         totalContributed: 0,
         remainingToTarget: settings.targetAmount,
         taxLiability: 0,
+        taxBreakdown: { mmf: 0, tbill: 0, ifb: 0, fxd: 0 },
+        annualFxdCouponIncome: 0,
         byBucket: { mmf: 0, tbill: 0, ifb: 0, fxd: 0 },
         entryCount: 0,
       };

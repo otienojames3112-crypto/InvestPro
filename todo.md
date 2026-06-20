@@ -121,3 +121,11 @@
 - [x] Clarify projected total vs target: show surplus/deficit clearly; explain that compounding overshoot is expected and desirable
 - [x] When target changes, projected amounts should reflect the new target context (progress bar, milestone status, surplus/deficit all sync)
 - [x] Move Record Deposits from a separate /deposits route to a global slide-out drawer accessible from sidebar and all dashboard CTAs
+
+## Round 5 Fixes & Features
+- [ ] Fix target amount language: everywhere say "the amount you will HOLD at Month 120" not "total contributions"
+- [ ] Implement time-locked rate changes: rate_history table with effective_date; engine uses rate valid at each month
+- [ ] Build Getting Started guide page with SanlamAllianz MMF + CBK DhowCSD step-by-step setup
+- [ ] Account status tracker: click to mark account as opened, store account details (account number, name, date opened)
+- [ ] Add Getting Started to sidebar navigation after Rate Settings
+- [ ] Full pre-publish sync verification across all pages

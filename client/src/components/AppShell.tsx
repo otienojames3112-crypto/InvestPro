@@ -13,6 +13,7 @@ import {
   Settings,
   TrendingUp,
   ArrowDownCircle,
+  MapPin,
 } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { Button } from "./ui/button";
@@ -26,6 +27,7 @@ const navItems = [
   { href: "/securities", label: "CBK Securities", icon: Landmark },
   { href: "/scenarios", label: "Scenarios", icon: BarChart3 },
   { href: "/settings", label: "Rate Settings", icon: Settings },
+  { href: "/getting-started", label: "Getting Started", icon: MapPin },
 ];
 
 export function AppShell({ children }: { children: React.ReactNode }) {

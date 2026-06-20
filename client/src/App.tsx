@@ -11,6 +11,7 @@ import Contributions from "./pages/Contributions";
 import Settings from "./pages/Settings";
 import Securities from "./pages/Securities";
 import Scenarios from "./pages/Scenarios";
+import GettingStarted from "./pages/GettingStarted";
 
 function Router() {
   return (
@@ -21,6 +22,7 @@ function Router() {
       <Route path="/securities" component={Securities} />
       <Route path="/scenarios" component={Scenarios} />
       <Route path="/settings" component={Settings} />
+      <Route path="/getting-started" component={GettingStarted} />
       <Route path="/404" component={NotFound} />
       <Route component={NotFound} />
     </Switch>

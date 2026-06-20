@@ -9,6 +9,8 @@ import { Settings as SettingsIcon, RefreshCw, Info } from "lucide-react";
 import { toast } from "sonner";
 import { useForm } from "react-hook-form";
 import { useEffect } from "react";
+import { History, TrendingUp } from "lucide-react";
+import { format } from "date-fns";
 
 interface SettingsForm {
   mmfYield: number;
@@ -47,6 +49,67 @@ function RateField({ label, name, register, description }: {
       </div>
       {description && <p className="text-xs text-muted-foreground">{description}</p>}
     </div>
+  );
+}
+
+function RateHistorySection() {
+  const { data: history, isLoading } = trpc.rateHistory.list.useQuery();
+
+  if (isLoading) return null;
+  if (!history || history.length === 0) {
+    return (
+      <Card className="mt-2">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-sm font-semibold flex items-center gap-2">
+            <History className="w-4 h-4 text-primary" />
+            Rate Change History
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="p-4 pt-0">
+          <p className="text-xs text-muted-foreground">No rate changes recorded yet. Rate changes will appear here after you save new settings.</p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <Card className="mt-2">
+      <CardHeader className="pb-3">
+        <CardTitle className="text-sm font-semibold flex items-center gap-2">
+          <History className="w-4 h-4 text-primary" />
+          Rate Change History
+        </CardTitle>
+        <p className="text-xs text-muted-foreground mt-1">
+          Each entry shows the rates that took effect on that date. Only future months are affected by each change.
+        </p>
+      </CardHeader>
+      <CardContent className="p-4 pt-0 overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="border-b border-border">
+              <th className="text-left pb-2 pr-3 font-medium text-muted-foreground">Effective Date</th>
+              <th className="text-right pb-2 pr-3 font-medium text-muted-foreground">MMF</th>
+              <th className="text-right pb-2 pr-3 font-medium text-muted-foreground">T-Bill 91d</th>
+              <th className="text-right pb-2 pr-3 font-medium text-muted-foreground">T-Bill 364d</th>
+              <th className="text-right pb-2 pr-3 font-medium text-muted-foreground">IFB</th>
+              <th className="text-right pb-2 font-medium text-muted-foreground">FXD</th>
+            </tr>
+          </thead>
+          <tbody>
+            {[...history].reverse().map((row) => (
+              <tr key={row.id} className="border-b border-border/50 last:border-0">
+                <td className="py-2 pr-3 text-foreground font-medium">{row.effectiveDate}</td>
+                <td className="py-2 pr-3 text-right text-muted-foreground">{row.mmfYield.toFixed(2)}%</td>
+                <td className="py-2 pr-3 text-right text-muted-foreground">{row.tbill91Rate.toFixed(2)}%</td>
+                <td className="py-2 pr-3 text-right text-muted-foreground">{row.tbill364Rate.toFixed(2)}%</td>
+                <td className="py-2 pr-3 text-right text-muted-foreground">{row.ifbCouponRate.toFixed(2)}%</td>
+                <td className="py-2 text-right text-muted-foreground">{row.fxdCouponRate.toFixed(2)}%</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -215,8 +278,9 @@ export default function Settings() {
                 <p className="text-xs text-muted-foreground">Minimum MMF balance before sweeping to DhowCSD</p>
               </div>
               <div className="space-y-1.5">
-                <Label className="text-xs font-medium">Target Amount (KES)</Label>
-                <Input type="number" step="100000" min="0" {...register("targetAmount", { valueAsNumber: true })} />
+                <Label className="text-xs font-medium">Target End Value (KES)</Label>
+                <Input type="number" step="100000" min="0" placeholder="5000000" {...register("targetAmount", { valueAsNumber: true })} />
+                <p className="text-xs text-muted-foreground">The total portfolio value you want to <strong>hold</strong> at Month 120 — not what you put in, but what you will have</p>
               </div>
               <div className="space-y-1.5">
                 <Label className="text-xs font-medium">Start Date</Label>
@@ -224,6 +288,13 @@ export default function Settings() {
               </div>
             </CardContent>
           </Card>
+
+          <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-4 flex gap-3">
+            <TrendingUp className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+            <div className="text-xs text-muted-foreground leading-relaxed">
+              <strong className="text-foreground">Rate changes only affect future months.</strong> When you save new rates, a snapshot is recorded with today's date as the effective date. The projection engine uses the rate that was in effect at each month's date — so your historical months are never retroactively changed.
+            </div>
+          </div>
 
           <Button type="submit" className="w-full sm:w-auto" disabled={saveMutation.isPending}>
             {saveMutation.isPending ? (
@@ -236,6 +307,8 @@ export default function Settings() {
             )}
           </Button>
         </form>
+
+        <RateHistorySection />
       </div>
     </AppShell>
   );

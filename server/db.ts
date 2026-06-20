@@ -1,4 +1,4 @@
-import { and, eq, desc } from "drizzle-orm";
+import { and, eq, desc, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import {
   InsertUser,
@@ -8,11 +8,13 @@ import {
   securities,
   contributionOverrides,
   depositEntries,
+  rateHistory,
   type InsertRateSettings,
   type InsertLedgerEntry,
   type InsertSecurity,
   type InsertContributionOverride,
   type InsertDepositEntry,
+  type InsertRateHistory,
 } from "../drizzle/schema";
 import { ENV } from "./_core/env";
 
@@ -226,6 +228,48 @@ export async function deleteContributionOverride(userId: number, monthNumber: nu
         eq(contributionOverrides.monthNumber, monthNumber)
       )
     );
+}
+
+// ─── Rate History ──────────────────────────────────────────────────────────────
+
+/**
+ * Record a rate snapshot whenever the user saves new rates.
+ * effectiveDate is today's date (YYYY-MM-DD) — rates apply from this date onward.
+ */
+export async function addRateHistorySnapshot(data: InsertRateHistory) {
+  const db = await getDb();
+  if (!db) return;
+  await db.insert(rateHistory).values(data);
+}
+
+/**
+ * Get all rate history entries for a user, ordered by effectiveDate ascending.
+ */
+export async function getRateHistory(userId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select()
+    .from(rateHistory)
+    .where(eq(rateHistory.userId, userId))
+    .orderBy(rateHistory.effectiveDate);
+}
+
+/**
+ * Get the rate snapshot that was in effect on a given date (YYYY-MM-DD).
+ * Returns the most recent snapshot with effectiveDate <= targetDate.
+ * Falls back to current settings if no history exists.
+ */
+export async function getRateForDate(userId: number, targetDate: string) {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db
+    .select()
+    .from(rateHistory)
+    .where(and(eq(rateHistory.userId, userId), sql`${rateHistory.effectiveDate} <= ${targetDate}`))
+    .orderBy(desc(rateHistory.effectiveDate))
+    .limit(1);
+  return rows[0] ?? null;
 }
 
 // ─── Deposit Entries ────────────────────────────────────────────────────────────

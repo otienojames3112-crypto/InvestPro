@@ -131,3 +131,26 @@ export const depositEntries = mysqlTable("deposit_entries", {
 
 export type DepositEntry = typeof depositEntries.$inferSelect;
 export type InsertDepositEntry = typeof depositEntries.$inferInsert;
+
+/**
+ * Rate history — every time the user saves new rates, a snapshot is recorded
+ * with the effective date. The engine uses the rate valid at each month's date,
+ * so historical months are never retroactively affected by rate changes.
+ */
+export const rateHistory = mysqlTable("rate_history", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("userId").notNull(),
+  effectiveDate: date("effectiveDate").notNull(), // YYYY-MM-DD: rates apply from this date onward
+  mmfYield: decimal("mmfYield", { precision: 8, scale: 4 }).notNull(),
+  tbill91Rate: decimal("tbill91Rate", { precision: 8, scale: 4 }).notNull(),
+  tbill182Rate: decimal("tbill182Rate", { precision: 8, scale: 4 }).notNull(),
+  tbill364Rate: decimal("tbill364Rate", { precision: 8, scale: 4 }).notNull(),
+  ifbCouponRate: decimal("ifbCouponRate", { precision: 8, scale: 4 }).notNull(),
+  fxdCouponRate: decimal("fxdCouponRate", { precision: 8, scale: 4 }).notNull(),
+  withholdingTax: decimal("withholdingTax", { precision: 8, scale: 4 }).notNull(),
+  changeNote: text("changeNote"), // optional note explaining why rates changed
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type RateHistory = typeof rateHistory.$inferSelect;
+export type InsertRateHistory = typeof rateHistory.$inferInsert;

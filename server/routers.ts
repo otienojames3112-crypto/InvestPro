@@ -19,6 +19,8 @@ import {
   addDepositEntry,
   deleteDepositEntry,
   getActualsSummary,
+  addRateHistorySnapshot,
+  getRateHistory,
 } from "./db";
 import {
   runProjection,
@@ -133,6 +135,21 @@ export const appRouter = router({
           const clean = d.split("T")[0]; // ensure no time part
           return new Date(`${clean}T12:00:00.000Z`);
         })(),
+      });
+      // Snapshot the rate-only fields to rate_history with today as effectiveDate
+      // This ensures future projections use the new rates only from today onward
+      const today = new Date().toISOString().split("T")[0]; // YYYY-MM-DD
+      await addRateHistorySnapshot({
+        userId: ctx.user.id,
+        effectiveDate: new Date(`${today}T12:00:00.000Z`),
+        mmfYield: String(input.mmfYield),
+        tbill91Rate: String(input.tbill91Rate),
+        tbill182Rate: String(input.tbill182Rate),
+        tbill364Rate: String(input.tbill364Rate),
+        ifbCouponRate: String(input.ifbCouponRate),
+        fxdCouponRate: String(input.fxdCouponRate),
+        withholdingTax: String(input.withholdingTax),
+        changeNote: `Rate update on ${today}`,
       });
       return { success: true };
     }),
@@ -389,6 +406,27 @@ export const appRouter = router({
         await deleteContributionOverride(ctx.user.id, input.monthNumber);
         return { success: true };
       }),
+  }),
+
+  // ─── Rate History ──────────────────────────────────────────────────────────────
+  rateHistory: router({
+    list: protectedProcedure.query(async ({ ctx }) => {
+      const rows = await getRateHistory(ctx.user.id);
+      return rows.map((r) => ({
+        id: r.id,
+        effectiveDate: r.effectiveDate instanceof Date
+          ? r.effectiveDate.toISOString().split("T")[0]
+          : String(r.effectiveDate).split("T")[0],
+        mmfYield: parseFloat(String(r.mmfYield)),
+        tbill91Rate: parseFloat(String(r.tbill91Rate)),
+        tbill364Rate: parseFloat(String(r.tbill364Rate)),
+        ifbCouponRate: parseFloat(String(r.ifbCouponRate)),
+        fxdCouponRate: parseFloat(String(r.fxdCouponRate)),
+        withholdingTax: parseFloat(String(r.withholdingTax)),
+        changeNote: r.changeNote,
+        createdAt: r.createdAt,
+      }));
+    }),
   }),
 });
 

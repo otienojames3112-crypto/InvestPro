@@ -130,7 +130,7 @@ export default function Dashboard() {
 
   const saveMutation = trpc.settings.save.useMutation({
     onSuccess: () => {
-      toast.success("Target updated — all projections recalculated");
+      toast.success("Target end value updated — all projections recalculated");
       utils.settings.get.invalidate();
       utils.projection.run.invalidate();
       utils.projection.scenarios.invalidate();
@@ -154,7 +154,7 @@ export default function Dashboard() {
   function saveTarget() {
     const val = parseFloat(targetInput.replace(/,/g, ""));
     if (!val || val < 100000) {
-      toast.error("Please enter a valid target amount (minimum KES 100,000)");
+      toast.error("Please enter a valid target end value (minimum KES 100,000)");
       return;
     }
     if (!settings) return;
@@ -249,13 +249,13 @@ export default function Dashboard() {
                   </p>
                 )}
                 <p className="text-xs text-muted-foreground mt-1.5">
-                  This is what the engine calculates you will accumulate by Month 120 if you follow the plan exactly.
+                  This is the total portfolio value you will <strong className="text-foreground">hold in your accounts</strong> at the end of Month 120 — not what you put in, but what you will have.
                 </p>
               </div>
 
               {/* Target amount — editable */}
               <div className="text-right shrink-0">
-                <p className="text-xs text-muted-foreground mb-1">Your Goal</p>
+                <p className="text-xs text-muted-foreground mb-1">Target End Value</p>
                 <div className="flex items-center gap-2 justify-end">
                   {settingsLoading ? (
                     <Skeleton className="h-7 w-32" />
@@ -267,7 +267,7 @@ export default function Dashboard() {
                   <button
                     onClick={openTargetDialog}
                     className="w-6 h-6 rounded-md bg-muted hover:bg-primary/20 flex items-center justify-center transition-colors"
-                    title="Change your target amount"
+                    title="Change your target end value (the amount you want to hold at Month 120)"
                   >
                     <Pencil className="w-3 h-3 text-muted-foreground" />
                   </button>
@@ -669,11 +669,12 @@ export default function Dashboard() {
       <Dialog open={targetDialogOpen} onOpenChange={setTargetDialogOpen}>
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>Change Your Investment Target</DialogTitle>
+            <DialogTitle>Set Your Target End Value</DialogTitle>
           </DialogHeader>
           <div className="space-y-4 py-2">
             <div className="rounded-lg bg-muted/40 border border-border p-3 text-xs text-muted-foreground leading-relaxed">
-              <strong className="text-foreground">What changes when you update this?</strong>
+              <p className="mb-2"><strong className="text-foreground">This is the total portfolio value you want to hold at Month 120</strong> — not the sum of what you put in, but the final balance sitting across all your investment buckets at the end of 10 years.</p>
+              <strong className="text-foreground">What updates when you change this?</strong>
               <ul className="mt-2 space-y-1 list-disc list-inside">
                 <li>The progress bar and percentage on the dashboard</li>
                 <li>The "Remaining to Target" figure in your live actuals</li>
@@ -684,7 +685,7 @@ export default function Dashboard() {
               <p className="mt-2">The monthly contribution schedule and rate settings are <strong className="text-foreground">not affected</strong>.</p>
             </div>
             <div className="space-y-1.5">
-              <label className="text-xs font-medium text-foreground">New Target Amount (KES)</label>
+              <label className="text-xs font-medium text-foreground">Target End Value (KES) — what you want to hold at Month 120</label>
               <div className="relative">
                 <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground font-medium">KES</span>
                 <Input

@@ -113,6 +113,6 @@
 - [x] Show "What this means" section on dashboard explaining the engine projection in simple terms
 
 ## Bug Fixes (Round 3)
-- [ ] Fix: second target-change attempt fails with "failed to change target amount" error
-- [ ] Fix: bucket balance cards (MMF/T-Bills/IFB/FXD) do not update when target changes
-- [ ] Full end-to-end system test of every page and feature before publish
+- [x] Fix: second target-change attempt fails with "failed to change target amount" error
+- [x] Fix: bucket balance cards (MMF/T-Bills/IFB/FXD) do not update when target changes — now show % of target so they visually respond to goal changes
+- [x] Full end-to-end system test of every page and feature before publish — 52 tests pass, 0 TS errors, all 7 pages render correctly

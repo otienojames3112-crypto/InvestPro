@@ -312,7 +312,7 @@ export default function Dashboard() {
         <div>
           <p className="text-xs text-muted-foreground mb-3 flex items-center gap-1.5">
             <Info className="w-3 h-3" />
-            These are the <strong className="text-foreground">projected balances in each bucket at Month 120</strong> — how your money is spread across the four investment instruments at the end of the 10-year plan.
+            These are the <strong className="text-foreground">projected balances in each bucket at Month 120</strong> — how your money is spread across the four investment instruments at the end of the 10-year plan. These figures are driven by your contribution schedule and interest rates, not your goal amount. To see how different step-up amounts affect your outcome, visit the <Link href="/scenarios"><span className="text-primary hover:underline cursor-pointer">Scenarios</span></Link> page.
           </p>
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
             {projLoading ? (

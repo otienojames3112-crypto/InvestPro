@@ -365,5 +365,54 @@ describe("Safety floor enforcement", () => {
   });
 });
 
+// ─── Date normalisation (regression for startDate save bug) ─────────────────
+describe("startDate normalisation", () => {
+  it("extracts YYYY-MM-DD from ISO timestamp string", () => {
+    const raw = "2026-07-01T12:00:00.000Z";
+    const clean = String(raw).split("T")[0];
+    expect(clean).toBe("2026-07-01");
+  });
+
+  it("extracts YYYY-MM-DD from Date object", () => {
+    const d = new Date("2026-07-01T12:00:00.000Z");
+    const clean = d.toISOString().split("T")[0];
+    expect(clean).toBe("2026-07-01");
+  });
+
+  it("noon UTC Date does not shift date in any UTC+/- timezone", () => {
+    // Storing at noon UTC means toISOString() always returns the correct date
+    // regardless of the server's local timezone (UTC+3 for Kenya, UTC-X for other)
+    const stored = new Date("2026-07-01T12:00:00.000Z");
+    const recovered = stored.toISOString().split("T")[0];
+    expect(recovered).toBe("2026-07-01");
+  });
+
+  it("plain YYYY-MM-DD string passes through unchanged", () => {
+    const raw = "2026-07-01";
+    const clean = String(raw).split("T")[0];
+    expect(clean).toBe("2026-07-01");
+  });
+});
+
+// ─── Target amount change regression ─────────────────────────────────────────
+describe("target amount change", () => {
+  it("changing target does not change projected bucket balances (they are engine outputs)", () => {
+    const r1 = runProjection({ ...DEFAULT_SETTINGS, targetAmount: 5000000 });
+    const r2 = runProjection({ ...DEFAULT_SETTINGS, targetAmount: 10000000 });
+    // Bucket balances at month 120 must be identical — target is not an engine input
+    expect(r1[119].mmfEnd).toBeCloseTo(r2[119].mmfEnd, 0);
+    expect(r1[119].tbillEnd).toBeCloseTo(r2[119].tbillEnd, 0);
+    expect(r1[119].ifbEnd).toBeCloseTo(r2[119].ifbEnd, 0);
+    expect(r1[119].fxdEnd).toBeCloseTo(r2[119].fxdEnd, 0);
+  });
+
+  it("changing target changes whether the plan is on-track (milestone check)", () => {
+    const onTrack = checkMilestones(120, 5279234, { ...DEFAULT_SETTINGS, targetAmount: 5000000 });
+    const behind = checkMilestones(120, 5279234, { ...DEFAULT_SETTINGS, targetAmount: 10000000 });
+    expect(onTrack.status).toBe("ahead");
+    expect(behind.status).toBe("behind");
+  });
+});
+
 // ─── Auth logout (existing) ───────────────────────────────────────────────────
 // (kept in server/auth.logout.test.ts)

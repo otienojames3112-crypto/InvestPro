@@ -396,17 +396,26 @@ export function runScenarios(
 export function checkMilestones(
   currentMonth: number,
   currentTotal: number,
-  _settings: EngineSettings
+  settings: EngineSettings
 ): {
   milestone: YearMilestone | null;
   status: "on-track" | "behind" | "ahead";
   gap: number;
   recommendation: string;
 } {
-  const milestone = YEAR_MILESTONES.find((m) => m.month === currentMonth);
-  if (!milestone) {
+  const rawMilestone = YEAR_MILESTONES.find((m) => m.month === currentMonth);
+  if (!rawMilestone) {
     return { milestone: null, status: "on-track", gap: 0, recommendation: "" };
   }
+
+  // Scale milestone targets proportionally if the user has changed their goal
+  const BASE_TARGET = 5000000;
+  const scale = settings.targetAmount / BASE_TARGET;
+  const milestone: YearMilestone = {
+    ...rawMilestone,
+    projectedTotal: Math.round(rawMilestone.projectedTotal * scale),
+    minHealthyCheckpoint: Math.round(rawMilestone.minHealthyCheckpoint * scale),
+  };
 
   const gap = currentTotal - milestone.minHealthyCheckpoint;
 

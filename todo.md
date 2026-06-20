@@ -92,16 +92,22 @@
 - [x] Grant admin role to otienojames707@gmail.com
 
 ## Accuracy Fixes Requested
-- [ ] Reconcile the engine with the original PDF allocation rules, especially the planned FXD bond allocation in the Growth, De-risking, and Final Liquidity phases
-- [ ] Apply 15% WHT correctly to MMF interest income as final tax for resident individuals
-- [ ] Apply 15% WHT correctly to T-Bill discount income deducted at source
-- [ ] Re-check whether IFB and FXD coupon timing, maturity recycling, and sweep rules match the original monthly plan table
-- [ ] Update dashboard, ledger, deposits, and settings pages so corrected tax treatment and corrected FXD allocations sync consistently across the app
-- [ ] Add or update engine tests to prove MMF WHT, T-Bill WHT, FXD coupon allocations, and milestone alignment are correct
+- [x] Reconcile the engine with the original PDF allocation rules, especially the planned FXD bond allocation in the Growth, De-risking, and Final Liquidity phases
+- [x] Apply 15% WHT correctly to MMF interest income as final tax for resident individuals
+- [x] Apply 15% WHT correctly to T-Bill discount income deducted at source
+- [x] Re-check whether IFB and FXD coupon timing, maturity recycling, and sweep rules match the original monthly plan table
+- [x] Update dashboard, ledger, deposits, and settings pages so corrected tax treatment and corrected FXD allocations sync consistently across the app
+- [x] Add or update engine tests to prove MMF WHT, T-Bill WHT, FXD coupon allocations, and milestone alignment are correct
 
 ## PDF Re-read Notes
-- [ ] Page 1 confirms target mix by phase: Foundation months 1-24 = MMF 50%, T-Bills 50%, IFB 0%, FXD 0%; Growth months 25-84 = MMF 20%, T-Bills 20%, IFB 45%, FXD 15%; De-risking months 85-102 = MMF 25%, T-Bills 35%, IFB 30%, FXD 10%; Final Liquidity months 103-120 = MMF 40%, T-Bills 45%, IFB 10%, FXD 5%
-- [ ] Page 2 confirms contribution ladder starts at KES 2,500 and steps up by KES 3,000 every 6 months through month 120
-- [ ] Pages 3-4 show FXD balances do appear from the Growth phase onward, so the current app behavior with zero FXD is inconsistent with the original plan
-- [ ] Pages 3-4 show monthly action lines combining deposits, coupon receipts, maturities, and specific KES 50,000 sweeps into IFB and FXD, so the engine must model actual bucket purchases rather than a simplified no-FXD path
+- [x] Page 1 confirms target mix by phase: Foundation months 1-24 = MMF 50%, T-Bills 50%, IFB 0%, FXD 0%; Growth months 25-84 = MMF 20%, T-Bills 20%, IFB 45%, FXD 15%; De-risking months 85-102 = MMF 25%, T-Bills 35%, IFB 30%, FXD 10%; Final Liquidity months 103-120 = MMF 40%, T-Bills 45%, IFB 10%, FXD 5%
+- [x] Page 2 confirms contribution ladder starts at KES 2,500 and steps up by KES 3,000 every 6 months through month 120
+- [x] Pages 3-4 show FXD balances do appear from the Growth phase onward, so the current app behavior with zero FXD is inconsistent with the original plan
+- [x] Pages 3-4 show monthly action lines combining deposits, coupon receipts, maturities, and specific KES 50,000 sweeps into IFB and FXD, so the engine must model actual bucket purchases rather than a simplified no-FXD path
 
+
+## Target Amount Interactivity & Plain Language
+- [x] Add plain-language tooltip/explainer on the dashboard for what "Projected at Month 120" means
+- [x] Add a quick-edit target amount control on the dashboard (click to change, saves to settings)
+- [x] When target changes: milestones, progress bar, scenarios, deposits remaining-to-target all sync
+- [x] Show "What this means" section on dashboard explaining the engine projection in simple terms

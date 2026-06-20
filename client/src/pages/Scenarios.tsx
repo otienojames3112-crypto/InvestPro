@@ -15,7 +15,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { BarChart3, CheckCircle2, XCircle } from "lucide-react";
+import { BarChart3, CheckCircle2, XCircle, Info } from "lucide-react";
 
 function CustomTooltip({ active, payload, label }: { active?: boolean; payload?: Array<{ value: number; name: string }>; label?: string }) {
   if (!active || !payload?.length) return null;
@@ -34,6 +34,8 @@ function CustomTooltip({ active, payload, label }: { active?: boolean; payload?:
 
 export default function Scenarios() {
   const { data: scenarios, isLoading } = trpc.projection.scenarios.useQuery();
+  const { data: settings } = trpc.settings.get.useQuery();
+  const targetAmount = settings?.targetAmount ?? 5000000;
 
   const chartData = scenarios?.map((s) => ({
     stepUp: s.stepUp,
@@ -49,7 +51,7 @@ export default function Scenarios() {
             Scenario Comparison
           </h1>
           <p className="text-sm text-muted-foreground mt-0.5">
-            Side-by-side projections for different step-up amounts — see which path hits KES 5,000,000
+            Side-by-side projections for different step-up amounts — see which path hits {formatKES(targetAmount)}
           </p>
         </div>
 
@@ -110,7 +112,7 @@ export default function Scenarios() {
             {/* Target line annotation */}
             <div className="flex items-center gap-2 mt-2 text-xs text-muted-foreground">
               <div className="w-4 h-0.5 bg-primary" />
-              <span>KES 5M target</span>
+              <span>{formatKESCompact(targetAmount)} target</span>
               <div className="w-3 h-3 rounded-sm bg-primary/80 ml-4" />
               <span>Recommended (KES 3,000 step-up)</span>
               <div className="w-3 h-3 rounded-sm bg-muted ml-4" />
@@ -138,13 +140,13 @@ export default function Scenarios() {
                       <th className="text-right px-4 py-3 text-muted-foreground font-medium">Final Monthly Saving</th>
                       <th className="text-right px-4 py-3 text-muted-foreground font-medium">Total Contributed</th>
                       <th className="text-right px-4 py-3 text-muted-foreground font-medium">Projected End Value</th>
-                      <th className="text-right px-4 py-3 text-muted-foreground font-medium">vs KES 5M Target</th>
+                      <th className="text-right px-4 py-3 text-muted-foreground font-medium">vs {formatKESCompact(targetAmount)} Target</th>
                       <th className="text-center px-4 py-3 text-muted-foreground font-medium">Result</th>
                     </tr>
                   </thead>
                   <tbody>
                     {scenarios?.map((s) => {
-                      const gap = s.projectedEndingValue - 5000000;
+                      const gap = s.projectedEndingValue - targetAmount;
                       const isRecommended = s.stepUp === 3000;
                       return (
                         <tr
@@ -215,7 +217,7 @@ export default function Scenarios() {
               <div>
                 <p className="text-sm font-semibold text-foreground mb-1">Strategy Insight</p>
                 <p className="text-xs text-muted-foreground leading-relaxed">
-                  The <strong className="text-foreground">KES 3,000 step-up every 6 months</strong> is the recommended path — it hits the KES 5M target with a comfortable surplus while keeping monthly contributions manageable. Starting at KES 2,500 and stepping up to KES 62,500 by Month 120, the plan leverages the power of compounding through the MMF + DhowCSD velocity loop. A KES 2,000 step-up falls just short; anything below KES 2,800 misses the target.
+                  The <strong className="text-foreground">KES 3,000 step-up every 6 months</strong> is the recommended path — it hits the {formatKES(targetAmount)} target with a comfortable surplus while keeping monthly contributions manageable. Starting at KES 2,500 and stepping up every 6 months, the plan leverages the power of compounding through the MMF + DhowCSD velocity loop. If you change your target above, the green/red status in the table above updates automatically to reflect which step-up amounts reach your new goal.
                 </p>
               </div>
             </div>

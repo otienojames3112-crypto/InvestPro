@@ -143,7 +143,18 @@ export const appRouter = router({
       return runScenarios(settings, SCENARIO_STEPUPS);
     }),
 
-    milestones: publicProcedure.query(() => YEAR_MILESTONES),
+    milestones: protectedProcedure.query(async ({ ctx }) => {
+      const dbSettings = await getRateSettings(ctx.user.id);
+      const settings = dbSettingsToEngine(dbSettings);
+      const BASE_TARGET = 5000000;
+      const scale = settings.targetAmount / BASE_TARGET;
+      if (scale === 1) return YEAR_MILESTONES;
+      return YEAR_MILESTONES.map((m) => ({
+        ...m,
+        projectedTotal: Math.round(m.projectedTotal * scale),
+        minHealthyCheckpoint: Math.round(m.minHealthyCheckpoint * scale),
+      }));
+    }),
 
     contributionSchedule: protectedProcedure.query(async ({ ctx }) => {
       const dbSettings = await getRateSettings(ctx.user.id);

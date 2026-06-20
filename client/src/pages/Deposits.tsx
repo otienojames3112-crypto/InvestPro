@@ -91,6 +91,8 @@ export default function Deposits() {
 
   const { data: deposits = [], isLoading } = trpc.deposits.list.useQuery();
   const { data: summary } = trpc.deposits.summary.useQuery();
+  const { data: settings } = trpc.settings.get.useQuery();
+  const liveTarget = settings?.targetAmount ?? 5000000;
 
   const addMutation = trpc.deposits.add.useMutation({
     onSuccess: () => {
@@ -147,12 +149,11 @@ export default function Deposits() {
   }
 
   const totalContributed = summary?.totalContributed ?? 0;
-  const remainingToTarget = summary?.remainingToTarget ?? 5000000;
+  const remainingToTarget = summary?.remainingToTarget ?? liveTarget;
   const taxLiability = summary?.taxLiability ?? 0;
   const taxBreakdown = summary?.taxBreakdown ?? { mmf: 0, tbill: 0, ifb: 0, fxd: 0 };
   const byBucket = summary?.byBucket ?? { mmf: 0, tbill: 0, ifb: 0, fxd: 0 };
-  const targetAmount = totalContributed + remainingToTarget;
-  const progressPct = targetAmount > 0 ? Math.min(100, (totalContributed / targetAmount) * 100) : 0;
+  const progressPct = liveTarget > 0 ? Math.min(100, (totalContributed / liveTarget) * 100) : 0;
 
   return (
     <div className="p-8 space-y-8 max-w-5xl mx-auto">
@@ -190,7 +191,7 @@ export default function Deposits() {
             />
           </div>
           <p className="text-xs text-muted-foreground">
-            {progressPct.toFixed(1)}% of KES 5,000,000 target
+            {progressPct.toFixed(1)}% of {formatKES(liveTarget)} goal
           </p>
         </div>
 
@@ -203,7 +204,7 @@ export default function Deposits() {
             {formatKES(remainingToTarget)}
           </p>
           <p className="text-xs text-muted-foreground">
-            Based on KES 5,000,000 goal
+            Based on {formatKES(liveTarget)} goal
           </p>
         </div>
 
@@ -314,13 +315,9 @@ export default function Deposits() {
                         <Badge className="bg-emerald-500/20 text-emerald-400 border-emerald-500/30 text-xs">
                           Tax-Exempt
                         </Badge>
-                      ) : d.bucket === "fxd" ? (
+                      ) : (
                         <Badge className="bg-red-500/20 text-red-400 border-red-500/30 text-xs">
                           15% WHT
-                        </Badge>
-                      ) : (
-                        <Badge className="bg-white/10 text-muted-foreground border-white/10 text-xs">
-                          No WHT
                         </Badge>
                       )}
                     </TableCell>

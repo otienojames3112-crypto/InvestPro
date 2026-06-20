@@ -416,3 +416,103 @@ describe("target amount change", () => {
 
 // ─── Auth logout (existing) ───────────────────────────────────────────────────
 // (kept in server/auth.logout.test.ts)
+
+// ─── Rate-history time-locking regression tests ───────────────────────────────
+describe("runProjection with rate schedule (time-locked rates)", () => {
+  // Settings with a fixed start date so month dates are deterministic
+  const SETTINGS_WITH_DATE: EngineSettings = {
+    ...DEFAULT_SETTINGS,
+    startDate: "2026-07-01",
+  };
+
+  it("uses baseline rates for all months when no rate change snapshot exists", () => {
+    const result = runProjection(SETTINGS_WITH_DATE, [], []);
+    // Month 1 MMF end should be ~2515 (2500 contribution + small interest)
+    expect(result[0].mmfEnd).toBeGreaterThan(2500);
+    expect(result[0].mmfEnd).toBeLessThan(2600);
+  });
+
+  it("months before a rate change use the original rate; months after use the new rate", () => {
+    // Month 1 = Jul 2026, Month 14 = Aug 2027 — rate change effective Aug 2027
+    const higherMMF = 12.0; // significantly higher so the difference is detectable
+
+    const schedule: RateSnapshot[] = [
+      {
+        effectiveDate: "2027-08-01",
+        mmfYield: higherMMF,
+        tbill91Rate: DEFAULT_SETTINGS.tbill91Rate,
+        tbill182Rate: DEFAULT_SETTINGS.tbill182Rate,
+        tbill364Rate: DEFAULT_SETTINGS.tbill364Rate,
+        ifbCouponRate: DEFAULT_SETTINGS.ifbCouponRate,
+        fxdCouponRate: DEFAULT_SETTINGS.fxdCouponRate,
+        withholdingTax: DEFAULT_SETTINGS.withholdingTax,
+      },
+    ];
+
+    const withChange = runProjection(SETTINGS_WITH_DATE, [], schedule);
+    const withoutChange = runProjection(SETTINGS_WITH_DATE, [], []);
+
+    // Month 13 (Jul 2027, before the Aug 2027 change): MMF end should be identical
+    expect(withChange[12].mmfEnd).toBeCloseTo(withoutChange[12].mmfEnd, 0);
+
+    // Month 120 (after the rate change): higher MMF rate means higher MMF balance
+    expect(withChange[119].mmfEnd).toBeGreaterThan(withoutChange[119].mmfEnd);
+  });
+
+  it("a rate change does not retroactively alter months before the effective date", () => {
+    // Rate change from Jul 2031 onward (approx month 61)
+    const schedule: RateSnapshot[] = [
+      {
+        effectiveDate: "2031-07-01",
+        mmfYield: 15.0,
+        tbill91Rate: DEFAULT_SETTINGS.tbill91Rate,
+        tbill182Rate: DEFAULT_SETTINGS.tbill182Rate,
+        tbill364Rate: DEFAULT_SETTINGS.tbill364Rate,
+        ifbCouponRate: DEFAULT_SETTINGS.ifbCouponRate,
+        fxdCouponRate: DEFAULT_SETTINGS.fxdCouponRate,
+        withholdingTax: DEFAULT_SETTINGS.withholdingTax,
+      },
+    ];
+
+    const withChange = runProjection(SETTINGS_WITH_DATE, [], schedule);
+    const withoutChange = runProjection(SETTINGS_WITH_DATE, [], []);
+
+    // Months 1-59 must be identical (rate change is in the future)
+    for (let i = 0; i < 59; i++) {
+      expect(withChange[i].mmfEnd).toBeCloseTo(withoutChange[i].mmfEnd, 0);
+    }
+    // Month 120 must diverge (higher rate means higher balance)
+    expect(withChange[119].mmfEnd).toBeGreaterThan(withoutChange[119].mmfEnd);
+  });
+
+  it("multiple rate changes apply in chronological order", () => {
+    const schedule: RateSnapshot[] = [
+      {
+        effectiveDate: "2028-01-01", // ~month 19
+        mmfYield: 10.0,
+        tbill91Rate: DEFAULT_SETTINGS.tbill91Rate,
+        tbill182Rate: DEFAULT_SETTINGS.tbill182Rate,
+        tbill364Rate: DEFAULT_SETTINGS.tbill364Rate,
+        ifbCouponRate: DEFAULT_SETTINGS.ifbCouponRate,
+        fxdCouponRate: DEFAULT_SETTINGS.fxdCouponRate,
+        withholdingTax: DEFAULT_SETTINGS.withholdingTax,
+      },
+      {
+        effectiveDate: "2030-01-01", // ~month 43 — rate drops back down
+        mmfYield: 6.0,
+        tbill91Rate: DEFAULT_SETTINGS.tbill91Rate,
+        tbill182Rate: DEFAULT_SETTINGS.tbill182Rate,
+        tbill364Rate: DEFAULT_SETTINGS.tbill364Rate,
+        ifbCouponRate: DEFAULT_SETTINGS.ifbCouponRate,
+        fxdCouponRate: DEFAULT_SETTINGS.fxdCouponRate,
+        withholdingTax: DEFAULT_SETTINGS.withholdingTax,
+      },
+    ];
+
+    const result = runProjection(SETTINGS_WITH_DATE, [], schedule);
+    // Should not throw and should produce 120 rows
+    expect(result).toHaveLength(120);
+    // Final total should be positive
+    expect(result[119].totalEnd).toBeGreaterThan(0);
+  });
+});

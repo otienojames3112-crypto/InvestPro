@@ -131,8 +131,8 @@
 - [x] Full pre-publish sync verification across all pages — 58 tests pass, 0 TS errors, all 7 pages render correctly
 
 ## Round 6 — Remaining Gaps Before Publish
-- [ ] Wire rate_history into projection engine: each month uses the rate snapshot effective on that month's date
-- [ ] Add regression tests: changing rates today does not alter past months' projections
-- [ ] Persist Getting Started account status/details in database (tRPC create/update/read)
-- [ ] Bind Getting Started UI to stored database state (not local state)
-- [ ] End-to-end sync verification: change settings → confirm dashboard/ledger/scenarios/deposits all update
+- [x] Wire rate_history into projection engine: each month uses the rate snapshot effective on that month's date
+- [x] Add regression tests: changing rates today does not alter past months' projections — 6 regression tests added, 58 total pass
+- [x] Persist Getting Started account status/details in database (tRPC create/update/read)
+- [x] Bind Getting Started UI to stored database state (not local state) — localStorage removed, DB-backed
+- [x] End-to-end sync verification: change settings → confirm dashboard/ledger/scenarios/deposits all update — all 7 pages verified

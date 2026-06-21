@@ -175,3 +175,25 @@
 - [x] Frontend: short-horizon warning banner
 - [x] Run full test suite and confirm all tests pass (71/71)
 - [x] Save checkpoint
+
+## Round 10 — MMF Comparison List + Other Asset Classes
+- [ ] Schema: add mmf_funds table (name, company, grossYield, ear, managementFee, minInvestment, aum, asOfDate, source)
+- [ ] Schema: add mmfFundId to portfolios table (nullable FK to mmf_funds)
+- [ ] Schema: add other_holdings table (portfolioId, assetClass, name, description, purchaseValue, currentValue, purchaseDate, notes, assumedReturnConservative, assumedReturnBase, assumedReturnOptimistic, incomeRecords)
+- [ ] Schema: add holding_income table (holdingId, amount, date, type, notes)
+- [ ] Run SQL migration for all new tables and columns
+- [ ] Seed 27 Kenyan MMF funds with current benchmark data
+- [ ] Engine: use selected fund EAR (net of fee) as MMF return; still apply 15% WHT on top
+- [ ] Engine: fall back to manual mmfYield if no fund selected
+- [ ] Router: mmfFunds CRUD (list, create, update, delete)
+- [ ] Router: portfolios.setFund (set mmfFundId on portfolio)
+- [ ] Router: otherHoldings CRUD (list, create, update, delete)
+- [ ] Router: holdingIncome CRUD (add, list, delete income records per holding)
+- [ ] Router: netWorth query (sum all buckets + other holdings current value)
+- [ ] Frontend: MMF Funds page (sortable/searchable table, add/edit/delete, rank vs top-5 avg, selected fund highlight)
+- [ ] Frontend: fund selector in Settings page (replace manual MMF yield with fund picker; manual override still available)
+- [ ] Frontend: dashboard fund rank card (show selected fund rank and gap vs top-5)
+- [ ] Frontend: Other Assets page (education section per asset class, holdings table, add/edit/delete holding, income tracker, net-worth summary)
+- [ ] Frontend: scenario projection on Other Assets page (user-entered assumed return, conservative/base/optimistic range, clearly labelled as scenario)
+- [ ] Frontend: add MMF Funds and Other Assets to sidebar navigation
+- [ ] Run full test suite and save checkpoint

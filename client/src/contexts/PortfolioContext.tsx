@@ -16,6 +16,7 @@ interface Portfolio {
   foundationFrac: number;
   growthFrac: number;
   deRiskingFrac: number;
+  mmfFundId: number | null;
   cbkSourceUrl: string | null;
   sanlamSourceUrl: string | null;
   ratesLastUpdatedAt: Date | null;

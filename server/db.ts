@@ -460,3 +460,132 @@ export async function upsertAccountStatus(data: InsertAccountStatus) {
     await db.insert(accountStatus).values(data);
   }
 }
+
+// ─── MMF Funds ────────────────────────────────────────────────────────────────
+
+import {
+  mmfFunds,
+  otherHoldings,
+  holdingIncome,
+  type InsertMmfFund,
+  type InsertOtherHolding,
+  type InsertHoldingIncome,
+} from "../drizzle/schema";
+
+/** List all active MMF funds, ordered by EAR descending. */
+export async function getMmfFunds() {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(mmfFunds).where(eq(mmfFunds.isActive, true)).orderBy(desc(mmfFunds.ear));
+}
+
+/** Get a single MMF fund by ID. */
+export async function getMmfFund(id: number) {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db.select().from(mmfFunds).where(eq(mmfFunds.id, id)).limit(1);
+  return rows[0] ?? null;
+}
+
+/** Insert a new MMF fund (admin/owner use). */
+export async function addMmfFund(data: InsertMmfFund) {
+  const db = await getDb();
+  if (!db) return null;
+  const result = await db.insert(mmfFunds).values(data);
+  return result;
+}
+
+/** Update an existing MMF fund. */
+export async function updateMmfFund(id: number, data: Partial<InsertMmfFund>) {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(mmfFunds).set(data).where(eq(mmfFunds.id, id));
+}
+
+/** Soft-delete (deactivate) an MMF fund. */
+export async function deactivateMmfFund(id: number) {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(mmfFunds).set({ isActive: false }).where(eq(mmfFunds.id, id));
+}
+
+/** Set the selected MMF fund for a portfolio (null = use manual rate). */
+export async function setPortfolioMmfFund(portfolioId: number, mmfFundId: number | null) {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(portfolios).set({ mmfFundId }).where(eq(portfolios.id, portfolioId));
+}
+
+// ─── Other Holdings ───────────────────────────────────────────────────────────
+
+/** List all holdings for a portfolio, ordered by asset class then name. */
+export async function getOtherHoldings(portfolioId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select()
+    .from(otherHoldings)
+    .where(eq(otherHoldings.portfolioId, portfolioId))
+    .orderBy(otherHoldings.assetClass, otherHoldings.name);
+}
+
+/** Get a single holding by ID. */
+export async function getOtherHolding(id: number, portfolioId: number) {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db
+    .select()
+    .from(otherHoldings)
+    .where(and(eq(otherHoldings.id, id), eq(otherHoldings.portfolioId, portfolioId)))
+    .limit(1);
+  return rows[0] ?? null;
+}
+
+/** Add a new holding. */
+export async function addOtherHolding(data: InsertOtherHolding) {
+  const db = await getDb();
+  if (!db) return null;
+  const result = await db.insert(otherHoldings).values(data);
+  return result;
+}
+
+/** Update a holding. */
+export async function updateOtherHolding(id: number, portfolioId: number, data: Partial<InsertOtherHolding>) {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(otherHoldings).set(data).where(and(eq(otherHoldings.id, id), eq(otherHoldings.portfolioId, portfolioId)));
+}
+
+/** Delete a holding and its income records. */
+export async function deleteOtherHolding(id: number, portfolioId: number) {
+  const db = await getDb();
+  if (!db) return;
+  await db.delete(holdingIncome).where(eq(holdingIncome.holdingId, id));
+  await db.delete(otherHoldings).where(and(eq(otherHoldings.id, id), eq(otherHoldings.portfolioId, portfolioId)));
+}
+
+/** List income records for a holding. */
+export async function getHoldingIncome(holdingId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select()
+    .from(holdingIncome)
+    .where(eq(holdingIncome.holdingId, holdingId))
+    .orderBy(desc(holdingIncome.incomeDate));
+}
+
+/** Add an income record for a holding. */
+export async function addHoldingIncome(data: InsertHoldingIncome) {
+  const db = await getDb();
+  if (!db) return null;
+  const result = await db.insert(holdingIncome).values(data);
+  return result;
+}
+
+/** Delete an income record. */
+export async function deleteHoldingIncome(id: number, holdingId: number) {
+  const db = await getDb();
+  if (!db) return;
+  await db.delete(holdingIncome).where(and(eq(holdingIncome.id, id), eq(holdingIncome.holdingId, holdingId)));
+}

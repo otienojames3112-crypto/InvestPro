@@ -15,6 +15,8 @@ import {
   TrendingUp,
   ArrowDownCircle,
   MapPin,
+  PiggyBank,
+  Briefcase,
 } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { Button } from "./ui/button";
@@ -27,6 +29,8 @@ const navItems = [
   { href: "/contributions", label: "Contributions", icon: TrendingUp },
   { href: "/securities", label: "CBK Securities", icon: Landmark },
   { href: "/scenarios", label: "Scenarios", icon: BarChart3 },
+  { href: "/mmf-funds", label: "MMF Funds", icon: PiggyBank },
+  { href: "/other-assets", label: "Other Assets", icon: Briefcase },
   { href: "/settings", label: "Rate Settings", icon: Settings },
   { href: "/getting-started", label: "Getting Started", icon: MapPin },
 ];

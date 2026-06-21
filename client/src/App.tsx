@@ -14,6 +14,8 @@ import Securities from "./pages/Securities";
 import Scenarios from "./pages/Scenarios";
 import GettingStarted from "./pages/GettingStarted";
 import Deposits from "./pages/Deposits";
+import MmfFunds from "./pages/MmfFunds";
+import OtherAssets from "./pages/OtherAssets";
 
 function Router() {
   return (
@@ -26,6 +28,8 @@ function Router() {
       <Route path="/settings" component={Settings} />
       <Route path="/getting-started" component={GettingStarted} />
       <Route path="/deposits" component={Deposits} />
+      <Route path="/mmf-funds" component={MmfFunds} />
+      <Route path="/other-assets" component={OtherAssets} />
       <Route path="/404" component={NotFound} />
       <Route component={NotFound} />
     </Switch>

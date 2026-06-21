@@ -66,6 +66,12 @@ export const portfolios = mysqlTable("portfolios", {
   sanlamSourceUrl: varchar("sanlamSourceUrl", { length: 500 }).notNull().default("https://www.sanlamallianz.co.ke/products/savings-and-investments/money-market-fund/"),
   /** Timestamp of last manual rate update (for staleness indicator) */
   ratesLastUpdatedAt: timestamp("ratesLastUpdatedAt"),
+  /**
+   * Selected MMF fund for this portfolio (nullable FK to mmf_funds).
+   * If set, engine uses this fund's EAR as the MMF return (WHT still applied on top).
+   * If null, engine falls back to rate_settings.mmfYield.
+   */
+  mmfFundId: int("mmfFundId"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
@@ -217,3 +223,91 @@ export type AccountStatus = typeof accountStatus.$inferSelect;
 export type InsertAccountStatus = typeof accountStatus.$inferInsert;
 
 // pendingRateFetches and rateFetchLog tables removed — replaced by manual rate entry flow
+
+/**
+ * MMF Funds — CMA-regulated Kenyan money market funds.
+ * Maintained manually; shared across all portfolios (not per-portfolio).
+ */
+export const mmfFunds = mysqlTable("mmf_funds", {
+  id: int("id").autoincrement().primaryKey(),
+  /** Fund name, e.g. "SanlamAllianz Money Market Fund" */
+  fundName: varchar("fundName", { length: 200 }).notNull(),
+  /** Fund manager / company, e.g. "SanlamAllianz Kenya" */
+  company: varchar("company", { length: 200 }).notNull(),
+  /** Quoted gross yield (% p.a.) before management fee */
+  grossYield: decimal("grossYield", { precision: 8, scale: 4 }).notNull(),
+  /** Effective Annual Rate net of management fee (% p.a.) — used by engine */
+  ear: decimal("ear", { precision: 8, scale: 4 }).notNull(),
+  /** Annual management fee (% p.a.) */
+  managementFee: decimal("managementFee", { precision: 6, scale: 4 }).notNull().default("2.0000"),
+  /** Minimum investment amount (KES) */
+  minInvestment: decimal("minInvestment", { precision: 12, scale: 2 }).notNull().default("1000.00"),
+  /** Assets under management (KES millions) — optional */
+  aumMillions: decimal("aumMillions", { precision: 12, scale: 2 }),
+  /** Date the data was sourced / last verified */
+  asOfDate: date("asOfDate"),
+  /** Source URL or description */
+  source: varchar("source", { length: 500 }),
+  /** Whether this fund is active / still available */
+  isActive: boolean("isActive").notNull().default(true),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type MmfFund = typeof mmfFunds.$inferSelect;
+export type InsertMmfFund = typeof mmfFunds.$inferInsert;
+
+/**
+ * Other holdings — real estate, equities, ETFs, and other assets tracked per portfolio.
+ * This is a TRACKING layer only. No recommendations are made.
+ */
+export const otherHoldings = mysqlTable("other_holdings", {
+  id: int("id").autoincrement().primaryKey(),
+  portfolioId: int("portfolioId").notNull(),
+  /** Asset class */
+  assetClass: mysqlEnum("assetClass", ["real_estate", "equity", "etf", "pension", "sacco", "business", "crypto", "insurance", "other"]).notNull(),
+  /** User-supplied name, e.g. "Nairobi apartment", "Safaricom shares" */
+  name: varchar("name", { length: 200 }).notNull(),
+  /** Optional description / notes */
+  description: text("description"),
+  /** Purchase / cost basis (KES) */
+  purchaseValue: decimal("purchaseValue", { precision: 14, scale: 2 }).notNull(),
+  /** Current estimated value (KES) — updated manually */
+  currentValue: decimal("currentValue", { precision: 14, scale: 2 }).notNull(),
+  /** Date of purchase / acquisition */
+  purchaseDate: date("purchaseDate"),
+  /** User's own notes */
+  notes: text("notes"),
+  /**
+   * Optional user-entered assumed annual return (%) for scenario modelling.
+   * Conservative / base / optimistic — all three are user-entered assumptions,
+   * never engine-generated forecasts.
+   */
+  assumedReturnConservative: decimal("assumedReturnConservative", { precision: 6, scale: 2 }),
+  assumedReturnBase: decimal("assumedReturnBase", { precision: 6, scale: 2 }),
+  assumedReturnOptimistic: decimal("assumedReturnOptimistic", { precision: 6, scale: 2 }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type OtherHolding = typeof otherHoldings.$inferSelect;
+export type InsertOtherHolding = typeof otherHoldings.$inferInsert;
+
+/**
+ * Holding income — dividends, rent, and other income per holding.
+ */
+export const holdingIncome = mysqlTable("holding_income", {
+  id: int("id").autoincrement().primaryKey(),
+  holdingId: int("holdingId").notNull(),
+  /** Income amount (KES) */
+  amount: decimal("amount", { precision: 14, scale: 2 }).notNull(),
+  /** Date received */
+  incomeDate: date("incomeDate").notNull(),
+  /** Income type, e.g. "dividend", "rent", "interest" */
+  incomeType: varchar("incomeType", { length: 50 }).notNull().default("other"),
+  notes: text("notes"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type HoldingIncome = typeof holdingIncome.$inferSelect;
+export type InsertHoldingIncome = typeof holdingIncome.$inferInsert;

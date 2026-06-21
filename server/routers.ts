@@ -28,6 +28,19 @@ import {
   getRateHistory,
   getAccountStatuses,
   upsertAccountStatus,
+  getMmfFunds,
+  getMmfFund,
+  addMmfFund,
+  updateMmfFund,
+  deactivateMmfFund,
+  setPortfolioMmfFund,
+  getOtherHoldings,
+  addOtherHolding,
+  updateOtherHolding,
+  deleteOtherHolding,
+  getHoldingIncome,
+  addHoldingIncome,
+  deleteHoldingIncome,
 } from "./db";
 import {
   runProjection,
@@ -68,12 +81,18 @@ const DEFAULT_SETTINGS: EngineSettings = {
  */
 function dbToEngine(
   rates: Awaited<ReturnType<typeof getRateSettings>>,
-  portfolio: Awaited<ReturnType<typeof getPortfolio>>
+  portfolio: Awaited<ReturnType<typeof getPortfolio>>,
+  selectedFundEar?: number | null
 ): EngineSettings {
   const r = rates;
   const p = portfolio;
+  // If a fund is selected, use its EAR as the MMF gross yield (WHT applied in engine).
+  // Otherwise fall back to the manually-entered mmfYield from rate_settings.
+  const mmfYield = selectedFundEar != null
+    ? selectedFundEar
+    : (r ? parseFloat(String(r.mmfYield)) : DEFAULT_SETTINGS.mmfYield);
   return {
-    mmfYield: r ? parseFloat(String(r.mmfYield)) : DEFAULT_SETTINGS.mmfYield,
+    mmfYield,
     tbill91Rate: r ? parseFloat(String(r.tbill91Rate)) : DEFAULT_SETTINGS.tbill91Rate,
     tbill182Rate: r ? parseFloat(String(r.tbill182Rate)) : DEFAULT_SETTINGS.tbill182Rate,
     tbill364Rate: r ? parseFloat(String(r.tbill364Rate)) : DEFAULT_SETTINGS.tbill364Rate,
@@ -99,6 +118,13 @@ function normaliseDate(d: Date | string | null | undefined): string {
   if (!d) return "2026-07-01";
   if (d instanceof Date) return d.toISOString().split("T")[0];
   return String(d).split("T")[0];
+}
+
+/** Fetch the EAR of the portfolio's selected MMF fund, or null if none is set. */
+async function getSelectedFundEar(portfolio: Awaited<ReturnType<typeof getPortfolio>>): Promise<number | null> {
+  if (!portfolio?.mmfFundId) return null;
+  const fund = await getMmfFund(portfolio.mmfFundId);
+  return fund ? parseFloat(String(fund.ear)) : null;
 }
 
 function mapRateHistory(rows: Awaited<ReturnType<typeof getRateHistory>>) {
@@ -210,6 +236,7 @@ export const appRouter = router({
         cbkSourceUrl: p.cbkSourceUrl,
         sanlamSourceUrl: p.sanlamSourceUrl,
         ratesLastUpdatedAt: p.ratesLastUpdatedAt ?? null,
+        mmfFundId: p.mmfFundId ?? null,
         createdAt: p.createdAt,
         updatedAt: p.updatedAt,
       }));
@@ -235,6 +262,7 @@ export const appRouter = router({
         cbkSourceUrl: p.cbkSourceUrl,
         sanlamSourceUrl: p.sanlamSourceUrl,
         ratesLastUpdatedAt: p.ratesLastUpdatedAt ?? null,
+        mmfFundId: p.mmfFundId ?? null,
         createdAt: p.createdAt,
       };
     }),
@@ -337,8 +365,8 @@ export const appRouter = router({
   projection: router({
     run: protectedProcedure.input(portfolioIdInput).query(async ({ ctx, input }) => {
       const p = await requirePortfolio(input.portfolioId, ctx.user.id);
-      const rates = await getRateSettings(input.portfolioId);
-      const settings = dbToEngine(rates, p);
+      const [rates, fundEar] = await Promise.all([getRateSettings(input.portfolioId), getSelectedFundEar(p)]);
+      const settings = dbToEngine(rates, p, fundEar);
       const overrides = await getContributionOverrides(input.portfolioId);
       const mappedOverrides = overrides.map((o) => ({
         monthNumber: o.monthNumber,
@@ -356,8 +384,8 @@ export const appRouter = router({
 
     scenarios: protectedProcedure.input(portfolioIdInput).query(async ({ ctx, input }) => {
       const p = await requirePortfolio(input.portfolioId, ctx.user.id);
-      const rates = await getRateSettings(input.portfolioId);
-      const settings = dbToEngine(rates, p);
+      const [rates, fundEar] = await Promise.all([getRateSettings(input.portfolioId), getSelectedFundEar(p)]);
+      const settings = dbToEngine(rates, p, fundEar);
       const rateHistoryRows = await getRateHistory(input.portfolioId);
       const rh = mapRateHistory(rateHistoryRows);
       return runScenarios(settings, SCENARIO_STEPUPS, rh);
@@ -365,15 +393,15 @@ export const appRouter = router({
 
     milestones: protectedProcedure.input(portfolioIdInput).query(async ({ ctx, input }) => {
       const p = await requirePortfolio(input.portfolioId, ctx.user.id);
-      const rates = await getRateSettings(input.portfolioId);
-      const settings = dbToEngine(rates, p);
+      const [rates, fundEar] = await Promise.all([getRateSettings(input.portfolioId), getSelectedFundEar(p)]);
+      const settings = dbToEngine(rates, p, fundEar);
       return generateMilestones(settings);
     }),
 
     contributionSchedule: protectedProcedure.input(portfolioIdInput).query(async ({ ctx, input }) => {
       const p = await requirePortfolio(input.portfolioId, ctx.user.id);
-      const rates = await getRateSettings(input.portfolioId);
-      const settings = dbToEngine(rates, p);
+      const [rates, fundEar] = await Promise.all([getRateSettings(input.portfolioId), getSelectedFundEar(p)]);
+      const settings = dbToEngine(rates, p, fundEar);
       const horizonMonths = settings.horizonMonths ?? 120;
       const schedule = [];
       for (let m = 1; m <= horizonMonths; m += settings.stepUpMonths) {
@@ -401,8 +429,8 @@ export const appRouter = router({
       }))
       .query(async ({ ctx, input }) => {
         const p = await requirePortfolio(input.portfolioId, ctx.user.id);
-        const rates = await getRateSettings(input.portfolioId);
-        const settings = dbToEngine(rates, p);
+        const [rates, fundEar] = await Promise.all([getRateSettings(input.portfolioId), getSelectedFundEar(p)]);
+        const settings = dbToEngine(rates, p, fundEar);
         const rateHistoryRows = await getRateHistory(input.portfolioId);
         const rh = mapRateHistory(rateHistoryRows);
         const stepUp = input.stepUpAmount ?? settings.stepUpAmount;
@@ -419,8 +447,8 @@ export const appRouter = router({
 
     sync: protectedProcedure.input(portfolioIdInput).mutation(async ({ ctx, input }) => {
       const p = await requirePortfolio(input.portfolioId, ctx.user.id);
-      const rates = await getRateSettings(input.portfolioId);
-      const settings = dbToEngine(rates, p);
+      const [rates, fundEar] = await Promise.all([getRateSettings(input.portfolioId), getSelectedFundEar(p)]);
+      const settings = dbToEngine(rates, p, fundEar);
       const overrides = await getContributionOverrides(input.portfolioId);
       const mappedOverrides = overrides.map((o) => ({
         monthNumber: o.monthNumber,
@@ -549,8 +577,8 @@ export const appRouter = router({
 
     summary: protectedProcedure.input(portfolioIdInput).query(async ({ ctx, input }) => {
       const p = await requirePortfolio(input.portfolioId, ctx.user.id);
-      const rates = await getRateSettings(input.portfolioId);
-      const settings = dbToEngine(rates, p);
+      const [rates, fundEar] = await Promise.all([getRateSettings(input.portfolioId), getSelectedFundEar(p)]);
+      const settings = dbToEngine(rates, p, fundEar);
       const rateHistoryRows = await getRateHistory(input.portfolioId);
       const rh = mapRateHistory(rateHistoryRows);
       const depositRows = await getDepositEntries(input.portfolioId);
@@ -743,6 +771,253 @@ export const appRouter = router({
           cbkSourceUrl: input.cbkSourceUrl,
           sanlamSourceUrl: input.sanlamSourceUrl,
         });
+        return { success: true };
+      }),
+  }),
+
+  // ─── MMF Funds ──────────────────────────────────────────────────────────────
+  mmfFunds: router({
+    /** List all active MMF funds ordered by EAR descending. */
+    list: protectedProcedure.query(async () => {
+      const rows = await getMmfFunds();
+      return rows.map((f) => ({
+        id: f.id,
+        fundName: f.fundName,
+        company: f.company,
+        grossYield: parseFloat(String(f.grossYield)),
+        ear: parseFloat(String(f.ear)),
+        managementFee: parseFloat(String(f.managementFee)),
+        minInvestment: parseFloat(String(f.minInvestment)),
+        aumMillions: f.aumMillions ? parseFloat(String(f.aumMillions)) : null,
+        asOfDate: f.asOfDate ? normaliseDate(f.asOfDate) : null,
+        source: f.source ?? null,
+        isActive: f.isActive,
+        createdAt: f.createdAt,
+        updatedAt: f.updatedAt,
+      }));
+    }),
+
+    /** Add a new MMF fund. */
+    add: protectedProcedure
+      .input(z.object({
+        fundName: z.string().min(1).max(200),
+        company: z.string().min(1).max(200),
+        grossYield: z.number().min(0).max(100),
+        ear: z.number().min(0).max(100),
+        managementFee: z.number().min(0).max(10).optional(),
+        minInvestment: z.number().min(0).optional(),
+        aumMillions: z.number().min(0).optional(),
+        asOfDate: z.string().optional(),
+        source: z.string().max(500).optional(),
+      }))
+      .mutation(async ({ input }) => {
+        await addMmfFund({
+          fundName: input.fundName,
+          company: input.company,
+          grossYield: String(input.grossYield),
+          ear: String(input.ear),
+          managementFee: input.managementFee != null ? String(input.managementFee) : undefined,
+          minInvestment: input.minInvestment != null ? String(input.minInvestment) : undefined,
+          aumMillions: input.aumMillions != null ? String(input.aumMillions) : undefined,
+          asOfDate: input.asOfDate ? new Date(input.asOfDate) : undefined,
+          source: input.source,
+          isActive: true,
+        });
+        return { success: true };
+      }),
+
+    /** Update an MMF fund's yield / fee data. */
+    update: protectedProcedure
+      .input(z.object({
+        id: z.number().int().positive(),
+        fundName: z.string().min(1).max(200).optional(),
+        company: z.string().min(1).max(200).optional(),
+        grossYield: z.number().min(0).max(100).optional(),
+        ear: z.number().min(0).max(100).optional(),
+        managementFee: z.number().min(0).max(10).optional(),
+        minInvestment: z.number().min(0).optional(),
+        aumMillions: z.number().min(0).optional(),
+        asOfDate: z.string().optional(),
+        source: z.string().max(500).optional(),
+      }))
+      .mutation(async ({ input }) => {
+        const { id, ...rest } = input;
+        await updateMmfFund(id, {
+          ...(rest.fundName !== undefined && { fundName: rest.fundName }),
+          ...(rest.company !== undefined && { company: rest.company }),
+          ...(rest.grossYield !== undefined && { grossYield: String(rest.grossYield) }),
+          ...(rest.ear !== undefined && { ear: String(rest.ear) }),
+          ...(rest.managementFee !== undefined && { managementFee: String(rest.managementFee) }),
+          ...(rest.minInvestment !== undefined && { minInvestment: String(rest.minInvestment) }),
+          ...(rest.aumMillions !== undefined && { aumMillions: String(rest.aumMillions) }),
+          ...(rest.asOfDate !== undefined && { asOfDate: new Date(rest.asOfDate) }),
+          ...(rest.source !== undefined && { source: rest.source }),
+        });
+        return { success: true };
+      }),
+
+    /** Deactivate (soft-delete) an MMF fund. */
+    deactivate: protectedProcedure
+      .input(z.object({ id: z.number().int().positive() }))
+      .mutation(async ({ input }) => {
+        await deactivateMmfFund(input.id);
+        return { success: true };
+      }),
+
+    /** Set the selected MMF fund for a portfolio (null = use manual rate). */
+    selectFund: protectedProcedure
+      .input(z.object({
+        portfolioId: z.number().int().positive(),
+        mmfFundId: z.number().int().positive().nullable(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        await requirePortfolio(input.portfolioId, ctx.user.id);
+        await setPortfolioMmfFund(input.portfolioId, input.mmfFundId);
+        return { success: true };
+      }),
+  }),
+
+  // ─── Other Holdings ─────────────────────────────────────────────────────────
+  otherHoldings: router({
+    /** List all holdings for a portfolio. */
+    list: protectedProcedure
+      .input(portfolioIdInput)
+      .query(async ({ ctx, input }) => {
+        await requirePortfolio(input.portfolioId, ctx.user.id);
+        const rows = await getOtherHoldings(input.portfolioId);
+        return rows.map((h) => ({
+          id: h.id,
+          portfolioId: h.portfolioId,
+          assetClass: h.assetClass,
+          name: h.name,
+          description: h.description ?? null,
+          purchaseValue: parseFloat(String(h.purchaseValue)),
+          currentValue: parseFloat(String(h.currentValue)),
+          purchaseDate: h.purchaseDate ? normaliseDate(h.purchaseDate) : null,
+          notes: h.notes ?? null,
+          assumedReturnConservative: h.assumedReturnConservative ? parseFloat(String(h.assumedReturnConservative)) : null,
+          assumedReturnBase: h.assumedReturnBase ? parseFloat(String(h.assumedReturnBase)) : null,
+          assumedReturnOptimistic: h.assumedReturnOptimistic ? parseFloat(String(h.assumedReturnOptimistic)) : null,
+          createdAt: h.createdAt,
+          updatedAt: h.updatedAt,
+        }));
+      }),
+
+    /** Add a new holding. */
+    add: protectedProcedure
+      .input(z.object({
+        portfolioId: z.number().int().positive(),
+        assetClass: z.enum(["real_estate", "equity", "etf", "pension", "sacco", "business", "crypto", "insurance", "other"]),
+        name: z.string().min(1).max(200),
+        description: z.string().max(1000).optional(),
+        purchaseValue: z.number().min(0).optional(),
+        currentValue: z.number().min(0),
+        purchaseDate: z.string().optional(),
+        notes: z.string().max(2000).optional(),
+        assumedReturnConservative: z.number().min(0).max(100).optional(),
+        assumedReturnBase: z.number().min(0).max(100).optional(),
+        assumedReturnOptimistic: z.number().min(0).max(100).optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        await requirePortfolio(input.portfolioId, ctx.user.id);
+        await addOtherHolding({
+          portfolioId: input.portfolioId,
+          assetClass: input.assetClass,
+          name: input.name,
+          description: input.description,
+          purchaseValue: String(input.purchaseValue),
+          currentValue: String(input.currentValue),
+          purchaseDate: input.purchaseDate ? new Date(input.purchaseDate) : undefined,
+          notes: input.notes,
+          assumedReturnConservative: input.assumedReturnConservative != null ? String(input.assumedReturnConservative) : undefined,
+          assumedReturnBase: input.assumedReturnBase != null ? String(input.assumedReturnBase) : undefined,
+          assumedReturnOptimistic: input.assumedReturnOptimistic != null ? String(input.assumedReturnOptimistic) : undefined,
+        });
+        return { success: true };
+      }),
+
+    /** Update a holding's current value and other fields. */
+    update: protectedProcedure
+      .input(z.object({
+        id: z.number().int().positive(),
+        portfolioId: z.number().int().positive(),
+        name: z.string().min(1).max(200).optional(),
+        description: z.string().max(1000).optional(),
+        currentValue: z.number().min(0).optional(),
+        notes: z.string().max(2000).optional(),
+        assumedReturnConservative: z.number().min(0).max(100).nullable().optional(),
+        assumedReturnBase: z.number().min(0).max(100).nullable().optional(),
+        assumedReturnOptimistic: z.number().min(0).max(100).nullable().optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        await requirePortfolio(input.portfolioId, ctx.user.id);
+        const { id, portfolioId, ...rest } = input;
+        await updateOtherHolding(id, portfolioId, {
+          ...(rest.name !== undefined && { name: rest.name }),
+          ...(rest.description !== undefined && { description: rest.description }),
+          ...(rest.currentValue !== undefined && { currentValue: String(rest.currentValue) }),
+          ...(rest.notes !== undefined && { notes: rest.notes }),
+          ...(rest.assumedReturnConservative !== undefined && { assumedReturnConservative: rest.assumedReturnConservative != null ? String(rest.assumedReturnConservative) : null }),
+          ...(rest.assumedReturnBase !== undefined && { assumedReturnBase: rest.assumedReturnBase != null ? String(rest.assumedReturnBase) : null }),
+          ...(rest.assumedReturnOptimistic !== undefined && { assumedReturnOptimistic: rest.assumedReturnOptimistic != null ? String(rest.assumedReturnOptimistic) : null }),
+        });
+        return { success: true };
+      }),
+
+    /** Delete a holding and all its income records. */
+    delete: protectedProcedure
+      .input(z.object({ id: z.number().int().positive(), portfolioId: z.number().int().positive() }))
+      .mutation(async ({ ctx, input }) => {
+        await requirePortfolio(input.portfolioId, ctx.user.id);
+        await deleteOtherHolding(input.id, input.portfolioId);
+        return { success: true };
+      }),
+
+    /** List income records for a holding. */
+    listIncome: protectedProcedure
+      .input(z.object({ holdingId: z.number().int().positive(), portfolioId: z.number().int().positive() }))
+      .query(async ({ ctx, input }) => {
+        await requirePortfolio(input.portfolioId, ctx.user.id);
+        const rows = await getHoldingIncome(input.holdingId);
+        return rows.map((r) => ({
+          id: r.id,
+          holdingId: r.holdingId,
+          amount: parseFloat(String(r.amount)),
+          incomeDate: normaliseDate(r.incomeDate),
+          incomeType: r.incomeType,
+          notes: r.notes ?? null,
+          createdAt: r.createdAt,
+        }));
+      }),
+
+    /** Add an income record. */
+    addIncome: protectedProcedure
+      .input(z.object({
+        holdingId: z.number().int().positive(),
+        portfolioId: z.number().int().positive(),
+        amount: z.number().min(0),
+        incomeDate: z.string(),
+        incomeType: z.string().max(50).optional(),
+        notes: z.string().max(1000).optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        await requirePortfolio(input.portfolioId, ctx.user.id);
+        await addHoldingIncome({
+          holdingId: input.holdingId,
+          amount: String(input.amount),
+          incomeDate: new Date(input.incomeDate),
+          incomeType: input.incomeType ?? "other",
+          notes: input.notes,
+        });
+        return { success: true };
+      }),
+
+    /** Delete an income record. */
+    deleteIncome: protectedProcedure
+      .input(z.object({ id: z.number().int().positive(), holdingId: z.number().int().positive(), portfolioId: z.number().int().positive() }))
+      .mutation(async ({ ctx, input }) => {
+        await requirePortfolio(input.portfolioId, ctx.user.id);
+        await deleteHoldingIncome(input.id, input.holdingId);
         return { success: true };
       }),
   }),

@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Settings as SettingsIcon, RefreshCw, Info } from "lucide-react";
-import { RateRefreshPanel } from "@/components/RateRefreshPanel";
+import { UpdateRatesPanel } from "@/components/UpdateRatesPanel";
 import { toast } from "sonner";
 import { useForm } from "react-hook-form";
 import { useEffect } from "react";
@@ -309,7 +309,7 @@ export default function Settings() {
           </Button>
         </form>
 
-        <RateRefreshPanel />
+        <UpdateRatesPanel />
         <RateHistorySection />
       </div>
     </AppShell>

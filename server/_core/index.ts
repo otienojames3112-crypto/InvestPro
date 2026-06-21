@@ -8,7 +8,6 @@ import { registerStorageProxy } from "./storageProxy";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
-import { scheduledRateFetchHandler } from "../scheduledRateFetch";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -37,8 +36,6 @@ async function startServer() {
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
   registerStorageProxy(app);
   registerOAuthRoutes(app);
-  // Scheduled rate fetch endpoint (called by Heartbeat cron or manual trigger)
-  app.post("/api/scheduled/rateFetch", scheduledRateFetchHandler);
   // tRPC API
   app.use(
     "/api/trpc",

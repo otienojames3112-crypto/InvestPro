@@ -45,6 +45,12 @@ export const rateSettings = mysqlTable("rate_settings", {
   stepUpAmount: decimal("stepUpAmount", { precision: 10, scale: 2 }).notNull().default("3000.00"),
   stepUpMonths: int("stepUpMonths").notNull().default(6),
   safetyFloor: decimal("safetyFloor", { precision: 10, scale: 2 }).notNull().default("50000.00"),
+  /** Editable source URL for CBK T-Bills rates page */
+  cbkSourceUrl: varchar("cbkSourceUrl", { length: 500 }).notNull().default("https://www.centralbank.go.ke/bills-bonds/treasury-bills/"),
+  /** Editable source URL for SanlamAllianz MMF page */
+  sanlamSourceUrl: varchar("sanlamSourceUrl", { length: 500 }).notNull().default("https://www.sanlamallianz.co.ke/products/savings-and-investments/money-market-fund/"),
+  /** Timestamp of last manual rate update (for staleness indicator) */
+  ratesLastUpdatedAt: timestamp("ratesLastUpdatedAt"),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
 
@@ -176,51 +182,4 @@ export const accountStatus = mysqlTable("account_status", {
 export type AccountStatus = typeof accountStatus.$inferSelect;
 export type InsertAccountStatus = typeof accountStatus.$inferInsert;
 
-/**
- * Pending rate fetch results awaiting user confirmation.
- * Each row represents one fetched rate that has not yet been accepted or dismissed.
- */
-export const pendingRateFetches = mysqlTable("pending_rate_fetches", {
-  id: int("id").autoincrement().primaryKey(),
-  userId: int("userId").notNull(),
-  /** Which rate field this row is for */
-  rateField: varchar("rateField", { length: 64 }).notNull(), // e.g. "tbill364Rate", "mmfYield"
-  /** The newly fetched value */
-  fetchedValue: decimal("fetchedValue", { precision: 8, scale: 4 }).notNull(),
-  /** The stored value at the time of fetch (for comparison display) */
-  storedValue: decimal("storedValue", { precision: 8, scale: 4 }).notNull(),
-  /** Source URL that was scraped */
-  sourceUrl: text("sourceUrl").notNull(),
-  /** ISO timestamp of when the fetch occurred */
-  fetchedAt: timestamp("fetchedAt").defaultNow().notNull(),
-  /** Human-readable label for the source (e.g. "CBK T-Bills", "SanlamAllianz MMF") */
-  sourceLabel: varchar("sourceLabel", { length: 200 }).notNull(),
-  /** Publication cadence note (e.g. "weekly", "monthly") */
-  cadenceNote: varchar("cadenceNote", { length: 100 }),
-  /** Whether this pending fetch has been acted on */
-  status: mysqlEnum("status", ["pending", "accepted", "dismissed"]).notNull().default("pending"),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
-});
-
-export type PendingRateFetch = typeof pendingRateFetches.$inferSelect;
-export type InsertPendingRateFetch = typeof pendingRateFetches.$inferInsert;
-
-/**
- * Log of rate fetch attempts (success or failure) for staleness tracking.
- */
-export const rateFetchLog = mysqlTable("rate_fetch_log", {
-  id: int("id").autoincrement().primaryKey(),
-  userId: int("userId").notNull(),
-  /** "cbk" | "sanlam" */
-  source: varchar("source", { length: 64 }).notNull(),
-  success: boolean("success").notNull(),
-  errorMessage: text("errorMessage"),
-  fetchedAt: timestamp("fetchedAt").defaultNow().notNull(),
-  /** Serialized JSON of fetched values (for audit) */
-  rawPayload: text("rawPayload"),
-  /** taskUid if triggered by a cron job */
-  taskUid: varchar("taskUid", { length: 65 }),
-});
-
-export type RateFetchLog = typeof rateFetchLog.$inferSelect;
-export type InsertRateFetchLog = typeof rateFetchLog.$inferInsert;
+// pendingRateFetches and rateFetchLog tables removed — replaced by manual rate entry flow

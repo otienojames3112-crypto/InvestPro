@@ -23,14 +23,7 @@ import {
   getRateHistory,
   getAccountStatuses,
   upsertAccountStatus,
-  getPendingRateFetches,
-  updatePendingRateFetchStatus,
-  dismissAllPendingRateFetches,
-  getLastFetchAttempts,
-  insertRateFetchLog,
-  insertPendingRateFetch,
 } from "./db";
-import { fetchAllRates } from "./rateFetcher";
 import {
   runProjection,
   runScenarios,
@@ -108,7 +101,13 @@ export const appRouter = router({
   settings: router({
     get: protectedProcedure.query(async ({ ctx }) => {
       const s = await getRateSettings(ctx.user.id);
-      if (!s) return { ...DEFAULT_SETTINGS, startDate: "2026-07-01" };
+      if (!s) return {
+        ...DEFAULT_SETTINGS,
+        startDate: "2026-07-01",
+        cbkSourceUrl: "https://www.centralbank.go.ke/bills-bonds/treasury-bills/",
+        sanlamSourceUrl: "https://www.sanlamallianz.co.ke/products/savings-and-investments/money-market-fund/",
+        ratesLastUpdatedAt: null as Date | null,
+      };
       // Normalise startDate: MySQL DATE may come back as a Date object or string
       const rawDate = s.startDate;
       let startDate = "2026-07-01";
@@ -123,6 +122,9 @@ export const appRouter = router({
       return {
         ...dbSettingsToEngine(s),
         startDate,
+        cbkSourceUrl: s.cbkSourceUrl ?? "https://www.centralbank.go.ke/bills-bonds/treasury-bills/",
+        sanlamSourceUrl: s.sanlamSourceUrl ?? "https://www.sanlamallianz.co.ke/products/savings-and-investments/money-market-fund/",
+        ratesLastUpdatedAt: s.ratesLastUpdatedAt ?? null,
       };
     }),
 
@@ -604,118 +606,50 @@ export const appRouter = router({
         return { success: true };
       }),
   }),
-  // ─── Rate Refresh (Confirmed Auto-Fetch) ─────────────────────────────────────
-  rateRefresh: router({
+  // ─── Manual Rate Update ("Update Rates" panel) ──────────────────────────────
+  rateUpdate: router({
     /**
-     * Trigger a manual rate fetch from CBK and SanlamAllianz.
-     * Writes pending_rate_fetches rows — does NOT save to rate_settings.
+     * Save manually-entered rates to rate_settings and write a rate_history snapshot.
+     * Also persists the editable source URLs and updates ratesLastUpdatedAt.
      */
-    triggerFetch: protectedProcedure.mutation(async ({ ctx }) => {
-      const userId = ctx.user.id;
-      const results = await fetchAllRates();
-
-      const dbSettings = await getRateSettings(userId);
-      const storedRates: Record<string, number> = {
-        mmfYield: parseFloat(String(dbSettings?.mmfYield ?? "8.78")),
-        tbill91Rate: parseFloat(String(dbSettings?.tbill91Rate ?? "8.8206")),
-        tbill182Rate: parseFloat(String(dbSettings?.tbill182Rate ?? "8.7782")),
-        tbill364Rate: parseFloat(String(dbSettings?.tbill364Rate ?? "8.9746")),
-        ifbCouponRate: parseFloat(String(dbSettings?.ifbCouponRate ?? "12.5")),
-        fxdCouponRate: parseFloat(String(dbSettings?.fxdCouponRate ?? "12.35")),
-        withholdingTax: parseFloat(String(dbSettings?.withholdingTax ?? "15")),
-      };
-
-      await dismissAllPendingRateFetches(userId);
-
-      let totalInserted = 0;
-      const errors: string[] = [];
-
-      for (const result of results) {
-        await insertRateFetchLog({
-          userId,
-          source: result.source,
-          success: result.success,
-          errorMessage: result.errorMessage ?? null,
-          fetchedAt: new Date(result.fetchedAt),
-          rawPayload: result.rates.length > 0 ? JSON.stringify(result.rates) : null,
-          taskUid: null,
-        });
-
-        if (!result.success) {
-          errors.push(`${result.source}: ${result.errorMessage}`);
-          continue;
-        }
-
-        for (const rate of result.rates) {
-          const storedValue = storedRates[rate.rateField] ?? 0;
-          await insertPendingRateFetch({
-            userId,
-            rateField: rate.rateField,
-            fetchedValue: String(rate.value),
-            storedValue: String(storedValue),
-            sourceUrl: rate.sourceUrl,
-            sourceLabel: rate.sourceLabel,
-            cadenceNote: rate.cadenceNote ?? null,
-            status: "pending",
-          });
-          totalInserted++;
-        }
-      }
-
-      return { success: true, inserted: totalInserted, errors };
-    }),
-
-    /** List all pending (unconfirmed) rate fetches for the current user. */
-    listPending: protectedProcedure.query(async ({ ctx }) => {
-      const rows = await getPendingRateFetches(ctx.user.id);
-      return rows.map((r) => ({
-        id: r.id,
-        rateField: r.rateField,
-        fetchedValue: parseFloat(String(r.fetchedValue)),
-        storedValue: parseFloat(String(r.storedValue)),
-        sourceUrl: r.sourceUrl,
-        sourceLabel: r.sourceLabel,
-        cadenceNote: r.cadenceNote,
-        fetchedAt: r.fetchedAt,
-        status: r.status,
-      }));
-    }),
-
-    /** Accept a single pending rate — saves it to rate_settings and rate_history. */
-    acceptOne: protectedProcedure
-      .input(z.object({ id: z.number(), rateField: z.string(), value: z.number() }))
+    save: protectedProcedure
+      .input(
+        z.object({
+          mmfYield: z.number().min(0).max(100),
+          tbill91Rate: z.number().min(0).max(100),
+          tbill182Rate: z.number().min(0).max(100),
+          tbill364Rate: z.number().min(0).max(100),
+          ifbCouponRate: z.number().min(0).max(100),
+          fxdCouponRate: z.number().min(0).max(100),
+          withholdingTax: z.number().min(0).max(100),
+          cbkSourceUrl: z.string().url().max(500),
+          sanlamSourceUrl: z.string().url().max(500),
+          changeNote: z.string().max(500).optional(),
+        })
+      )
       .mutation(async ({ ctx, input }) => {
         const userId = ctx.user.id;
-        // Mark as accepted
-        await updatePendingRateFetchStatus(input.id, userId, "accepted");
-
-        // Load current settings and update the specific field
         const dbSettings = await getRateSettings(userId);
-        const current = {
-          mmfYield: parseFloat(String(dbSettings?.mmfYield ?? "8.78")),
-          tbill91Rate: parseFloat(String(dbSettings?.tbill91Rate ?? "8.8206")),
-          tbill182Rate: parseFloat(String(dbSettings?.tbill182Rate ?? "8.7782")),
-          tbill364Rate: parseFloat(String(dbSettings?.tbill364Rate ?? "8.9746")),
-          ifbCouponRate: parseFloat(String(dbSettings?.ifbCouponRate ?? "12.5")),
-          fxdCouponRate: parseFloat(String(dbSettings?.fxdCouponRate ?? "12.35")),
-          withholdingTax: parseFloat(String(dbSettings?.withholdingTax ?? "15")),
-        };
-        const updated = { ...current, [input.rateField]: input.value };
 
         const rawDate = dbSettings?.startDate;
         const startDateStr = rawDate
           ? (rawDate instanceof Date ? rawDate.toISOString().split("T")[0] : String(rawDate).split("T")[0])
           : "2026-07-01";
 
+        const now = new Date();
+
         await upsertRateSettings({
           userId,
-          mmfYield: String(updated.mmfYield),
-          tbill91Rate: String(updated.tbill91Rate),
-          tbill182Rate: String(updated.tbill182Rate),
-          tbill364Rate: String(updated.tbill364Rate),
-          ifbCouponRate: String(updated.ifbCouponRate),
-          fxdCouponRate: String(updated.fxdCouponRate),
-          withholdingTax: String(updated.withholdingTax),
+          mmfYield: String(input.mmfYield),
+          tbill91Rate: String(input.tbill91Rate),
+          tbill182Rate: String(input.tbill182Rate),
+          tbill364Rate: String(input.tbill364Rate),
+          ifbCouponRate: String(input.ifbCouponRate),
+          fxdCouponRate: String(input.fxdCouponRate),
+          withholdingTax: String(input.withholdingTax),
+          cbkSourceUrl: input.cbkSourceUrl,
+          sanlamSourceUrl: input.sanlamSourceUrl,
+          ratesLastUpdatedAt: now,
           startDate: new Date(`${startDateStr}T12:00:00.000Z`),
           startingContribution: String(dbSettings?.startingContribution ?? "2500"),
           stepUpAmount: String(dbSettings?.stepUpAmount ?? "3000"),
@@ -724,111 +658,65 @@ export const appRouter = router({
           targetAmount: String(dbSettings?.targetAmount ?? "5000000"),
         });
 
-        // Snapshot to rate_history
-        const today = new Date().toISOString().split("T")[0];
+        // Write a rate_history snapshot so time-locked projection works correctly
+        const today = now.toISOString().split("T")[0];
         await addRateHistorySnapshot({
           userId,
           effectiveDate: new Date(`${today}T12:00:00.000Z`),
-          mmfYield: String(updated.mmfYield),
-          tbill91Rate: String(updated.tbill91Rate),
-          tbill182Rate: String(updated.tbill182Rate),
-          tbill364Rate: String(updated.tbill364Rate),
-          ifbCouponRate: String(updated.ifbCouponRate),
-          fxdCouponRate: String(updated.fxdCouponRate),
-          withholdingTax: String(updated.withholdingTax),
-          changeNote: `Rate update: ${input.rateField} → ${input.value} (auto-fetched, user-confirmed)`,
+          mmfYield: String(input.mmfYield),
+          tbill91Rate: String(input.tbill91Rate),
+          tbill182Rate: String(input.tbill182Rate),
+          tbill364Rate: String(input.tbill364Rate),
+          ifbCouponRate: String(input.ifbCouponRate),
+          fxdCouponRate: String(input.fxdCouponRate),
+          withholdingTax: String(input.withholdingTax),
+          changeNote: input.changeNote ?? "Manual rate update",
         });
 
         invalidateMilestoneCache();
-        return { success: true };
+        return { success: true, updatedAt: now };
       }),
 
-    /** Accept all pending rates at once. */
-    acceptAll: protectedProcedure.mutation(async ({ ctx }) => {
-      const userId = ctx.user.id;
-      const pending = await getPendingRateFetches(userId);
-      if (pending.length === 0) return { success: true, accepted: 0 };
-
-      const dbSettings = await getRateSettings(userId);
-      const current: Record<string, number> = {
-        mmfYield: parseFloat(String(dbSettings?.mmfYield ?? "8.78")),
-        tbill91Rate: parseFloat(String(dbSettings?.tbill91Rate ?? "8.8206")),
-        tbill182Rate: parseFloat(String(dbSettings?.tbill182Rate ?? "8.7782")),
-        tbill364Rate: parseFloat(String(dbSettings?.tbill364Rate ?? "8.9746")),
-        ifbCouponRate: parseFloat(String(dbSettings?.ifbCouponRate ?? "12.5")),
-        fxdCouponRate: parseFloat(String(dbSettings?.fxdCouponRate ?? "12.35")),
-        withholdingTax: parseFloat(String(dbSettings?.withholdingTax ?? "15")),
-      };
-
-      for (const row of pending) {
-        current[row.rateField] = parseFloat(String(row.fetchedValue));
-        await updatePendingRateFetchStatus(row.id, userId, "accepted");
-      }
-
-      const rawDate = dbSettings?.startDate;
-      const startDateStr = rawDate
-        ? (rawDate instanceof Date ? rawDate.toISOString().split("T")[0] : String(rawDate).split("T")[0])
-        : "2026-07-01";
-
-      await upsertRateSettings({
-        userId,
-        mmfYield: String(current.mmfYield),
-        tbill91Rate: String(current.tbill91Rate),
-        tbill182Rate: String(current.tbill182Rate),
-        tbill364Rate: String(current.tbill364Rate),
-        ifbCouponRate: String(current.ifbCouponRate),
-        fxdCouponRate: String(current.fxdCouponRate),
-        withholdingTax: String(current.withholdingTax),
-        startDate: new Date(`${startDateStr}T12:00:00.000Z`),
-        startingContribution: String(dbSettings?.startingContribution ?? "2500"),
-        stepUpAmount: String(dbSettings?.stepUpAmount ?? "3000"),
-        stepUpMonths: dbSettings?.stepUpMonths ?? 6,
-        safetyFloor: String(dbSettings?.safetyFloor ?? "50000"),
-        targetAmount: String(dbSettings?.targetAmount ?? "5000000"),
-      });
-
-      const today = new Date().toISOString().split("T")[0];
-      await addRateHistorySnapshot({
-        userId,
-        effectiveDate: new Date(`${today}T12:00:00.000Z`),
-        mmfYield: String(current.mmfYield),
-        tbill91Rate: String(current.tbill91Rate),
-        tbill182Rate: String(current.tbill182Rate),
-        tbill364Rate: String(current.tbill364Rate),
-        ifbCouponRate: String(current.ifbCouponRate),
-        fxdCouponRate: String(current.fxdCouponRate),
-        withholdingTax: String(current.withholdingTax),
-        changeNote: `Bulk rate update from auto-fetch (user-confirmed ${pending.length} rates)`,
-      });
-
-      invalidateMilestoneCache();
-      return { success: true, accepted: pending.length };
-    }),
-
-    /** Dismiss a single pending fetch without saving. */
-    dismissOne: protectedProcedure
-      .input(z.object({ id: z.number() }))
+    /**
+     * Update only the source URLs (without changing rates or writing a history snapshot).
+     */
+    saveSourceUrls: protectedProcedure
+      .input(
+        z.object({
+          cbkSourceUrl: z.string().url().max(500),
+          sanlamSourceUrl: z.string().url().max(500),
+        })
+      )
       .mutation(async ({ ctx, input }) => {
-        await updatePendingRateFetchStatus(input.id, ctx.user.id, "dismissed");
+        const userId = ctx.user.id;
+        const dbSettings = await getRateSettings(userId);
+        if (!dbSettings) return { success: false };
+
+        const rawDate = dbSettings.startDate;
+        const startDateStr = rawDate instanceof Date
+          ? rawDate.toISOString().split("T")[0]
+          : String(rawDate).split("T")[0];
+
+        await upsertRateSettings({
+          userId,
+          mmfYield: String(dbSettings.mmfYield),
+          tbill91Rate: String(dbSettings.tbill91Rate),
+          tbill182Rate: String(dbSettings.tbill182Rate),
+          tbill364Rate: String(dbSettings.tbill364Rate),
+          ifbCouponRate: String(dbSettings.ifbCouponRate),
+          fxdCouponRate: String(dbSettings.fxdCouponRate),
+          withholdingTax: String(dbSettings.withholdingTax),
+          cbkSourceUrl: input.cbkSourceUrl,
+          sanlamSourceUrl: input.sanlamSourceUrl,
+          startDate: new Date(`${startDateStr}T12:00:00.000Z`),
+          startingContribution: String(dbSettings.startingContribution),
+          stepUpAmount: String(dbSettings.stepUpAmount),
+          stepUpMonths: dbSettings.stepUpMonths,
+          safetyFloor: String(dbSettings.safetyFloor),
+          targetAmount: String(dbSettings.targetAmount),
+        });
         return { success: true };
       }),
-
-    /** Dismiss all pending fetches. */
-    dismissAll: protectedProcedure.mutation(async ({ ctx }) => {
-      await dismissAllPendingRateFetches(ctx.user.id);
-      return { success: true };
-    }),
-
-    /** Get staleness info: last successful fetch per source. */
-    fetchStatus: protectedProcedure.query(async ({ ctx }) => {
-      const rows = await getLastFetchAttempts(ctx.user.id);
-      return rows.map((r) => ({
-        source: r.source,
-        success: r.success,
-        fetchedAt: r.fetchedAt,
-        errorMessage: r.errorMessage,
-      }));
-    }),
   }),
 });
 

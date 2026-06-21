@@ -28,7 +28,7 @@ type Fund = {
 type SortKey = "fundName" | "ear" | "grossYield" | "managementFee" | "minInvestment" | "aumMillions";
 type SortDir = "asc" | "desc";
 
-const INDUSTRY_AVG_EAR = 11.1; // Q2 2025 Cytonn report
+const INDUSTRY_AVG_EAR = 9.24; // Jun 2026 Serrari data (mean of 27 active funds)
 
 function FundFormDialog({
   open,
@@ -218,6 +218,16 @@ export default function MmfFunds() {
           <h1 className="text-2xl font-bold tracking-tight">MMF Fund Tracker</h1>
           <p className="text-muted-foreground text-sm mt-1">
             27 CMA-regulated Kenyan money market funds. Select one to use its EAR in your projection.
+            {" "}Data from{" "}
+            <a
+              href="https://serrarigroup.com/ke/mmf/"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline text-primary hover:text-primary/80 font-medium"
+            >
+              Serrari Group
+            </a>
+            {" "}(updated daily).
           </p>
         </div>
         <Button onClick={() => setAddOpen(true)} size="sm">
@@ -261,7 +271,15 @@ export default function MmfFunds() {
       {/* Industry average note */}
       <div className="flex items-center gap-2 text-xs text-muted-foreground">
         <Info className="w-3 h-3" />
-        Industry average EAR (Q2 2025): <strong>{INDUSTRY_AVG_EAR}%</strong> · Source: Cytonn Q2 2025 Unit Trust Performance Note
+        Industry average EAR (Jun 2026): <strong>{INDUSTRY_AVG_EAR}%</strong> ·{" "}
+        <a
+          href="https://serrarigroup.com/ke/mmf/"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="underline hover:text-foreground"
+        >
+          Verify on Serrari ↗
+        </a>
       </div>
 
       {/* Search */}
@@ -423,7 +441,16 @@ export default function MmfFunds() {
 
       <p className="text-xs text-muted-foreground">
         EAR = Effective Annual Rate net of management fee, before 15% WHT. WHT is applied by the projection engine.
-        Data sourced from Cytonn Q2 2025 Unit Trust Performance Note. Update fund data regularly as yields change.
+        Data last updated 21 Jun 2026 from{" "}
+        <a
+          href="https://serrarigroup.com/ke/mmf/"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="underline text-primary hover:text-primary/80"
+        >
+          serrarigroup.com/ke/mmf/
+        </a>
+        {" "}— click to verify current rates, then use the Edit button to update any fund.
       </p>
 
       {/* Add dialog */}

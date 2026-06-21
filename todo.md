@@ -147,13 +147,13 @@
 - [x] Save checkpoint
 
 ## Round 8 — Replace Scraper with Manual Rate Entry
-- [ ] Remove rateFetcher.ts, scheduledRateFetch.ts, and dead pending_rate_fetches table
-- [ ] Add cbkSourceUrl and sanlamSourceUrl columns to rate_settings schema
-- [ ] Run SQL migration for new URL columns
-- [ ] Remove rateRefresh tRPC router, replace with manual saveRates procedure
-- [ ] Remove /api/scheduled/rateFetch endpoint from index.ts
-- [ ] Remove RateRefreshPanel.tsx (auto-fetch UI)
-- [ ] Build UpdateRatesPanel.tsx with editable source URLs, clickable links, manual fields, staleness indicator
-- [ ] Wire UpdateRatesPanel into Settings page
-- [ ] Run full test suite and confirm all tests pass
-- [ ] Save checkpoint
+- [x] Remove rateFetcher.ts, scheduledRateFetch.ts, and dead pending_rate_fetches table
+- [x] Add cbkSourceUrl and sanlamSourceUrl columns to rate_settings schema
+- [x] Run SQL migration for new URL columns
+- [x] Remove rateRefresh tRPC router, replace with manual saveRates procedure
+- [x] Remove /api/scheduled/rateFetch endpoint from index.ts
+- [x] Remove RateRefreshPanel.tsx (auto-fetch UI)
+- [x] Build UpdateRatesPanel.tsx with editable source URLs, clickable links, manual fields, staleness indicator
+- [x] Wire UpdateRatesPanel into Settings page
+- [x] Run full test suite and confirm all tests pass (71/71)
+- [x] Save checkpoint

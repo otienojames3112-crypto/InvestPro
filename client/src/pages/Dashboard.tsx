@@ -537,6 +537,27 @@ export default function Dashboard() {
                 </tbody>
               </table>
             </div>
+
+            {/* Plan vs PDF note */}
+            <div className="mt-4 rounded-md bg-amber-500/10 border border-amber-500/25 p-3 flex gap-2.5">
+              <Info className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+              <div className="text-xs text-muted-foreground leading-relaxed space-y-1">
+                <p>
+                  <strong className="text-foreground">Why these numbers differ from the original PDF.</strong>{" "}
+                  The planning PDF assumed KES 5,279,234 at Month 120 with a KES 3,000 step-up. That figure was produced
+                  by an earlier model that double-counted fixed-income returns (compounding T-bill/IFB/FXD buckets in place
+                  <em> and</em> paying coupons/maturity proceeds into MMF). The corrected engine removes the double-count:
+                  bonds earn returns only through cash flows (coupons and maturity proceeds), not by growing in place.
+                </p>
+                <p>
+                  <strong className="text-foreground">Your real options to reach KES 5,000,000:</strong>{" "}
+                  Under the corrected engine, a <strong className="text-amber-300">KES 3,500 step-up</strong> (instead of
+                  KES 3,000) is the minimum that reaches KES 5M — landing at approximately KES 5,478,000 at Month 120.
+                  Alternatively, a one-off lump sum of ~KES 250,000 at any point in the Growth phase achieves the same effect.
+                  The milestones table above already reflects the corrected projections.
+                </p>
+              </div>
+            </div>
           </CardContent>
         </Card>
 

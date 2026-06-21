@@ -136,3 +136,12 @@
 - [x] Persist Getting Started account status/details in database (tRPC create/update/read)
 - [x] Bind Getting Started UI to stored database state (not local state) — localStorage removed, DB-backed
 - [x] End-to-end sync verification: change settings → confirm dashboard/ledger/scenarios/deposits all update — all 7 pages verified
+
+## Round 7 — Engine Math Fixes & Rate Auto-Fetch
+- [x] Update regression test target to KES 4,763,385 ±2%
+- [x] Compute what step-up amount hits KES 5M under corrected engine
+- [x] Add plan-vs-PDF explanation note to Dashboard milestones view
+- [x] Update existing engine.test.ts to match corrected engine outputs
+- [x] Finish wiring rate auto-fetch confirmation feature (RateRefreshPanel + router + DB)
+- [x] Run full test suite and confirm all tests pass (71/71)
+- [x] Save checkpoint

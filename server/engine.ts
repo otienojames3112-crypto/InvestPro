@@ -1,5 +1,5 @@
 /**
- * KES 5M Investment Compounding Engine — v2
+ * KES Investment Compounding Engine — v3
  *
  * Tax treatment (Kenya, resident individuals — Income Tax Act Cap 470):
  *   - MMF interest:    15% WHT deducted at source (gross rate entered; engine applies WHT).
@@ -9,13 +9,17 @@
  *                      the proposed 3-year tenor threshold was NOT enacted — all IFBs are exempt).
  *   - FXD coupons:     15% WHT deducted at source; gross rate stored, net applied here.
  *
- * Allocation rules by phase (PDF page 1):
- *   Foundation    (M1–24):   MMF 50%, T-Bills 50%, IFB  0%, FXD  0%
- *   Growth        (M25–84):  MMF 20%, T-Bills 20%, IFB 45%, FXD 15%
- *   De-risking    (M85–102): MMF 25%, T-Bills 35%, IFB 30%, FXD 10%
- *   Final liq.    (M103–120):MMF 40%, T-Bills 45%, IFB 10%, FXD  5%
+ * Allocation rules by phase (proportional fractions of horizonMonths):
+ *   Foundation    (~20%): MMF 50%, T-Bills 50%, IFB  0%, FXD  0%
+ *   Growth        (~50%): MMF 20%, T-Bills 20%, IFB 45%, FXD 15%
+ *   De-risking    (~15%): MMF 25%, T-Bills 35%, IFB 30%, FXD 10%
+ *   Final liq.    (~15%): MMF 40%, T-Bills 45%, IFB 10%, FXD  5%
  *
- * Key design decisions (v2):
+ * Short-horizon strategy (horizonMonths < SHORT_HORIZON_THRESHOLD = 30):
+ *   IFBs and long FXDs cannot mature in time. Strategy collapses to MMF + 91-day T-bills only.
+ *   The plan becomes contribution-driven rather than return-driven.
+ *
+ * Key design decisions (v3, inherits v2):
  *   1. Fixed-income buckets (T-Bill, IFB, FXD) are held at FACE VALUE — they do NOT compound
  *      in place. Returns flow exclusively as cash (coupons / maturity proceeds) back into MMF.
  *      Only MMF compounds in place.
@@ -23,10 +27,20 @@
  *      so maturities and coupons fire on real per-lot dates.
  *   3. When actuals are provided, months before currentMonth are seeded from real deposit entries
  *      and logged securities; future months continue from the actual current balances.
- *   4. WHT is accumulated inside the engine and exposed per month — getActualsSummary uses this
- *      number instead of recomputing with a separate formula.
+ *   4. WHT is accumulated inside the engine and exposed per month.
  *   5. Sweep buys floor((mmf - safetyFloor) / 50000) lots per month, not just one.
+ *   6. Horizon is variable (12–240 months). Phases are proportional fractions of the horizon.
+ *   7. Backwards solver: given target, horizon, and rates, computes required startingContribution.
  */
+
+// ─── Constants ────────────────────────────────────────────────────────────────
+
+/**
+ * Minimum horizon (months) for the full bond-ladder strategy.
+ * Below this threshold, IFBs and long FXDs cannot mature in time, so the engine
+ * collapses to MMF + 91-day T-bills only.
+ */
+export const SHORT_HORIZON_THRESHOLD = 30;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -39,6 +53,17 @@ export interface RateSnapshot {
   ifbCouponRate: number;
   fxdCouponRate: number;
   withholdingTax: number;
+}
+
+/**
+ * Phase fractions — must sum to 1.0.
+ * finalLiquidityFrac is implied: 1 - foundation - growth - deRisking.
+ */
+export interface PhaseFractions {
+  foundationFrac: number; // default 0.20
+  growthFrac: number;     // default 0.50
+  deRiskingFrac: number;  // default 0.15
+  // finalLiquidityFrac = 1 - foundationFrac - growthFrac - deRiskingFrac (default 0.15)
 }
 
 export interface EngineSettings {
@@ -58,6 +83,10 @@ export interface EngineSettings {
   safetyFloor: number;
   targetAmount: number;
   startDate?: string;
+  /** Total plan duration in months. Default 120. */
+  horizonMonths?: number;
+  /** Phase fractions. Defaults: foundation 0.20, growth 0.50, deRisking 0.15. */
+  phaseFractions?: PhaseFractions;
 }
 
 /** An individual security lot held in the DhowCSD portfolio. */
@@ -117,6 +146,8 @@ export interface MonthResult {
   whtThisMonth: number;
   /** True if this month's data comes from actual deposits/securities. */
   isActual: boolean;
+  /** True when the short-horizon strategy is active (MMF + T-bills only). */
+  isShortHorizon: boolean;
 }
 
 export interface YearMilestone {
@@ -135,17 +166,34 @@ export interface ScenarioResult {
   hitsTarget: boolean;
 }
 
+/**
+ * Result of the backwards solver.
+ */
+export interface SolverResult {
+  /** Whether a feasible solution was found within the contribution cap. */
+  feasible: boolean;
+  /** Required starting contribution (KES/month). */
+  requiredStartingContribution: number;
+  /** Step-up amount used (same as input, or 0 if no step-up). */
+  stepUpAmount: number;
+  /** Projected ending value at the required contribution. */
+  projectedEndingValue: number;
+  /** Total contributions over the horizon. */
+  totalContributed: number;
+  /** Shortfall if infeasible (how much more is needed at the cap). */
+  shortfall: number;
+  /** Whether the target is contribution-driven (short horizon). */
+  isShortHorizon: boolean;
+  /** Message explaining the result. */
+  message: string;
+}
+
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 export const SCENARIO_STEPUPS = [0, 500, 1000, 1500, 2000, 2500, 3000, 4000, 5000];
 
-/**
- * YEAR_MILESTONES is now generated dynamically from a clean projection run.
- * This array is populated by calling generateMilestones() and is exported for
- * backward-compatibility with code that imported the constant directly.
- * It is lazily populated on first use.
- */
-let _cachedMilestones: YearMilestone[] | null = null;
+/** Maximum starting contribution the solver will try before declaring infeasible. */
+const SOLVER_MAX_CONTRIBUTION = 1_000_000;
 
 const MILESTONE_LABELS: Record<number, string> = {
   1:  "Still building the base. Do not panic if most money is still in MMF.",
@@ -174,58 +222,39 @@ const DEFAULT_SETTINGS_FOR_MILESTONES: EngineSettings = {
   safetyFloor: 50000,
   targetAmount: 5000000,
   startDate: "2026-07-01",
+  horizonMonths: 120,
 };
 
-export function generateMilestones(settings?: EngineSettings): YearMilestone[] {
-  const s = settings ?? DEFAULT_SETTINGS_FOR_MILESTONES;
-  const results = runProjection(s);
-  const milestones: YearMilestone[] = [];
-  for (let year = 1; year <= 10; year++) {
-    const month = year * 12;
-    const row = results.find(r => r.monthNumber === month);
-    if (!row) continue;
-    const projected = row.totalEnd;
-    milestones.push({
-      year,
-      month,
-      projectedTotal: Math.round(projected),
-      minHealthyCheckpoint: Math.round(projected * 0.9),
-      label: MILESTONE_LABELS[year] ?? "",
-    });
-  }
-  return milestones;
+// ─── Phase helpers ────────────────────────────────────────────────────────────
+
+/**
+ * Compute the absolute month boundaries for each phase given horizon and fractions.
+ * Returns { foundationEnd, growthEnd, deRiskingEnd } — all inclusive upper bounds.
+ * finalLiquidityEnd = horizonMonths.
+ */
+export function getPhaseBoundaries(
+  horizonMonths: number,
+  fractions?: PhaseFractions
+): { foundationEnd: number; growthEnd: number; deRiskingEnd: number } {
+  const f = fractions ?? { foundationFrac: 0.20, growthFrac: 0.50, deRiskingFrac: 0.15 };
+  const foundationEnd = Math.round(horizonMonths * f.foundationFrac);
+  const growthEnd = Math.round(horizonMonths * (f.foundationFrac + f.growthFrac));
+  const deRiskingEnd = Math.round(horizonMonths * (f.foundationFrac + f.growthFrac + f.deRiskingFrac));
+  return { foundationEnd, growthEnd, deRiskingEnd };
 }
 
-export function getYearMilestones(): YearMilestone[] {
-  if (!_cachedMilestones) {
-    _cachedMilestones = generateMilestones();
-  }
-  return _cachedMilestones;
-}
-
-/** Invalidate the milestone cache (call after settings change). */
-export function invalidateMilestoneCache(): void {
-  _cachedMilestones = null;
-}
-
-// Keep a static export for backward compatibility (populated lazily on first access).
-// Code that does `import { YEAR_MILESTONES }` will get the dynamically-generated array.
-export const YEAR_MILESTONES: YearMilestone[] = new Proxy([] as YearMilestone[], {
-  get(_, prop) {
-    const live = getYearMilestones();
-    if (prop === "length") return live.length;
-    if (prop === Symbol.iterator) return live[Symbol.iterator].bind(live);
-    if (typeof prop === "string" && !isNaN(Number(prop))) return live[Number(prop)];
-    return (live as unknown as Record<string | symbol, unknown>)[prop];
-  },
-});
-
-// ─── Pure helpers ─────────────────────────────────────────────────────────────
-
-export function getPhase(month: number): "foundation" | "growth" | "de-risking" | "final-liquidity" {
-  if (month <= 24) return "foundation";
-  if (month <= 84) return "growth";
-  if (month <= 102) return "de-risking";
+/**
+ * Determine the phase for a given month number, using proportional boundaries.
+ */
+export function getPhase(
+  month: number,
+  horizonMonths = 120,
+  fractions?: PhaseFractions
+): "foundation" | "growth" | "de-risking" | "final-liquidity" {
+  const { foundationEnd, growthEnd, deRiskingEnd } = getPhaseBoundaries(horizonMonths, fractions);
+  if (month <= foundationEnd) return "foundation";
+  if (month <= growthEnd) return "growth";
+  if (month <= deRiskingEnd) return "de-risking";
   return "final-liquidity";
 }
 
@@ -262,20 +291,26 @@ export function getRatesForMonth(
 /**
  * Determine the sweep target for a given month, rotating through the phase allocation.
  * Returns the bucket name and the tenor (in months) to use for the new lot.
+ * When isShortHorizon is true, always returns 91-day T-bills.
  */
 export function getSweepTargetForMonth(
   month: number,
-  sweepCountInPhase: number
+  sweepCountInPhase: number,
+  horizonMonths = 120,
+  fractions?: PhaseFractions,
+  isShortHorizon = false
 ): { bucket: "tbill" | "ifb" | "fxd"; tenorMonths: number } | null {
-  const phase = getPhase(month);
+  if (isShortHorizon) {
+    return { bucket: "tbill", tenorMonths: 3 };
+  }
+
+  const phase = getPhase(month, horizonMonths, fractions);
 
   switch (phase) {
     case "foundation":
-      // T-Bills only; use 364-day (12-month) tenor per PDF Rule 3
       return { bucket: "tbill", tenorMonths: 12 };
 
     case "growth": {
-      // Cycle of 16: T-Bill×4, IFB×9, FXD×3
       const cycle = sweepCountInPhase % 16;
       if (cycle < 4) return { bucket: "tbill", tenorMonths: 12 };
       if (cycle < 13) return { bucket: "ifb", tenorMonths: 12 };
@@ -283,7 +318,6 @@ export function getSweepTargetForMonth(
     }
 
     case "de-risking": {
-      // Cycle of 15: T-Bill×7, IFB×6, FXD×2; use 182-day (6-month) T-bills per PDF Rule 3
       const cycle = sweepCountInPhase % 15;
       if (cycle < 7) return { bucket: "tbill", tenorMonths: 6 };
       if (cycle < 13) return { bucket: "ifb", tenorMonths: 12 };
@@ -291,7 +325,6 @@ export function getSweepTargetForMonth(
     }
 
     case "final-liquidity":
-      // No new long bonds; 91-day (3-month) T-bills per PDF Rule 3
       return { bucket: "tbill", tenorMonths: 3 };
 
     default:
@@ -302,9 +335,9 @@ export function getSweepTargetForMonth(
 // ─── Main projection engine ───────────────────────────────────────────────────
 
 /**
- * Run the full 120-month projection simulation.
+ * Run the full projection simulation for horizonMonths months.
  *
- * @param settings         - Rate and plan settings.
+ * @param settings         - Rate and plan settings (horizonMonths defaults to 120).
  * @param overrides        - Per-month contribution overrides.
  * @param rateHistory      - Historical rate snapshots for time-locked per-month rates.
  * @param actualDeposits   - Real deposit entries (for actuals-seeded mode).
@@ -317,10 +350,13 @@ export function runProjection(
   actualDeposits: ActualDeposit[] = [],
   actualSecurities: ActualSecurity[] = []
 ): MonthResult[] {
+  const horizonMonths = settings.horizonMonths ?? 120;
+  const isShortHorizon = horizonMonths < SHORT_HORIZON_THRESHOLD;
+  const fractions = settings.phaseFractions;
+
   const overrideMap = new Map<number, MonthlyContributionOverride>();
   for (const o of overrides) overrideMap.set(o.monthNumber, o);
 
-  // Determine current month from today vs startDate
   const startDate = new Date(
     (settings.startDate ?? new Date().toISOString().split("T")[0]) + "T12:00:00Z"
   );
@@ -329,45 +365,24 @@ export function runProjection(
     (today.getFullYear() - startDate.getFullYear()) * 12 +
     (today.getMonth() - startDate.getMonth())
   );
-  // currentMonth is 1-based; month 1 = startDate month
-  // If today is before startDate, currentMonth = 0 (pure forecast)
-  const currentMonth = Math.max(0, Math.min(monthsSinceStart, 120));
+  const currentMonth = Math.max(0, Math.min(monthsSinceStart, horizonMonths));
   const hasActuals = actualDeposits.length > 0 || actualSecurities.length > 0;
 
   const results: MonthResult[] = [];
 
-  // ── State variables ──────────────────────────────────────────────────────────
   let mmf = 0;
-  // Active security lots in DhowCSD
   let lots: SecurityLot[] = [];
   let lotIdCounter = 0;
-
-  // Sweep counter per phase (resets when phase changes)
   let sweepCount = 0;
   let lastPhase = "";
 
-  // ── Seed from actuals for past months ────────────────────────────────────────
-  // For months 1..currentMonth, we use actual deposit data to set the starting
-  // balances, then let the forecast engine continue from there.
-  //
-  // Strategy: compute actual bucket balances up to today from deposit entries,
-  // then seed the simulation state at the boundary month.
   let actualsMMF = 0;
-  let actualsTbillFace = 0;
-  let actualsIfbFace = 0;
-  let actualsFxdFace = 0;
 
   if (hasActuals && currentMonth > 0) {
-    // Sum deposits by bucket up to today
     for (const d of actualDeposits) {
-      const amt = d.amount;
-      if (d.bucket === "mmf") actualsMMF += amt;
-      else if (d.bucket === "tbill") actualsTbillFace += amt;
-      else if (d.bucket === "ifb") actualsIfbFace += amt;
-      else if (d.bucket === "fxd") actualsFxdFace += amt;
+      if (d.bucket === "mmf") actualsMMF += d.amount;
     }
 
-    // Build lots from actual securities that are still active
     for (const sec of actualSecurities) {
       if (sec.isMatured) continue;
       const issueDate = new Date(sec.issueDate + "T12:00:00Z");
@@ -376,7 +391,7 @@ export function runProjection(
         (issueDate.getFullYear() - startDate.getFullYear()) * 12 +
         (issueDate.getMonth() - startDate.getMonth())
       );
-      const issueMonth = issueMonthOffset + 1; // 1-based
+      const issueMonth = issueMonthOffset + 1;
       const tenorMonths = Math.round(
         (matDate.getFullYear() - issueDate.getFullYear()) * 12 +
         (matDate.getMonth() - issueDate.getMonth())
@@ -397,19 +412,21 @@ export function runProjection(
     }
   }
 
-  // ── Month loop ───────────────────────────────────────────────────────────────
-  for (let m = 1; m <= 120; m++) {
+  // Determine the last month at which new long bonds are allowed.
+  // In the final-liquidity phase, only T-bills are swept.
+  const { deRiskingEnd } = getPhaseBoundaries(horizonMonths, fractions);
+
+  for (let m = 1; m <= horizonMonths; m++) {
     const monthDate = new Date(startDate);
     monthDate.setMonth(monthDate.getMonth() + (m - 1));
 
     const rates = getRatesForMonth(monthDate, rateHistory, settings);
     const wht = rates.withholdingTax / 100;
 
-    // Net monthly MMF rate (gross yield, WHT applied)
     const mmfNetAnnual = netYield(rates.mmfYield, rates.withholdingTax);
     const mmfMonthly = monthlyRate(mmfNetAnnual);
 
-    const phase = getPhase(m);
+    const phase = getPhase(m, horizonMonths, fractions);
     const override = overrideMap.get(m);
 
     if (phase !== lastPhase) {
@@ -419,15 +436,10 @@ export function runProjection(
 
     const isActualMonth = hasActuals && m <= currentMonth;
 
-    // ── Seed state at the actuals boundary ──────────────────────────────────
-    // At month = currentMonth + 1 (first forecast month), inject actual balances
-    // as the starting state instead of the simulated state.
     if (hasActuals && m === currentMonth + 1 && currentMonth > 0) {
       mmf = actualsMMF;
-      // lots already seeded from actual securities above; keep them
     }
 
-    // ── Step 1: Contribution ─────────────────────────────────────────────────
     let contribution = 0;
     let whtThisMonth = 0;
 
@@ -438,44 +450,33 @@ export function runProjection(
       contribution += lumpSum;
       mmf += contribution;
     } else {
-      // For actual months, contribution = sum of actual MMF deposits this month
-      // (We already added all actuals to actualsMMF above; here we just record the
-      //  scheduled amount for display purposes — the actual balance is seeded at boundary)
       contribution = getScheduledContribution(m, settings);
     }
 
-    // ── Step 2: MMF monthly compounding (only for forecast months) ───────────
     if (!isActualMonth) {
-      const grossInterest = mmf * monthlyRate(rates.mmfYield / 1); // gross monthly
-      // Actually: compound at net rate (WHT already applied in netYield)
       const interestGross = mmf * monthlyRate(rates.mmfYield);
       const interestWHT = interestGross * wht;
       whtThisMonth += interestWHT;
       mmf = mmf * (1 + mmfMonthly);
     }
 
-    // ── Step 3: Process lots — coupons and maturities ────────────────────────
     let cbkCashIn = 0;
     const cbkActions: string[] = [];
     const survivingLots: SecurityLot[] = [];
 
     for (const lot of lots) {
-      const age = m - lot.issueMonth; // months since purchase
+      const age = m - lot.issueMonth;
 
       if (age < 0) {
-        // Lot not yet issued (shouldn't happen in normal flow)
         survivingLots.push(lot);
         continue;
       }
 
-      // ── Maturity ─────────────────────────────────────────────────────────
       if (age === lot.tenorMonths) {
-        // Return face value to MMF
         cbkCashIn += lot.faceValue;
         cbkActions.push(`${lot.bucket.toUpperCase()} maturity KES ${Math.round(lot.faceValue).toLocaleString()}`);
 
         if (lot.bucket === "tbill") {
-          // T-bill: discount (net interest) flows to MMF at maturity
           const tenorYears = lot.tenorMonths / 12;
           const grossInterest = lot.faceValue * (rates.tbill364Rate / 100) * tenorYears;
           const netInterest = grossInterest * (1 - wht);
@@ -483,12 +484,9 @@ export function runProjection(
           cbkCashIn += netInterest;
           cbkActions.push(`T-bill net discount KES ${Math.round(netInterest).toLocaleString()}`);
         }
-        // Bond face value already added above; coupons handled separately below
-        // Do NOT add lot to survivingLots — it's matured
         continue;
       }
 
-      // ── Semi-annual coupon (bonds only) ──────────────────────────────────
       if ((lot.bucket === "ifb" || lot.bucket === "fxd") && age > 0 && age % 6 === 0) {
         const grossCoupon = (lot.couponRate / 100 / 2) * lot.faceValue;
         if (lot.isTaxExempt) {
@@ -508,19 +506,17 @@ export function runProjection(
     lots = survivingLots;
     mmf += cbkCashIn;
 
-    // ── Step 4: Sweep — buy floor((mmf - safetyFloor) / 50000) lots ─────────
     let mmfToDhow = 0;
     let sweepTarget: "tbill" | "ifb" | "fxd" | null = null;
 
-    // No new long bonds in final 18 months (M103–120) — only T-bills allowed
-    const noNewLongBonds = m >= 103;
+    // No new long bonds in final-liquidity phase
+    const noNewLongBonds = m > deRiskingEnd;
 
     if (!isActualMonth) {
       const maxLots = Math.floor((mmf - settings.safetyFloor) / 50000);
       if (maxLots > 0) {
-        const target = getSweepTargetForMonth(m, sweepCount);
+        const target = getSweepTargetForMonth(m, sweepCount, horizonMonths, fractions, isShortHorizon);
         if (target) {
-          // In final-liquidity phase, only T-bills
           const effectiveBucket = noNewLongBonds && target.bucket !== "tbill"
             ? { bucket: "tbill" as const, tenorMonths: 3 }
             : target;
@@ -533,7 +529,6 @@ export function runProjection(
             mmf -= totalSweep;
             mmfToDhow = totalSweep;
 
-            // Create individual lots
             for (let i = 0; i < lotsCount; i++) {
               lots.push({
                 id: `sim-${m}-${lotIdCounter++}`,
@@ -555,21 +550,15 @@ export function runProjection(
       }
     }
 
-    // ── Compute bucket totals from lots ──────────────────────────────────────
-    // T-bills are valued at face value PLUS accrued net discount (mark-to-maturity).
-    // This matches the spec's portfolio value which includes unrealised T-bill returns.
-    // IFB and FXD are held at face value (coupons are cash, not accrued).
     let tbillEnd = 0;
     let ifbEnd = 0;
     let fxdEnd = 0;
     for (const lot of lots) {
       if (lot.bucket === "tbill") {
-        // Accrued net discount = face × (net annual rate) × (age / 12)
-        const age = m - lot.issueMonth; // months elapsed since purchase
+        const age = m - lot.issueMonth;
         const tenorYears = lot.tenorMonths / 12;
         const grossDiscount = lot.faceValue * (rates.tbill364Rate / 100) * tenorYears;
         const netDiscount = grossDiscount * (1 - wht);
-        // Accrue linearly over the tenor
         const accruedDiscount = age > 0 ? netDiscount * (age / lot.tenorMonths) : 0;
         tbillEnd += lot.faceValue + accruedDiscount;
       } else if (lot.bucket === "ifb") {
@@ -579,7 +568,6 @@ export function runProjection(
       }
     }
 
-    // ── Build action description ──────────────────────────────────────────────
     let mainAction = "";
     const sweepDesc = mmfToDhow > 0
       ? `sweep KES ${Math.round(mmfToDhow).toLocaleString()} → ${sweepTarget?.toUpperCase()} (${Math.round(mmfToDhow / 50000)} lot${mmfToDhow > 50000 ? "s" : ""})`
@@ -611,6 +599,7 @@ export function runProjection(
       sweepTarget,
       whtThisMonth: Math.round(whtThisMonth * 100) / 100,
       isActual: isActualMonth,
+      isShortHorizon,
     });
   }
 
@@ -624,6 +613,7 @@ export function runScenarios(
   stepUps: number[] = SCENARIO_STEPUPS,
   rateHistory: RateSnapshot[] = []
 ): ScenarioResult[] {
+  const horizonMonths = baseSettings.horizonMonths ?? 120;
   return stepUps.map((stepUp) => {
     const settings = { ...baseSettings, stepUpAmount: stepUp };
     const results = runProjection(settings, [], rateHistory);
@@ -634,7 +624,7 @@ export function runScenarios(
 
     return {
       stepUp,
-      finalMonthlySaving:   getScheduledContribution(120, settings),
+      finalMonthlySaving:   getScheduledContribution(horizonMonths, settings),
       totalContributed:     Math.round(totalContributed),
       projectedEndingValue: last.totalEnd,
       hitsTarget:           last.totalEnd >= settings.targetAmount,
@@ -643,6 +633,54 @@ export function runScenarios(
 }
 
 // ─── Milestones ───────────────────────────────────────────────────────────────
+
+/**
+ * Generate per-portfolio year-end milestones from a clean projection run.
+ * Works for any horizon: generates one milestone per year up to horizonMonths.
+ */
+export function generateMilestones(settings?: EngineSettings): YearMilestone[] {
+  const s = settings ?? DEFAULT_SETTINGS_FOR_MILESTONES;
+  const horizonMonths = s.horizonMonths ?? 120;
+  const results = runProjection(s);
+  const milestones: YearMilestone[] = [];
+  const totalYears = Math.floor(horizonMonths / 12);
+  for (let year = 1; year <= totalYears; year++) {
+    const month = year * 12;
+    if (month > horizonMonths) break;
+    const row = results.find(r => r.monthNumber === month);
+    if (!row) continue;
+    const projected = row.totalEnd;
+    milestones.push({
+      year,
+      month,
+      projectedTotal: Math.round(projected),
+      minHealthyCheckpoint: Math.round(projected * 0.9),
+      label: MILESTONE_LABELS[year] ?? `Year ${year} checkpoint.`,
+    });
+  }
+  return milestones;
+}
+
+/** @deprecated Use generateMilestones(settings) directly. */
+export function getYearMilestones(): YearMilestone[] {
+  return generateMilestones();
+}
+
+/** @deprecated No-op — milestones are now generated per-portfolio on demand. */
+export function invalidateMilestoneCache(): void {
+  // no-op
+}
+
+/** @deprecated Backward compat — returns default 120-month milestones. */
+export const YEAR_MILESTONES: YearMilestone[] = new Proxy([] as YearMilestone[], {
+  get(_, prop) {
+    const live = generateMilestones();
+    if (prop === "length") return live.length;
+    if (prop === Symbol.iterator) return live[Symbol.iterator].bind(live);
+    if (typeof prop === "string" && !isNaN(Number(prop))) return live[Number(prop)];
+    return (live as unknown as Record<string | symbol, unknown>)[prop];
+  },
+});
 
 export function checkMilestones(
   currentMonth: number,
@@ -677,4 +715,94 @@ export function checkMilestones(
       recommendation: `You are KES ${shortfall.toLocaleString()} below the healthy checkpoint. Consider increasing your next step-up by KES 1,000–2,000, adding a one-off lump sum, or giving the plan more time.`,
     };
   }
+}
+
+// ─── Backwards Solver ─────────────────────────────────────────────────────────
+
+/**
+ * Solve backwards: given a target, horizon, and rates, compute the required
+ * starting contribution (and optional step-up) to reach the goal.
+ *
+ * Strategy:
+ *   - Hold the step-up amount fixed (caller supplies it, or 0 for flat contributions).
+ *   - Binary-search on startingContribution until month-horizonMonths total ≥ target.
+ *   - If even SOLVER_MAX_CONTRIBUTION doesn't reach the target, report infeasible
+ *     with the shortfall and what would be needed.
+ *
+ * @param settings   - Base settings (target, horizon, rates, step-up). startingContribution is ignored.
+ * @param stepUpAmount - Step-up amount to use (0 = flat contributions).
+ * @param rateHistory  - Rate history for time-locked projection.
+ */
+export function solveForContribution(
+  settings: EngineSettings,
+  stepUpAmount = 0,
+  rateHistory: RateSnapshot[] = []
+): SolverResult {
+  const horizonMonths = settings.horizonMonths ?? 120;
+  const isShortHorizon = horizonMonths < SHORT_HORIZON_THRESHOLD;
+  const target = settings.targetAmount;
+
+  const project = (startingContribution: number): number => {
+    const s: EngineSettings = { ...settings, startingContribution, stepUpAmount };
+    const results = runProjection(s, [], rateHistory);
+    return results[results.length - 1]?.totalEnd ?? 0;
+  };
+
+  // Quick feasibility check at the cap
+  const atCap = project(SOLVER_MAX_CONTRIBUTION);
+  if (atCap < target) {
+    const shortfall = target - atCap;
+    return {
+      feasible: false,
+      requiredStartingContribution: SOLVER_MAX_CONTRIBUTION,
+      stepUpAmount,
+      projectedEndingValue: atCap,
+      totalContributed: 0,
+      shortfall,
+      isShortHorizon,
+      message: `Target of KES ${target.toLocaleString()} is not achievable within ${horizonMonths} months even at KES ${SOLVER_MAX_CONTRIBUTION.toLocaleString()}/month. ` +
+        `Shortfall: KES ${Math.round(shortfall).toLocaleString()}. ` +
+        `Consider a longer horizon, a higher target tolerance, or a lower target.`,
+    };
+  }
+
+  // Binary search: find minimum startingContribution that hits target
+  let lo = 0;
+  let hi = SOLVER_MAX_CONTRIBUTION;
+  for (let iter = 0; iter < 60; iter++) {
+    const mid = (lo + hi) / 2;
+    if (project(mid) >= target) {
+      hi = mid;
+    } else {
+      lo = mid;
+    }
+  }
+
+  const requiredStartingContribution = Math.ceil(hi); // round up to nearest KES
+  const projectedEndingValue = project(requiredStartingContribution);
+
+  // Compute total contributed
+  const s: EngineSettings = { ...settings, startingContribution: requiredStartingContribution, stepUpAmount };
+  const results = runProjection(s, [], rateHistory);
+  let totalContributed = 0;
+  for (const r of results) totalContributed += r.contribution;
+
+  const shortHorizonNote = isShortHorizon
+    ? ` Note: this is a short-horizon plan (${horizonMonths} months). The strategy uses MMF + 91-day T-bills only — returns are limited, so the result is primarily contribution-driven.`
+    : "";
+
+  const stepUpNote = stepUpAmount > 0
+    ? ` with a KES ${stepUpAmount.toLocaleString()} step-up every ${settings.stepUpMonths ?? 6} months`
+    : " (flat contributions, no step-up)";
+
+  return {
+    feasible: true,
+    requiredStartingContribution,
+    stepUpAmount,
+    projectedEndingValue: Math.round(projectedEndingValue),
+    totalContributed: Math.round(totalContributed),
+    shortfall: 0,
+    isShortHorizon,
+    message: `To reach KES ${target.toLocaleString()} in ${horizonMonths} months, start at KES ${requiredStartingContribution.toLocaleString()}/month${stepUpNote}.${shortHorizonNote}`,
+  };
 }

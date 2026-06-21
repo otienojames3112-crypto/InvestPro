@@ -1,3 +1,4 @@
+import { usePortfolio } from "@/contexts/PortfolioContext";
 import { AppShell } from "@/components/AppShell";
 import { trpc } from "@/lib/trpc";
 import { formatKES, getMonthLabel } from "@/lib/format";
@@ -21,10 +22,14 @@ interface OverrideForm {
 }
 
 export default function Contributions() {
+  const { portfolioId, portfolio } = usePortfolio();
   const utils = trpc.useUtils();
-  const { data: schedule, isLoading: schedLoading } = trpc.projection.contributionSchedule.useQuery();
-  const { data: overrides, isLoading: overLoading } = trpc.contributions.list.useQuery();
-  const { data: settings } = trpc.settings.get.useQuery();
+  const { data: schedule, isLoading: schedLoading } = trpc.projection.contributionSchedule.useQuery({ portfolioId: portfolioId! }, { enabled: !!portfolioId });
+  const { data: overrides, isLoading: overLoading } = trpc.contributions.list.useQuery(
+    { portfolioId: portfolioId! },
+    { enabled: !!portfolioId }
+  );
+  const { data: settings } = trpc.settings.get.useQuery({ portfolioId: portfolioId! }, { enabled: !!portfolioId });
 
   const upsertMutation = trpc.contributions.upsert.useMutation({
     onSuccess: () => {
@@ -50,12 +55,14 @@ export default function Contributions() {
     defaultValues: { monthNumber: 1, overrideAmount: 0, lumpSum: 0, reason: "" },
   });
 
-  const startDate = settings?.startDate ? String(settings.startDate) : "2026-07-01";
+  const startDate = portfolio?.startDate ? String(portfolio.startDate).split("T")[0] : "2026-07-01";
 
   const overrideMap = new Map(overrides?.map((o) => [o.monthNumber, o]) ?? []);
 
   function onSubmit(data: OverrideForm) {
+    if (!portfolioId) return;
     upsertMutation.mutate({
+      portfolioId,
       monthNumber: data.monthNumber,
       overrideAmount: data.overrideAmount > 0 ? data.overrideAmount : undefined,
       lumpSum: data.lumpSum > 0 ? data.lumpSum : undefined,
@@ -225,7 +232,7 @@ export default function Contributions() {
                               variant="ghost"
                               size="icon"
                               className="w-7 h-7 text-destructive hover:text-destructive"
-                              onClick={() => deleteMutation.mutate({ monthNumber: o.monthNumber })}
+                              onClick={() => { if (!portfolioId) return; deleteMutation.mutate({ portfolioId: portfolioId!, monthNumber: o.monthNumber }); }}
                             >
                               <Trash2 className="w-3 h-3" />
                             </Button>

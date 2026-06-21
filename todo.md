@@ -157,3 +157,21 @@
 - [x] Wire UpdateRatesPanel into Settings page
 - [x] Run full test suite and confirm all tests pass (71/71)
 - [x] Save checkpoint
+
+## Round 9 — Multi-Portfolio Architecture
+- [x] Add portfolios table to schema (name, userId, targetAmount, startDate, horizonMonths, contribution settings, phase fractions, source URLs)
+- [x] Re-key all 7 tables (rateSettings, ledgerEntries, securities, contributionOverrides, depositEntries, rateHistory, accountStatus) from userId to portfolioId
+- [x] SQL migration: create portfolios, add portfolioId columns, backfill from userId, migrate existing data into default portfolio
+- [x] Engine: variable horizon (replace hardcoded 120 with horizonMonths parameter)
+- [x] Engine: proportional phases (fractions of horizon, not absolute month numbers)
+- [x] Engine: short-horizon strategy switch (< 30 months → MMF + 91-day T-bills only)
+- [x] Engine: backwards solver (compute required startingContribution/stepUp to hit target)
+- [x] Router: portfolio CRUD procedures (create, list, get, update, delete)
+- [x] Router: re-key all existing procedures to accept portfolioId
+- [x] Router: per-portfolio milestones generated dynamically
+- [x] Frontend: portfolio list page (home screen after login)
+- [x] Frontend: portfolio detail view (existing pages scoped to selected portfolio)
+- [x] Frontend: backwards solver UI (new "Plan a Portfolio" form)
+- [x] Frontend: short-horizon warning banner
+- [x] Run full test suite and confirm all tests pass (71/71)
+- [x] Save checkpoint

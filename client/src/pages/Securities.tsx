@@ -1,3 +1,4 @@
+import { usePortfolio } from "@/contexts/PortfolioContext";
 import { AppShell } from "@/components/AppShell";
 import { trpc } from "@/lib/trpc";
 import { formatKES, formatPct, getSecurityLabel } from "@/lib/format";
@@ -45,8 +46,12 @@ function nextCouponDate(issueDate: string | Date, maturityDate: string | Date): 
 }
 
 export default function Securities() {
+  const { portfolioId } = usePortfolio();
   const utils = trpc.useUtils();
-  const { data: securities, isLoading } = trpc.securities.list.useQuery();
+  const { data: securities, isLoading } = trpc.securities.list.useQuery(
+    { portfolioId: portfolioId! },
+    { enabled: !!portfolioId }
+  );
   const addMutation = trpc.securities.add.useMutation({
     onSuccess: () => {
       toast.success("Security added to register");
@@ -86,7 +91,9 @@ export default function Securities() {
   const isBond = secType === "ifb" || secType === "fxd";
 
   function onSubmit(data: SecurityForm) {
-    addMutation.mutate({
+    if (!portfolioId) return;
+      addMutation.mutate({
+        portfolioId: portfolioId!,
       ...data,
       couponRate: isBond ? data.couponRate : 0,
       isTaxExempt: secType === "ifb" ? true : data.isTaxExempt,

@@ -5,6 +5,7 @@ import { Route, Switch } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import { DepositDrawerProvider } from "./contexts/DepositDrawerContext";
+import { PortfolioProvider } from "./contexts/PortfolioContext";
 import Dashboard from "./pages/Dashboard";
 import Ledger from "./pages/Ledger";
 import Contributions from "./pages/Contributions";
@@ -12,6 +13,7 @@ import Settings from "./pages/Settings";
 import Securities from "./pages/Securities";
 import Scenarios from "./pages/Scenarios";
 import GettingStarted from "./pages/GettingStarted";
+import Deposits from "./pages/Deposits";
 
 function Router() {
   return (
@@ -23,6 +25,7 @@ function Router() {
       <Route path="/scenarios" component={Scenarios} />
       <Route path="/settings" component={Settings} />
       <Route path="/getting-started" component={GettingStarted} />
+      <Route path="/deposits" component={Deposits} />
       <Route path="/404" component={NotFound} />
       <Route component={NotFound} />
     </Switch>
@@ -34,10 +37,12 @@ function App() {
     <ErrorBoundary>
       <ThemeProvider defaultTheme="dark">
         <TooltipProvider>
-          <DepositDrawerProvider>
-            <Toaster />
-            <Router />
-          </DepositDrawerProvider>
+          <PortfolioProvider>
+            <DepositDrawerProvider>
+              <Toaster />
+              <Router />
+            </DepositDrawerProvider>
+          </PortfolioProvider>
         </TooltipProvider>
       </ThemeProvider>
     </ErrorBoundary>

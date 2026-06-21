@@ -1,3 +1,4 @@
+import { usePortfolio } from "@/contexts/PortfolioContext";
 import { AppShell } from "@/components/AppShell";
 import { trpc } from "@/lib/trpc";
 import { formatKES, formatKESCompact } from "@/lib/format";
@@ -33,9 +34,16 @@ function CustomTooltip({ active, payload, label }: { active?: boolean; payload?:
 }
 
 export default function Scenarios() {
-  const { data: scenarios, isLoading } = trpc.projection.scenarios.useQuery();
-  const { data: settings } = trpc.settings.get.useQuery();
-  const targetAmount = settings?.targetAmount ?? 5000000;
+  const { portfolioId, portfolio } = usePortfolio();
+  const { data: scenarios, isLoading } = trpc.projection.scenarios.useQuery(
+    { portfolioId: portfolioId! },
+    { enabled: !!portfolioId }
+  );
+  const { data: settings } = trpc.settings.get.useQuery(
+    { portfolioId: portfolioId! },
+    { enabled: !!portfolioId }
+  );
+  const targetAmount = portfolio?.targetAmount ?? 5000000;
 
   const chartData = scenarios?.map((s) => ({
     stepUp: s.stepUp,

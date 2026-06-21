@@ -2,6 +2,7 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import { getLoginUrl } from "@/const";
 import { cn } from "@/lib/utils";
 import { useDepositDrawer } from "@/contexts/DepositDrawerContext";
+import { PortfolioSelector } from "./PortfolioSelector";
 import {
   BarChart3,
   BookOpen,
@@ -103,6 +104,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               <p className="text-xs text-muted-foreground">2026 – 2036</p>
             </div>
           </div>
+        </div>
+
+        {/* Portfolio Selector */}
+        <div className="px-3 py-3 border-b border-sidebar-border">
+          <PortfolioSelector />
         </div>
 
         {/* Navigation */}

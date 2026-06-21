@@ -1,3 +1,4 @@
+import { usePortfolio } from "@/contexts/PortfolioContext";
 import { AppShell } from "@/components/AppShell";
 import { trpc } from "@/lib/trpc";
 import { formatKES, formatKESCompact, formatPct, getPhaseName, getPhaseColorClass } from "@/lib/format";
@@ -122,21 +123,31 @@ function ChartTooltip({ active, payload, label }: { active?: boolean; payload?: 
 }
 
 export default function Dashboard() {
+  const { portfolioId, portfolio } = usePortfolio();
   const utils = trpc.useUtils();
-  const { data: projection, isLoading: projLoading } = trpc.projection.run.useQuery();
-  const { data: milestones } = trpc.projection.milestones.useQuery();
-  const { data: settings, isLoading: settingsLoading } = trpc.settings.get.useQuery();
-  const { data: actualsSummary } = trpc.deposits.summary.useQuery();
-
-  const saveMutation = trpc.settings.save.useMutation({
+  const { data: projection, isLoading: projLoading } = trpc.projection.run.useQuery(
+    { portfolioId: portfolioId! },
+    { enabled: !!portfolioId }
+  );
+  const { data: milestones } = trpc.projection.milestones.useQuery(
+    { portfolioId: portfolioId! },
+    { enabled: !!portfolioId }
+  );
+    const { data: actualsSummary } = trpc.deposits.summary.useQuery(
+    { portfolioId: portfolioId! },
+    { enabled: !!portfolioId }
+  );
+  const { data: settings } = trpc.settings.get.useQuery(
+    { portfolioId: portfolioId! },
+    { enabled: !!portfolioId }
+  );
+  const updatePortfolioMutation = trpc.portfolios.update.useMutation({
     onSuccess: () => {
-      toast.success("Target end value updated — all projections recalculated");
-      utils.settings.get.invalidate();
-      utils.projection.run.invalidate();
-      utils.projection.scenarios.invalidate();
-      utils.projection.contributionSchedule.invalidate();
-      utils.projection.milestones.invalidate();
-      utils.deposits.summary.invalidate();
+      toast.success("Target updated — projection recalculated");
+      utils.portfolios.list.invalidate();
+      utils.projection.run.invalidate({ portfolioId: portfolioId! });
+      utils.projection.milestones.invalidate({ portfolioId: portfolioId! });
+      utils.deposits.summary.invalidate({ portfolioId: portfolioId! });
       setTargetDialogOpen(false);
     },
     onError: () => toast.error("Failed to update target"),
@@ -147,31 +158,32 @@ export default function Dashboard() {
   const [targetInput, setTargetInput] = useState("");
 
   function openTargetDialog() {
-    setTargetInput(String(settings?.targetAmount ?? 5000000));
+    setTargetInput(String(portfolio?.targetAmount ?? 5000000));
     setTargetDialogOpen(true);
   }
 
   function saveTarget() {
+    if (!portfolioId || !portfolio) return;
     const val = parseFloat(targetInput.replace(/,/g, ""));
     if (!val || val < 100000) {
       toast.error("Please enter a valid target end value (minimum KES 100,000)");
       return;
     }
-    if (!settings) return;
-    // Normalise startDate to plain YYYY-MM-DD before sending
-    const rawSD = settings.startDate;
-    let cleanSD = "2026-07-01";
-    if (rawSD) {
-      cleanSD = String(rawSD).split("T")[0];
-    }
-    saveMutation.mutate({
-      ...settings,
+    if (!portfolio) return;
+    updatePortfolioMutation.mutate({
+      portfolioId,
+      name: portfolio.name,
       targetAmount: val,
-      startDate: cleanSD,
+      startDate: String(portfolio.startDate).split("T")[0],
+      horizonMonths: portfolio.horizonMonths,
+      startingContribution: Number(portfolio.startingContribution),
+      stepUpAmount: Number(portfolio.stepUpAmount),
+      stepUpMonths: portfolio.stepUpMonths,
+      safetyFloor: Number(portfolio.safetyFloor),
     });
   }
 
-  const targetAmount = settings?.targetAmount ?? 5000000;
+  const targetAmount = portfolio?.targetAmount ?? 5000000;
   const lastData = projection?.[119];
   const currentMonth = 1;
   const currentData = projection?.[currentMonth - 1];
@@ -257,7 +269,7 @@ export default function Dashboard() {
               <div className="text-right shrink-0">
                 <p className="text-xs text-muted-foreground mb-1">Target End Value</p>
                 <div className="flex items-center gap-2 justify-end">
-                  {settingsLoading ? (
+                  {false ? (
                     <Skeleton className="h-7 w-32" />
                   ) : (
                     <p className="text-xl font-bold text-primary kes-amount">
@@ -744,10 +756,10 @@ export default function Dashboard() {
             <Button variant="outline" onClick={() => setTargetDialogOpen(false)}>Cancel</Button>
             <Button
               onClick={saveTarget}
-              disabled={saveMutation.isPending}
+              disabled={updatePortfolioMutation.isPending}
               className="bg-primary text-primary-foreground"
             >
-              {saveMutation.isPending ? "Saving…" : "Update Target & Recalculate"}
+              {updatePortfolioMutation.isPending ? "Saving…" : "Update Target & Recalculate"}
             </Button>
           </DialogFooter>
         </DialogContent>

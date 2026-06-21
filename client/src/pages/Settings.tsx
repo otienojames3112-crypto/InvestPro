@@ -4,16 +4,17 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Separator } from "@/components/ui/separator";
-import { Settings as SettingsIcon, RefreshCw, Info } from "lucide-react";
+import { Settings as SettingsIcon, RefreshCw, Info, Pencil } from "lucide-react";
 import { UpdateRatesPanel } from "@/components/UpdateRatesPanel";
 import { toast } from "sonner";
 import { useForm } from "react-hook-form";
 import { useEffect } from "react";
 import { History, TrendingUp } from "lucide-react";
-import { format } from "date-fns";
+import { usePortfolio } from "@/contexts/PortfolioContext";
 
-interface SettingsForm {
+// ─── Rate-only form ────────────────────────────────────────────────────────────
+
+interface RateForm {
   mmfYield: number;
   tbill91Rate: number;
   tbill182Rate: number;
@@ -21,18 +22,26 @@ interface SettingsForm {
   ifbCouponRate: number;
   fxdCouponRate: number;
   withholdingTax: number;
+}
+
+// ─── Plan-level form ──────────────────────────────────────────────────────────
+
+interface PlanForm {
+  name: string;
+  description: string;
+  targetAmount: number;
+  startDate: string;
+  horizonMonths: number;
   startingContribution: number;
   stepUpAmount: number;
   stepUpMonths: number;
   safetyFloor: number;
-  targetAmount: number;
-  startDate: string;
 }
 
 function RateField({ label, name, register, description }: {
   label: string;
-  name: keyof SettingsForm;
-  register: ReturnType<typeof useForm<SettingsForm>>["register"];
+  name: keyof RateForm;
+  register: ReturnType<typeof useForm<RateForm>>["register"];
   description?: string;
 }) {
   return (
@@ -53,8 +62,8 @@ function RateField({ label, name, register, description }: {
   );
 }
 
-function RateHistorySection() {
-  const { data: history, isLoading } = trpc.rateHistory.list.useQuery();
+function RateHistorySection({ portfolioId }: { portfolioId: number }) {
+  const { data: history, isLoading } = trpc.settings.getRateHistory.useQuery({ portfolioId });
 
   if (isLoading) return null;
   if (!history || history.length === 0) {
@@ -67,7 +76,7 @@ function RateHistorySection() {
           </CardTitle>
         </CardHeader>
         <CardContent className="p-4 pt-0">
-          <p className="text-xs text-muted-foreground">No rate changes recorded yet. Rate changes will appear here after you save new settings.</p>
+          <p className="text-xs text-muted-foreground">No rate changes recorded yet.</p>
         </CardContent>
       </Card>
     );
@@ -115,61 +124,112 @@ function RateHistorySection() {
 }
 
 export default function Settings() {
+  const { portfolioId, portfolio, refetch: refetchPortfolios } = usePortfolio();
   const utils = trpc.useUtils();
-  const { data: settings, isLoading } = trpc.settings.get.useQuery();
-  const saveMutation = trpc.settings.save.useMutation({
-    onSuccess: () => {
-      toast.success("Settings saved — projection recalculated");
-      utils.settings.get.invalidate();
-      utils.projection.run.invalidate();
-      utils.projection.scenarios.invalidate();
-      utils.projection.contributionSchedule.invalidate();
-      utils.projection.milestones.invalidate();
-      utils.deposits.summary.invalidate();
-    },
-    onError: () => toast.error("Failed to save settings"),
-  });
 
-  const { register, handleSubmit, reset } = useForm<SettingsForm>({
+  // ─── Rate form ──────────────────────────────────────────────────────────────
+  const { data: rateSettings } = trpc.settings.get.useQuery(
+    { portfolioId: portfolioId! },
+    { enabled: !!portfolioId }
+  );
+
+  const rateForm = useForm<RateForm>({
     defaultValues: {
       mmfYield: 8.78,
       tbill91Rate: 8.8206,
       tbill182Rate: 8.7782,
       tbill364Rate: 8.9746,
       ifbCouponRate: 12.5,
-      fxdCouponRate: 12.35,  // gross; net ≈ 10.5% after 15% WHT
+      fxdCouponRate: 12.35,
       withholdingTax: 15,
-      startingContribution: 2500,
-      stepUpAmount: 3000,
-      stepUpMonths: 6,
-      safetyFloor: 50000,
-      targetAmount: 5000000,
-      startDate: "2026-07-01",
     },
   });
 
   useEffect(() => {
-    if (settings) {
-      reset({
-        mmfYield: settings.mmfYield,
-        tbill91Rate: settings.tbill91Rate,
-        tbill182Rate: settings.tbill182Rate,
-        tbill364Rate: settings.tbill364Rate,
-        ifbCouponRate: settings.ifbCouponRate,
-        fxdCouponRate: settings.fxdCouponRate,
-        withholdingTax: settings.withholdingTax,
-        startingContribution: settings.startingContribution,
-        stepUpAmount: settings.stepUpAmount,
-        stepUpMonths: settings.stepUpMonths,
-        safetyFloor: settings.safetyFloor,
-        targetAmount: settings.targetAmount,
-        startDate: settings.startDate ? String(settings.startDate).split("T")[0] : "2026-07-01",
+    if (rateSettings) {
+      rateForm.reset({
+        mmfYield: rateSettings.mmfYield,
+        tbill91Rate: rateSettings.tbill91Rate,
+        tbill182Rate: rateSettings.tbill182Rate,
+        tbill364Rate: rateSettings.tbill364Rate,
+        ifbCouponRate: rateSettings.ifbCouponRate,
+        fxdCouponRate: rateSettings.fxdCouponRate,
+        withholdingTax: rateSettings.withholdingTax,
       });
     }
-  }, [settings, reset]);
+  }, [rateSettings]);
 
-  function onSubmit(data: SettingsForm) {
-    saveMutation.mutate(data);
+  const saveRatesMutation = trpc.rateUpdate.save.useMutation({
+    onSuccess: () => {
+      toast.success("Rates saved — projection recalculated");
+      utils.settings.get.invalidate({ portfolioId: portfolioId! });
+      utils.projection.run.invalidate({ portfolioId: portfolioId! });
+      utils.projection.scenarios.invalidate({ portfolioId: portfolioId! });
+      utils.projection.milestones.invalidate({ portfolioId: portfolioId! });
+      utils.deposits.summary.invalidate({ portfolioId: portfolioId! });
+    },
+    onError: () => toast.error("Failed to save rates"),
+  });
+
+  function onSaveRates(data: RateForm) {
+    if (!portfolioId) return;
+    saveRatesMutation.mutate({ portfolioId, ...data });
+  }
+
+  // ─── Plan form ──────────────────────────────────────────────────────────────
+  const planForm = useForm<PlanForm>({
+    defaultValues: {
+      name: "",
+      description: "",
+      targetAmount: 5000000,
+      startDate: "2026-07-01",
+      horizonMonths: 120,
+      startingContribution: 2500,
+      stepUpAmount: 3000,
+      stepUpMonths: 6,
+      safetyFloor: 50000,
+    },
+  });
+
+  useEffect(() => {
+    if (portfolio) {
+      planForm.reset({
+        name: portfolio.name,
+        description: portfolio.description ?? "",
+        targetAmount: portfolio.targetAmount,
+        startDate: portfolio.startDate,
+        horizonMonths: portfolio.horizonMonths,
+        startingContribution: portfolio.startingContribution,
+        stepUpAmount: portfolio.stepUpAmount,
+        stepUpMonths: portfolio.stepUpMonths,
+        safetyFloor: portfolio.safetyFloor,
+      });
+    }
+  }, [portfolio]);
+
+  const updatePortfolioMutation = trpc.portfolios.update.useMutation({
+    onSuccess: () => {
+      toast.success("Portfolio plan updated");
+      refetchPortfolios();
+      utils.portfolios.list.invalidate();
+      utils.projection.run.invalidate({ portfolioId: portfolioId! });
+      utils.projection.milestones.invalidate({ portfolioId: portfolioId! });
+      utils.projection.scenarios.invalidate({ portfolioId: portfolioId! });
+    },
+    onError: () => toast.error("Failed to update portfolio"),
+  });
+
+  function onSavePlan(data: PlanForm) {
+    if (!portfolioId) return;
+    updatePortfolioMutation.mutate({ portfolioId, ...data });
+  }
+
+  if (!portfolioId) {
+    return (
+      <AppShell>
+        <div className="p-8 text-muted-foreground text-sm">Select a portfolio to view settings.</div>
+      </AppShell>
+    );
   }
 
   return (
@@ -177,140 +237,132 @@ export default function Settings() {
       <div className="p-6 lg:p-8 space-y-6 max-w-3xl">
         <div>
           <h1 className="text-2xl font-bold text-foreground" style={{ fontFamily: "'Playfair Display', serif" }}>
-            Rate Settings
+            Settings
           </h1>
           <p className="text-sm text-muted-foreground mt-0.5">
-            Update rates to reflect current CBK and MMF market conditions. All projections recalculate instantly.
+            Configure rates and plan parameters for <strong>{portfolio?.name}</strong>.
           </p>
         </div>
 
+        {/* ── Plan Settings ── */}
+        <form onSubmit={planForm.handleSubmit(onSavePlan)} className="space-y-4">
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                <Pencil className="w-4 h-4 text-primary" />
+                Portfolio Plan
+              </CardTitle>
+              <p className="text-xs text-muted-foreground mt-1">
+                Change the goal, horizon, or contribution schedule. The projection recalculates immediately.
+              </p>
+            </CardHeader>
+            <CardContent className="p-4 pt-0 grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="sm:col-span-2 space-y-1.5">
+                <Label className="text-xs font-medium">Portfolio Name</Label>
+                <Input {...planForm.register("name")} />
+              </div>
+              <div className="sm:col-span-2 space-y-1.5">
+                <Label className="text-xs font-medium">Description (optional)</Label>
+                <Input {...planForm.register("description")} placeholder="Notes about this goal" />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs font-medium">Target End Value (KES)</Label>
+                <Input type="number" step="100000" min="0" {...planForm.register("targetAmount", { valueAsNumber: true })} />
+                <p className="text-xs text-muted-foreground">Total portfolio value to hold at end of horizon</p>
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs font-medium">Horizon (months)</Label>
+                <Input type="number" min="12" max="240" {...planForm.register("horizonMonths", { valueAsNumber: true })} />
+                <p className="text-xs text-muted-foreground">12–240 months (1–20 years)</p>
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs font-medium">Start Date</Label>
+                <Input type="date" {...planForm.register("startDate")} />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs font-medium">Starting Monthly Contribution (KES)</Label>
+                <Input type="number" step="100" min="0" {...planForm.register("startingContribution", { valueAsNumber: true })} />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs font-medium">Step-Up Amount per Period (KES)</Label>
+                <Input type="number" step="100" min="0" {...planForm.register("stepUpAmount", { valueAsNumber: true })} />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs font-medium">Step-Up Every N Months</Label>
+                <Input type="number" step="1" min="1" max="24" {...planForm.register("stepUpMonths", { valueAsNumber: true })} />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs font-medium">MMF Safety Floor (KES)</Label>
+                <Input type="number" step="1000" min="0" {...planForm.register("safetyFloor", { valueAsNumber: true })} />
+                <p className="text-xs text-muted-foreground">Minimum MMF balance before sweeping to DhowCSD</p>
+              </div>
+            </CardContent>
+          </Card>
+          <Button type="submit" variant="outline" className="w-full sm:w-auto" disabled={updatePortfolioMutation.isPending}>
+            {updatePortfolioMutation.isPending ? <><RefreshCw className="w-3.5 h-3.5 mr-2 animate-spin" />Saving…</> : "Save Plan Settings"}
+          </Button>
+        </form>
+
+        {/* ── Rate Settings ── */}
         <div className="bg-muted/40 border border-border rounded-lg p-4 flex gap-3">
           <Info className="w-4 h-4 text-primary shrink-0 mt-0.5" />
           <div className="text-xs text-muted-foreground leading-relaxed">
-            <strong className="text-foreground">Live CBK rates as of June 2026:</strong> 91-day T-bill 8.82%, 182-day 8.78%, 364-day 8.97%.
-            IFB bonds offer 12–18% tax-exempt coupons. FXD bonds 10–14% gross (15% WHT deducted at source).
-            SanlamAllianz MMF effective annual yield: 8.78% gross (15% WHT deducted at source).
-            <br /><strong className="text-foreground">All rates entered here are gross rates.</strong> The engine automatically deducts 15% WHT on MMF, T-Bill, and FXD income. IFB coupons remain tax-exempt.
+            <strong className="text-foreground">All rates are gross rates.</strong> The engine deducts 15% WHT on MMF, T-Bill, and FXD income automatically. IFB coupons are tax-exempt.
           </div>
         </div>
 
-        <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
-          {/* MMF Settings */}
+        <form onSubmit={rateForm.handleSubmit(onSaveRates)} className="space-y-6">
           <Card>
             <CardHeader className="pb-3">
               <CardTitle className="text-sm font-semibold flex items-center gap-2">
                 <SettingsIcon className="w-4 h-4 text-primary" />
-                SanlamAllianz MMF Settings
+                SanlamAllianz MMF
               </CardTitle>
-              <p className="text-xs text-muted-foreground mt-1">15% WHT is deducted at source — enter the gross yield shown by SanlamAllianz.</p>
+              <p className="text-xs text-muted-foreground mt-1">Enter the gross yield shown by SanlamAllianz.</p>
             </CardHeader>
             <CardContent className="p-4 pt-0 grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <RateField
-                label="MMF Annual Yield (Gross)"
-                name="mmfYield"
-                register={register}
-                description="Gross yield before 15% WHT. Default: 8.78% → net ≈ 7.46%"
-              />
+              <RateField label="MMF Annual Yield (Gross)" name="mmfYield" register={rateForm.register} description="Default: 8.78% → net ≈ 7.46%" />
             </CardContent>
           </Card>
 
-          {/* T-Bill Rates */}
           <Card>
             <CardHeader className="pb-3">
               <CardTitle className="text-sm font-semibold">CBK Treasury Bill Rates</CardTitle>
-              <p className="text-xs text-muted-foreground mt-1">15% WHT deducted at source on the discount amount — enter the gross auction rate.</p>
+              <p className="text-xs text-muted-foreground mt-1">Enter the gross auction rate.</p>
             </CardHeader>
             <CardContent className="p-4 pt-0 grid grid-cols-1 sm:grid-cols-3 gap-4">
-              <RateField label="91-Day T-Bill (Gross)" name="tbill91Rate" register={register} description="Gross rate. Default: 8.82% → net ≈ 7.50%" />
-              <RateField label="182-Day T-Bill (Gross)" name="tbill182Rate" register={register} description="Gross rate. Default: 8.78% → net ≈ 7.46%" />
-              <RateField label="364-Day T-Bill (Gross)" name="tbill364Rate" register={register} description="Gross rate. Default: 8.97% → net ≈ 7.62%" />
+              <RateField label="91-Day T-Bill (Gross)" name="tbill91Rate" register={rateForm.register} description="Default: 8.82%" />
+              <RateField label="182-Day T-Bill (Gross)" name="tbill182Rate" register={rateForm.register} description="Default: 8.78%" />
+              <RateField label="364-Day T-Bill (Gross)" name="tbill364Rate" register={rateForm.register} description="Default: 8.97%" />
             </CardContent>
           </Card>
 
-          {/* Bond Rates */}
           <Card>
             <CardHeader className="pb-3">
               <CardTitle className="text-sm font-semibold">CBK Bond Rates</CardTitle>
-              <p className="text-xs text-muted-foreground mt-1">Enter gross coupon rates. IFB coupons are tax-exempt; FXD coupons have 15% WHT deducted.</p>
+              <p className="text-xs text-muted-foreground mt-1">IFB: tax-exempt. FXD: 15% WHT deducted.</p>
             </CardHeader>
             <CardContent className="p-4 pt-0 grid grid-cols-1 sm:grid-cols-3 gap-4">
-              <RateField
-                label="IFB Coupon Rate (Gross = Net)"
-                name="ifbCouponRate"
-                register={register}
-                description="Tax-exempt — no WHT. Default: 12.5%"
-              />
-              <RateField
-                label="FXD Coupon Rate (Gross)"
-                name="fxdCouponRate"
-                register={register}
-                description="Gross rate before 15% WHT. Default: 12.35% → net ≈ 10.5%"
-              />
-              <RateField
-                label="Withholding Tax Rate"
-                name="withholdingTax"
-                register={register}
-                description="Applied to MMF, T-Bill, and FXD income. Default: 15%"
-              />
-            </CardContent>
-          </Card>
-
-          {/* Plan Settings */}
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-sm font-semibold">Investment Plan Settings</CardTitle>
-            </CardHeader>
-            <CardContent className="p-4 pt-0 grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="space-y-1.5">
-                <Label className="text-xs font-medium">Starting Monthly Contribution (KES)</Label>
-                <Input type="number" step="100" min="0" {...register("startingContribution", { valueAsNumber: true })} />
-              </div>
-              <div className="space-y-1.5">
-                <Label className="text-xs font-medium">Step-Up Amount per Period (KES)</Label>
-                <Input type="number" step="100" min="0" {...register("stepUpAmount", { valueAsNumber: true })} />
-              </div>
-              <div className="space-y-1.5">
-                <Label className="text-xs font-medium">Step-Up Every N Months</Label>
-                <Input type="number" step="1" min="1" max="24" {...register("stepUpMonths", { valueAsNumber: true })} />
-              </div>
-              <div className="space-y-1.5">
-                <Label className="text-xs font-medium">MMF Safety Floor (KES)</Label>
-                <Input type="number" step="1000" min="0" {...register("safetyFloor", { valueAsNumber: true })} />
-                <p className="text-xs text-muted-foreground">Minimum MMF balance before sweeping to DhowCSD</p>
-              </div>
-              <div className="space-y-1.5">
-                <Label className="text-xs font-medium">Target End Value (KES)</Label>
-                <Input type="number" step="100000" min="0" placeholder="5000000" {...register("targetAmount", { valueAsNumber: true })} />
-                <p className="text-xs text-muted-foreground">The total portfolio value you want to <strong>hold</strong> at Month 120 — not what you put in, but what you will have</p>
-              </div>
-              <div className="space-y-1.5">
-                <Label className="text-xs font-medium">Start Date</Label>
-                <Input type="date" {...register("startDate")} />
-              </div>
+              <RateField label="IFB Coupon Rate (Gross = Net)" name="ifbCouponRate" register={rateForm.register} description="Tax-exempt. Default: 12.5%" />
+              <RateField label="FXD Coupon Rate (Gross)" name="fxdCouponRate" register={rateForm.register} description="Default: 12.35% → net ≈ 10.5%" />
+              <RateField label="Withholding Tax Rate" name="withholdingTax" register={rateForm.register} description="Default: 15%" />
             </CardContent>
           </Card>
 
           <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-4 flex gap-3">
             <TrendingUp className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
             <div className="text-xs text-muted-foreground leading-relaxed">
-              <strong className="text-foreground">Rate changes only affect future months.</strong> When you save new rates, a snapshot is recorded with today's date as the effective date. The projection engine uses the rate that was in effect at each month's date — so your historical months are never retroactively changed.
+              <strong className="text-foreground">Rate changes only affect future months.</strong> A snapshot is recorded with today's date as the effective date.
             </div>
           </div>
 
-          <Button type="submit" className="w-full sm:w-auto" disabled={saveMutation.isPending}>
-            {saveMutation.isPending ? (
-              <>
-                <RefreshCw className="w-3.5 h-3.5 mr-2 animate-spin" />
-                Saving & Recalculating...
-              </>
-            ) : (
-              "Save Settings & Recalculate"
-            )}
+          <Button type="submit" className="w-full sm:w-auto" disabled={saveRatesMutation.isPending}>
+            {saveRatesMutation.isPending ? <><RefreshCw className="w-3.5 h-3.5 mr-2 animate-spin" />Saving…</> : "Save Rates & Recalculate"}
           </Button>
         </form>
 
-        <UpdateRatesPanel />
-        <RateHistorySection />
+        <UpdateRatesPanel portfolioId={portfolioId} />
+        <RateHistorySection portfolioId={portfolioId} />
       </div>
     </AppShell>
   );

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { usePortfolio } from "@/contexts/PortfolioContext";
 import { trpc } from "@/lib/trpc";
 import { formatKES } from "@/lib/format";
 import { Button } from "@/components/ui/button";
@@ -77,11 +78,17 @@ interface DepositDrawerProps {
 }
 
 export function DepositDrawer({ open, onClose }: DepositDrawerProps) {
+  const { portfolioId, portfolio } = usePortfolio();
   const utils = trpc.useUtils();
-  const { data: deposits = [], isLoading } = trpc.deposits.list.useQuery();
-  const { data: summary } = trpc.deposits.summary.useQuery();
-  const { data: settings } = trpc.settings.get.useQuery();
-  const liveTarget = settings?.targetAmount ?? 5000000;
+  const { data: deposits = [], isLoading } = trpc.deposits.list.useQuery(
+    { portfolioId: portfolioId! },
+    { enabled: !!portfolioId }
+  );
+  const { data: summary } = trpc.deposits.summary.useQuery(
+    { portfolioId: portfolioId! },
+    { enabled: !!portfolioId }
+  );
+  const liveTarget = portfolio?.targetAmount ?? 5000000;
 
   const addMutation = trpc.deposits.add.useMutation({
     onSuccess: () => {
@@ -121,7 +128,8 @@ export function DepositDrawer({ open, onClose }: DepositDrawerProps) {
   function handleSubmit() {
     const amount = parseFloat(form.amount);
     if (!amount || amount <= 0) { toast.error("Please enter a valid amount"); return; }
-    addMutation.mutate({ bucket: form.bucket, amount, depositDate: form.depositDate, notes: form.notes || undefined });
+    if (!portfolioId) return;
+    addMutation.mutate({ portfolioId, bucket: form.bucket, amount, depositDate: form.depositDate, notes: form.notes || undefined });
   }
 
   const totalContributed = summary?.totalContributed ?? 0;
@@ -381,7 +389,7 @@ export function DepositDrawer({ open, onClose }: DepositDrawerProps) {
           <AlertDialogFooter>
             <AlertDialogCancel className="border-white/10">Cancel</AlertDialogCancel>
             <AlertDialogAction
-              onClick={() => deleteId !== null && deleteMutation.mutate({ id: deleteId })}
+              onClick={() => deleteId !== null && portfolioId && deleteMutation.mutate({ portfolioId, id: deleteId })}
               className="bg-red-600 hover:bg-red-700 text-white"
             >
               Remove

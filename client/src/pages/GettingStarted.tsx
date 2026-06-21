@@ -1,3 +1,4 @@
+import { usePortfolio } from "@/contexts/PortfolioContext";
 import { AppShell } from "@/components/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -252,11 +253,15 @@ function StatusBadge({ status }: { status: AccountStatus }) {
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export default function GettingStarted() {
+  const { portfolioId } = usePortfolio();
   const [openDialog, setOpenDialog] = useState<"mmf" | "dhow" | null>(null);
   const utils = trpc.useUtils();
 
   // Load account statuses from database
-  const { data: dbStatuses = [], isLoading: statusLoading } = trpc.accountStatus.list.useQuery();
+  const { data: dbStatuses = [], isLoading: statusLoading } = trpc.accountStatus.list.useQuery(
+    { portfolioId: portfolioId! },
+    { enabled: !!portfolioId }
+  );
   const upsertMutation = trpc.accountStatus.upsert.useMutation({
     onSuccess: () => {
       utils.accountStatus.list.invalidate();
@@ -274,8 +279,10 @@ export default function GettingStarted() {
   const dhow = dbRowToState(dhowRow);
 
   function updateState(type: "mmf" | "dhow", newState: AccountState) {
+    if (!portfolioId) return;
     const dbType = type === "dhow" ? "dhowcsd" : "mmf";
     upsertMutation.mutate({
+      portfolioId,
       accountType: dbType,
       isOpened: newState.status === "opened",
       accountNumber: newState.details.accountNumber,

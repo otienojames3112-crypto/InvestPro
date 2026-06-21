@@ -1,9 +1,15 @@
-import { COOKIE_NAME } from "@shared/const";
+import { TRPCError } from "@trpc/server";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import { protectedProcedure, publicProcedure, router } from "./_core/trpc";
 import { z } from "zod";
 import {
+  getPortfolios,
+  getPortfolio,
+  createPortfolio,
+  updatePortfolio,
+  deletePortfolio,
+  ensureRateSettings,
   getRateSettings,
   upsertRateSettings,
   getLedgerEntries,
@@ -18,7 +24,6 @@ import {
   getDepositEntries,
   addDepositEntry,
   deleteDepositEntry,
-  getActualsSummary,
   addRateHistorySnapshot,
   getRateHistory,
   getAccountStatuses,
@@ -30,12 +35,15 @@ import {
   checkMilestones,
   getScheduledContribution,
   generateMilestones,
-  invalidateMilestoneCache,
+  solveForContribution,
   SCENARIO_STEPUPS,
   type EngineSettings,
   type ActualDeposit,
   type ActualSecurity,
 } from "./engine";
+import { COOKIE_NAME } from "../shared/const";
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 const DEFAULT_SETTINGS: EngineSettings = {
   mmfYield: 8.78,
@@ -43,51 +51,134 @@ const DEFAULT_SETTINGS: EngineSettings = {
   tbill182Rate: 8.7782,
   tbill364Rate: 8.9746,
   ifbCouponRate: 12.5,
-  fxdCouponRate: 12.35,  // gross; net ≈ 10.5% after 15% WHT
+  fxdCouponRate: 12.35,
   withholdingTax: 15,
   startingContribution: 2500,
   stepUpAmount: 3000,
   stepUpMonths: 6,
   safetyFloor: 50000,
   targetAmount: 5000000,
+  horizonMonths: 120,
 };
 
-function dbSettingsToEngine(s: Awaited<ReturnType<typeof getRateSettings>>): EngineSettings {
-  if (!s) return DEFAULT_SETTINGS;
+/**
+ * Convert a DB rate_settings row + portfolio row into an EngineSettings object.
+ * Plan-level fields (contribution schedule, target, horizon) come from the portfolio;
+ * rate fields come from rate_settings.
+ */
+function dbToEngine(
+  rates: Awaited<ReturnType<typeof getRateSettings>>,
+  portfolio: Awaited<ReturnType<typeof getPortfolio>>
+): EngineSettings {
+  const r = rates;
+  const p = portfolio;
   return {
-    mmfYield: parseFloat(String(s.mmfYield)),
-    tbill91Rate: parseFloat(String(s.tbill91Rate)),
-    tbill182Rate: parseFloat(String(s.tbill182Rate)),
-    tbill364Rate: parseFloat(String(s.tbill364Rate)),
-    ifbCouponRate: parseFloat(String(s.ifbCouponRate)),
-    fxdCouponRate: parseFloat(String(s.fxdCouponRate)),
-    withholdingTax: parseFloat(String(s.withholdingTax)),
-    startingContribution: parseFloat(String(s.startingContribution)),
-    stepUpAmount: parseFloat(String(s.stepUpAmount)),
-    stepUpMonths: s.stepUpMonths,
-    safetyFloor: parseFloat(String(s.safetyFloor)),
-    targetAmount: parseFloat(String(s.targetAmount)),
+    mmfYield: r ? parseFloat(String(r.mmfYield)) : DEFAULT_SETTINGS.mmfYield,
+    tbill91Rate: r ? parseFloat(String(r.tbill91Rate)) : DEFAULT_SETTINGS.tbill91Rate,
+    tbill182Rate: r ? parseFloat(String(r.tbill182Rate)) : DEFAULT_SETTINGS.tbill182Rate,
+    tbill364Rate: r ? parseFloat(String(r.tbill364Rate)) : DEFAULT_SETTINGS.tbill364Rate,
+    ifbCouponRate: r ? parseFloat(String(r.ifbCouponRate)) : DEFAULT_SETTINGS.ifbCouponRate,
+    fxdCouponRate: r ? parseFloat(String(r.fxdCouponRate)) : DEFAULT_SETTINGS.fxdCouponRate,
+    withholdingTax: r ? parseFloat(String(r.withholdingTax)) : DEFAULT_SETTINGS.withholdingTax,
+    startingContribution: p ? parseFloat(String(p.startingContribution)) : DEFAULT_SETTINGS.startingContribution,
+    stepUpAmount: p ? parseFloat(String(p.stepUpAmount)) : DEFAULT_SETTINGS.stepUpAmount,
+    stepUpMonths: p ? p.stepUpMonths : DEFAULT_SETTINGS.stepUpMonths,
+    safetyFloor: p ? parseFloat(String(p.safetyFloor)) : DEFAULT_SETTINGS.safetyFloor,
+    targetAmount: p ? parseFloat(String(p.targetAmount)) : DEFAULT_SETTINGS.targetAmount,
+    horizonMonths: p ? p.horizonMonths : DEFAULT_SETTINGS.horizonMonths,
+    startDate: p ? normaliseDate(p.startDate) : "2026-07-01",
+    phaseFractions: p ? {
+      foundationFrac: parseFloat(String(p.foundationFrac)),
+      growthFrac: parseFloat(String(p.growthFrac)),
+      deRiskingFrac: parseFloat(String(p.deRiskingFrac)),
+    } : undefined,
   };
 }
 
-const rateSettingsInput = z.object({
-  mmfYield: z.number().min(0).max(50),
-  tbill91Rate: z.number().min(0).max(50),
-  tbill182Rate: z.number().min(0).max(50),
-  tbill364Rate: z.number().min(0).max(50),
-  ifbCouponRate: z.number().min(0).max(50),
-  fxdCouponRate: z.number().min(0).max(50),
-  withholdingTax: z.number().min(0).max(100),
+function normaliseDate(d: Date | string | null | undefined): string {
+  if (!d) return "2026-07-01";
+  if (d instanceof Date) return d.toISOString().split("T")[0];
+  return String(d).split("T")[0];
+}
+
+function mapRateHistory(rows: Awaited<ReturnType<typeof getRateHistory>>) {
+  return rows.map((r) => ({
+    effectiveDate: normaliseDate(r.effectiveDate),
+    mmfYield: parseFloat(String(r.mmfYield)),
+    tbill91Rate: parseFloat(String(r.tbill91Rate)),
+    tbill182Rate: parseFloat(String(r.tbill182Rate)),
+    tbill364Rate: parseFloat(String(r.tbill364Rate)),
+    ifbCouponRate: parseFloat(String(r.ifbCouponRate)),
+    fxdCouponRate: parseFloat(String(r.fxdCouponRate)),
+    withholdingTax: parseFloat(String(r.withholdingTax)),
+  }));
+}
+
+function mapActualDeposits(rows: Awaited<ReturnType<typeof getDepositEntries>>): ActualDeposit[] {
+  return rows.map((d) => ({
+    bucket: d.bucket as "mmf" | "tbill" | "ifb" | "fxd",
+    amount: parseFloat(String(d.amount)),
+    depositDate: normaliseDate(d.depositDate),
+  }));
+}
+
+function mapActualSecurities(rows: Awaited<ReturnType<typeof getSecurities>>): ActualSecurity[] {
+  return rows.map((s) => ({
+    securityType: s.securityType as ActualSecurity["securityType"],
+    faceValue: parseFloat(String(s.faceValue)),
+    issueDate: normaliseDate(s.issueDate),
+    maturityDate: normaliseDate(s.maturityDate),
+    couponRate: parseFloat(String(s.couponRate)),
+    isTaxExempt: s.isTaxExempt,
+    isMatured: s.isMatured,
+  }));
+}
+
+/** Verify the portfolio belongs to the requesting user. Throws FORBIDDEN if not. */
+async function requirePortfolio(portfolioId: number, userId: number) {
+  const p = await getPortfolio(portfolioId, userId);
+  if (!p) throw new TRPCError({ code: "FORBIDDEN", message: "Portfolio not found or access denied." });
+  return p;
+}
+
+// ─── Zod schemas ─────────────────────────────────────────────────────────────
+
+const portfolioIdInput = z.object({ portfolioId: z.number().int().positive() });
+
+const portfolioCreateInput = z.object({
+  name: z.string().min(1).max(200),
+  description: z.string().max(1000).optional(),
+  targetAmount: z.number().min(1),
+  startDate: z.string(),
+  horizonMonths: z.number().int().min(12).max(240),
   startingContribution: z.number().min(0),
   stepUpAmount: z.number().min(0),
   stepUpMonths: z.number().int().min(1).max(24),
   safetyFloor: z.number().min(0),
-  targetAmount: z.number().min(0),
-  startDate: z.string().optional(),
+  foundationFrac: z.number().min(0.05).max(0.5).optional(),
+  growthFrac: z.number().min(0.1).max(0.7).optional(),
+  deRiskingFrac: z.number().min(0.05).max(0.4).optional(),
 });
+
+const rateOnlyInput = z.object({
+  portfolioId: z.number().int().positive(),
+  mmfYield: z.number().min(0).max(100),
+  tbill91Rate: z.number().min(0).max(100),
+  tbill182Rate: z.number().min(0).max(100),
+  tbill364Rate: z.number().min(0).max(100),
+  ifbCouponRate: z.number().min(0).max(100),
+  fxdCouponRate: z.number().min(0).max(100),
+  withholdingTax: z.number().min(0).max(100),
+  cbkSourceUrl: z.string().url().max(500).optional(),
+  sanlamSourceUrl: z.string().url().max(500).optional(),
+  changeNote: z.string().max(500).optional(),
+});
+
+// ─── Router ───────────────────────────────────────────────────────────────────
 
 export const appRouter = router({
   system: systemRouter,
+
   auth: router({
     me: publicProcedure.query((opts) => opts.ctx.user),
     logout: publicProcedure.mutation(({ ctx }) => {
@@ -97,234 +188,257 @@ export const appRouter = router({
     }),
   }),
 
-  // ─── Settings ────────────────────────────────────────────────────────────────
-  settings: router({
-    get: protectedProcedure.query(async ({ ctx }) => {
-      const s = await getRateSettings(ctx.user.id);
-      if (!s) return {
-        ...DEFAULT_SETTINGS,
-        startDate: "2026-07-01",
-        cbkSourceUrl: "https://www.centralbank.go.ke/bills-bonds/treasury-bills/",
-        sanlamSourceUrl: "https://www.sanlamallianz.co.ke/products/savings-and-investments/money-market-fund/",
-        ratesLastUpdatedAt: null as Date | null,
-      };
-      // Normalise startDate: MySQL DATE may come back as a Date object or string
-      const rawDate = s.startDate;
-      let startDate = "2026-07-01";
-      if (rawDate) {
-        if (rawDate instanceof Date) {
-          startDate = rawDate.toISOString().split("T")[0];
-        } else {
-          // String like "2026-07-01" or "2026-07-01T00:00:00.000Z"
-          startDate = String(rawDate).split("T")[0];
-        }
-      }
+  // ─── Portfolios ─────────────────────────────────────────────────────────────
+  portfolios: router({
+    /** List all portfolios owned by the current user. */
+    list: protectedProcedure.query(async ({ ctx }) => {
+      const rows = await getPortfolios(ctx.user.id);
+      return rows.map((p) => ({
+        id: p.id,
+        name: p.name,
+        description: p.description,
+        targetAmount: parseFloat(String(p.targetAmount)),
+        startDate: normaliseDate(p.startDate),
+        horizonMonths: p.horizonMonths,
+        startingContribution: parseFloat(String(p.startingContribution)),
+        stepUpAmount: parseFloat(String(p.stepUpAmount)),
+        stepUpMonths: p.stepUpMonths,
+        safetyFloor: parseFloat(String(p.safetyFloor)),
+        foundationFrac: parseFloat(String(p.foundationFrac)),
+        growthFrac: parseFloat(String(p.growthFrac)),
+        deRiskingFrac: parseFloat(String(p.deRiskingFrac)),
+        cbkSourceUrl: p.cbkSourceUrl,
+        sanlamSourceUrl: p.sanlamSourceUrl,
+        ratesLastUpdatedAt: p.ratesLastUpdatedAt ?? null,
+        createdAt: p.createdAt,
+        updatedAt: p.updatedAt,
+      }));
+    }),
+
+    /** Get a single portfolio by ID (must belong to current user). */
+    get: protectedProcedure.input(portfolioIdInput).query(async ({ ctx, input }) => {
+      const p = await requirePortfolio(input.portfolioId, ctx.user.id);
       return {
-        ...dbSettingsToEngine(s),
-        startDate,
-        cbkSourceUrl: s.cbkSourceUrl ?? "https://www.centralbank.go.ke/bills-bonds/treasury-bills/",
-        sanlamSourceUrl: s.sanlamSourceUrl ?? "https://www.sanlamallianz.co.ke/products/savings-and-investments/money-market-fund/",
-        ratesLastUpdatedAt: s.ratesLastUpdatedAt ?? null,
+        id: p.id,
+        name: p.name,
+        description: p.description,
+        targetAmount: parseFloat(String(p.targetAmount)),
+        startDate: normaliseDate(p.startDate),
+        horizonMonths: p.horizonMonths,
+        startingContribution: parseFloat(String(p.startingContribution)),
+        stepUpAmount: parseFloat(String(p.stepUpAmount)),
+        stepUpMonths: p.stepUpMonths,
+        safetyFloor: parseFloat(String(p.safetyFloor)),
+        foundationFrac: parseFloat(String(p.foundationFrac)),
+        growthFrac: parseFloat(String(p.growthFrac)),
+        deRiskingFrac: parseFloat(String(p.deRiskingFrac)),
+        cbkSourceUrl: p.cbkSourceUrl,
+        sanlamSourceUrl: p.sanlamSourceUrl,
+        ratesLastUpdatedAt: p.ratesLastUpdatedAt ?? null,
+        createdAt: p.createdAt,
       };
     }),
 
-    save: protectedProcedure.input(rateSettingsInput).mutation(async ({ ctx, input }) => {
-      invalidateMilestoneCache();
-      await upsertRateSettings({
+    /** Create a new portfolio. Also creates a default rate_settings row for it. */
+    create: protectedProcedure.input(portfolioCreateInput).mutation(async ({ ctx, input }) => {
+      const p = await createPortfolio({
         userId: ctx.user.id,
-        mmfYield: String(input.mmfYield),
-        tbill91Rate: String(input.tbill91Rate),
-        tbill182Rate: String(input.tbill182Rate),
-        tbill364Rate: String(input.tbill364Rate),
-        ifbCouponRate: String(input.ifbCouponRate),
-        fxdCouponRate: String(input.fxdCouponRate),
-        withholdingTax: String(input.withholdingTax),
+        name: input.name,
+        description: input.description,
+        targetAmount: String(input.targetAmount),
+        startDate: new Date(`${input.startDate}T12:00:00.000Z`),
+        horizonMonths: input.horizonMonths,
         startingContribution: String(input.startingContribution),
         stepUpAmount: String(input.stepUpAmount),
         stepUpMonths: input.stepUpMonths,
         safetyFloor: String(input.safetyFloor),
-        targetAmount: String(input.targetAmount),
-        // Store as a plain Date at noon UTC to avoid timezone-off-by-one issues
-        startDate: (() => {
-          const d = input.startDate ?? "2026-07-01";
-          const clean = d.split("T")[0]; // ensure no time part
-          return new Date(`${clean}T12:00:00.000Z`);
-        })(),
+        foundationFrac: String(input.foundationFrac ?? 0.20),
+        growthFrac: String(input.growthFrac ?? 0.50),
+        deRiskingFrac: String(input.deRiskingFrac ?? 0.15),
       });
-      // Snapshot the rate-only fields to rate_history with today as effectiveDate
-      // This ensures future projections use the new rates only from today onward
-      const today = new Date().toISOString().split("T")[0]; // YYYY-MM-DD
-      await addRateHistorySnapshot({
-        userId: ctx.user.id,
-        effectiveDate: new Date(`${today}T12:00:00.000Z`),
-        mmfYield: String(input.mmfYield),
-        tbill91Rate: String(input.tbill91Rate),
-        tbill182Rate: String(input.tbill182Rate),
-        tbill364Rate: String(input.tbill364Rate),
-        ifbCouponRate: String(input.ifbCouponRate),
-        fxdCouponRate: String(input.fxdCouponRate),
-        withholdingTax: String(input.withholdingTax),
-        changeNote: `Rate update on ${today}`,
-      });
+      if (!p) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Failed to create portfolio." });
+      // Ensure a rate_settings row exists
+      await ensureRateSettings(p.id);
+      return { success: true, portfolioId: p.id };
+    }),
+
+    /** Update plan-level settings for a portfolio. */
+    update: protectedProcedure
+      .input(portfolioCreateInput.extend({ portfolioId: z.number().int().positive() }))
+      .mutation(async ({ ctx, input }) => {
+        await requirePortfolio(input.portfolioId, ctx.user.id);
+        await updatePortfolio(input.portfolioId, ctx.user.id, {
+          name: input.name,
+          description: input.description,
+          targetAmount: String(input.targetAmount),
+          startDate: new Date(`${input.startDate}T12:00:00.000Z`),
+          horizonMonths: input.horizonMonths,
+          startingContribution: String(input.startingContribution),
+          stepUpAmount: String(input.stepUpAmount),
+          stepUpMonths: input.stepUpMonths,
+          safetyFloor: String(input.safetyFloor),
+          foundationFrac: String(input.foundationFrac ?? 0.20),
+          growthFrac: String(input.growthFrac ?? 0.50),
+          deRiskingFrac: String(input.deRiskingFrac ?? 0.15),
+        });
+        return { success: true };
+      }),
+
+    /** Delete a portfolio and all its child data. */
+    delete: protectedProcedure.input(portfolioIdInput).mutation(async ({ ctx, input }) => {
+      await requirePortfolio(input.portfolioId, ctx.user.id);
+      await deletePortfolio(input.portfolioId, ctx.user.id);
       return { success: true };
+    }),
+  }),
+
+  // ─── Rate Settings (per-portfolio) ──────────────────────────────────────────
+  settings: router({
+    /** Get rate settings for a portfolio. */
+    get: protectedProcedure.input(portfolioIdInput).query(async ({ ctx, input }) => {
+      const p = await requirePortfolio(input.portfolioId, ctx.user.id);
+      const r = await getRateSettings(input.portfolioId);
+      return {
+        // Rate fields
+        mmfYield: r ? parseFloat(String(r.mmfYield)) : DEFAULT_SETTINGS.mmfYield,
+        tbill91Rate: r ? parseFloat(String(r.tbill91Rate)) : DEFAULT_SETTINGS.tbill91Rate,
+        tbill182Rate: r ? parseFloat(String(r.tbill182Rate)) : DEFAULT_SETTINGS.tbill182Rate,
+        tbill364Rate: r ? parseFloat(String(r.tbill364Rate)) : DEFAULT_SETTINGS.tbill364Rate,
+        ifbCouponRate: r ? parseFloat(String(r.ifbCouponRate)) : DEFAULT_SETTINGS.ifbCouponRate,
+        fxdCouponRate: r ? parseFloat(String(r.fxdCouponRate)) : DEFAULT_SETTINGS.fxdCouponRate,
+        withholdingTax: r ? parseFloat(String(r.withholdingTax)) : DEFAULT_SETTINGS.withholdingTax,
+        // Source URLs (from portfolio)
+        cbkSourceUrl: p.cbkSourceUrl,
+        sanlamSourceUrl: p.sanlamSourceUrl,
+        ratesLastUpdatedAt: p.ratesLastUpdatedAt ?? null,
+      };
+    }),
+
+    /** Get rate history for a portfolio. */
+    getRateHistory: protectedProcedure.input(portfolioIdInput).query(async ({ ctx, input }) => {
+      await requirePortfolio(input.portfolioId, ctx.user.id);
+      const rows = await getRateHistory(input.portfolioId);
+      return rows.map((r) => ({
+        id: r.id,
+        effectiveDate: normaliseDate(r.effectiveDate),
+        mmfYield: parseFloat(String(r.mmfYield)),
+        tbill91Rate: parseFloat(String(r.tbill91Rate)),
+        tbill364Rate: parseFloat(String(r.tbill364Rate)),
+        ifbCouponRate: parseFloat(String(r.ifbCouponRate)),
+        fxdCouponRate: parseFloat(String(r.fxdCouponRate)),
+        withholdingTax: parseFloat(String(r.withholdingTax)),
+        changeNote: r.changeNote,
+        createdAt: r.createdAt,
+      }));
     }),
   }),
 
   // ─── Projection Engine ────────────────────────────────────────────────────────
   projection: router({
-    run: protectedProcedure.query(async ({ ctx }) => {
-      const dbSettings = await getRateSettings(ctx.user.id);
-      const settings = dbSettingsToEngine(dbSettings);
-      // Attach startDate to settings for time-locked rate history
-      const rawDate = dbSettings?.startDate;
-      if (rawDate) {
-        settings.startDate = rawDate instanceof Date
-          ? rawDate.toISOString().split("T")[0]
-          : String(rawDate).split("T")[0];
-      } else {
-        settings.startDate = "2026-07-01";
-      }
-      const overrides = await getContributionOverrides(ctx.user.id);
+    run: protectedProcedure.input(portfolioIdInput).query(async ({ ctx, input }) => {
+      const p = await requirePortfolio(input.portfolioId, ctx.user.id);
+      const rates = await getRateSettings(input.portfolioId);
+      const settings = dbToEngine(rates, p);
+      const overrides = await getContributionOverrides(input.portfolioId);
       const mappedOverrides = overrides.map((o) => ({
         monthNumber: o.monthNumber,
         overrideAmount: o.overrideAmount ? parseFloat(String(o.overrideAmount)) : undefined,
         lumpSum: o.lumpSum ? parseFloat(String(o.lumpSum)) : undefined,
       }));
-      // Fetch rate history for time-locked per-month rates
-      const rateHistoryRows = await getRateHistory(ctx.user.id);
-      const rateHistory = rateHistoryRows.map((r) => ({
-        effectiveDate: r.effectiveDate instanceof Date
-          ? r.effectiveDate.toISOString().split("T")[0]
-          : String(r.effectiveDate).split("T")[0],
-        mmfYield: parseFloat(String(r.mmfYield)),
-        tbill91Rate: parseFloat(String(r.tbill91Rate)),
-        tbill182Rate: parseFloat(String(r.tbill182Rate)),
-        tbill364Rate: parseFloat(String(r.tbill364Rate)),
-        ifbCouponRate: parseFloat(String(r.ifbCouponRate)),
-        fxdCouponRate: parseFloat(String(r.fxdCouponRate)),
-        withholdingTax: parseFloat(String(r.withholdingTax)),
-      }));
-      // Fetch actuals to seed the projection from real data
-      const depositRows = await getDepositEntries(ctx.user.id);
-      const actualDeposits: ActualDeposit[] = depositRows.map((d) => ({
-        bucket: d.bucket as "mmf" | "tbill" | "ifb" | "fxd",
-        amount: parseFloat(String(d.amount)),
-        depositDate: d.depositDate instanceof Date
-          ? d.depositDate.toISOString().split("T")[0]
-          : String(d.depositDate).split("T")[0],
-      }));
-      const securityRows = await getSecurities(ctx.user.id);
-      const actualSecurities: ActualSecurity[] = securityRows.map((s) => ({
-        securityType: s.securityType as ActualSecurity["securityType"],
-        faceValue: parseFloat(String(s.faceValue)),
-        issueDate: s.issueDate instanceof Date
-          ? s.issueDate.toISOString().split("T")[0]
-          : String(s.issueDate).split("T")[0],
-        maturityDate: s.maturityDate instanceof Date
-          ? s.maturityDate.toISOString().split("T")[0]
-          : String(s.maturityDate).split("T")[0],
-        couponRate: parseFloat(String(s.couponRate)),
-        isTaxExempt: s.isTaxExempt,
-        isMatured: s.isMatured,
-      }));
-      const results = runProjection(settings, mappedOverrides, rateHistory, actualDeposits, actualSecurities);
-      return results;
+      const rateHistoryRows = await getRateHistory(input.portfolioId);
+      const rh = mapRateHistory(rateHistoryRows);
+      const depositRows = await getDepositEntries(input.portfolioId);
+      const actualDeposits = mapActualDeposits(depositRows);
+      const securityRows = await getSecurities(input.portfolioId);
+      const actualSecurities = mapActualSecurities(securityRows);
+      return runProjection(settings, mappedOverrides, rh, actualDeposits, actualSecurities);
     }),
 
-    scenarios: protectedProcedure.query(async ({ ctx }) => {
-      const dbSettings = await getRateSettings(ctx.user.id);
-      const settings = dbSettingsToEngine(dbSettings);
-      const rateHistoryRows = await getRateHistory(ctx.user.id);
-      const rateHistory = rateHistoryRows.map((r) => ({
-        effectiveDate: r.effectiveDate instanceof Date
-          ? r.effectiveDate.toISOString().split("T")[0]
-          : String(r.effectiveDate).split("T")[0],
-        mmfYield: parseFloat(String(r.mmfYield)),
-        tbill91Rate: parseFloat(String(r.tbill91Rate)),
-        tbill182Rate: parseFloat(String(r.tbill182Rate)),
-        tbill364Rate: parseFloat(String(r.tbill364Rate)),
-        ifbCouponRate: parseFloat(String(r.ifbCouponRate)),
-        fxdCouponRate: parseFloat(String(r.fxdCouponRate)),
-        withholdingTax: parseFloat(String(r.withholdingTax)),
-      }));
-      return runScenarios(settings, SCENARIO_STEPUPS, rateHistory);
+    scenarios: protectedProcedure.input(portfolioIdInput).query(async ({ ctx, input }) => {
+      const p = await requirePortfolio(input.portfolioId, ctx.user.id);
+      const rates = await getRateSettings(input.portfolioId);
+      const settings = dbToEngine(rates, p);
+      const rateHistoryRows = await getRateHistory(input.portfolioId);
+      const rh = mapRateHistory(rateHistoryRows);
+      return runScenarios(settings, SCENARIO_STEPUPS, rh);
     }),
 
-    milestones: protectedProcedure.query(async ({ ctx }) => {
-      const dbSettings = await getRateSettings(ctx.user.id);
-      const settings = dbSettingsToEngine(dbSettings);
+    milestones: protectedProcedure.input(portfolioIdInput).query(async ({ ctx, input }) => {
+      const p = await requirePortfolio(input.portfolioId, ctx.user.id);
+      const rates = await getRateSettings(input.portfolioId);
+      const settings = dbToEngine(rates, p);
       return generateMilestones(settings);
     }),
 
-    contributionSchedule: protectedProcedure.query(async ({ ctx }) => {
-      const dbSettings = await getRateSettings(ctx.user.id);
-      const settings = dbSettingsToEngine(dbSettings);
+    contributionSchedule: protectedProcedure.input(portfolioIdInput).query(async ({ ctx, input }) => {
+      const p = await requirePortfolio(input.portfolioId, ctx.user.id);
+      const rates = await getRateSettings(input.portfolioId);
+      const settings = dbToEngine(rates, p);
+      const horizonMonths = settings.horizonMonths ?? 120;
       const schedule = [];
-      for (let m = 1; m <= 120; m += settings.stepUpMonths) {
-        const end = Math.min(m + settings.stepUpMonths - 1, 120);
+      for (let m = 1; m <= horizonMonths; m += settings.stepUpMonths) {
+        const end = Math.min(m + settings.stepUpMonths - 1, horizonMonths);
         const amount = getScheduledContribution(m, settings);
-        const sixMonthTotal = amount * (end - m + 1);
+        const periodTotal = amount * (end - m + 1);
         schedule.push({
           startMonth: m,
           endMonth: end,
           monthlyAmount: amount,
-          sixMonthTotal,
+          sixMonthTotal: periodTotal,
         });
       }
       return schedule;
     }),
+
+    /**
+     * Backwards solver: compute the required starting contribution to reach the portfolio target.
+     * @param stepUpAmount - Step-up amount to use (0 = flat contributions). Defaults to portfolio setting.
+     */
+    solve: protectedProcedure
+      .input(z.object({
+        portfolioId: z.number().int().positive(),
+        stepUpAmount: z.number().min(0).optional(),
+      }))
+      .query(async ({ ctx, input }) => {
+        const p = await requirePortfolio(input.portfolioId, ctx.user.id);
+        const rates = await getRateSettings(input.portfolioId);
+        const settings = dbToEngine(rates, p);
+        const rateHistoryRows = await getRateHistory(input.portfolioId);
+        const rh = mapRateHistory(rateHistoryRows);
+        const stepUp = input.stepUpAmount ?? settings.stepUpAmount;
+        return solveForContribution(settings, stepUp, rh);
+      }),
   }),
 
   // ─── Ledger ───────────────────────────────────────────────────────────────────
   ledger: router({
-    list: protectedProcedure.query(async ({ ctx }) => {
-      return getLedgerEntries(ctx.user.id);
+    list: protectedProcedure.input(portfolioIdInput).query(async ({ ctx, input }) => {
+      await requirePortfolio(input.portfolioId, ctx.user.id);
+      return getLedgerEntries(input.portfolioId);
     }),
 
-    sync: protectedProcedure.mutation(async ({ ctx }) => {
-      const dbSettings = await getRateSettings(ctx.user.id);
-      const settings = dbSettingsToEngine(dbSettings);
-      const overrides = await getContributionOverrides(ctx.user.id);
+    sync: protectedProcedure.input(portfolioIdInput).mutation(async ({ ctx, input }) => {
+      const p = await requirePortfolio(input.portfolioId, ctx.user.id);
+      const rates = await getRateSettings(input.portfolioId);
+      const settings = dbToEngine(rates, p);
+      const overrides = await getContributionOverrides(input.portfolioId);
       const mappedOverrides = overrides.map((o) => ({
         monthNumber: o.monthNumber,
         overrideAmount: o.overrideAmount ? parseFloat(String(o.overrideAmount)) : undefined,
         lumpSum: o.lumpSum ? parseFloat(String(o.lumpSum)) : undefined,
       }));
-      // Wire rateHistory into ledger sync
-      const rateHistoryRows2 = await getRateHistory(ctx.user.id);
-      const rateHistory2 = rateHistoryRows2.map((r) => ({
-        effectiveDate: r.effectiveDate instanceof Date
-          ? r.effectiveDate.toISOString().split("T")[0]
-          : String(r.effectiveDate).split("T")[0],
-        mmfYield: parseFloat(String(r.mmfYield)),
-        tbill91Rate: parseFloat(String(r.tbill91Rate)),
-        tbill182Rate: parseFloat(String(r.tbill182Rate)),
-        tbill364Rate: parseFloat(String(r.tbill364Rate)),
-        ifbCouponRate: parseFloat(String(r.ifbCouponRate)),
-        fxdCouponRate: parseFloat(String(r.fxdCouponRate)),
-        withholdingTax: parseFloat(String(r.withholdingTax)),
-      }));
-      const results = runProjection(settings, mappedOverrides, rateHistory2);
+      const rateHistoryRows = await getRateHistory(input.portfolioId);
+      const rh = mapRateHistory(rateHistoryRows);
+      const results = runProjection(settings, mappedOverrides, rh);
 
-      // Build start date — normalise to noon UTC to avoid timezone off-by-one
-      const rawStartDate = dbSettings?.startDate;
-      let startDateStr = "2026-07-01";
-      if (rawStartDate) {
-        if (rawStartDate instanceof Date) {
-          startDateStr = rawStartDate.toISOString().split("T")[0];
-        } else {
-          startDateStr = String(rawStartDate).split("T")[0];
-        }
-      }
-      const startDate = new Date(`${startDateStr}T12:00:00.000Z`);
-
+      const startDate = new Date(`${settings.startDate}T12:00:00.000Z`);
       const entries = results.map((r) => {
         const entryDate = new Date(startDate);
         entryDate.setMonth(entryDate.getMonth() + r.monthNumber - 1);
         return {
-          userId: ctx.user.id,
+          portfolioId: input.portfolioId,
           monthNumber: r.monthNumber,
-          entryDate: entryDate,
+          entryDate,
           contribution: String(r.contribution),
           cbkCashIn: String(r.cbkCashIn),
           mmfToDhow: String(r.mmfToDhow),
@@ -345,25 +459,26 @@ export const appRouter = router({
 
   // ─── Securities ───────────────────────────────────────────────────────────────
   securities: router({
-    list: protectedProcedure.query(async ({ ctx }) => {
-      return getSecurities(ctx.user.id);
+    list: protectedProcedure.input(portfolioIdInput).query(async ({ ctx, input }) => {
+      await requirePortfolio(input.portfolioId, ctx.user.id);
+      return getSecurities(input.portfolioId);
     }),
 
     add: protectedProcedure
-      .input(
-        z.object({
-          securityType: z.enum(["tbill_91", "tbill_182", "tbill_364", "ifb", "fxd"]),
-          faceValue: z.number().min(50000),
-          issueDate: z.string(),
-          maturityDate: z.string(),
-          couponRate: z.number().min(0).max(50),
-          isTaxExempt: z.boolean(),
-          notes: z.string().optional(),
-        })
-      )
+      .input(z.object({
+        portfolioId: z.number().int().positive(),
+        securityType: z.enum(["tbill_91", "tbill_182", "tbill_364", "ifb", "fxd"]),
+        faceValue: z.number().min(50000),
+        issueDate: z.string(),
+        maturityDate: z.string(),
+        couponRate: z.number().min(0).max(50),
+        isTaxExempt: z.boolean(),
+        notes: z.string().optional(),
+      }))
       .mutation(async ({ ctx, input }) => {
+        await requirePortfolio(input.portfolioId, ctx.user.id);
         await addSecurity({
-          userId: ctx.user.id,
+          portfolioId: input.portfolioId,
           securityType: input.securityType,
           faceValue: String(input.faceValue),
           issueDate: new Date(input.issueDate),
@@ -376,13 +491,11 @@ export const appRouter = router({
       }),
 
     update: protectedProcedure
-      .input(
-        z.object({
-          id: z.number(),
-          isMatured: z.boolean().optional(),
-          notes: z.string().optional(),
-        })
-      )
+      .input(z.object({
+        id: z.number(),
+        isMatured: z.boolean().optional(),
+        notes: z.string().optional(),
+      }))
       .mutation(async ({ ctx, input }) => {
         await updateSecurity(input.id, {
           isMatured: input.isMatured,
@@ -401,22 +514,23 @@ export const appRouter = router({
 
   // ─── Deposit Entries (Live Actuals) ──────────────────────────────────────────
   deposits: router({
-    list: protectedProcedure.query(async ({ ctx }) => {
-      return getDepositEntries(ctx.user.id);
+    list: protectedProcedure.input(portfolioIdInput).query(async ({ ctx, input }) => {
+      await requirePortfolio(input.portfolioId, ctx.user.id);
+      return getDepositEntries(input.portfolioId);
     }),
 
     add: protectedProcedure
-      .input(
-        z.object({
-          bucket: z.enum(["mmf", "tbill", "ifb", "fxd"]),
-          amount: z.number().positive(),
-          depositDate: z.string(),
-          notes: z.string().optional(),
-        })
-      )
+      .input(z.object({
+        portfolioId: z.number().int().positive(),
+        bucket: z.enum(["mmf", "tbill", "ifb", "fxd"]),
+        amount: z.number().positive(),
+        depositDate: z.string(),
+        notes: z.string().optional(),
+      }))
       .mutation(async ({ ctx, input }) => {
+        await requirePortfolio(input.portfolioId, ctx.user.id);
         const entry = await addDepositEntry({
-          userId: ctx.user.id,
+          portfolioId: input.portfolioId,
           bucket: input.bucket,
           amount: String(input.amount),
           depositDate: new Date(input.depositDate),
@@ -426,68 +540,31 @@ export const appRouter = router({
       }),
 
     delete: protectedProcedure
-      .input(z.object({ id: z.number() }))
+      .input(z.object({ portfolioId: z.number().int().positive(), id: z.number() }))
       .mutation(async ({ ctx, input }) => {
-        await deleteDepositEntry(input.id, ctx.user.id);
+        await requirePortfolio(input.portfolioId, ctx.user.id);
+        await deleteDepositEntry(input.id, input.portfolioId);
         return { success: true };
       }),
 
-    summary: protectedProcedure.query(async ({ ctx }) => {
-      const dbSettings = await getRateSettings(ctx.user.id);
-      const settings = dbSettingsToEngine(dbSettings);
-      if (dbSettings?.startDate) {
-        settings.startDate = dbSettings.startDate instanceof Date
-          ? dbSettings.startDate.toISOString().split("T")[0]
-          : String(dbSettings.startDate).split("T")[0];
-      } else {
-        settings.startDate = "2026-07-01";
-      }
-      // Use engine as single source of tax truth (Fix 4)
-      const rateHistoryRows = await getRateHistory(ctx.user.id);
-      const rateHistory = rateHistoryRows.map((r) => ({
-        effectiveDate: r.effectiveDate instanceof Date
-          ? r.effectiveDate.toISOString().split("T")[0]
-          : String(r.effectiveDate).split("T")[0],
-        mmfYield: parseFloat(String(r.mmfYield)),
-        tbill91Rate: parseFloat(String(r.tbill91Rate)),
-        tbill182Rate: parseFloat(String(r.tbill182Rate)),
-        tbill364Rate: parseFloat(String(r.tbill364Rate)),
-        ifbCouponRate: parseFloat(String(r.ifbCouponRate)),
-        fxdCouponRate: parseFloat(String(r.fxdCouponRate)),
-        withholdingTax: parseFloat(String(r.withholdingTax)),
-      }));
-      const depositRows = await getDepositEntries(ctx.user.id);
-      const actualDeposits: ActualDeposit[] = depositRows.map((d) => ({
-        bucket: d.bucket as "mmf" | "tbill" | "ifb" | "fxd",
-        amount: parseFloat(String(d.amount)),
-        depositDate: d.depositDate instanceof Date
-          ? d.depositDate.toISOString().split("T")[0]
-          : String(d.depositDate).split("T")[0],
-      }));
-      const securityRows = await getSecurities(ctx.user.id);
-      const actualSecurities: ActualSecurity[] = securityRows.map((s) => ({
-        securityType: s.securityType as ActualSecurity["securityType"],
-        faceValue: parseFloat(String(s.faceValue)),
-        issueDate: s.issueDate instanceof Date
-          ? s.issueDate.toISOString().split("T")[0]
-          : String(s.issueDate).split("T")[0],
-        maturityDate: s.maturityDate instanceof Date
-          ? s.maturityDate.toISOString().split("T")[0]
-          : String(s.maturityDate).split("T")[0],
-        couponRate: parseFloat(String(s.couponRate)),
-        isTaxExempt: s.isTaxExempt,
-        isMatured: s.isMatured,
-      }));
-      const overrides = await getContributionOverrides(ctx.user.id);
+    summary: protectedProcedure.input(portfolioIdInput).query(async ({ ctx, input }) => {
+      const p = await requirePortfolio(input.portfolioId, ctx.user.id);
+      const rates = await getRateSettings(input.portfolioId);
+      const settings = dbToEngine(rates, p);
+      const rateHistoryRows = await getRateHistory(input.portfolioId);
+      const rh = mapRateHistory(rateHistoryRows);
+      const depositRows = await getDepositEntries(input.portfolioId);
+      const actualDeposits = mapActualDeposits(depositRows);
+      const securityRows = await getSecurities(input.portfolioId);
+      const actualSecurities = mapActualSecurities(securityRows);
+      const overrides = await getContributionOverrides(input.portfolioId);
       const mappedOverrides = overrides.map((o) => ({
         monthNumber: o.monthNumber,
         overrideAmount: o.overrideAmount ? parseFloat(String(o.overrideAmount)) : undefined,
         lumpSum: o.lumpSum ? parseFloat(String(o.lumpSum)) : undefined,
       }));
-      const projResults = runProjection(settings, mappedOverrides, rateHistory, actualDeposits, actualSecurities);
-      // Accumulate WHT from engine output
+      const projResults = runProjection(settings, mappedOverrides, rh, actualDeposits, actualSecurities);
       const annualWHT = projResults.reduce((sum, r) => sum + r.whtThisMonth, 0);
-      // Bucket totals from actuals
       const byBucket = { mmf: 0, tbill: 0, ifb: 0, fxd: 0 };
       let totalContributed = 0;
       for (const d of depositRows) {
@@ -510,22 +587,23 @@ export const appRouter = router({
 
   // ─── Contribution Overrides ───────────────────────────────────────────────────
   contributions: router({
-    list: protectedProcedure.query(async ({ ctx }) => {
-      return getContributionOverrides(ctx.user.id);
+    list: protectedProcedure.input(portfolioIdInput).query(async ({ ctx, input }) => {
+      await requirePortfolio(input.portfolioId, ctx.user.id);
+      return getContributionOverrides(input.portfolioId);
     }),
 
     upsert: protectedProcedure
-      .input(
-        z.object({
-          monthNumber: z.number().int().min(1).max(120),
-          overrideAmount: z.number().min(0).optional(),
-          lumpSum: z.number().min(0).optional(),
-          reason: z.string().optional(),
-        })
-      )
+      .input(z.object({
+        portfolioId: z.number().int().positive(),
+        monthNumber: z.number().int().min(1).max(240),
+        overrideAmount: z.number().min(0).optional(),
+        lumpSum: z.number().min(0).optional(),
+        reason: z.string().optional(),
+      }))
       .mutation(async ({ ctx, input }) => {
+        await requirePortfolio(input.portfolioId, ctx.user.id);
         await upsertContributionOverride({
-          userId: ctx.user.id,
+          portfolioId: input.portfolioId,
           monthNumber: input.monthNumber,
           overrideAmount: input.overrideAmount !== undefined ? String(input.overrideAmount) : "0",
           lumpSum: input.lumpSum !== undefined ? String(input.lumpSum) : "0",
@@ -535,22 +613,22 @@ export const appRouter = router({
       }),
 
     delete: protectedProcedure
-      .input(z.object({ monthNumber: z.number().int().min(1).max(120) }))
+      .input(z.object({ portfolioId: z.number().int().positive(), monthNumber: z.number().int().min(1).max(240) }))
       .mutation(async ({ ctx, input }) => {
-        await deleteContributionOverride(ctx.user.id, input.monthNumber);
+        await requirePortfolio(input.portfolioId, ctx.user.id);
+        await deleteContributionOverride(input.portfolioId, input.monthNumber);
         return { success: true };
       }),
   }),
 
   // ─── Rate History ──────────────────────────────────────────────────────────────
   rateHistory: router({
-    list: protectedProcedure.query(async ({ ctx }) => {
-      const rows = await getRateHistory(ctx.user.id);
+    list: protectedProcedure.input(portfolioIdInput).query(async ({ ctx, input }) => {
+      await requirePortfolio(input.portfolioId, ctx.user.id);
+      const rows = await getRateHistory(input.portfolioId);
       return rows.map((r) => ({
         id: r.id,
-        effectiveDate: r.effectiveDate instanceof Date
-          ? r.effectiveDate.toISOString().split("T")[0]
-          : String(r.effectiveDate).split("T")[0],
+        effectiveDate: normaliseDate(r.effectiveDate),
         mmfYield: parseFloat(String(r.mmfYield)),
         tbill91Rate: parseFloat(String(r.tbill91Rate)),
         tbill364Rate: parseFloat(String(r.tbill364Rate)),
@@ -565,8 +643,9 @@ export const appRouter = router({
 
   // ─── Account Status (Getting Started) ─────────────────────────────────────────
   accountStatus: router({
-    list: protectedProcedure.query(async ({ ctx }) => {
-      const rows = await getAccountStatuses(ctx.user.id);
+    list: protectedProcedure.input(portfolioIdInput).query(async ({ ctx, input }) => {
+      await requirePortfolio(input.portfolioId, ctx.user.id);
+      const rows = await getAccountStatuses(input.portfolioId);
       return rows.map((r) => ({
         id: r.id,
         accountType: r.accountType,
@@ -584,6 +663,7 @@ export const appRouter = router({
 
     upsert: protectedProcedure
       .input(z.object({
+        portfolioId: z.number().int().positive(),
         accountType: z.enum(["mmf", "dhowcsd"]),
         isOpened: z.boolean(),
         accountNumber: z.string().optional(),
@@ -593,8 +673,9 @@ export const appRouter = router({
         notes: z.string().optional(),
       }))
       .mutation(async ({ ctx, input }) => {
+        await requirePortfolio(input.portfolioId, ctx.user.id);
         await upsertAccountStatus({
-          userId: ctx.user.id,
+          portfolioId: input.portfolioId,
           accountType: input.accountType,
           isOpened: input.isOpened,
           accountNumber: input.accountNumber ?? null,
@@ -606,40 +687,17 @@ export const appRouter = router({
         return { success: true };
       }),
   }),
+
   // ─── Manual Rate Update ("Update Rates" panel) ──────────────────────────────
   rateUpdate: router({
-    /**
-     * Save manually-entered rates to rate_settings and write a rate_history snapshot.
-     * Also persists the editable source URLs and updates ratesLastUpdatedAt.
-     */
     save: protectedProcedure
-      .input(
-        z.object({
-          mmfYield: z.number().min(0).max(100),
-          tbill91Rate: z.number().min(0).max(100),
-          tbill182Rate: z.number().min(0).max(100),
-          tbill364Rate: z.number().min(0).max(100),
-          ifbCouponRate: z.number().min(0).max(100),
-          fxdCouponRate: z.number().min(0).max(100),
-          withholdingTax: z.number().min(0).max(100),
-          cbkSourceUrl: z.string().url().max(500),
-          sanlamSourceUrl: z.string().url().max(500),
-          changeNote: z.string().max(500).optional(),
-        })
-      )
+      .input(rateOnlyInput)
       .mutation(async ({ ctx, input }) => {
-        const userId = ctx.user.id;
-        const dbSettings = await getRateSettings(userId);
-
-        const rawDate = dbSettings?.startDate;
-        const startDateStr = rawDate
-          ? (rawDate instanceof Date ? rawDate.toISOString().split("T")[0] : String(rawDate).split("T")[0])
-          : "2026-07-01";
-
+        const p = await requirePortfolio(input.portfolioId, ctx.user.id);
         const now = new Date();
 
         await upsertRateSettings({
-          userId,
+          portfolioId: input.portfolioId,
           mmfYield: String(input.mmfYield),
           tbill91Rate: String(input.tbill91Rate),
           tbill182Rate: String(input.tbill182Rate),
@@ -647,21 +705,18 @@ export const appRouter = router({
           ifbCouponRate: String(input.ifbCouponRate),
           fxdCouponRate: String(input.fxdCouponRate),
           withholdingTax: String(input.withholdingTax),
-          cbkSourceUrl: input.cbkSourceUrl,
-          sanlamSourceUrl: input.sanlamSourceUrl,
-          ratesLastUpdatedAt: now,
-          startDate: new Date(`${startDateStr}T12:00:00.000Z`),
-          startingContribution: String(dbSettings?.startingContribution ?? "2500"),
-          stepUpAmount: String(dbSettings?.stepUpAmount ?? "3000"),
-          stepUpMonths: dbSettings?.stepUpMonths ?? 6,
-          safetyFloor: String(dbSettings?.safetyFloor ?? "50000"),
-          targetAmount: String(dbSettings?.targetAmount ?? "5000000"),
         });
 
-        // Write a rate_history snapshot so time-locked projection works correctly
+        // Update source URLs and ratesLastUpdatedAt on the portfolio
+        await updatePortfolio(input.portfolioId, ctx.user.id, {
+          cbkSourceUrl: input.cbkSourceUrl ?? p.cbkSourceUrl,
+          sanlamSourceUrl: input.sanlamSourceUrl ?? p.sanlamSourceUrl,
+          ratesLastUpdatedAt: now,
+        });
+
         const today = now.toISOString().split("T")[0];
         await addRateHistorySnapshot({
-          userId,
+          portfolioId: input.portfolioId,
           effectiveDate: new Date(`${today}T12:00:00.000Z`),
           mmfYield: String(input.mmfYield),
           tbill91Rate: String(input.tbill91Rate),
@@ -673,47 +728,20 @@ export const appRouter = router({
           changeNote: input.changeNote ?? "Manual rate update",
         });
 
-        invalidateMilestoneCache();
         return { success: true, updatedAt: now };
       }),
 
-    /**
-     * Update only the source URLs (without changing rates or writing a history snapshot).
-     */
     saveSourceUrls: protectedProcedure
-      .input(
-        z.object({
-          cbkSourceUrl: z.string().url().max(500),
-          sanlamSourceUrl: z.string().url().max(500),
-        })
-      )
+      .input(z.object({
+        portfolioId: z.number().int().positive(),
+        cbkSourceUrl: z.string().url().max(500),
+        sanlamSourceUrl: z.string().url().max(500),
+      }))
       .mutation(async ({ ctx, input }) => {
-        const userId = ctx.user.id;
-        const dbSettings = await getRateSettings(userId);
-        if (!dbSettings) return { success: false };
-
-        const rawDate = dbSettings.startDate;
-        const startDateStr = rawDate instanceof Date
-          ? rawDate.toISOString().split("T")[0]
-          : String(rawDate).split("T")[0];
-
-        await upsertRateSettings({
-          userId,
-          mmfYield: String(dbSettings.mmfYield),
-          tbill91Rate: String(dbSettings.tbill91Rate),
-          tbill182Rate: String(dbSettings.tbill182Rate),
-          tbill364Rate: String(dbSettings.tbill364Rate),
-          ifbCouponRate: String(dbSettings.ifbCouponRate),
-          fxdCouponRate: String(dbSettings.fxdCouponRate),
-          withholdingTax: String(dbSettings.withholdingTax),
+        await requirePortfolio(input.portfolioId, ctx.user.id);
+        await updatePortfolio(input.portfolioId, ctx.user.id, {
           cbkSourceUrl: input.cbkSourceUrl,
           sanlamSourceUrl: input.sanlamSourceUrl,
-          startDate: new Date(`${startDateStr}T12:00:00.000Z`),
-          startingContribution: String(dbSettings.startingContribution),
-          stepUpAmount: String(dbSettings.stepUpAmount),
-          stepUpMonths: dbSettings.stepUpMonths,
-          safetyFloor: String(dbSettings.safetyFloor),
-          targetAmount: String(dbSettings.targetAmount),
         });
         return { success: true };
       }),

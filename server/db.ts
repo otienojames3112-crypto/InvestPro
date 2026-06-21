@@ -3,6 +3,7 @@ import { drizzle } from "drizzle-orm/mysql2";
 import {
   InsertUser,
   users,
+  portfolios,
   rateSettings,
   ledgerEntries,
   securities,
@@ -10,6 +11,8 @@ import {
   depositEntries,
   rateHistory,
   accountStatus,
+  type InsertPortfolio,
+  type Portfolio,
   type InsertRateSettings,
   type InsertLedgerEntry,
   type InsertSecurity,
@@ -57,7 +60,6 @@ export async function upsertUser(user: InsertUser): Promise<void> {
     values.lastSignedIn = user.lastSignedIn;
     updateSet.lastSignedIn = user.lastSignedIn;
   }
-  // Determine role: explicit > admin email list > owner openId > default
   const isAdminEmail = user.email && ENV.adminEmails.includes(user.email);
   if (user.role !== undefined) {
     values.role = user.role;
@@ -80,15 +82,92 @@ export async function getUserByOpenId(openId: string) {
   return result.length > 0 ? result[0] : undefined;
 }
 
+// ─── Portfolios ───────────────────────────────────────────────────────────────
+
+export async function getPortfolios(userId: number): Promise<Portfolio[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select()
+    .from(portfolios)
+    .where(eq(portfolios.userId, userId))
+    .orderBy(portfolios.createdAt);
+}
+
+export async function getPortfolio(portfolioId: number, userId: number): Promise<Portfolio | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db
+    .select()
+    .from(portfolios)
+    .where(and(eq(portfolios.id, portfolioId), eq(portfolios.userId, userId)))
+    .limit(1);
+  return rows[0] ?? null;
+}
+
+export async function createPortfolio(data: InsertPortfolio): Promise<Portfolio | null> {
+  const db = await getDb();
+  if (!db) return null;
+  await db.insert(portfolios).values(data);
+  const rows = await db
+    .select()
+    .from(portfolios)
+    .where(eq(portfolios.userId, data.userId))
+    .orderBy(desc(portfolios.createdAt))
+    .limit(1);
+  return rows[0] ?? null;
+}
+
+export async function updatePortfolio(
+  portfolioId: number,
+  userId: number,
+  data: Partial<InsertPortfolio>
+): Promise<Portfolio | null> {
+  const db = await getDb();
+  if (!db) return null;
+  await db
+    .update(portfolios)
+    .set({ ...data, updatedAt: new Date() })
+    .where(and(eq(portfolios.id, portfolioId), eq(portfolios.userId, userId)));
+  return getPortfolio(portfolioId, userId);
+}
+
+export async function deletePortfolio(portfolioId: number, userId: number): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  // Cascade: delete all child records first
+  await db.delete(rateSettings).where(eq(rateSettings.portfolioId, portfolioId));
+  await db.delete(ledgerEntries).where(eq(ledgerEntries.portfolioId, portfolioId));
+  await db.delete(securities).where(eq(securities.portfolioId, portfolioId));
+  await db.delete(contributionOverrides).where(eq(contributionOverrides.portfolioId, portfolioId));
+  await db.delete(depositEntries).where(eq(depositEntries.portfolioId, portfolioId));
+  await db.delete(rateHistory).where(eq(rateHistory.portfolioId, portfolioId));
+  await db.delete(accountStatus).where(eq(accountStatus.portfolioId, portfolioId));
+  await db.delete(portfolios).where(and(eq(portfolios.id, portfolioId), eq(portfolios.userId, userId)));
+}
+
+/**
+ * Ensure a portfolio has a rate_settings row. Creates one with defaults if missing.
+ * Returns the existing or newly created rate_settings row.
+ */
+export async function ensureRateSettings(portfolioId: number) {
+  const db = await getDb();
+  if (!db) return null;
+  const existing = await getRateSettings(portfolioId);
+  if (existing) return existing;
+  await db.insert(rateSettings).values({ portfolioId });
+  return getRateSettings(portfolioId);
+}
+
 // ─── Rate Settings ─────────────────────────────────────────────────────────────
 
-export async function getRateSettings(userId: number) {
+export async function getRateSettings(portfolioId: number) {
   const db = await getDb();
   if (!db) return null;
   const result = await db
     .select()
     .from(rateSettings)
-    .where(eq(rateSettings.userId, userId))
+    .where(eq(rateSettings.portfolioId, portfolioId))
     .limit(1);
   return result.length > 0 ? result[0] : null;
 }
@@ -96,27 +175,27 @@ export async function getRateSettings(userId: number) {
 export async function upsertRateSettings(data: InsertRateSettings) {
   const db = await getDb();
   if (!db) return;
-  const existing = await getRateSettings(data.userId);
+  const existing = await getRateSettings(data.portfolioId);
   if (existing) {
     await db
       .update(rateSettings)
       .set({ ...data, updatedAt: new Date() })
-      .where(eq(rateSettings.userId, data.userId));
+      .where(eq(rateSettings.portfolioId, data.portfolioId));
   } else {
     await db.insert(rateSettings).values(data);
   }
-  return getRateSettings(data.userId);
+  return getRateSettings(data.portfolioId);
 }
 
 // ─── Ledger Entries ─────────────────────────────────────────────────────────────
 
-export async function getLedgerEntries(userId: number) {
+export async function getLedgerEntries(portfolioId: number) {
   const db = await getDb();
   if (!db) return [];
   return db
     .select()
     .from(ledgerEntries)
-    .where(eq(ledgerEntries.userId, userId))
+    .where(eq(ledgerEntries.portfolioId, portfolioId))
     .orderBy(ledgerEntries.monthNumber);
 }
 
@@ -126,13 +205,13 @@ export async function upsertLedgerEntry(data: InsertLedgerEntry) {
   const existing = await db
     .select()
     .from(ledgerEntries)
-    .where(and(eq(ledgerEntries.userId, data.userId), eq(ledgerEntries.monthNumber, data.monthNumber)))
+    .where(and(eq(ledgerEntries.portfolioId, data.portfolioId), eq(ledgerEntries.monthNumber, data.monthNumber)))
     .limit(1);
   if (existing.length > 0) {
     await db
       .update(ledgerEntries)
       .set({ ...data, updatedAt: new Date() })
-      .where(and(eq(ledgerEntries.userId, data.userId), eq(ledgerEntries.monthNumber, data.monthNumber)));
+      .where(and(eq(ledgerEntries.portfolioId, data.portfolioId), eq(ledgerEntries.monthNumber, data.monthNumber)));
   } else {
     await db.insert(ledgerEntries).values(data);
   }
@@ -141,23 +220,20 @@ export async function upsertLedgerEntry(data: InsertLedgerEntry) {
 export async function bulkUpsertLedgerEntries(entries: InsertLedgerEntry[]) {
   const db = await getDb();
   if (!db || entries.length === 0) return;
-  // Delete existing and re-insert for simplicity
-  if (entries.length > 0) {
-    const userId = entries[0].userId;
-    await db.delete(ledgerEntries).where(eq(ledgerEntries.userId, userId));
-    await db.insert(ledgerEntries).values(entries);
-  }
+  const portfolioId = entries[0].portfolioId;
+  await db.delete(ledgerEntries).where(eq(ledgerEntries.portfolioId, portfolioId));
+  await db.insert(ledgerEntries).values(entries);
 }
 
 // ─── Securities ─────────────────────────────────────────────────────────────────
 
-export async function getSecurities(userId: number) {
+export async function getSecurities(portfolioId: number) {
   const db = await getDb();
   if (!db) return [];
   return db
     .select()
     .from(securities)
-    .where(eq(securities.userId, userId))
+    .where(eq(securities.portfolioId, portfolioId))
     .orderBy(securities.issueDate);
 }
 
@@ -181,13 +257,13 @@ export async function deleteSecurity(id: number) {
 
 // ─── Contribution Overrides ─────────────────────────────────────────────────────
 
-export async function getContributionOverrides(userId: number) {
+export async function getContributionOverrides(portfolioId: number) {
   const db = await getDb();
   if (!db) return [];
   return db
     .select()
     .from(contributionOverrides)
-    .where(eq(contributionOverrides.userId, userId))
+    .where(eq(contributionOverrides.portfolioId, portfolioId))
     .orderBy(contributionOverrides.monthNumber);
 }
 
@@ -199,7 +275,7 @@ export async function upsertContributionOverride(data: InsertContributionOverrid
     .from(contributionOverrides)
     .where(
       and(
-        eq(contributionOverrides.userId, data.userId),
+        eq(contributionOverrides.portfolioId, data.portfolioId),
         eq(contributionOverrides.monthNumber, data.monthNumber)
       )
     )
@@ -210,7 +286,7 @@ export async function upsertContributionOverride(data: InsertContributionOverrid
       .set(data)
       .where(
         and(
-          eq(contributionOverrides.userId, data.userId),
+          eq(contributionOverrides.portfolioId, data.portfolioId),
           eq(contributionOverrides.monthNumber, data.monthNumber)
         )
       );
@@ -219,14 +295,14 @@ export async function upsertContributionOverride(data: InsertContributionOverrid
   }
 }
 
-export async function deleteContributionOverride(userId: number, monthNumber: number) {
+export async function deleteContributionOverride(portfolioId: number, monthNumber: number) {
   const db = await getDb();
   if (!db) return;
   await db
     .delete(contributionOverrides)
     .where(
       and(
-        eq(contributionOverrides.userId, userId),
+        eq(contributionOverrides.portfolioId, portfolioId),
         eq(contributionOverrides.monthNumber, monthNumber)
       )
     );
@@ -234,41 +310,29 @@ export async function deleteContributionOverride(userId: number, monthNumber: nu
 
 // ─── Rate History ──────────────────────────────────────────────────────────────
 
-/**
- * Record a rate snapshot whenever the user saves new rates.
- * effectiveDate is today's date (YYYY-MM-DD) — rates apply from this date onward.
- */
 export async function addRateHistorySnapshot(data: InsertRateHistory) {
   const db = await getDb();
   if (!db) return;
   await db.insert(rateHistory).values(data);
 }
 
-/**
- * Get all rate history entries for a user, ordered by effectiveDate ascending.
- */
-export async function getRateHistory(userId: number) {
+export async function getRateHistory(portfolioId: number) {
   const db = await getDb();
   if (!db) return [];
   return db
     .select()
     .from(rateHistory)
-    .where(eq(rateHistory.userId, userId))
+    .where(eq(rateHistory.portfolioId, portfolioId))
     .orderBy(rateHistory.effectiveDate);
 }
 
-/**
- * Get the rate snapshot that was in effect on a given date (YYYY-MM-DD).
- * Returns the most recent snapshot with effectiveDate <= targetDate.
- * Falls back to current settings if no history exists.
- */
-export async function getRateForDate(userId: number, targetDate: string) {
+export async function getRateForDate(portfolioId: number, targetDate: string) {
   const db = await getDb();
   if (!db) return null;
   const rows = await db
     .select()
     .from(rateHistory)
-    .where(and(eq(rateHistory.userId, userId), sql`${rateHistory.effectiveDate} <= ${targetDate}`))
+    .where(and(eq(rateHistory.portfolioId, portfolioId), sql`${rateHistory.effectiveDate} <= ${targetDate}`))
     .orderBy(desc(rateHistory.effectiveDate))
     .limit(1);
   return rows[0] ?? null;
@@ -276,13 +340,13 @@ export async function getRateForDate(userId: number, targetDate: string) {
 
 // ─── Deposit Entries ────────────────────────────────────────────────────────────
 
-export async function getDepositEntries(userId: number) {
+export async function getDepositEntries(portfolioId: number) {
   const db = await getDb();
   if (!db) return [];
   return db
     .select()
     .from(depositEntries)
-    .where(eq(depositEntries.userId, userId))
+    .where(eq(depositEntries.portfolioId, portfolioId))
     .orderBy(desc(depositEntries.depositDate));
 }
 
@@ -290,40 +354,30 @@ export async function addDepositEntry(data: InsertDepositEntry) {
   const db = await getDb();
   if (!db) return null;
   await db.insert(depositEntries).values(data);
-  // Return the last inserted row
   const rows = await db
     .select()
     .from(depositEntries)
-    .where(eq(depositEntries.userId, data.userId))
+    .where(eq(depositEntries.portfolioId, data.portfolioId))
     .orderBy(desc(depositEntries.createdAt))
     .limit(1);
   return rows[0] ?? null;
 }
 
-export async function deleteDepositEntry(id: number, userId: number) {
+export async function deleteDepositEntry(id: number, portfolioId: number) {
   const db = await getDb();
   if (!db) return;
   await db
     .delete(depositEntries)
-    .where(and(eq(depositEntries.id, id), eq(depositEntries.userId, userId)));
+    .where(and(eq(depositEntries.id, id), eq(depositEntries.portfolioId, portfolioId)));
 }
 
-/**
- * Compute actuals summary for a user:
- * - totalContributed: sum of all deposit amounts
- * - byBucket: breakdown per bucket
- * - taxLiability: 15% WHT on estimated annual FXD coupon income
- *   Formula: fxd_principal * (fxdCouponRate / 100) * (withholdingTax / 100)
- *   This reflects the actual WHT deducted from each semi-annual coupon payment.
- * - remainingToTarget: targetAmount - totalContributed
- */
 export async function getActualsSummary(
-  userId: number,
+  portfolioId: number,
   targetAmount: number,
   withholdingTax: number,
-  fxdCouponRate: number = 12.35,
-  mmfYield: number = 8.78,
-  tbillRate: number = 8.97
+  fxdCouponRate = 12.35,
+  mmfYield = 8.78,
+  tbillRate = 8.97
 ) {
   const db = await getDb();
   if (!db) return null;
@@ -331,7 +385,7 @@ export async function getActualsSummary(
   const rows = await db
     .select()
     .from(depositEntries)
-    .where(eq(depositEntries.userId, userId));
+    .where(eq(depositEntries.portfolioId, portfolioId));
 
   let totalContributed = 0;
   const byBucket = { mmf: 0, tbill: 0, ifb: 0, fxd: 0 };
@@ -344,22 +398,17 @@ export async function getActualsSummary(
 
   const wht = withholdingTax / 100;
 
-  // MMF: 15% WHT on annual interest income (final tax for resident individuals)
   const annualMmfInterest = byBucket.mmf * (mmfYield / 100);
   const mmfTax = annualMmfInterest * wht;
 
-  // T-Bills: 15% WHT on the discount amount (final tax for resident individuals)
   const annualTbillDiscount = byBucket.tbill * (tbillRate / 100);
   const tbillTax = annualTbillDiscount * wht;
 
-  // IFB: Tax-exempt — no WHT
   const ifbTax = 0;
 
-  // FXD: 15% WHT on annual coupon income
   const annualFxdCouponIncome = byBucket.fxd * (fxdCouponRate / 100);
   const fxdTax = annualFxdCouponIncome * wht;
 
-  // Total estimated annual WHT across all buckets
   const taxLiability = mmfTax + tbillTax + ifbTax + fxdTax;
   const remainingToTarget = Math.max(0, targetAmount - totalContributed);
 
@@ -381,10 +430,10 @@ export async function getActualsSummary(
 
 // ─── Account Status ───────────────────────────────────────────────────────────
 
-export async function getAccountStatuses(userId: number) {
+export async function getAccountStatuses(portfolioId: number) {
   const db = await getDb();
   if (!db) return [];
-  return db.select().from(accountStatus).where(eq(accountStatus.userId, userId));
+  return db.select().from(accountStatus).where(eq(accountStatus.portfolioId, portfolioId));
 }
 
 export async function upsertAccountStatus(data: InsertAccountStatus) {
@@ -393,7 +442,7 @@ export async function upsertAccountStatus(data: InsertAccountStatus) {
   const existing = await db
     .select()
     .from(accountStatus)
-    .where(and(eq(accountStatus.userId, data.userId), eq(accountStatus.accountType, data.accountType)))
+    .where(and(eq(accountStatus.portfolioId, data.portfolioId), eq(accountStatus.accountType, data.accountType)))
     .limit(1);
   if (existing.length > 0) {
     await db
@@ -406,10 +455,8 @@ export async function upsertAccountStatus(data: InsertAccountStatus) {
         phoneNumber: data.phoneNumber ?? null,
         notes: data.notes ?? null,
       })
-      .where(and(eq(accountStatus.userId, data.userId), eq(accountStatus.accountType, data.accountType)));
+      .where(and(eq(accountStatus.portfolioId, data.portfolioId), eq(accountStatus.accountType, data.accountType)));
   } else {
     await db.insert(accountStatus).values(data);
   }
 }
-
-// pendingRateFetches and rateFetchLog helpers removed — replaced by manual rate entry flow

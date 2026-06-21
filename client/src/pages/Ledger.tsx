@@ -1,3 +1,4 @@
+import { usePortfolio } from "@/contexts/PortfolioContext";
 import { AppShell } from "@/components/AppShell";
 import { trpc } from "@/lib/trpc";
 import { formatKES, getMonthLabel, getPhaseName, getPhaseColorClass } from "@/lib/format";
@@ -11,12 +12,16 @@ import { useState, useMemo } from "react";
 import { toast } from "sonner";
 
 export default function Ledger() {
-  const { data: projection, isLoading } = trpc.projection.run.useQuery();
-  const { data: settings } = trpc.settings.get.useQuery();
+  const { portfolioId, portfolio } = usePortfolio();
+  const { data: projection, isLoading } = trpc.projection.run.useQuery(
+    { portfolioId: portfolioId! },
+    { enabled: !!portfolioId }
+  );
   const syncMutation = trpc.ledger.sync.useMutation({
     onSuccess: () => toast.success("Ledger synced with latest projection"),
     onError: () => toast.error("Failed to sync ledger"),
   });
+  const handleSync = () => { if (portfolioId) syncMutation.mutate({ portfolioId }); };
 
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
@@ -37,7 +42,7 @@ export default function Ledger() {
   const totalPages = Math.ceil(filtered.length / pageSize);
   const paged = filtered.slice((page - 1) * pageSize, page * pageSize);
 
-  const startDate = settings?.startDate ? String(settings.startDate).split("T")[0] : "2026-07-01";
+  const startDate = portfolio?.startDate ? String(portfolio.startDate).split("T")[0] : "2026-07-01";
 
   return (
     <AppShell>
@@ -54,7 +59,7 @@ export default function Ledger() {
           <Button
             variant="outline"
             size="sm"
-            onClick={() => syncMutation.mutate()}
+            onClick={handleSync}
             disabled={syncMutation.isPending}
             className="gap-2"
           >

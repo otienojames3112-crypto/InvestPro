@@ -47,6 +47,7 @@ import {
 } from "lucide-react";
 import { Link } from "wouter";
 import { useDepositDrawer } from "@/contexts/DepositDrawerContext";
+import { useSelectedFund } from "@/hooks/useSelectedFund";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 
@@ -141,6 +142,11 @@ export default function Dashboard() {
     { portfolioId: portfolioId! },
     { enabled: !!portfolioId }
   );
+  const { data: secondaryMmfs = [] } = trpc.secondaryMmfs.list.useQuery(
+    { portfolioId: portfolioId! },
+    { enabled: !!portfolioId }
+  );
+  const secondaryMmfTotal = secondaryMmfs.reduce((sum, s) => sum + s.currentBalance, 0);
   const updatePortfolioMutation = trpc.portfolios.update.useMutation({
     onSuccess: () => {
       toast.success("Target updated — projection recalculated");
@@ -183,6 +189,7 @@ export default function Dashboard() {
     });
   }
 
+  const { fundName, fundLabel, fundEar } = useSelectedFund();
   const targetAmount = portfolio?.targetAmount ?? 5000000;
   const lastData = projection?.[119];
   const currentMonth = 1;
@@ -218,7 +225,7 @@ export default function Dashboard() {
               Investment Dashboard
             </h1>
             <p className="text-sm text-muted-foreground mt-0.5">
-              10-year journey to {formatKES(targetAmount)} · SanlamAllianz MMF + CBK DhowCSD
+              10-year journey to {formatKES(targetAmount)} · {fundLabel} + CBK DhowCSD
             </p>
           </div>
           <Badge variant="outline" className={`text-xs px-3 py-1 border ${getPhaseColorClass(currentPhase)}`}>
@@ -361,7 +368,7 @@ export default function Dashboard() {
               ))
             ) : (
               [
-                { title: "MMF Balance", key: "mmfEnd" as const, subtitle: "SanlamAllianz MMF", icon: Wallet, accent: true, tooltip: "Your SanlamAllianz Money Market Fund balance at Year 10. This is your liquid cash buffer — money you can access any time. It earns daily interest (net ~7.5% p.a. after 15% WHT)." },
+                { title: "MMF Balance", key: "mmfEnd" as const, subtitle: secondaryMmfs.length > 0 ? `${fundName} + ${secondaryMmfs.length} more` : fundName, icon: Wallet, accent: true, tooltip: `Your ${fundName} projected balance at Year 10${secondaryMmfs.length > 0 ? ` (+ ${secondaryMmfs.length} additional MMF account${secondaryMmfs.length > 1 ? "s" : ""} with KES ${secondaryMmfTotal.toLocaleString("en-KE")} current balance)` : ""}. Earns daily interest (net ~${(fundEar * 0.85).toFixed(1)}% p.a. after 15% WHT).` },
                 { title: "T-Bills", key: "tbillEnd" as const, subtitle: "CBK Treasury Bills", icon: TrendingUp, accent: false, tooltip: "Your total invested in CBK Treasury Bills at Year 10. T-bills are short-term (91–364 days), very safe government instruments. You earn a discount return (net ~7.5% p.a. after 15% WHT deducted at source)." },
                 { title: "IFB Holdings", key: "ifbEnd" as const, subtitle: "Tax-exempt bonds", icon: Shield, accent: false, tooltip: "Your total invested in Infrastructure Finance Bonds at Year 10. IFBs pay a semi-annual coupon (e.g. 12.5% p.a.) and are 100% tax-exempt — you keep every shilling of interest earned." },
                 { title: "FXD Bonds", key: "fxdEnd" as const, subtitle: "Fixed coupon bonds", icon: Landmark, accent: false, tooltip: "Your total invested in Fixed Coupon Bonds at Year 10. FXDs pay a semi-annual coupon (e.g. 12.35% gross, ~10.5% net after 15% WHT). They provide predictable income but the WHT is deducted before you receive the coupon." },
@@ -678,7 +685,7 @@ export default function Dashboard() {
             <CardContent className="p-4 pt-0">
               <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
                 {[
-                  { label: "MMF Yield (gross)", value: formatPct(settings.mmfYield), note: "net ~" + formatPct(settings.mmfYield * 0.85) },
+                  { label: `${fundLabel} Yield (gross)`, value: formatPct((settings as any).selectedFundEar ?? settings.mmfYield), note: "net ~" + formatPct(((settings as any).selectedFundEar ?? settings.mmfYield) * 0.85) },
                   { label: "91-Day T-Bill", value: formatPct(settings.tbill91Rate), note: "net ~" + formatPct(settings.tbill91Rate * 0.85) },
                   { label: "364-Day T-Bill", value: formatPct(settings.tbill364Rate), note: "net ~" + formatPct(settings.tbill364Rate * 0.85) },
                   { label: "IFB Coupon", value: formatPct(settings.ifbCouponRate), note: "tax-exempt" },

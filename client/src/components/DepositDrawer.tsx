@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { usePortfolio } from "@/contexts/PortfolioContext";
+import { useSelectedFund } from "@/hooks/useSelectedFund";
 import { trpc } from "@/lib/trpc";
 import { formatKES } from "@/lib/format";
 import { Button } from "@/components/ui/button";
@@ -43,10 +44,10 @@ type Bucket = "mmf" | "tbill" | "ifb" | "fxd";
 
 const BUCKET_META: Record<Bucket, { label: string; color: string; icon: React.ReactNode; description: string; taxNote: string }> = {
   mmf: {
-    label: "SanlamAllianz MMF",
+    label: "MMF", // overridden dynamically in render
     color: "text-emerald-400",
     icon: <Wallet className="w-4 h-4" />,
-    description: "Money Market Fund — daily accrual, 8.78% p.a. gross",
+    description: "Money Market Fund",
     taxNote: "15% WHT deducted at source (final tax)",
   },
   tbill: {
@@ -79,6 +80,7 @@ interface DepositDrawerProps {
 
 export function DepositDrawer({ open, onClose }: DepositDrawerProps) {
   const { portfolioId, portfolio } = usePortfolio();
+  const { fundName, fundLabel, fundEar } = useSelectedFund();
   const utils = trpc.useUtils();
   const { data: deposits = [], isLoading } = trpc.deposits.list.useQuery(
     { portfolioId: portfolioId! },
@@ -206,7 +208,7 @@ export function DepositDrawer({ open, onClose }: DepositDrawerProps) {
                 <div key={key} className="flex items-center gap-2">
                   <span className={meta.color}>{meta.icon}</span>
                   <div className="min-w-0">
-                    <p className="text-xs text-muted-foreground truncate">{meta.label}</p>
+                    <p className="text-xs text-muted-foreground truncate">{key === "mmf" ? fundLabel : meta.label}</p>
                     <p className="text-sm font-bold text-foreground kes-amount">{formatKES(byBucket[key])}</p>
                   </div>
                 </div>
@@ -263,13 +265,13 @@ export function DepositDrawer({ open, onClose }: DepositDrawerProps) {
                       <SelectItem key={key} value={key}>
                         <div className="flex items-center gap-2">
                           <span className={meta.color}>{meta.icon}</span>
-                          <span>{meta.label}</span>
+                          <span>{key === "mmf" ? fundLabel : meta.label}</span>
                         </div>
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
-                <p className="text-xs text-muted-foreground">{BUCKET_META[form.bucket].description}</p>
+                <p className="text-xs text-muted-foreground">{form.bucket === "mmf" ? `${fundName} — daily accrual, ${fundEar.toFixed(2)}% p.a. gross` : BUCKET_META[form.bucket].description}</p>
                 {form.bucket === "fxd" && (
                   <div className="flex items-start gap-2 rounded-lg bg-red-500/10 border border-red-500/20 p-2.5 text-xs text-red-300">
                     <Info className="w-3 h-3 mt-0.5 shrink-0" />

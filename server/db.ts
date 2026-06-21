@@ -589,3 +589,76 @@ export async function deleteHoldingIncome(id: number, holdingId: number) {
   if (!db) return;
   await db.delete(holdingIncome).where(and(eq(holdingIncome.id, id), eq(holdingIncome.holdingId, holdingId)));
 }
+
+// ─── Secondary MMF Accounts ───────────────────────────────────────────────────
+import {
+  portfolioSecondaryMmfs,
+  type InsertPortfolioSecondaryMmf,
+} from "../drizzle/schema";
+
+/** List all secondary MMF accounts for a portfolio, joined with fund info. */
+export async function getSecondaryMmfs(portfolioId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db
+    .select({
+      id: portfolioSecondaryMmfs.id,
+      portfolioId: portfolioSecondaryMmfs.portfolioId,
+      mmfFundId: portfolioSecondaryMmfs.mmfFundId,
+      label: portfolioSecondaryMmfs.label,
+      currentBalance: portfolioSecondaryMmfs.currentBalance,
+      monthlyContribution: portfolioSecondaryMmfs.monthlyContribution,
+      notes: portfolioSecondaryMmfs.notes,
+      createdAt: portfolioSecondaryMmfs.createdAt,
+      updatedAt: portfolioSecondaryMmfs.updatedAt,
+      fundName: mmfFunds.fundName,
+      company: mmfFunds.company,
+      ear: mmfFunds.ear,
+    })
+    .from(portfolioSecondaryMmfs)
+    .innerJoin(mmfFunds, eq(portfolioSecondaryMmfs.mmfFundId, mmfFunds.id))
+    .where(eq(portfolioSecondaryMmfs.portfolioId, portfolioId))
+    .orderBy(portfolioSecondaryMmfs.createdAt);
+  return rows;
+}
+
+/** Add a secondary MMF account. */
+export async function addSecondaryMmf(data: InsertPortfolioSecondaryMmf) {
+  const db = await getDb();
+  if (!db) return null;
+  const result = await db.insert(portfolioSecondaryMmfs).values(data);
+  return result;
+}
+
+/** Update a secondary MMF account. */
+export async function updateSecondaryMmf(
+  id: number,
+  portfolioId: number,
+  data: Partial<InsertPortfolioSecondaryMmf>
+) {
+  const db = await getDb();
+  if (!db) return;
+  await db
+    .update(portfolioSecondaryMmfs)
+    .set({ ...data, updatedAt: new Date() })
+    .where(
+      and(
+        eq(portfolioSecondaryMmfs.id, id),
+        eq(portfolioSecondaryMmfs.portfolioId, portfolioId)
+      )
+    );
+}
+
+/** Delete a secondary MMF account. */
+export async function deleteSecondaryMmf(id: number, portfolioId: number) {
+  const db = await getDb();
+  if (!db) return;
+  await db
+    .delete(portfolioSecondaryMmfs)
+    .where(
+      and(
+        eq(portfolioSecondaryMmfs.id, id),
+        eq(portfolioSecondaryMmfs.portfolioId, portfolioId)
+      )
+    );
+}

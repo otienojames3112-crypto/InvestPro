@@ -311,3 +311,30 @@ export const holdingIncome = mysqlTable("holding_income", {
 
 export type HoldingIncome = typeof holdingIncome.$inferSelect;
 export type InsertHoldingIncome = typeof holdingIncome.$inferInsert;
+
+/**
+ * Secondary MMF accounts — additional MMF funds a user is investing in alongside
+ * their primary fund. Each row links a portfolio to an mmfFund and stores the
+ * user's current balance in that fund.
+ *
+ * The primary fund is stored on the portfolio row (mmfFundId).
+ * This table holds any additional funds the user wants to track.
+ */
+export const portfolioSecondaryMmfs = mysqlTable("portfolio_secondary_mmfs", {
+  id: int("id").autoincrement().primaryKey(),
+  portfolioId: int("portfolioId").notNull(),
+  /** References mmfFunds.id */
+  mmfFundId: int("mmfFundId").notNull(),
+  /** Optional user label, e.g. "Cytonn MMF (savings)" */
+  label: varchar("label", { length: 200 }),
+  /** Current balance in this fund (KES) — updated manually */
+  currentBalance: decimal("currentBalance", { precision: 14, scale: 2 }).notNull().default("0.00"),
+  /** Monthly contribution amount allocated to this fund (KES) */
+  monthlyContribution: decimal("monthlyContribution", { precision: 14, scale: 2 }).notNull().default("0.00"),
+  /** Notes */
+  notes: text("notes"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+export type PortfolioSecondaryMmf = typeof portfolioSecondaryMmfs.$inferSelect;
+export type InsertPortfolioSecondaryMmf = typeof portfolioSecondaryMmfs.$inferInsert;

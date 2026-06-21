@@ -193,8 +193,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               KES 5M Tracker
             </h1>
             <p className="text-muted-foreground text-sm leading-relaxed">
-              Your personal 10-year investment journey to KES 5,000,000 using the
-              SanlamAllianz MMF + CBK DhowCSD velocity loop strategy.
+              Your personal 10-year investment journey to KES 5,000,000 using a
+              Money Market Fund + CBK DhowCSD velocity loop strategy.
             </p>
           </div>
           <Button

@@ -41,6 +41,10 @@ import {
   getHoldingIncome,
   addHoldingIncome,
   deleteHoldingIncome,
+  getSecondaryMmfs,
+  addSecondaryMmf,
+  updateSecondaryMmf,
+  deleteSecondaryMmf,
 } from "./db";
 import {
   runProjection,
@@ -326,6 +330,9 @@ export const appRouter = router({
     get: protectedProcedure.input(portfolioIdInput).query(async ({ ctx, input }) => {
       const p = await requirePortfolio(input.portfolioId, ctx.user.id);
       const r = await getRateSettings(input.portfolioId);
+      // Resolve the selected MMF fund name and EAR
+      const selectedFund = p.mmfFundId ? await getMmfFund(p.mmfFundId) : null;
+      const selectedFundEar = selectedFund ? parseFloat(String(selectedFund.ear)) : null;
       return {
         // Rate fields
         mmfYield: r ? parseFloat(String(r.mmfYield)) : DEFAULT_SETTINGS.mmfYield,
@@ -339,6 +346,11 @@ export const appRouter = router({
         cbkSourceUrl: p.cbkSourceUrl,
         sanlamSourceUrl: p.sanlamSourceUrl,
         ratesLastUpdatedAt: p.ratesLastUpdatedAt ?? null,
+        // Selected MMF fund info
+        selectedFundId: p.mmfFundId ?? null,
+        selectedFundName: selectedFund?.fundName ?? null,
+        selectedFundCompany: selectedFund?.company ?? null,
+        selectedFundEar: selectedFundEar,
       };
     }),
 
@@ -1021,6 +1033,82 @@ export const appRouter = router({
         return { success: true };
       }),
   }),
+  /** Secondary MMF accounts — additional MMF funds tracked per portfolio */
+  secondaryMmfs: router({
+    /** List all secondary MMF accounts for a portfolio. */
+    list: protectedProcedure
+      .input(z.object({ portfolioId: z.number().int().positive() }))
+      .query(async ({ ctx, input }) => {
+        await requirePortfolio(input.portfolioId, ctx.user.id);
+        const rows = await getSecondaryMmfs(input.portfolioId);
+        return rows.map((r) => ({
+          id: r.id,
+          portfolioId: r.portfolioId,
+          mmfFundId: r.mmfFundId,
+          label: r.label ?? null,
+          currentBalance: Number(r.currentBalance),
+          monthlyContribution: Number(r.monthlyContribution),
+          notes: r.notes ?? null,
+          createdAt: r.createdAt,
+          updatedAt: r.updatedAt,
+          fundName: r.fundName,
+          company: r.company,
+          ear: Number(r.ear),
+        }));
+      }),
+    /** Add a secondary MMF account. */
+    add: protectedProcedure
+      .input(z.object({
+        portfolioId: z.number().int().positive(),
+        mmfFundId: z.number().int().positive(),
+        label: z.string().max(200).optional(),
+        currentBalance: z.number().min(0).default(0),
+        monthlyContribution: z.number().min(0).default(0),
+        notes: z.string().max(1000).optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        await requirePortfolio(input.portfolioId, ctx.user.id);
+        await addSecondaryMmf({
+          portfolioId: input.portfolioId,
+          mmfFundId: input.mmfFundId,
+          label: input.label,
+          currentBalance: String(input.currentBalance),
+          monthlyContribution: String(input.monthlyContribution),
+          notes: input.notes,
+        });
+        return { success: true };
+      }),
+    /** Update a secondary MMF account. */
+    update: protectedProcedure
+      .input(z.object({
+        id: z.number().int().positive(),
+        portfolioId: z.number().int().positive(),
+        mmfFundId: z.number().int().positive().optional(),
+        label: z.string().max(200).optional(),
+        currentBalance: z.number().min(0).optional(),
+        monthlyContribution: z.number().min(0).optional(),
+        notes: z.string().max(1000).optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        await requirePortfolio(input.portfolioId, ctx.user.id);
+        const { id, portfolioId, ...rest } = input;
+        await updateSecondaryMmf(id, portfolioId, {
+          ...(rest.mmfFundId !== undefined && { mmfFundId: rest.mmfFundId }),
+          ...(rest.label !== undefined && { label: rest.label }),
+          ...(rest.currentBalance !== undefined && { currentBalance: String(rest.currentBalance) }),
+          ...(rest.monthlyContribution !== undefined && { monthlyContribution: String(rest.monthlyContribution) }),
+          ...(rest.notes !== undefined && { notes: rest.notes }),
+        });
+        return { success: true };
+      }),
+    /** Remove a secondary MMF account. */
+    remove: protectedProcedure
+      .input(z.object({ id: z.number().int().positive(), portfolioId: z.number().int().positive() }))
+      .mutation(async ({ ctx, input }) => {
+        await requirePortfolio(input.portfolioId, ctx.user.id);
+        await deleteSecondaryMmf(input.id, input.portfolioId);
+        return { success: true };
+      }),
+  }),
 });
-
 export type AppRouter = typeof appRouter;

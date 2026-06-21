@@ -1,4 +1,5 @@
 import { usePortfolio } from "@/contexts/PortfolioContext";
+import { useSelectedFund } from "@/hooks/useSelectedFund";
 import { AppShell } from "@/components/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -872,7 +873,7 @@ function AccountStatusDialog({
   isSaving?: boolean;
 }) {
   const isMmf = accountType === "mmf";
-  const title = isMmf ? "SanlamAllianz MMF Account" : "CBK DhowCSD Account";
+  const title = isMmf ? "MMF Account" : "CBK DhowCSD Account";
 
   const [status, setStatus] = useState<AccountStatus>(state.status);
   const [accountNumber, setAccountNumber] = useState(state.details.accountNumber ?? "");
@@ -1161,6 +1162,7 @@ function MmfFundCard({ fund }: { fund: MmfFundInfo }) {
 
 export default function GettingStarted() {
   const { portfolioId } = usePortfolio();
+  const { fundName, fundLabel } = useSelectedFund();
   const [openDialog, setOpenDialog] = useState<"mmf" | "dhow" | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [activeCategory, setActiveCategory] = useState<FundCategory | "all">("all");
@@ -1278,7 +1280,7 @@ export default function GettingStarted() {
                   <div className="flex items-start justify-between gap-2">
                     <div>
                       <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">Money Market Fund</p>
-                      <p className="text-sm font-semibold text-foreground mt-0.5">SanlamAllianz MMF</p>
+                      <p className="text-sm font-semibold text-foreground mt-0.5">{fundName || "SanlamAllianz MMF"}</p>
                       {mmf.status === "opened" && mmf.details.accountNumber && (
                         <p className="text-xs text-muted-foreground mt-1">Ref: {mmf.details.accountNumber}</p>
                       )}
@@ -1328,11 +1330,11 @@ export default function GettingStarted() {
             <div className="bg-primary/5 border border-primary/20 rounded-lg p-4 flex gap-3">
               <AlertCircle className="w-4 h-4 text-primary shrink-0 mt-0.5" />
               <div className="text-xs text-muted-foreground leading-relaxed">
-                <strong className="text-foreground">Estimated time to open both accounts:</strong> SanlamAllianz MMF takes 1–3 business days after submitting your application. CBK DhowCSD takes 3–5 business days. You can start both processes simultaneously. Once both are open, you are ready to make your first investment contribution.
+                <strong className="text-foreground">Estimated time to open both accounts:</strong> {fundName || "Your MMF"} takes 1–3 business days after submitting your application. CBK DhowCSD takes 3–5 business days. You can start both processes simultaneously. Once both are open, you are ready to make your first investment contribution.
               </div>
             </div>
 
-            {/* ── SECTION 1: SanlamAllianz MMF ── */}
+            {/* ── SECTION 1: Primary MMF ── */}
             <div>
               <div className="flex items-center gap-3 mb-5">
                 <div className="w-8 h-8 rounded-full bg-primary flex items-center justify-center shrink-0">
@@ -1340,7 +1342,7 @@ export default function GettingStarted() {
                 </div>
                 <div>
                   <h2 className="text-base font-bold text-foreground" style={{ fontFamily: "'Playfair Display', serif" }}>
-                    Part 1 — Open Your SanlamAllianz MMF Account
+                    Part 1 — Open Your {fundName || "MMF"} Account
                   </h2>
                   <p className="text-xs text-muted-foreground">Your monthly contributions land here first before sweeping to DhowCSD</p>
                 </div>
@@ -1392,7 +1394,7 @@ export default function GettingStarted() {
               <CardContent className="p-4 pt-0">
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
                   <div className="space-y-1">
-                    <p className="font-semibold text-foreground">SanlamAllianz Kenya</p>
+                    <p className="font-semibold text-foreground">{fundLabel || "SanlamAllianz Kenya"}</p>
                     <p className="text-muted-foreground">Customer Care: 0800 723 456 (toll-free)</p>
                     <p className="text-muted-foreground">Email: info@sanlamallianz.co.ke</p>
                     <a href="https://www.sanlamallianz.co.ke" target="_blank" rel="noopener noreferrer" className="text-primary hover:text-primary/80 flex items-center gap-1">

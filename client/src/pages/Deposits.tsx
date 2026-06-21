@@ -1,4 +1,5 @@
 import { usePortfolio } from "@/contexts/PortfolioContext";
+import { useSelectedFund } from "@/hooks/useSelectedFund";
 import { useState } from "react";
 import { trpc } from "@/lib/trpc";
 import { formatKES } from "@/lib/format";
@@ -58,10 +59,10 @@ const BUCKET_META: Record<
   { label: string; color: string; icon: React.ReactNode; description: string; taxNote: string }
 > = {
   mmf: {
-    label: "SanlamAllianz MMF",
+    label: "MMF", // overridden dynamically in render
     color: "text-[#4ade80]",
     icon: <Wallet className="w-4 h-4" />,
-    description: "Money Market Fund — daily accrual, 8.78% p.a. gross",
+    description: "Money Market Fund",
     taxNote: "15% WHT deducted at source (final tax)",
   },
   tbill: {
@@ -89,6 +90,7 @@ const BUCKET_META: Record<
 
 export default function Deposits() {
   const { portfolioId, portfolio } = usePortfolio();
+  const { fundName, fundLabel, fundEar } = useSelectedFund();
   const utils = trpc.useUtils();
 
   const { data: deposits = [], isLoading } = trpc.deposits.list.useQuery({ portfolioId: portfolioId! }, { enabled: !!portfolioId });
@@ -246,7 +248,7 @@ export default function Deposits() {
               <div key={key} className="space-y-1">
                 <div className={`flex items-center gap-2 ${meta.color}`}>
                   {meta.icon}
-                  <span className="text-xs font-medium">{meta.label}</span>
+                  <span className="text-xs font-medium">{key === "mmf" ? fundLabel : meta.label}</span>
                 </div>
                 <p className="text-lg font-serif font-bold text-foreground">
                   {formatKES(byBucket[key])}
@@ -306,7 +308,7 @@ export default function Deposits() {
                     <TableCell>
                       <div className={`flex items-center gap-2 ${meta.color}`}>
                         {meta.icon}
-                        <span className="text-sm font-medium">{meta.label}</span>
+                        <span className="text-sm font-medium">{d.bucket === "mmf" ? fundLabel : meta.label}</span>
                       </div>
                     </TableCell>
                     <TableCell className="text-right font-mono font-semibold text-foreground">
@@ -368,7 +370,7 @@ export default function Deposits() {
                       <SelectItem key={key} value={key}>
                         <div className="flex items-center gap-2">
                           <span className={meta.color}>{meta.icon}</span>
-                          <span>{meta.label}</span>
+                          <span>{key === "mmf" ? fundLabel : meta.label}</span>
                         </div>
                       </SelectItem>
                     )
@@ -376,7 +378,7 @@ export default function Deposits() {
                 </SelectContent>
               </Select>
               <p className="text-xs text-muted-foreground">
-                {BUCKET_META[form.bucket].description}
+                {form.bucket === "mmf" ? `${fundName} — daily accrual, ${fundEar.toFixed(2)}% p.a. gross` : BUCKET_META[form.bucket].description}
               </p>
               {form.bucket === "fxd" && (
                 <div className="flex items-start gap-2 rounded-lg bg-red-500/10 border border-red-500/20 p-3 text-xs text-red-300">

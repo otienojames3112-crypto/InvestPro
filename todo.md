@@ -197,3 +197,15 @@
 - [x] Frontend: scenario projection on Other Assets page (user-entered assumed return, conservative/base/optimistic range, clearly labelled as scenario)
 - [x] Frontend: add MMF Funds and Other Assets to sidebar navigation
 - [x] Run full test suite and save checkpoint
+
+## Round 11 — Dynamic MMF Fund Selection Across App
+- [x] Backend: extend `settings.get` to include `selectedFundName` and `selectedFundEar` (join mmf_funds on portfolios.mmfFundId)
+- [x] Frontend: create `useSelectedFund()` hook that reads mmfFundId from portfolio and looks it up in mmfFunds list
+- [x] Frontend Dashboard: replace hardcoded "SanlamAllianz MMF" with dynamic fund name everywhere
+- [x] Frontend Deposits page: replace hardcoded "SanlamAllianz MMF" bucket label and rate description with dynamic values
+- [x] Frontend DepositDrawer: replace hardcoded "SanlamAllianz MMF" bucket label with dynamic fund name
+- [x] Frontend Settings page: replace "SanlamAllianz MMF" label and description with dynamic fund name
+- [x] Frontend UpdateRatesPanel: replace "SanlamAllianz MMF" source URL label with dynamic fund name
+- [x] Frontend AppShell: replace hardcoded "SanlamAllianz MMF + CBK DhowCSD" with dynamic fund name
+- [x] Frontend GettingStarted: mark the selected fund dynamically (not always "sanlam")
+- [x] Support multiple MMF accounts: add secondary MMF tracking with full CRUD (add, edit, remove, view balances)

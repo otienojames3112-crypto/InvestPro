@@ -11,6 +11,7 @@ import { useForm } from "react-hook-form";
 import { useEffect } from "react";
 import { History, TrendingUp } from "lucide-react";
 import { usePortfolio } from "@/contexts/PortfolioContext";
+import { useSelectedFund } from "@/hooks/useSelectedFund";
 
 // ─── Rate-only form ────────────────────────────────────────────────────────────
 
@@ -125,6 +126,7 @@ function RateHistorySection({ portfolioId }: { portfolioId: number }) {
 
 export default function Settings() {
   const { portfolioId, portfolio, refetch: refetchPortfolios } = usePortfolio();
+  const { fundLabel: selectedFundLabel, fundEar: selectedFundEar } = useSelectedFund();
   const utils = trpc.useUtils();
 
   // ─── Rate form ──────────────────────────────────────────────────────────────
@@ -316,12 +318,12 @@ export default function Settings() {
             <CardHeader className="pb-3">
               <CardTitle className="text-sm font-semibold flex items-center gap-2">
                 <SettingsIcon className="w-4 h-4 text-primary" />
-                SanlamAllianz MMF
+                {selectedFundLabel} Yield
               </CardTitle>
-              <p className="text-xs text-muted-foreground mt-1">Enter the gross yield shown by SanlamAllianz.</p>
+              <p className="text-xs text-muted-foreground mt-1">Enter the gross effective annual yield shown by {selectedFundLabel}. Current fund EAR: {selectedFundEar.toFixed(2)}%.</p>
             </CardHeader>
             <CardContent className="p-4 pt-0 grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <RateField label="MMF Annual Yield (Gross)" name="mmfYield" register={rateForm.register} description="Default: 8.78% → net ≈ 7.46%" />
+              <RateField label={`${selectedFundLabel} Annual Yield (Gross)`} name="mmfYield" register={rateForm.register} description={`Current EAR: ${selectedFundEar.toFixed(2)}% → net ≈ ${(selectedFundEar * 0.85).toFixed(2)}%`} />
             </CardContent>
           </Card>
 

@@ -7,6 +7,7 @@
 
 import { useState, useEffect } from "react";
 import { trpc } from "@/lib/trpc";
+import { useSelectedFund } from "@/hooks/useSelectedFund";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -55,6 +56,7 @@ interface Props {
 
 export function UpdateRatesPanel({ portfolioId }: Props) {
   const utils = trpc.useUtils();
+  const { fundName: selectedFundName, fundLabel: selectedFundLabel } = useSelectedFund();
   const { data: settings, isLoading } = trpc.settings.get.useQuery({ portfolioId });
 
   const [mmfYield, setMmfYield] = useState("");
@@ -192,7 +194,7 @@ export function UpdateRatesPanel({ portfolioId }: Props) {
 
             {[
               { title: "CBK Treasury Bills", desc: "91-day, 182-day, 364-day auction results", url: cbkSourceUrl, setUrl: setCbkSourceUrl, placeholder: "https://www.centralbank.go.ke/..." },
-              { title: "SanlamAllianz MMF", desc: "Effective annual yield (gross, before WHT)", url: sanlamSourceUrl, setUrl: setSanlamSourceUrl, placeholder: "https://www.sanlamallianz.co.ke/..." },
+              { title: selectedFundLabel, desc: `${selectedFundName} — effective annual yield (gross, before WHT)`, url: sanlamSourceUrl, setUrl: setSanlamSourceUrl, placeholder: "https://www.sanlamallianz.co.ke/..." },
             ].map(({ title, desc, url, setUrl, placeholder }) => (
               <div key={title} className="rounded-lg border border-border/50 bg-background/40 p-3 space-y-2">
                 <div className="flex items-center justify-between gap-2">

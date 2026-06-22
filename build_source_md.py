@@ -29,9 +29,10 @@ SECTIONS = [
         "drizzle/schema.ts",
         "drizzle/relations.ts",
     ]),
-    ("3. Shared Constants & Types", [
+    ("3. Shared Constants, Types & Accrual Math", [
         "shared/const.ts",
         "shared/types.ts",
+        "shared/accrual.ts",
     ]),
     ("4. Server — Projection Engine", [
         "server/engine.ts",
@@ -48,6 +49,8 @@ SECTIONS = [
     ("8. Server — Tests", [
         "server/engine.test.ts",
         "server/engine.regression.test.ts",
+        "server/accrual.test.ts",
+        "server/taxBreakdown.test.ts",
         "server/auth.logout.test.ts",
     ]),
     ("9. Client — App Entry & Routing", [
@@ -63,6 +66,7 @@ SECTIONS = [
     ]),
     ("11. Client — Hooks", [
         "client/src/hooks/useSelectedFund.ts",
+        "client/src/hooks/useComposition.ts",
     ]),
     ("12. Client — Libraries", [
         "client/src/lib/trpc.ts",
@@ -88,6 +92,11 @@ SECTIONS = [
         "client/src/pages/Scenarios.tsx",
         "client/src/pages/Settings.tsx",
         "client/src/pages/GettingStarted.tsx",
+        "client/src/pages/MmfAccrual.tsx",
+        "client/src/pages/TaxSummary.tsx",
+        "client/src/pages/MmfStrategy.tsx",
+        "client/src/pages/BankInstruments.tsx",
+        "client/src/pages/PortfolioReview.tsx",
         "client/src/pages/NotFound.tsx",
     ]),
     ("15. Project TODO / Change Log", [

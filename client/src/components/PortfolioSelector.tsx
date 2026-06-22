@@ -111,12 +111,12 @@ export function PortfolioSelector() {
           <div className="space-y-4 py-2">
             <div className="space-y-1.5">
               <Label>Name *</Label>
-              <Input placeholder="e.g. KES 5M Goal" value={name} onChange={(e) => setName(e.target.value)} />
+              <Input placeholder="e.g. Retirement Fund, House Deposit" value={name} onChange={(e) => setName(e.target.value)} />
             </div>
             <div className="space-y-1.5">
               <Label>Description</Label>
               <Textarea
-                placeholder="Optional notes about this portfolio"
+                placeholder="Optional — what this portfolio is for (shown as the app subtitle)"
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
                 rows={2}

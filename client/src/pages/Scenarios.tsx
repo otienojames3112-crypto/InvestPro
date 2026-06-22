@@ -16,7 +16,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { BarChart3, CheckCircle2, XCircle, Info } from "lucide-react";
+import { BarChart3, CheckCircle2, XCircle, Info, AlertTriangle, Lightbulb } from "lucide-react";
 
 function CustomTooltip({ active, payload, label }: { active?: boolean; payload?: Array<{ value: number; name: string }>; label?: string }) {
   if (!active || !payload?.length) return null;
@@ -35,21 +35,49 @@ function CustomTooltip({ active, payload, label }: { active?: boolean; payload?:
 
 export default function Scenarios() {
   const { portfolioId, portfolio } = usePortfolio();
+
   const { data: scenarios, isLoading } = trpc.projection.scenarios.useQuery(
     { portfolioId: portfolioId! },
     { enabled: !!portfolioId }
   );
-  const { data: settings } = trpc.settings.get.useQuery(
+  // The user's CURRENT plan projection — single source of truth for surplus/shortfall.
+  const { data: projection, isLoading: projLoading } = trpc.projection.run.useQuery(
     { portfolioId: portfolioId! },
     { enabled: !!portfolioId }
   );
-  const targetAmount = portfolio?.targetAmount ?? 5000000;
+  // The solver, run at the portfolio's own step-up cadence. Same engine, same inputs.
+  const { data: solver, isLoading: solverLoading } = trpc.projection.solve.useQuery(
+    { portfolioId: portfolioId! },
+    { enabled: !!portfolioId }
+  );
+
+  const targetAmount = Number(portfolio?.targetAmount ?? 0);
+  const horizonMonths = portfolio?.horizonMonths ?? 120;
+  const stepUpMonths = portfolio?.stepUpMonths ?? 6;
+  const currentStepUp = Number(portfolio?.stepUpAmount ?? 0);
+  const currentStart = Number(portfolio?.startingContribution ?? 0);
+
+  // The user's current projected ending value (last row of their real projection).
+  const currentEndingValue = projection?.length ? projection[projection.length - 1].totalEnd : 0;
+  const currentGap = currentEndingValue - targetAmount;
+  const currentHits = currentGap >= 0;
+
+  // Derive the recommended step-up dynamically: the LOWEST step-up in the scenario
+  // set whose projection reaches the target. Never hardcoded.
+  const recommendedScenario = scenarios
+    ?.slice()
+    .sort((a, b) => a.stepUp - b.stepUp)
+    .find((s) => s.hitsTarget);
+  const recommendedStepUp = recommendedScenario?.stepUp ?? null;
 
   const chartData = scenarios?.map((s) => ({
     stepUp: s.stepUp,
     "Projected Value": s.projectedEndingValue,
     hitsTarget: s.hitsTarget,
+    isRecommended: s.stepUp === recommendedStepUp,
   }));
+
+  const everythingLoading = isLoading || projLoading || solverLoading;
 
   return (
     <AppShell>
@@ -59,16 +87,136 @@ export default function Scenarios() {
             Scenario Comparison
           </h1>
           <p className="text-sm text-muted-foreground mt-0.5">
-            Side-by-side projections for different step-up amounts — see which path hits {formatKES(targetAmount)}
+            Side-by-side projections for different step-up amounts — see which path reaches {formatKES(targetAmount)} over {horizonMonths} months
           </p>
         </div>
+
+        {/* ── Your current plan: real status from the solver/projection ── */}
+        <Card className={currentHits ? "border-emerald-500/30" : "border-amber-500/30"}>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-semibold flex items-center gap-2">
+              {currentHits ? (
+                <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+              ) : (
+                <AlertTriangle className="w-4 h-4 text-amber-400" />
+              )}
+              Your Current Plan
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="p-5 pt-0">
+            {everythingLoading ? (
+              <Skeleton className="h-24 w-full" />
+            ) : (
+              <div className="space-y-3">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  <div>
+                    <p className="text-xs text-muted-foreground">Month 1 saving</p>
+                    <p className="text-sm font-bold text-foreground kes-amount">{formatKES(currentStart)}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground">Step-up / {stepUpMonths} mo</p>
+                    <p className="text-sm font-bold text-foreground kes-amount">
+                      {currentStepUp > 0 ? `+${formatKES(currentStepUp)}` : "None"}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground">Projected at Month {horizonMonths}</p>
+                    <p className="text-sm font-bold text-foreground kes-amount">{formatKES(currentEndingValue)}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground">vs {formatKESCompact(targetAmount)} target</p>
+                    <p className={`text-sm font-bold kes-amount ${currentHits ? "status-on-track" : "status-behind"}`}>
+                      {currentHits ? "+" : "−"}{formatKES(Math.abs(currentGap))}
+                    </p>
+                  </div>
+                </div>
+
+                {currentHits ? (
+                  <p className="text-xs text-muted-foreground leading-relaxed">
+                    On your current settings, the projection reaches {formatKES(currentEndingValue)} at Month {horizonMonths} —
+                    a surplus of {formatKES(currentGap)} above your {formatKES(targetAmount)} target. You can adjust your
+                    target, horizon, contribution, or step-up at any time on the Rate Settings page; this page updates
+                    automatically.
+                  </p>
+                ) : (
+                  <p className="text-xs text-muted-foreground leading-relaxed">
+                    On your current settings, the projection reaches {formatKES(currentEndingValue)} at Month {horizonMonths} —
+                    a shortfall of {formatKES(Math.abs(currentGap))} below your {formatKES(targetAmount)} target. See the
+                    options below to close the gap.
+                  </p>
+                )}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* ── How to reach your target (solver-driven) ── */}
+        {!everythingLoading && solver && (
+          <Card className="border-primary/20">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                <Lightbulb className="w-4 h-4 text-primary" />
+                How to Reach {formatKES(targetAmount)}
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="p-5 pt-0 space-y-3">
+              {solver.feasible ? (
+                <>
+                  <p className="text-sm text-foreground leading-relaxed">
+                    To reach <strong>{formatKES(targetAmount)}</strong> in {horizonMonths} months
+                    {solver.stepUpAmount > 0 ? (
+                      <> with a <strong>{formatKES(solver.stepUpAmount)}</strong> step-up every {stepUpMonths} months</>
+                    ) : (
+                      <> with flat contributions (no step-up)</>
+                    )}
+                    , start at <strong className="text-primary">{formatKES(solver.requiredStartingContribution)}/month</strong>.
+                    That path is projected to end at {formatKES(solver.projectedEndingValue)} (total contributed
+                    {" "}{formatKES(solver.totalContributed)}).
+                  </p>
+
+                  {currentStart < solver.requiredStartingContribution && (
+                    <div className="rounded-md bg-amber-500/10 border border-amber-500/25 p-3 text-xs text-muted-foreground leading-relaxed">
+                      Your current Month-1 saving of {formatKES(currentStart)} is below the {formatKES(solver.requiredStartingContribution)} this
+                      plan needs. Options to close the gap: <strong className="text-foreground">raise your starting contribution</strong> to
+                      {" "}{formatKES(solver.requiredStartingContribution)}, <strong className="text-foreground">increase the step-up</strong> (see the table below),
+                      add a <strong className="text-foreground">one-off lump sum</strong> on the Contributions page, <strong className="text-foreground">extend the horizon</strong>,
+                      or <strong className="text-foreground">lower the target</strong>.
+                    </div>
+                  )}
+
+                  {recommendedStepUp !== null && (
+                    <p className="text-xs text-muted-foreground leading-relaxed">
+                      Holding your Month-1 saving at {formatKES(currentStart)}, the smallest step-up in the table below that still
+                      reaches {formatKESCompact(targetAmount)} is <strong className="text-foreground">+{formatKES(recommendedStepUp)}</strong> every
+                      {" "}{stepUpMonths} months.
+                    </p>
+                  )}
+
+                  {solver.isShortHorizon && (
+                    <p className="text-xs text-amber-300/90 leading-relaxed">
+                      This is a short-horizon plan ({horizonMonths} months). The strategy uses MMF + 91-day T-bills only, so
+                      returns are limited and the result is primarily contribution-driven.
+                    </p>
+                  )}
+                </>
+              ) : (
+                <div className="rounded-md bg-destructive/10 border border-destructive/25 p-3 flex gap-2.5">
+                  <AlertTriangle className="w-4 h-4 text-destructive shrink-0 mt-0.5" />
+                  <p className="text-xs text-muted-foreground leading-relaxed">
+                    {solver.message}
+                  </p>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
 
         {/* Chart */}
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-semibold flex items-center gap-2">
               <BarChart3 className="w-4 h-4 text-primary" />
-              Projected 10-Year Value by Step-Up Amount
+              Projected Value at Month {horizonMonths} by Step-Up Amount
             </CardTitle>
           </CardHeader>
           <CardContent className="p-4 pt-0">
@@ -105,25 +253,25 @@ export default function Scenarios() {
                         key={`cell-${index}`}
                         fill={
                           entry.hitsTarget
-                            ? entry.stepUp === 3000
+                            ? entry.isRecommended
                               ? "oklch(0.78 0.14 85)"
                               : "oklch(0.70 0.12 160)"
                             : "oklch(0.40 0.05 250)"
                         }
-                        fillOpacity={entry.stepUp === 3000 ? 1 : 0.75}
+                        fillOpacity={entry.isRecommended ? 1 : 0.75}
                       />
                     ))}
                   </Bar>
                 </BarChart>
               </ResponsiveContainer>
             )}
-            {/* Target line annotation */}
-            <div className="flex items-center gap-2 mt-2 text-xs text-muted-foreground">
-              <div className="w-4 h-0.5 bg-primary" />
-              <span>{formatKESCompact(targetAmount)} target</span>
-              <div className="w-3 h-3 rounded-sm bg-primary/80 ml-4" />
-              <span>Recommended (KES 3,000 step-up)</span>
-              <div className="w-3 h-3 rounded-sm bg-muted ml-4" />
+            {/* Legend */}
+            <div className="flex flex-wrap items-center gap-2 mt-2 text-xs text-muted-foreground">
+              <div className="w-3 h-3 rounded-sm" style={{ background: "oklch(0.78 0.14 85)" }} />
+              <span>{recommendedStepUp !== null ? `Smallest step-up that reaches ${formatKESCompact(targetAmount)} (+${recommendedStepUp.toLocaleString()})` : "No step-up reaches target"}</span>
+              <div className="w-3 h-3 rounded-sm ml-3" style={{ background: "oklch(0.70 0.12 160)" }} />
+              <span>Reaches target</span>
+              <div className="w-3 h-3 rounded-sm ml-3" style={{ background: "oklch(0.40 0.05 250)" }} />
               <span>Below target</span>
             </div>
           </CardContent>
@@ -155,7 +303,7 @@ export default function Scenarios() {
                   <tbody>
                     {scenarios?.map((s) => {
                       const gap = s.projectedEndingValue - targetAmount;
-                      const isRecommended = s.stepUp === 3000;
+                      const isRecommended = s.stepUp === recommendedStepUp;
                       return (
                         <tr
                           key={s.stepUp}
@@ -172,7 +320,12 @@ export default function Scenarios() {
                               </span>
                               {isRecommended && (
                                 <Badge className="text-xs bg-primary/20 text-primary border-primary/30 border">
-                                  Recommended
+                                  Smallest that reaches target
+                                </Badge>
+                              )}
+                              {s.stepUp === currentStepUp && (
+                                <Badge variant="outline" className="text-xs text-muted-foreground">
+                                  Your plan
                                 </Badge>
                               )}
                               {s.stepUp === 0 && (
@@ -215,17 +368,21 @@ export default function Scenarios() {
           </CardContent>
         </Card>
 
-        {/* Insight */}
-        <Card className="border-primary/20">
+        {/* Methodology note */}
+        <Card className="border-border/60">
           <CardContent className="p-5">
             <div className="flex gap-3">
-              <div className="w-8 h-8 rounded-lg bg-primary/15 flex items-center justify-center shrink-0">
-                <BarChart3 className="w-4 h-4 text-primary" />
+              <div className="w-8 h-8 rounded-lg bg-muted flex items-center justify-center shrink-0">
+                <Info className="w-4 h-4 text-muted-foreground" />
               </div>
               <div>
-                <p className="text-sm font-semibold text-foreground mb-1">Strategy Insight</p>
+                <p className="text-sm font-semibold text-foreground mb-1">How these figures are produced</p>
                 <p className="text-xs text-muted-foreground leading-relaxed">
-                  The <strong className="text-foreground">KES 3,000 step-up every 6 months</strong> is the recommended path — it hits the {formatKES(targetAmount)} target with a comfortable surplus while keeping monthly contributions manageable. Starting at KES 2,500 and stepping up every 6 months, the plan leverages the power of compounding through the MMF + DhowCSD velocity loop. If you change your target above, the green/red status in the table above updates automatically to reflect which step-up amounts reach your new goal.
+                  Every number on this page comes from the same projection engine used across the app, applied to this
+                  portfolio's own target, horizon, start date, selected fund, rates, and contribution schedule. The
+                  "How to reach" guidance and the green/red table are computed from that single engine — they will always
+                  agree. Change any setting on the Rate Settings or Contributions page and this page recalculates
+                  automatically.
                 </p>
               </div>
             </div>

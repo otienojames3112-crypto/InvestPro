@@ -60,6 +60,10 @@ export default function TaxSummary() {
     { portfolioId: portfolioId! },
     { enabled: !!portfolioId }
   );
+  const { data: secondaryMmfs = [] } = trpc.secondaryMmfs.list.useQuery(
+    { portfolioId: portfolioId! },
+    { enabled: !!portfolioId }
+  );
 
   // Bucket balances
   const buckets = useMemo(() => {
@@ -73,6 +77,8 @@ export default function TaxSummary() {
 
   const whtRate = settings?.withholdingTax ?? 15;
   const mmfYield = fund.fundEar || settings?.mmfYield || 8.78;
+  // Total balance + gross income across ALL tracked MMF accounts (primary + secondary).
+  const secondaryMmfBalance = secondaryMmfs.reduce((s, m) => s + m.currentBalance, 0);
   const tbillRate = settings?.tbill364Rate ?? 8.97;
   const ifbRate = settings?.ifbCouponRate ?? 12.5;
   const fxdRate = settings?.fxdCouponRate ?? 12.35;
@@ -81,12 +87,12 @@ export default function TaxSummary() {
   const lines: TaxLine[] = useMemo(() => {
     const result: TaxLine[] = [];
 
-    // MMF interest — 15% WHT, final
+    // MMF interest — primary fund (15% WHT, final).
     if (buckets.mmf > 0) {
       const basis = buckets.mmf * (mmfYield / 100);
       const tax = basis * (whtRate / 100);
       result.push({
-        source: `${fund.fundLabel} interest`,
+        source: `${fund.fundLabel} interest (primary)`,
         basis,
         rate: whtRate,
         tax,
@@ -95,6 +101,22 @@ export default function TaxSummary() {
         note: "Withheld at source by fund manager; final tax.",
       });
     }
+
+    // MMF interest — each tracked secondary account, at its own yield/WHT.
+    secondaryMmfs.forEach((m) => {
+      if (m.currentBalance <= 0) return;
+      const basis = m.currentBalance * (m.ear / 100);
+      const tax = basis * (whtRate / 100);
+      result.push({
+        source: `${m.label?.trim() ? `${m.label} — ` : ""}${m.fundName} interest`,
+        basis,
+        rate: whtRate,
+        tax,
+        net: basis - tax,
+        exempt: false,
+        note: "Additional tracked MMF account; WHT withheld at source by fund manager.",
+      });
+    });
 
     // T-bill discount income — 15% WHT
     if (buckets.tbill > 0) {
@@ -161,7 +183,10 @@ export default function TaxSummary() {
       });
 
     return result;
-  }, [buckets, mmfYield, tbillRate, ifbRate, fxdRate, whtRate, fund.fundLabel, holdings]);
+  }, [buckets, mmfYield, tbillRate, ifbRate, fxdRate, whtRate, fund.fundLabel, holdings, secondaryMmfs]);
+
+  // Gross annual MMF income across all accounts (for blended yield weighting).
+  const secondaryMmfGross = secondaryMmfs.reduce((s, m) => s + m.currentBalance * (m.ear / 100), 0);
 
   const totalGross = lines.reduce((s, l) => s + l.basis, 0);
   const totalTax = lines.reduce((s, l) => s + l.tax, 0);
@@ -169,10 +194,11 @@ export default function TaxSummary() {
   const effectiveTaxRate = totalGross > 0 ? (totalTax / totalGross) * 100 : 0;
 
   const fixedIncomeTotal =
-    buckets.mmf + buckets.tbill + buckets.ifb + buckets.fxd;
+    buckets.mmf + secondaryMmfBalance + buckets.tbill + buckets.ifb + buckets.fxd;
   const grossYieldBlended =
     fixedIncomeTotal > 0
       ? ((buckets.mmf * mmfYield +
+          secondaryMmfGross * 100 +
           buckets.tbill * tbillRate +
           buckets.ifb * ifbRate +
           buckets.fxd * fxdRate) /
@@ -318,7 +344,7 @@ export default function TaxSummary() {
               Fixed-Income Yield Reconciliation
             </CardTitle>
             <CardDescription>
-              Blended across your MMF, T-bill, IFB and FXD balances
+              Blended across all your MMF account{secondaryMmfs.length > 0 ? "s" : ""}, T-bill, IFB and FXD balances
               ({kes(fixedIncomeTotal)} total).
             </CardDescription>
           </CardHeader>

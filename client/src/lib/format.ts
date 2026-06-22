@@ -61,6 +61,20 @@ export function getPhaseColorClass(phase: string): string {
 }
 
 /**
+ * Build a "Mon YYYY – Mon YYYY" date range from a start date and horizon in months.
+ * The end is the month in which the horizon completes (start + horizonMonths - 1).
+ */
+export function formatDateRange(startDate: string | null | undefined, horizonMonths: number | null | undefined): string {
+  if (!startDate || !horizonMonths || horizonMonths < 1) return "";
+  const start = new Date(startDate);
+  if (isNaN(start.getTime())) return "";
+  const end = new Date(start);
+  end.setMonth(end.getMonth() + horizonMonths - 1);
+  const fmt = (d: Date) => d.toLocaleDateString("en-KE", { month: "short", year: "numeric" });
+  return `${fmt(start)} – ${fmt(end)}`;
+}
+
+/**
  * Get security type label.
  */
 export function getSecurityLabel(type: string): string {

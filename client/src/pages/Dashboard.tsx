@@ -58,7 +58,6 @@ const PHASE_BANDS = [
   { start: 103, end: 120, label: "Final Liquidity", color: "oklch(0.65 0.15 280 / 0.08)" },
 ];
 
-const YEAR_LABELS = [12, 24, 36, 48, 60, 72, 84, 96, 108, 120];
 
 function StatCard({
   title,
@@ -191,7 +190,17 @@ export default function Dashboard() {
 
   const { fundName, fundLabel, fundEar } = useSelectedFund();
   const targetAmount = portfolio?.targetAmount ?? 5000000;
-  const lastData = projection?.[119];
+  const horizonMonths = portfolio?.horizonMonths ?? 120;
+  const horizonYears = Math.round((horizonMonths / 12) * 10) / 10;
+  const horizonYearsLabel = Number.isInteger(horizonYears) ? `${horizonYears}` : horizonYears.toFixed(1);
+  // Year gridlines/ticks derived from the actual horizon (every 12 months, plus the final month).
+  const yearLabels = useMemo(() => {
+    const labels: number[] = [];
+    for (let m = 12; m <= horizonMonths; m += 12) labels.push(m);
+    if (labels[labels.length - 1] !== horizonMonths) labels.push(horizonMonths);
+    return labels;
+  }, [horizonMonths]);
+  const lastData = projection?.length ? projection[projection.length - 1] : undefined;
   const currentMonth = 1;
   const currentData = projection?.[currentMonth - 1];
 
@@ -225,7 +234,7 @@ export default function Dashboard() {
               Investment Dashboard
             </h1>
             <p className="text-sm text-muted-foreground mt-0.5">
-              10-year journey to {formatKES(targetAmount)} · {fundLabel} + CBK DhowCSD
+              {horizonYearsLabel}-year journey to {formatKES(targetAmount)} · {fundLabel} + CBK DhowCSD
             </p>
           </div>
           <Badge variant="outline" className={`text-xs px-3 py-1 border ${getPhaseColorClass(currentPhase)}`}>
@@ -238,8 +247,8 @@ export default function Dashboard() {
           <Info className="w-4 h-4 text-primary shrink-0 mt-0.5" />
           <div className="text-xs text-muted-foreground leading-relaxed space-y-1">
             <p>
-              <strong className="text-foreground">What does "Projected at Month 120" mean?</strong>{" "}
-              This is the computer's best estimate of how much money you will have after exactly 10 years (120 monthly contributions),
+              <strong className="text-foreground">What does "Projected at Month {horizonMonths}" mean?</strong>{" "}
+              This is the computer's best estimate of how much money you will have after {horizonYearsLabel} years ({horizonMonths} monthly contributions),
               assuming you follow the step-up schedule, the current interest rates stay roughly the same, and every month's earnings
               are automatically reinvested. Think of it as your <em className="text-foreground">financial finish line</em> — the number
               the plan is designed to reach.
@@ -258,7 +267,7 @@ export default function Dashboard() {
             <div className="flex items-start justify-between mb-4 gap-4 flex-wrap">
               <div>
                 <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-1">
-                  Projected Portfolio Value at Year 10
+                  Projected Portfolio Value at Year {horizonYearsLabel}
                 </p>
                 {projLoading ? (
                   <Skeleton className="h-10 w-52 mt-1" />
@@ -268,7 +277,7 @@ export default function Dashboard() {
                   </p>
                 )}
                 <p className="text-xs text-muted-foreground mt-1.5">
-                  This is the total portfolio value you will <strong className="text-foreground">hold in your accounts</strong> at the end of Month 120 — not what you put in, but what you will have.
+                  This is the total portfolio value you will <strong className="text-foreground">hold in your accounts</strong> at the end of Month {horizonMonths} — not what you put in, but what you will have.
                 </p>
               </div>
 
@@ -286,7 +295,7 @@ export default function Dashboard() {
                   <button
                     onClick={openTargetDialog}
                     className="w-6 h-6 rounded-md bg-muted hover:bg-primary/20 flex items-center justify-center transition-colors"
-                    title="Change your target end value (the amount you want to hold at Month 120)"
+                    title={`Change your target end value (the amount you want to hold at Month ${horizonMonths})`}
                   >
                     <Pencil className="w-3 h-3 text-muted-foreground" />
                   </button>
@@ -340,7 +349,7 @@ export default function Dashboard() {
                       <strong>Your plan overshoots the target by {formatKES(surplusOrShortfall)}.</strong>{" "}
                       This is because your contribution step-ups and compound interest naturally produce more than your {formatKES(targetAmount)} goal.
                       The extra {formatKES(surplusOrShortfall)} is a buffer — it protects you if rates fall or you miss a few contributions.
-                      The bucket balances above show where all {formatKES(projectedFinalValue)} will be sitting at Year 10.
+                      The bucket balances above show where all {formatKES(projectedFinalValue)} will be sitting at Year {horizonYearsLabel}.
                     </>
                   ) : (
                     <>
@@ -359,7 +368,7 @@ export default function Dashboard() {
         <div>
           <p className="text-xs text-muted-foreground mb-3 flex items-center gap-1.5">
             <Info className="w-3 h-3" />
-            These are the <strong className="text-foreground">projected balances in each bucket at Month 120</strong> — how your money is spread across the four investment instruments at the end of the 10-year plan. These figures are driven by your contribution schedule and interest rates, not your goal amount. To see how different step-up amounts affect your outcome, visit the <Link href="/scenarios"><span className="text-primary hover:underline cursor-pointer">Scenarios</span></Link> page.
+            These are the <strong className="text-foreground">projected balances in each bucket at Month {horizonMonths}</strong> — how your money is spread across the four investment instruments at the end of the {horizonYearsLabel}-year plan. These figures are driven by your contribution schedule and interest rates, not your goal amount. To see how different step-up amounts affect your outcome, visit the <Link href="/scenarios"><span className="text-primary hover:underline cursor-pointer">Scenarios</span></Link> page.
           </p>
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
             {projLoading ? (
@@ -368,10 +377,10 @@ export default function Dashboard() {
               ))
             ) : (
               [
-                { title: "MMF Balance", key: "mmfEnd" as const, subtitle: secondaryMmfs.length > 0 ? `${fundName} + ${secondaryMmfs.length} more` : fundName, icon: Wallet, accent: true, tooltip: `Your ${fundName} projected balance at Year 10${secondaryMmfs.length > 0 ? ` (+ ${secondaryMmfs.length} additional MMF account${secondaryMmfs.length > 1 ? "s" : ""} with KES ${secondaryMmfTotal.toLocaleString("en-KE")} current balance)` : ""}. Earns daily interest (net ~${(fundEar * 0.85).toFixed(1)}% p.a. after 15% WHT).` },
-                { title: "T-Bills", key: "tbillEnd" as const, subtitle: "CBK Treasury Bills", icon: TrendingUp, accent: false, tooltip: "Your total invested in CBK Treasury Bills at Year 10. T-bills are short-term (91–364 days), very safe government instruments. You earn a discount return (net ~7.5% p.a. after 15% WHT deducted at source)." },
-                { title: "IFB Holdings", key: "ifbEnd" as const, subtitle: "Tax-exempt bonds", icon: Shield, accent: false, tooltip: "Your total invested in Infrastructure Finance Bonds at Year 10. IFBs pay a semi-annual coupon (e.g. 12.5% p.a.) and are 100% tax-exempt — you keep every shilling of interest earned." },
-                { title: "FXD Bonds", key: "fxdEnd" as const, subtitle: "Fixed coupon bonds", icon: Landmark, accent: false, tooltip: "Your total invested in Fixed Coupon Bonds at Year 10. FXDs pay a semi-annual coupon (e.g. 12.35% gross, ~10.5% net after 15% WHT). They provide predictable income but the WHT is deducted before you receive the coupon." },
+                { title: "MMF Balance", key: "mmfEnd" as const, subtitle: secondaryMmfs.length > 0 ? `${fundName} + ${secondaryMmfs.length} more` : fundName, icon: Wallet, accent: true, tooltip: `Your ${fundName} projected balance at Year ${horizonYearsLabel}${secondaryMmfs.length > 0 ? ` (+ ${secondaryMmfs.length} additional MMF account${secondaryMmfs.length > 1 ? "s" : ""} with KES ${secondaryMmfTotal.toLocaleString("en-KE")} current balance)` : ""}. Earns daily interest (net ~${(fundEar * 0.85).toFixed(1)}% p.a. after 15% WHT).` },
+                { title: "T-Bills", key: "tbillEnd" as const, subtitle: "CBK Treasury Bills", icon: TrendingUp, accent: false, tooltip: `Your total invested in CBK Treasury Bills at Year ${horizonYearsLabel}. T-bills are short-term (91–364 days), very safe government instruments. You earn a discount return (net ~7.5% p.a. after 15% WHT deducted at source).` },
+                { title: "IFB Holdings", key: "ifbEnd" as const, subtitle: "Tax-exempt bonds", icon: Shield, accent: false, tooltip: `Your total invested in Infrastructure Finance Bonds at Year ${horizonYearsLabel}. IFBs pay a semi-annual coupon (e.g. 12.5% p.a.) and are 100% tax-exempt — you keep every shilling of interest earned.` },
+                { title: "FXD Bonds", key: "fxdEnd" as const, subtitle: "Fixed coupon bonds", icon: Landmark, accent: false, tooltip: `Your total invested in Fixed Coupon Bonds at Year ${horizonYearsLabel}. FXDs pay a semi-annual coupon (e.g. 12.35% gross, ~10.5% net after 15% WHT). They provide predictable income but the WHT is deducted before you receive the coupon.` },
               ].map(({ title, key, subtitle, icon, accent, tooltip }) => {
                 const bucketValue = lastData?.[key] ?? 0;
                 const pctOfTarget = targetAmount > 0 ? ((bucketValue / targetAmount) * 100).toFixed(1) : "0.0";
@@ -409,6 +418,49 @@ export default function Dashboard() {
           </div>
         </div>
 
+        {/* ── Tracked MMF Accounts (multi-MMF rollup) ─────────────────────── */}
+        {secondaryMmfs.length > 0 && (
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-semibold text-foreground flex items-center gap-2">
+                <Wallet className="w-4 h-4 text-primary" />
+                Tracked MMF Accounts
+              </CardTitle>
+              <p className="text-xs text-muted-foreground mt-1">
+                Current balances you maintain across multiple money market funds. The projection above models your primary fund; these additional accounts are tracked here and rolled into your tax and accrual views.
+              </p>
+            </CardHeader>
+            <CardContent className="p-4 pt-0">
+              <div className="rounded-lg border border-border divide-y divide-border">
+                <div className="flex items-center justify-between px-3 py-2.5">
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-foreground truncate">{fundName} <span className="text-xs text-muted-foreground">(primary)</span></p>
+                    <p className="text-xs text-muted-foreground">Net yield {fundEar.toFixed(2)}% p.a.</p>
+                  </div>
+                  <p className="text-sm font-semibold kes-amount text-foreground shrink-0">{formatKES(actualsSummary?.byBucket?.mmf ?? 0)}</p>
+                </div>
+                {secondaryMmfs.map((m) => (
+                  <div key={m.id} className="flex items-center justify-between px-3 py-2.5">
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-foreground truncate">{m.label?.trim() ? `${m.label}` : m.fundName}{m.label?.trim() ? <span className="text-xs text-muted-foreground"> ({m.fundName})</span> : null}</p>
+                      <p className="text-xs text-muted-foreground">Net yield {m.ear.toFixed(2)}% p.a.{m.monthlyContribution > 0 ? ` · +${formatKES(m.monthlyContribution)}/mo` : ""}</p>
+                    </div>
+                    <p className="text-sm font-semibold kes-amount text-foreground shrink-0">{formatKES(m.currentBalance)}</p>
+                  </div>
+                ))}
+                <div className="flex items-center justify-between px-3 py-2.5 bg-primary/5">
+                  <p className="text-sm font-semibold text-foreground">Total tracked MMF</p>
+                  <p className="text-sm font-bold kes-amount gradient-text shrink-0">{formatKES((actualsSummary?.byBucket?.mmf ?? 0) + secondaryMmfTotal)}</p>
+                </div>
+              </div>
+              <p className="text-xs text-muted-foreground mt-2 flex items-start gap-1.5">
+                <Info className="w-3 h-3 mt-0.5 shrink-0" />
+                Manage these accounts on the <Link href="/mmf-funds"><span className="text-primary hover:underline cursor-pointer">MMF Funds</span></Link> page. Balances are entered manually.
+              </p>
+            </CardContent>
+          </Card>
+        )}
+
         {/* ── Portfolio Growth Chart ──────────────────────────────────────── */}
         <Card>
           <CardHeader className="pb-2">
@@ -416,7 +468,7 @@ export default function Dashboard() {
               <div>
                 <CardTitle className="text-sm font-semibold text-foreground flex items-center gap-2">
                   <TrendingUp className="w-4 h-4 text-primary" />
-                  Portfolio Growth Projection (120 Months)
+                  Portfolio Growth Projection ({horizonMonths} Months)
                 </CardTitle>
                 <p className="text-xs text-muted-foreground mt-1">
                   Each coloured band shows how much money is in each bucket over time. The dashed line is your {formatKES(targetAmount)} goal.
@@ -446,7 +498,7 @@ export default function Dashboard() {
                     tick={{ fontSize: 10, fill: "oklch(0.60 0.02 250)" }}
                     tickLine={false}
                     axisLine={false}
-                    tickFormatter={(v) => (YEAR_LABELS.includes(v) ? `Yr ${v / 12}` : "")}
+                    tickFormatter={(v) => (yearLabels.includes(v) ? `Yr ${Math.round((v / 12) * 10) / 10}` : "")}
                   />
                   <YAxis
                     tick={{ fontSize: 10, fill: "oklch(0.60 0.02 250)" }}
@@ -463,7 +515,7 @@ export default function Dashboard() {
                     strokeOpacity={0.6}
                     label={{ value: `${formatKESCompact(targetAmount)} Target`, fill: "oklch(0.78 0.14 85)", fontSize: 10, position: "insideTopRight" }}
                   />
-                  {YEAR_LABELS.map((m) => (
+                  {yearLabels.map((m) => (
                     <ReferenceLine key={m} x={m} stroke="oklch(0.30 0.03 250)" strokeDasharray="2 4" />
                   ))}
                   <Area type="monotone" dataKey="mmf" name="MMF" stackId="1" stroke="oklch(0.65 0.15 200)" fill="url(#mmfGrad)" strokeWidth={1.5} />
@@ -557,26 +609,6 @@ export default function Dashboard() {
               </table>
             </div>
 
-            {/* Plan vs PDF note */}
-            <div className="mt-4 rounded-md bg-amber-500/10 border border-amber-500/25 p-3 flex gap-2.5">
-              <Info className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
-              <div className="text-xs text-muted-foreground leading-relaxed space-y-1">
-                <p>
-                  <strong className="text-foreground">Why these numbers differ from the original PDF.</strong>{" "}
-                  The planning PDF assumed KES 5,279,234 at Month 120 with a KES 3,000 step-up. That figure was produced
-                  by an earlier model that double-counted fixed-income returns (compounding T-bill/IFB/FXD buckets in place
-                  <em> and</em> paying coupons/maturity proceeds into MMF). The corrected engine removes the double-count:
-                  bonds earn returns only through cash flows (coupons and maturity proceeds), not by growing in place.
-                </p>
-                <p>
-                  <strong className="text-foreground">Your real options to reach KES 5,000,000:</strong>{" "}
-                  Under the corrected engine, a <strong className="text-amber-300">KES 3,500 step-up</strong> (instead of
-                  KES 3,000) is the minimum that reaches KES 5M — landing at approximately KES 5,478,000 at Month 120.
-                  Alternatively, a one-off lump sum of ~KES 250,000 at any point in the Growth phase achieves the same effect.
-                  The milestones table above already reflects the corrected projections.
-                </p>
-              </div>
-            </div>
           </CardContent>
         </Card>
 
@@ -713,7 +745,7 @@ export default function Dashboard() {
           </DialogHeader>
           <div className="space-y-4 py-2">
             <div className="rounded-lg bg-muted/40 border border-border p-3 text-xs text-muted-foreground leading-relaxed">
-              <p className="mb-2"><strong className="text-foreground">This is the total portfolio value you want to hold at Month 120</strong> — not the sum of what you put in, but the final balance sitting across all your investment buckets at the end of 10 years.</p>
+              <p className="mb-2"><strong className="text-foreground">This is the total portfolio value you want to hold at Month {horizonMonths}</strong> — not the sum of what you put in, but the final balance sitting across all your investment buckets at the end of {horizonYearsLabel} years.</p>
               <strong className="text-foreground">What updates when you change this?</strong>
               <ul className="mt-2 space-y-1 list-disc list-inside">
                 <li>The progress bar and percentage on the dashboard</li>
@@ -725,7 +757,7 @@ export default function Dashboard() {
               <p className="mt-2">The monthly contribution schedule and rate settings are <strong className="text-foreground">not affected</strong>.</p>
             </div>
             <div className="space-y-1.5">
-              <label className="text-xs font-medium text-foreground">Target End Value (KES) — what you want to hold at Month 120</label>
+              <label className="text-xs font-medium text-foreground">Target End Value (KES) — what you want to hold at Month {horizonMonths}</label>
               <div className="relative">
                 <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground font-medium">KES</span>
                 <Input

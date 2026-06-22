@@ -3,6 +3,8 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import { getLoginUrl } from "@/const";
 import { cn } from "@/lib/utils";
 import { useDepositDrawer } from "@/contexts/DepositDrawerContext";
+import { usePortfolio } from "@/contexts/PortfolioContext";
+import { formatDateRange, formatKESCompact } from "@/lib/format";
 import { PortfolioSelector } from "./PortfolioSelector";
 import {
   BarChart3,
@@ -73,12 +75,16 @@ function SidebarContent({
   user,
   logout,
   onNavClick,
+  appTitle,
+  appSubtitle,
 }: {
   location: string;
   openDrawer: () => void;
   user: { name?: string | null; email?: string | null } | null;
   logout: () => void;
   onNavClick?: () => void;
+  appTitle: string;
+  appSubtitle: string;
 }) {
   return (
     <div className="flex flex-col h-full">
@@ -90,12 +96,13 @@ function SidebarContent({
           </div>
           <div className="min-w-0">
             <p
-              className="text-sm font-bold text-sidebar-foreground leading-tight"
+              className="text-sm font-bold text-sidebar-foreground leading-tight truncate"
               style={{ fontFamily: "'Playfair Display', serif" }}
+              title={appTitle}
             >
-              KES 5M Tracker
+              {appTitle}
             </p>
-            <p className="text-xs text-muted-foreground">2026 – 2036</p>
+            <p className="text-xs text-muted-foreground truncate" title={appSubtitle}>{appSubtitle}</p>
           </div>
         </div>
       </div>
@@ -187,13 +194,29 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const { user, loading, isAuthenticated, logout } = useAuth();
   const [location] = useLocation();
   const { openDrawer } = useDepositDrawer();
+  const { portfolio } = usePortfolio();
   const [mobileOpen, setMobileOpen] = useState(false);
+
+  // Portfolio-driven app identity. Falls back to a neutral label before a
+  // portfolio is loaded so we never show another portfolio's hardcoded name.
+  const appTitle = portfolio?.name?.trim() || "Investment Tracker";
+  const dateRange = portfolio
+    ? formatDateRange(portfolio.startDate, portfolio.horizonMonths)
+    : "";
+  const targetLabel = portfolio
+    ? `Target ${formatKESCompact(Number(portfolio.targetAmount) || 0)}`
+    : "";
+  // Prefer the portfolio's own description; otherwise derive a date-range + target subtitle.
+  const appSubtitle =
+    portfolio?.description?.trim() ||
+    [dateRange, targetLabel].filter(Boolean).join(" · ") ||
+    "Personal investment plan";
 
   // Current page label for the mobile top bar
   const currentPage =
     navGroups
       .flatMap((g) => g.items)
-      .find((n) => n.href === location)?.label ?? "KES 5M Tracker";
+      .find((n) => n.href === location)?.label ?? appTitle;
 
   if (loading) {
     return (
@@ -224,11 +247,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               className="text-3xl font-bold mb-2 gradient-text"
               style={{ fontFamily: "'Playfair Display', serif" }}
             >
-              KES 5M Tracker
+              Investment Tracker
             </h1>
             <p className="text-muted-foreground text-sm leading-relaxed">
-              Your personal 10-year investment journey to KES 5,000,000 using a
-              Money Market Fund + CBK DhowCSD velocity loop strategy.
+              Plan and track your fixed-income investment journey across Money
+              Market Funds and CBK securities — one or many portfolios, each with
+              its own target, horizon, and strategy.
             </p>
           </div>
           <Button
@@ -252,6 +276,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           openDrawer={openDrawer}
           user={user}
           logout={logout}
+          appTitle={appTitle}
+          appSubtitle={appSubtitle}
         />
       </aside>
 
@@ -284,6 +310,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           user={user}
           logout={logout}
           onNavClick={() => setMobileOpen(false)}
+          appTitle={appTitle}
+          appSubtitle={appSubtitle}
         />
       </aside>
 

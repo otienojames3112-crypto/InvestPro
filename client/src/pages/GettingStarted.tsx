@@ -529,7 +529,7 @@ const MMF_FUNDS: MmfFundInfo[] = [
       "Set up a monthly standing order to automate your contributions.",
     ],
     documents: ["National ID or Passport (front & back)", "KRA PIN certificate", "Passport-size photo", "Proof of address (utility bill or bank statement, max 3 months old)"],
-    notes: "Largest MMF in Kenya by AUM at KES 114.2B. This is the primary fund used in the KES 5M plan. Toll-free customer care: 0800 723 456.",
+    notes: "Largest MMF in Kenya by AUM at KES 114.2B. Toll-free customer care: 0800 723 456.",
   },
   {
     id: "cic",
@@ -1238,7 +1238,7 @@ export default function GettingStarted() {
             Getting Started
           </h1>
           <p className="text-sm text-muted-foreground mt-0.5">
-            Step-by-step guide to opening your investment accounts — your primary KES 5M strategy accounts and all 27 CMA-regulated Kenyan MMFs.
+            Step-by-step guide to opening your investment accounts — your primary strategy accounts and all 27 CMA-regulated Kenyan MMFs.
           </p>
         </div>
 

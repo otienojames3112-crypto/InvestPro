@@ -89,7 +89,13 @@ export default function Contributions() {
               Contribution Schedule
             </h1>
             <p className="text-sm text-muted-foreground mt-0.5">
-              Starting at KES 2,500 with automatic +KES 3,000 step-up every 6 months
+              {portfolio
+                ? `Starting at ${formatKES(Number(portfolio.startingContribution) || 0)}${
+                    Number(portfolio.stepUpAmount) > 0
+                      ? ` with automatic +${formatKES(Number(portfolio.stepUpAmount))} step-up every ${portfolio.stepUpMonths} months`
+                      : " with flat contributions (no step-up)"
+                  }`
+                : "Your monthly contribution schedule"}
             </p>
           </div>
           <Dialog open={open} onOpenChange={setOpen}>
@@ -105,8 +111,8 @@ export default function Contributions() {
               </DialogHeader>
               <form onSubmit={handleSubmit(onSubmit)} className="space-y-4 mt-2">
                 <div className="space-y-1.5">
-                  <Label className="text-xs">Month Number (1–120)</Label>
-                  <Input type="number" min={1} max={120} {...register("monthNumber", { valueAsNumber: true })} />
+                  <Label className="text-xs">Month Number (1–{portfolio?.horizonMonths ?? 120})</Label>
+                  <Input type="number" min={1} max={portfolio?.horizonMonths ?? 120} {...register("monthNumber", { valueAsNumber: true })} />
                 </div>
                 <div className="space-y-1.5">
                   <Label className="text-xs">Override Monthly Amount (KES)</Label>
@@ -134,7 +140,7 @@ export default function Contributions() {
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-semibold flex items-center gap-2">
               <TrendingUp className="w-4 h-4 text-primary" />
-              Contribution Ladder (Auto Step-Up)
+              Contribution Ladder{Number(portfolio?.stepUpAmount) > 0 ? " (Auto Step-Up)" : ""}
             </CardTitle>
           </CardHeader>
           <CardContent className="p-4 pt-0">

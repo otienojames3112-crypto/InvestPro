@@ -279,3 +279,20 @@
 - [x] Updated db helper + composition router to return + accept new fields
 - [x] Updated MMF Strategy UI: per-segment detail panels with rates + real-estate note (shown even at 0%) + editable note inputs
 - [x] 87/87 tests pass, 0 TS errors, screenshots verified
+
+## Round 15 — Presentation layer: fully portfolio-driven (no engine/solver/schema math changes)
+
+- [x] R15.1 AppShell: replace hardcoded "KES 5M Tracker" / "2026–2036" with active portfolio name + derived date range + target subtitle
+- [x] R15.1 Add portfolio `description` field (schema + router + UI) to drive subtitle
+- [x] R15.1 client/index.html: change <title> to generic "Investment Tracker"
+- [x] R15.2 Dashboard: remove hardcoded "Why these numbers differ from the PDF" block
+- [x] R15.3 Scenarios: delete hardcoded "KES 3,000 step-up hits target" prose; render real solveForContribution output; rec + table from same solver call; honour feasible:false
+- [x] R15.4 Sweep 5M-specific copy: OtherAssets, GettingStarted, MmfFunds Sanlam note → portfolio name / neutral
+- [x] R15.4 Audit client/ for literals 5M / 5,279,234 / 5,478,000 / 236,615 / 3,500 step-up / 2026–2036 / PDF in user-facing strings
+- [x] R15.5 Verify add/edit/remove secondary MMF UI in MmfFunds
+- [x] R15.5 Dashboard blended view: per-fund balance + EAR + combined MMF position
+- [x] R15.5 MmfAccrual: per-fund accrual rows + combined total
+- [x] R15.5 TaxSummary: per-fund WHT breakdown + combined total
+- [x] R15.5 Adding/removing secondary fund instantly reflows dashboard/accrual/tax
+- [x] R15.6 End-to-end sync audit across all pages; switching portfolio fully re-renders, no stale values
+- [ ] R15 Run tsc --noEmit + pnpm test; screenshot; save checkpoint

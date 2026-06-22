@@ -264,11 +264,13 @@ function IncomeFormDialog({
 function HoldingCard({
   holding,
   portfolioId,
+  horizonYears,
   onEdit,
   onDelete,
 }: {
   holding: Holding;
   portfolioId: number;
+  horizonYears: number;
   onEdit: () => void;
   onDelete: () => void;
 }) {
@@ -298,9 +300,10 @@ function HoldingCard({
   const totalIncome = incomeList.reduce((sum, i) => sum + i.amount, 0);
 
   const hasScenarios = holding.assumedReturnConservative != null || holding.assumedReturnBase != null || holding.assumedReturnOptimistic != null;
-  const horizonYears = 10;
+  const scenarioYears = horizonYears;
+  const scenarioYearsLabel = Number.isInteger(scenarioYears) ? `${scenarioYears}` : scenarioYears.toFixed(1);
   const scenarioValue = (rate: number | null) =>
-    rate != null ? holding.currentValue * Math.pow(1 + rate / 100, horizonYears) : null;
+    rate != null ? holding.currentValue * Math.pow(1 + rate / 100, scenarioYears) : null;
 
   return (
     <Card>
@@ -351,7 +354,7 @@ function HoldingCard({
           <div className="rounded-md bg-muted/40 p-3 space-y-1.5">
             <div className="flex items-center gap-1 text-xs text-muted-foreground mb-1">
               <AlertTriangle className="w-3 h-3 text-amber-500" />
-              Assumed 10-year scenario — not a forecast or advice
+              Assumed {scenarioYearsLabel}-year scenario — not a forecast or advice
             </div>
             <div className="grid grid-cols-3 gap-2 text-xs">
               {[
@@ -428,7 +431,8 @@ function HoldingCard({
 }
 
 export default function OtherAssets() {
-  const { portfolioId } = usePortfolio();
+  const { portfolioId, portfolio } = usePortfolio();
+  const portfolioLabel = portfolio?.name?.trim() || "your investment portfolio";
   const utils = trpc.useUtils();
 
   const { data: holdings = [], isLoading } = trpc.otherHoldings.list.useQuery(
@@ -465,7 +469,7 @@ export default function OtherAssets() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Other Assets</h1>
           <p className="text-muted-foreground text-sm mt-1">
-            Track holdings outside your KES 5M portfolio — real estate, equities, pension, SACCO, and more.
+            Track holdings outside {portfolioLabel} — real estate, equities, pension, SACCO, and more.
           </p>
         </div>
         <Button onClick={() => setAddOpen(true)} size="sm" disabled={!portfolioId}>
@@ -481,7 +485,7 @@ export default function OtherAssets() {
             <p className="text-sm font-medium text-blue-800 dark:text-blue-300">Why track other assets here?</p>
           </div>
           <p className="text-xs text-blue-700 dark:text-blue-400 pl-6">
-            Your KES 5M portfolio (T-bills, IFBs, FXDs, MMF) is your liquid, fixed-income savings plan.
+            {portfolioLabel} (T-bills, IFBs, FXDs, MMF) is your liquid, fixed-income savings plan.
             Other assets — property, equities, pension — form the rest of your net worth.
             Tracking them together gives you a complete picture without mixing the projection math.
             Scenario returns entered here are <strong>your own assumptions</strong>, not forecasts.
@@ -535,6 +539,7 @@ export default function OtherAssets() {
             key={h.id}
             holding={h}
             portfolioId={portfolioId!}
+            horizonYears={(portfolio?.horizonMonths ?? 120) / 12}
             onEdit={() => setEditHolding(h)}
             onDelete={() => setDeleteId(h.id)}
           />

@@ -6,6 +6,7 @@ import { useDepositDrawer } from "@/contexts/DepositDrawerContext";
 import { usePortfolio } from "@/contexts/PortfolioContext";
 import { formatDateRange, formatKESCompact } from "@/lib/format";
 import { PortfolioSelector } from "./PortfolioSelector";
+import { ModeSwitcher, SandboxBanner } from "./ModeSwitcher";
 import {
   BarChart3,
   BookOpen,
@@ -107,8 +108,9 @@ function SidebarContent({
         </div>
       </div>
 
-      {/* Portfolio Selector */}
-      <div className="px-3 py-3 border-b border-sidebar-border">
+      {/* Mode toggle + Portfolio Selector */}
+      <div className="px-3 py-3 border-b border-sidebar-border space-y-3">
+        <ModeSwitcher />
         <PortfolioSelector />
       </div>
 
@@ -341,6 +343,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <ArrowDownCircle className="w-5 h-5" />
           </button>
         </header>
+
+        {/* Sandbox banner */}
+        <SandboxBanner />
 
         {/* Page content */}
         <main className="flex-1 overflow-y-auto">

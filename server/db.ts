@@ -20,8 +20,12 @@ import {
   type InsertDepositEntry,
   type InsertRateHistory,
   type InsertAccountStatus,
+  portfolioSecondaryMmfs,
+  bankInstrumentHoldings,
+  type InsertBankInstrumentHolding,
 } from "../drizzle/schema";
 import { ENV } from "./_core/env";
+import { computeActualsTotals } from "../shared/actuals";
 
 let _db: ReturnType<typeof drizzle> | null = null;
 
@@ -84,14 +88,14 @@ export async function getUserByOpenId(openId: string) {
 
 // ─── Portfolios ───────────────────────────────────────────────────────────────
 
-export async function getPortfolios(userId: number): Promise<Portfolio[]> {
+export async function getPortfolios(userId: number, isSandbox?: boolean): Promise<Portfolio[]> {
   const db = await getDb();
   if (!db) return [];
-  return db
-    .select()
-    .from(portfolios)
-    .where(eq(portfolios.userId, userId))
-    .orderBy(portfolios.createdAt);
+  const where =
+    isSandbox === undefined
+      ? eq(portfolios.userId, userId)
+      : and(eq(portfolios.userId, userId), eq(portfolios.isSandbox, isSandbox));
+  return db.select().from(portfolios).where(where).orderBy(portfolios.createdAt);
 }
 
 export async function getPortfolio(portfolioId: number, userId: number): Promise<Portfolio | null> {
@@ -143,6 +147,8 @@ export async function deletePortfolio(portfolioId: number, userId: number): Prom
   await db.delete(depositEntries).where(eq(depositEntries.portfolioId, portfolioId));
   await db.delete(rateHistory).where(eq(rateHistory.portfolioId, portfolioId));
   await db.delete(accountStatus).where(eq(accountStatus.portfolioId, portfolioId));
+  await db.delete(portfolioSecondaryMmfs).where(eq(portfolioSecondaryMmfs.portfolioId, portfolioId));
+  await db.delete(bankInstrumentHoldings).where(eq(bankInstrumentHoldings.portfolioId, portfolioId));
   await db.delete(portfolios).where(and(eq(portfolios.id, portfolioId), eq(portfolios.userId, userId)));
 }
 
@@ -387,43 +393,47 @@ export async function getActualsSummary(
     .from(depositEntries)
     .where(eq(depositEntries.portfolioId, portfolioId));
 
-  let totalContributed = 0;
-  const byBucket = { mmf: 0, tbill: 0, ifb: 0, fxd: 0 };
+  const secondaries = await getSecondaryMmfs(portfolioId);
+  const bankHoldings = await getBankInstrumentHoldings(portfolioId);
 
-  for (const row of rows) {
-    const amt = parseFloat(row.amount);
-    totalContributed += amt;
-    byBucket[row.bucket as keyof typeof byBucket] += amt;
-  }
+  // Delegate the (double-counting-safe) aggregation to the pure, unit-tested helper.
+  const agg = computeActualsTotals(
+    rows.map((row) => ({
+      amount: parseFloat(row.amount) || 0,
+      bucket: row.bucket as "mmf" | "tbill" | "ifb" | "fxd",
+      institutionType: (row as { institutionType?: string | null }).institutionType ?? null,
+      mmfFundId: (row as { mmfFundId?: number | null }).mmfFundId ?? null,
+    })),
+    secondaries.map((s) => ({
+      mmfFundId: s.mmfFundId ?? null,
+      currentBalance: parseFloat(String(s.currentBalance ?? "0")) || 0,
+      ear: parseFloat(String(s.ear ?? "0")) || 0,
+      whtRate: parseFloat(String(s.whtRate ?? "15")) || 15,
+    })),
+    bankHoldings.map((b) => ({
+      principal: parseFloat(String(b.principal ?? "0")) || 0,
+      interestRate: parseFloat(String(b.interestRate ?? "0")) || 0,
+      whtRate: parseFloat(String(b.whtRate ?? "15")) || 15,
+      isActive: !!b.isActive,
+    })),
+    { withholdingTax, mmfYield, tbillRate, fxdCouponRate },
+  );
 
-  const wht = withholdingTax / 100;
-
-  const annualMmfInterest = byBucket.mmf * (mmfYield / 100);
-  const mmfTax = annualMmfInterest * wht;
-
-  const annualTbillDiscount = byBucket.tbill * (tbillRate / 100);
-  const tbillTax = annualTbillDiscount * wht;
-
-  const ifbTax = 0;
-
-  const annualFxdCouponIncome = byBucket.fxd * (fxdCouponRate / 100);
-  const fxdTax = annualFxdCouponIncome * wht;
-
-  const taxLiability = mmfTax + tbillTax + ifbTax + fxdTax;
-  const remainingToTarget = Math.max(0, targetAmount - totalContributed);
+  const annualFxdCouponIncome = agg.byBucket.fxd * (fxdCouponRate / 100);
+  const remainingToTarget = Math.max(0, targetAmount - agg.totalContributed);
 
   return {
-    totalContributed,
+    totalContributed: agg.totalContributed,
+    depositsContributed: agg.depositsContributed,
+    secondaryMmfBalance: agg.secondaryMmfBalance,
+    bankBalance: agg.bankBalance,
     remainingToTarget,
-    taxLiability,
-    taxBreakdown: {
-      mmf: Math.round(mmfTax * 100) / 100,
-      tbill: Math.round(tbillTax * 100) / 100,
-      ifb: 0,
-      fxd: Math.round(fxdTax * 100) / 100,
-    },
+    taxLiability: agg.taxLiability,
+    taxBreakdown: agg.taxBreakdown,
     annualFxdCouponIncome,
-    byBucket,
+    byBucket: agg.byBucket,
+    secondaryCount: secondaries.length,
+    bankHoldingCount: bankHoldings.filter((b) => b.isActive).length,
     entryCount: rows.length,
   };
 }
@@ -592,7 +602,6 @@ export async function deleteHoldingIncome(id: number, holdingId: number) {
 
 // ─── Secondary MMF Accounts ───────────────────────────────────────────────────
 import {
-  portfolioSecondaryMmfs,
   type InsertPortfolioSecondaryMmf,
 } from "../drizzle/schema";
 
@@ -787,6 +796,52 @@ export async function deleteBankInstrument(id: number) {
   const db = await getDb();
   if (!db) return;
   await db.delete(bankInstruments).where(eq(bankInstruments.id, id));
+}
+
+/** ---------------- Bank Instrument Holdings (per-portfolio LIVE actuals) ---------------- */
+
+export async function getBankInstrumentHoldings(portfolioId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select()
+    .from(bankInstrumentHoldings)
+    .where(eq(bankInstrumentHoldings.portfolioId, portfolioId))
+    .orderBy(bankInstrumentHoldings.createdAt);
+}
+
+export async function addBankInstrumentHolding(data: InsertBankInstrumentHolding) {
+  const db = await getDb();
+  if (!db) return null;
+  await db.insert(bankInstrumentHoldings).values(data);
+  const rows = await db
+    .select()
+    .from(bankInstrumentHoldings)
+    .where(eq(bankInstrumentHoldings.portfolioId, data.portfolioId))
+    .orderBy(desc(bankInstrumentHoldings.createdAt))
+    .limit(1);
+  return rows[0] ?? null;
+}
+
+export async function updateBankInstrumentHolding(
+  id: number,
+  portfolioId: number,
+  data: Partial<InsertBankInstrumentHolding>
+) {
+  const db = await getDb();
+  if (!db) return;
+  await db
+    .update(bankInstrumentHoldings)
+    .set({ ...data, updatedAt: new Date() })
+    .where(and(eq(bankInstrumentHoldings.id, id), eq(bankInstrumentHoldings.portfolioId, portfolioId)));
+}
+
+export async function deleteBankInstrumentHolding(id: number, portfolioId: number) {
+  const db = await getDb();
+  if (!db) return;
+  await db
+    .delete(bankInstrumentHoldings)
+    .where(and(eq(bankInstrumentHoldings.id, id), eq(bankInstrumentHoldings.portfolioId, portfolioId)));
 }
 
 /** ---------------- Benchmark Inputs (global reference) ---------------- */

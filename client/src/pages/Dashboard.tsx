@@ -763,6 +763,54 @@ export default function Dashboard() {
                 </div>
               </div>
             )}
+
+            {/* ── Unified live net worth across every destination ──────────── */}
+            {actualsSummary && actualsSummary.entryCount > 0 && (() => {
+              const primaryMmf = actualsSummary.byBucket?.mmf ?? 0;
+              const sec = actualsSummary.secondaryMmfBalance ?? 0;
+              const bank = actualsSummary.bankBalance ?? 0;
+              const tb = actualsSummary.byBucket?.tbill ?? 0;
+              const ifb = actualsSummary.byBucket?.ifb ?? 0;
+              const fxd = actualsSummary.byBucket?.fxd ?? 0;
+              const net = actualsSummary.totalContributed ?? 0;
+              const segs = [
+                { key: "pmmf", label: `${fundName} (primary MMF)`, amt: primaryMmf, color: "#34d399" },
+                { key: "smmf", label: `Other MMFs (${actualsSummary.secondaryCount ?? 0})`, amt: sec, color: "#6ee7b7" },
+                { key: "bank", label: `Bank deposits (${actualsSummary.bankHoldingCount ?? 0})`, amt: bank, color: "#38bdf8" },
+                { key: "tb", label: "CBK T-Bills", amt: tb, color: "#60a5fa" },
+                { key: "ifb", label: "IFB Bonds", amt: ifb, color: "#a78bfa" },
+                { key: "fxd", label: "FXD Bonds", amt: fxd, color: "#fb923c" },
+              ].filter((s) => s.amt > 0);
+              return (
+                <div className="mt-4 rounded-xl border border-emerald-500/20 bg-emerald-500/[0.04] p-4 space-y-3">
+                  <div className="flex items-end justify-between flex-wrap gap-2">
+                    <div>
+                      <p className="text-xs font-medium uppercase tracking-widest text-emerald-400">Live Net Worth</p>
+                      <p className="text-2xl font-serif font-bold text-foreground kes-amount">{formatKES(net)}</p>
+                      <p className="text-xs text-muted-foreground">Sum of every account you actually own — separate from the projection above.</p>
+                    </div>
+                  </div>
+                  {net > 0 && (
+                    <>
+                      <div className="w-full h-2.5 rounded-full overflow-hidden flex bg-white/5">
+                        {segs.map((s) => (
+                          <div key={s.key} style={{ width: `${(s.amt / net) * 100}%`, backgroundColor: s.color }} title={`${s.label}: ${formatKES(s.amt)}`} />
+                        ))}
+                      </div>
+                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-1.5">
+                        {segs.map((s) => (
+                          <div key={s.key} className="flex items-center gap-2 text-xs">
+                            <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ backgroundColor: s.color }} />
+                            <span className="text-muted-foreground truncate">{s.label}</span>
+                            <span className="ml-auto font-semibold text-foreground kes-amount shrink-0">{formatKESCompact(s.amt)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </div>
+              );
+            })()}
           </CardContent>
         </Card>
 

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { usePortfolio } from "@/contexts/PortfolioContext";
 import { useSelectedFund } from "@/hooks/useSelectedFund";
 import { trpc } from "@/lib/trpc";
@@ -10,7 +10,9 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -37,41 +39,39 @@ import {
   Info,
   ArrowDownCircle,
   X,
-  ChevronRight,
+  Building2,
+  PiggyBank,
 } from "lucide-react";
 
-type Bucket = "mmf" | "tbill" | "ifb" | "fxd";
-
-const BUCKET_META: Record<Bucket, { label: string; color: string; icon: React.ReactNode; description: string; taxNote: string }> = {
-  mmf: {
-    label: "MMF", // overridden dynamically in render
-    color: "text-emerald-400",
-    icon: <Wallet className="w-4 h-4" />,
-    description: "Money Market Fund",
-    taxNote: "15% WHT deducted at source (final tax)",
-  },
-  tbill: {
-    label: "CBK T-Bills",
-    color: "text-blue-400",
-    icon: <TrendingUp className="w-4 h-4" />,
-    description: "Treasury Bills — 91/182/364-day discount instruments",
-    taxNote: "15% WHT on discount (final tax)",
-  },
-  ifb: {
-    label: "IFB Bonds",
-    color: "text-violet-400",
-    icon: <ShieldCheck className="w-4 h-4" />,
-    description: "Infrastructure Bonds — semi-annual coupons, tax-exempt",
-    taxNote: "Tax-exempt (IFB)",
-  },
-  fxd: {
-    label: "FXD Bonds",
-    color: "text-orange-400",
-    icon: <Landmark className="w-4 h-4" />,
-    description: "Fixed Coupon Bonds — semi-annual coupons, 15% WHT",
-    taxNote: "15% withholding tax on coupons",
-  },
+/**
+ * A destination is a concrete place real money can go:
+ *  - a primary MMF fund
+ *  - a secondary MMF fund
+ *  - a live bank instrument holding
+ *  - a government-security bucket (T-bill / IFB / FXD)
+ * Each carries the exact payload `deposits.add` needs.
+ */
+type Destination = {
+  value: string; // unique key for the Select
+  label: string;
+  sublabel?: string;
+  group: "MMF funds" | "Bank instruments" | "Government securities";
+  icon: React.ReactNode;
+  color: string;
+  taxNote: string;
+  payload: {
+    institutionType: "mmf_fund" | "bank_instrument" | "government_security";
+    mmfFundId?: number;
+    bankHoldingId?: number;
+    bucket?: "mmf" | "tbill" | "ifb" | "fxd";
+  };
 };
+
+const GOV_META = {
+  tbill: { label: "CBK T-Bills", icon: <TrendingUp className="w-4 h-4" />, color: "text-blue-400", taxNote: "15% WHT on discount (final tax)" },
+  ifb: { label: "IFB Bonds", icon: <ShieldCheck className="w-4 h-4" />, color: "text-violet-400", taxNote: "Tax-exempt (IFB)" },
+  fxd: { label: "FXD Bonds", icon: <Landmark className="w-4 h-4" />, color: "text-orange-400", taxNote: "15% WHT on coupons" },
+} as const;
 
 interface DepositDrawerProps {
   open: boolean;
@@ -82,6 +82,7 @@ export function DepositDrawer({ open, onClose }: DepositDrawerProps) {
   const { portfolioId, portfolio } = usePortfolio();
   const { fundName, fundLabel, fundEar } = useSelectedFund();
   const utils = trpc.useUtils();
+
   const { data: deposits = [], isLoading } = trpc.deposits.list.useQuery(
     { portfolioId: portfolioId! },
     { enabled: !!portfolioId }
@@ -90,13 +91,23 @@ export function DepositDrawer({ open, onClose }: DepositDrawerProps) {
     { portfolioId: portfolioId! },
     { enabled: !!portfolioId }
   );
-  const liveTarget = portfolio?.targetAmount ?? 5000000;
+  const { data: secondaries = [] } = trpc.secondaryMmfs.list.useQuery(
+    { portfolioId: portfolioId! },
+    { enabled: !!portfolioId }
+  );
+  const { data: bankHoldings = [] } = trpc.bankHoldings.list.useQuery(
+    { portfolioId: portfolioId! },
+    { enabled: !!portfolioId }
+  );
+
+  const liveTarget = portfolio?.targetAmount ?? 0;
 
   const addMutation = trpc.deposits.add.useMutation({
     onSuccess: () => {
       utils.deposits.list.invalidate();
       utils.deposits.summary.invalidate();
-      utils.deposits.summary.invalidate();
+      utils.secondaryMmfs.list.invalidate();
+      utils.bankHoldings.list.invalidate();
       toast.success("Deposit recorded");
       setFormOpen(false);
       resetForm();
@@ -114,31 +125,120 @@ export function DepositDrawer({ open, onClose }: DepositDrawerProps) {
     onError: (err) => toast.error(err.message),
   });
 
+  // Build the full destination list from the portfolio's real accounts.
+  const destinations = useMemo<Destination[]>(() => {
+    const list: Destination[] = [];
+    const primaryFundId = portfolio?.mmfFundId ?? undefined;
+
+    // Primary MMF (only routable as a destination if a fund is selected)
+    if (primaryFundId) {
+      list.push({
+        value: `mmf:${primaryFundId}`,
+        label: fundName,
+        sublabel: `Primary fund · ${fundEar.toFixed(2)}% p.a. gross`,
+        group: "MMF funds",
+        icon: <Wallet className="w-4 h-4" />,
+        color: "text-emerald-400",
+        taxNote: "15% WHT deducted at source (final tax)",
+        payload: { institutionType: "mmf_fund", mmfFundId: primaryFundId },
+      });
+    }
+    // Secondary MMFs
+    for (const s of secondaries) {
+      list.push({
+        value: `smmf:${s.id}`,
+        label: s.label || s.fundName,
+        sublabel: `${s.company} · ${s.ear.toFixed(2)}% p.a.`,
+        group: "MMF funds",
+        icon: <PiggyBank className="w-4 h-4" />,
+        color: "text-emerald-300",
+        taxNote: "15% WHT deducted at source (final tax)",
+        payload: { institutionType: "mmf_fund", mmfFundId: s.mmfFundId },
+      });
+    }
+    // Bank instrument holdings
+    for (const h of bankHoldings) {
+      list.push({
+        value: `bank:${h.id}`,
+        label: h.label || `${h.bankName} ${h.instrumentType === "fixed_deposit" ? "Fixed Deposit" : "Call Deposit"}`,
+        sublabel: `${h.bankName} · ${h.interestRate.toFixed(2)}% p.a.`,
+        group: "Bank instruments",
+        icon: <Building2 className="w-4 h-4" />,
+        color: "text-sky-300",
+        taxNote: "15% WHT on interest (final tax)",
+        payload: { institutionType: "bank_instrument", bankHoldingId: h.id },
+      });
+    }
+    // Government securities buckets
+    (["tbill", "ifb", "fxd"] as const).forEach((b) => {
+      const m = GOV_META[b];
+      list.push({
+        value: `gov:${b}`,
+        label: m.label,
+        sublabel: "CBK / DhowCSD",
+        group: "Government securities",
+        icon: m.icon,
+        color: m.color,
+        taxNote: m.taxNote,
+        payload: { institutionType: "government_security", bucket: b },
+      });
+    });
+    return list;
+  }, [portfolio?.mmfFundId, fundName, fundEar, secondaries, bankHoldings]);
+
   const [formOpen, setFormOpen] = useState(false);
   const [deleteId, setDeleteId] = useState<number | null>(null);
   const [form, setForm] = useState({
-    bucket: "mmf" as Bucket,
+    destination: "",
     amount: "",
     depositDate: new Date().toISOString().slice(0, 10),
     notes: "",
   });
 
+  const selectedDest = destinations.find((d) => d.value === form.destination);
+
   function resetForm() {
-    setForm({ bucket: "mmf", amount: "", depositDate: new Date().toISOString().slice(0, 10), notes: "" });
+    setForm({ destination: "", amount: "", depositDate: new Date().toISOString().slice(0, 10), notes: "" });
   }
 
   function handleSubmit() {
     const amount = parseFloat(form.amount);
     if (!amount || amount <= 0) { toast.error("Please enter a valid amount"); return; }
     if (!portfolioId) return;
-    addMutation.mutate({ portfolioId, bucket: form.bucket, amount, depositDate: form.depositDate, notes: form.notes || undefined });
+    if (!selectedDest) { toast.error("Please choose where the money went"); return; }
+    addMutation.mutate({
+      portfolioId,
+      amount,
+      depositDate: form.depositDate,
+      notes: form.notes || undefined,
+      ...selectedDest.payload,
+    });
+  }
+
+  // Resolve a deposit row to a human destination label for the history list.
+  function destLabelFor(d: { institutionType?: string | null; mmfFundId?: number | null; bankHoldingId?: number | null; bucket: string }): { label: string; icon: React.ReactNode; color: string; taxFree: boolean } {
+    if (d.institutionType === "bank_instrument" && d.bankHoldingId) {
+      const h = bankHoldings.find((x) => x.id === d.bankHoldingId);
+      return { label: h ? (h.label || `${h.bankName} deposit`) : "Bank deposit", icon: <Building2 className="w-4 h-4" />, color: "text-sky-300", taxFree: false };
+    }
+    if (d.institutionType === "mmf_fund" && d.mmfFundId) {
+      if (portfolio?.mmfFundId === d.mmfFundId) {
+        return { label: fundName, icon: <Wallet className="w-4 h-4" />, color: "text-emerald-400", taxFree: false };
+      }
+      const s = secondaries.find((x) => x.mmfFundId === d.mmfFundId);
+      return { label: s ? (s.label || s.fundName) : "MMF fund", icon: <PiggyBank className="w-4 h-4" />, color: "text-emerald-300", taxFree: false };
+    }
+    if (d.bucket === "ifb") return { label: GOV_META.ifb.label, icon: GOV_META.ifb.icon, color: GOV_META.ifb.color, taxFree: true };
+    if (d.bucket === "tbill") return { label: GOV_META.tbill.label, icon: GOV_META.tbill.icon, color: GOV_META.tbill.color, taxFree: false };
+    if (d.bucket === "fxd") return { label: GOV_META.fxd.label, icon: GOV_META.fxd.icon, color: GOV_META.fxd.color, taxFree: false };
+    // legacy mmf bucket with no destination metadata
+    return { label: fundLabel, icon: <Wallet className="w-4 h-4" />, color: "text-emerald-400", taxFree: false };
   }
 
   const totalContributed = summary?.totalContributed ?? 0;
   const remainingToTarget = summary?.remainingToTarget ?? liveTarget;
   const progressPct = liveTarget > 0 ? Math.min(100, (totalContributed / liveTarget) * 100) : 0;
   const taxBreakdown = summary?.taxBreakdown ?? { mmf: 0, tbill: 0, ifb: 0, fxd: 0 };
-  const byBucket = summary?.byBucket ?? { mmf: 0, tbill: 0, ifb: 0, fxd: 0 };
 
   return (
     <>
@@ -168,7 +268,7 @@ export function DepositDrawer({ open, onClose }: DepositDrawerProps) {
               <h2 className="text-sm font-bold text-foreground" style={{ fontFamily: "'Playfair Display', serif" }}>
                 Record Deposits
               </h2>
-              <p className="text-xs text-muted-foreground">Log real money into each bucket</p>
+              <p className="text-xs text-muted-foreground">Log real money into a specific account</p>
             </div>
           </div>
           <button
@@ -200,22 +300,6 @@ export function DepositDrawer({ open, onClose }: DepositDrawerProps) {
             </div>
           </div>
 
-          {/* Bucket breakdown */}
-          <div className="rounded-xl bg-white/5 border border-white/10 p-4">
-            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">By Bucket</p>
-            <div className="grid grid-cols-2 gap-3">
-              {(Object.entries(BUCKET_META) as [Bucket, typeof BUCKET_META[Bucket]][]).map(([key, meta]) => (
-                <div key={key} className="flex items-center gap-2">
-                  <span className={meta.color}>{meta.icon}</span>
-                  <div className="min-w-0">
-                    <p className="text-xs text-muted-foreground truncate">{key === "mmf" ? fundLabel : meta.label}</p>
-                    <p className="text-sm font-bold text-foreground kes-amount">{formatKES(byBucket[key])}</p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-
           {/* Tax summary */}
           {(summary?.taxLiability ?? 0) > 0 && (
             <div className="rounded-xl bg-red-500/10 border border-red-500/20 p-4">
@@ -225,7 +309,7 @@ export function DepositDrawer({ open, onClose }: DepositDrawerProps) {
               </div>
               <p className="text-lg font-bold text-red-300 kes-amount">{formatKES(summary?.taxLiability ?? 0)}</p>
               <div className="text-xs text-muted-foreground mt-2 space-y-0.5">
-                {taxBreakdown.mmf > 0 && <p>MMF: {formatKES(taxBreakdown.mmf)}</p>}
+                {taxBreakdown.mmf > 0 && <p>MMF / Bank: {formatKES(taxBreakdown.mmf)}</p>}
                 {taxBreakdown.tbill > 0 && <p>T-Bill: {formatKES(taxBreakdown.tbill)}</p>}
                 {taxBreakdown.fxd > 0 && <p>FXD: {formatKES(taxBreakdown.fxd)}</p>}
                 <p className="text-emerald-400 mt-1">IFB: Tax-exempt</p>
@@ -253,32 +337,47 @@ export function DepositDrawer({ open, onClose }: DepositDrawerProps) {
                 </button>
               </div>
 
-              {/* Bucket */}
+              {/* Destination — pick the account first */}
               <div className="space-y-1.5">
-                <Label className="text-xs text-muted-foreground">Investment Bucket</Label>
-                <Select value={form.bucket} onValueChange={(v) => setForm((f) => ({ ...f, bucket: v as Bucket }))}>
+                <Label className="text-xs text-muted-foreground">Where did the money go?</Label>
+                <Select value={form.destination} onValueChange={(v) => setForm((f) => ({ ...f, destination: v }))}>
                   <SelectTrigger className="bg-white/5 border-white/10 h-9 text-sm">
-                    <SelectValue />
+                    <SelectValue placeholder="Choose an account or instrument" />
                   </SelectTrigger>
-                  <SelectContent className="bg-[#0d1117] border-white/10">
-                    {(Object.entries(BUCKET_META) as [Bucket, typeof BUCKET_META[Bucket]][]).map(([key, meta]) => (
-                      <SelectItem key={key} value={key}>
-                        <div className="flex items-center gap-2">
-                          <span className={meta.color}>{meta.icon}</span>
-                          <span>{key === "mmf" ? fundLabel : meta.label}</span>
-                        </div>
-                      </SelectItem>
-                    ))}
+                  <SelectContent className="bg-[#0d1117] border-white/10 max-h-72">
+                    {(["MMF funds", "Bank instruments", "Government securities"] as const).map((group) => {
+                      const items = destinations.filter((d) => d.group === group);
+                      if (items.length === 0) return null;
+                      return (
+                        <SelectGroup key={group}>
+                          <SelectLabel className="text-xs text-muted-foreground">{group}</SelectLabel>
+                          {items.map((d) => (
+                            <SelectItem key={d.value} value={d.value}>
+                              <div className="flex items-center gap-2">
+                                <span className={d.color}>{d.icon}</span>
+                                <span>{d.label}</span>
+                              </div>
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      );
+                    })}
                   </SelectContent>
                 </Select>
-                <p className="text-xs text-muted-foreground">{form.bucket === "mmf" ? `${fundName} — daily accrual, ${fundEar.toFixed(2)}% p.a. gross` : BUCKET_META[form.bucket].description}</p>
-                {form.bucket === "fxd" && (
+                {selectedDest ? (
+                  <p className="text-xs text-muted-foreground">{selectedDest.sublabel} · {selectedDest.taxNote}</p>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    Don't see your bank deposit or extra MMF? Add it first on the relevant page, then it appears here.
+                  </p>
+                )}
+                {selectedDest?.payload.bucket === "fxd" && (
                   <div className="flex items-start gap-2 rounded-lg bg-red-500/10 border border-red-500/20 p-2.5 text-xs text-red-300">
                     <Info className="w-3 h-3 mt-0.5 shrink-0" />
                     <span>FXD coupon income is subject to 15% WHT — reflected in your tax estimate.</span>
                   </div>
                 )}
-                {form.bucket === "ifb" && (
+                {selectedDest?.payload.bucket === "ifb" && (
                   <div className="flex items-start gap-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20 p-2.5 text-xs text-emerald-300">
                     <ShieldCheck className="w-3 h-3 mt-0.5 shrink-0" />
                     <span>IFB bond coupons are fully tax-exempt.</span>
@@ -347,20 +446,20 @@ export function DepositDrawer({ open, onClose }: DepositDrawerProps) {
             ) : (
               <div className="space-y-2">
                 {deposits.map((d) => {
-                  const meta = BUCKET_META[d.bucket as Bucket];
+                  const dest = destLabelFor(d as never);
                   const amount = parseFloat(String(d.amount));
                   return (
                     <div key={d.id} className="flex items-center gap-3 rounded-lg bg-white/5 border border-white/10 px-3 py-2.5">
-                      <span className={meta.color}>{meta.icon}</span>
+                      <span className={dest.color}>{dest.icon}</span>
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2">
                           <span className="text-xs font-semibold text-foreground kes-amount">{formatKES(amount)}</span>
-                          <Badge className={`text-xs px-1.5 py-0 h-4 ${d.bucket === "ifb" ? "bg-emerald-500/20 text-emerald-400 border-emerald-500/30" : "bg-red-500/20 text-red-400 border-red-500/30"}`}>
-                            {d.bucket === "ifb" ? "Tax-Free" : "15% WHT"}
+                          <Badge className={`text-xs px-1.5 py-0 h-4 ${dest.taxFree ? "bg-emerald-500/20 text-emerald-400 border-emerald-500/30" : "bg-red-500/20 text-red-400 border-red-500/30"}`}>
+                            {dest.taxFree ? "Tax-Free" : "15% WHT"}
                           </Badge>
                         </div>
                         <p className="text-xs text-muted-foreground truncate">
-                          {meta.label} · {new Date(d.depositDate).toLocaleDateString("en-KE", { day: "numeric", month: "short", year: "numeric" })}
+                          {dest.label} · {new Date(d.depositDate).toLocaleDateString("en-KE", { day: "numeric", month: "short", year: "numeric" })}
                           {d.notes ? ` · ${d.notes}` : ""}
                         </p>
                       </div>

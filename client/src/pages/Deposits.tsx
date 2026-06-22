@@ -1,6 +1,7 @@
 import { usePortfolio } from "@/contexts/PortfolioContext";
 import { useSelectedFund } from "@/hooks/useSelectedFund";
-import { useState } from "react";
+import { useDepositDrawer } from "@/contexts/DepositDrawerContext";
+import { useMemo, useState } from "react";
 import { trpc } from "@/lib/trpc";
 import { formatKES } from "@/lib/format";
 import { Button } from "@/components/ui/button";
@@ -40,6 +41,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
+import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 import {
   PlusCircle,
@@ -50,114 +52,158 @@ import {
   Landmark,
   Info,
   ArrowDownCircle,
+  Building2,
+  PiggyBank,
+  Pencil,
 } from "lucide-react";
 
 type Bucket = "mmf" | "tbill" | "ifb" | "fxd";
 
-const BUCKET_META: Record<
-  Bucket,
-  { label: string; color: string; icon: React.ReactNode; description: string; taxNote: string }
-> = {
-  mmf: {
-    label: "MMF", // overridden dynamically in render
-    color: "text-[#4ade80]",
-    icon: <Wallet className="w-4 h-4" />,
-    description: "Money Market Fund",
-    taxNote: "15% WHT deducted at source (final tax)",
-  },
-  tbill: {
-    label: "CBK T-Bills",
-    color: "text-[#60a5fa]",
-    icon: <TrendingUp className="w-4 h-4" />,
-    description: "Treasury Bills — 91/182/364-day discount instruments",
-    taxNote: "15% WHT on discount (final tax)",
-  },
-  ifb: {
-    label: "IFB Bonds",
-    color: "text-[#a78bfa]",
-    icon: <ShieldCheck className="w-4 h-4" />,
-    description: "Infrastructure Bonds — semi-annual coupons, tax-exempt",
-    taxNote: "Tax-exempt (IFB)",
-  },
-  fxd: {
-    label: "FXD Bonds",
-    color: "text-[#fb923c]",
-    icon: <Landmark className="w-4 h-4" />,
-    description: "Fixed Coupon Bonds — semi-annual coupons, 15% WHT",
-    taxNote: "15% withholding tax on coupons",
-  },
+const GOV_META = {
+  tbill: { label: "CBK T-Bills", color: "text-[#60a5fa]", icon: <TrendingUp className="w-4 h-4" /> },
+  ifb: { label: "IFB Bonds", color: "text-[#a78bfa]", icon: <ShieldCheck className="w-4 h-4" /> },
+  fxd: { label: "FXD Bonds", color: "text-[#fb923c]", icon: <Landmark className="w-4 h-4" /> },
+} as const;
+
+const EMPTY_BANK = {
+  id: null as number | null,
+  bankName: "",
+  label: "",
+  instrumentType: "call_deposit" as "call_deposit" | "fixed_deposit",
+  principal: "",
+  interestRate: "",
+  rateAsOfDate: new Date().toISOString().slice(0, 10),
+  isNegotiable: true,
+  tenorMonths: "",
+  notes: "",
 };
 
 export default function Deposits() {
   const { portfolioId, portfolio } = usePortfolio();
-  const { fundName, fundLabel, fundEar } = useSelectedFund();
+  const { fundName, fundLabel } = useSelectedFund();
+  const { openDrawer } = useDepositDrawer();
   const utils = trpc.useUtils();
 
   const { data: deposits = [], isLoading } = trpc.deposits.list.useQuery({ portfolioId: portfolioId! }, { enabled: !!portfolioId });
   const { data: summary } = trpc.deposits.summary.useQuery({ portfolioId: portfolioId! }, { enabled: !!portfolioId });
-  const { data: settings } = trpc.settings.get.useQuery({ portfolioId: portfolioId! }, { enabled: !!portfolioId });
-  const liveTarget = portfolio?.targetAmount ?? 5000000;
+  const { data: secondaries = [] } = trpc.secondaryMmfs.list.useQuery({ portfolioId: portfolioId! }, { enabled: !!portfolioId });
+  const { data: bankHoldings = [] } = trpc.bankHoldings.list.useQuery({ portfolioId: portfolioId! }, { enabled: !!portfolioId });
 
-  const addMutation = trpc.deposits.add.useMutation({
-    onSuccess: () => {
-      utils.deposits.list.invalidate();
-      utils.deposits.summary.invalidate();
-      toast.success("Deposit recorded successfully");
-      setDialogOpen(false);
-      resetForm();
-    },
-    onError: (err) => toast.error(err.message),
-  });
+  const liveTarget = portfolio?.targetAmount ?? 0;
 
   const deleteMutation = trpc.deposits.delete.useMutation({
     onSuccess: () => {
       utils.deposits.list.invalidate();
       utils.deposits.summary.invalidate();
+      utils.secondaryMmfs.list.invalidate();
+      utils.bankHoldings.list.invalidate();
       toast.success("Deposit removed");
       setDeleteId(null);
     },
     onError: (err) => toast.error(err.message),
   });
 
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [deleteId, setDeleteId] = useState<number | null>(null);
-
-  const [form, setForm] = useState({
-    bucket: "mmf" as Bucket,
-    amount: "",
-    depositDate: new Date().toISOString().slice(0, 10),
-    notes: "",
+  const addBank = trpc.bankHoldings.add.useMutation({
+    onSuccess: () => {
+      utils.bankHoldings.list.invalidate();
+      utils.deposits.summary.invalidate();
+      toast.success("Bank instrument saved");
+      setBankDialogOpen(false);
+      setBankForm(EMPTY_BANK);
+    },
+    onError: (err) => toast.error(err.message),
+  });
+  const updateBank = trpc.bankHoldings.update.useMutation({
+    onSuccess: () => {
+      utils.bankHoldings.list.invalidate();
+      utils.deposits.summary.invalidate();
+      toast.success("Bank instrument updated");
+      setBankDialogOpen(false);
+      setBankForm(EMPTY_BANK);
+    },
+    onError: (err) => toast.error(err.message),
+  });
+  const deleteBank = trpc.bankHoldings.remove.useMutation({
+    onSuccess: () => {
+      utils.bankHoldings.list.invalidate();
+      utils.deposits.summary.invalidate();
+      toast.success("Bank instrument removed");
+      setDeleteBankId(null);
+    },
+    onError: (err: { message: string }) => toast.error(err.message),
   });
 
-  function resetForm() {
-    setForm({
-      bucket: "mmf",
-      amount: "",
-      depositDate: new Date().toISOString().slice(0, 10),
-      notes: "",
+  const [deleteId, setDeleteId] = useState<number | null>(null);
+  const [bankDialogOpen, setBankDialogOpen] = useState(false);
+  const [bankForm, setBankForm] = useState(EMPTY_BANK);
+  const [deleteBankId, setDeleteBankId] = useState<number | null>(null);
+
+  function openBankEdit(h: (typeof bankHoldings)[number]) {
+    setBankForm({
+      id: h.id,
+      bankName: h.bankName,
+      label: h.label ?? "",
+      instrumentType: h.instrumentType as "call_deposit" | "fixed_deposit",
+      principal: String(h.principal),
+      interestRate: String(h.interestRate),
+      rateAsOfDate: h.rateAsOfDate ? new Date(h.rateAsOfDate).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10),
+      isNegotiable: h.isNegotiable,
+      tenorMonths: h.tenorMonths != null ? String(h.tenorMonths) : "",
+      notes: h.notes ?? "",
     });
+    setBankDialogOpen(true);
   }
 
-  function handleSubmit() {
-    const amount = parseFloat(form.amount);
-    if (!amount || amount <= 0) {
-      toast.error("Please enter a valid amount");
-      return;
+  function submitBank() {
+    if (!portfolioId) return;
+    if (!bankForm.bankName.trim()) { toast.error("Bank name is required"); return; }
+    const principal = parseFloat(bankForm.principal) || 0;
+    const interestRate = parseFloat(bankForm.interestRate) || 0;
+    const common = {
+      portfolioId,
+      bankName: bankForm.bankName.trim(),
+      label: bankForm.label.trim() || undefined,
+      instrumentType: bankForm.instrumentType,
+      interestRate,
+      rateAsOfDate: bankForm.rateAsOfDate || undefined,
+      isNegotiable: bankForm.isNegotiable,
+      tenorMonths: bankForm.tenorMonths ? parseInt(bankForm.tenorMonths) : undefined,
+      notes: bankForm.notes.trim() || undefined,
+    };
+    if (bankForm.id) {
+      updateBank.mutate({ id: bankForm.id, ...common, principal });
+    } else {
+      addBank.mutate({ ...common, principal });
     }
-    addMutation.mutate({ portfolioId: portfolioId!,
-      bucket: form.bucket,
-      amount,
-      depositDate: form.depositDate,
-      notes: form.notes || undefined,
-    });
+  }
+
+  // Resolve a deposit row to a destination label for the history table.
+  function destLabelFor(d: { institutionType?: string | null; mmfFundId?: number | null; bankHoldingId?: number | null; bucket: string }) {
+    if (d.institutionType === "bank_instrument" && d.bankHoldingId) {
+      const h = bankHoldings.find((x) => x.id === d.bankHoldingId);
+      return { label: h ? (h.label || `${h.bankName}`) : "Bank deposit", icon: <Building2 className="w-4 h-4" />, color: "text-sky-300", taxFree: false };
+    }
+    if (d.institutionType === "mmf_fund" && d.mmfFundId) {
+      if (portfolio?.mmfFundId === d.mmfFundId) return { label: fundName, icon: <Wallet className="w-4 h-4" />, color: "text-emerald-400", taxFree: false };
+      const s = secondaries.find((x) => x.mmfFundId === d.mmfFundId);
+      return { label: s ? (s.label || s.fundName) : "MMF fund", icon: <PiggyBank className="w-4 h-4" />, color: "text-emerald-300", taxFree: false };
+    }
+    if (d.bucket === "ifb") return { label: GOV_META.ifb.label, icon: GOV_META.ifb.icon, color: GOV_META.ifb.color, taxFree: true };
+    if (d.bucket === "tbill") return { label: GOV_META.tbill.label, icon: GOV_META.tbill.icon, color: GOV_META.tbill.color, taxFree: false };
+    if (d.bucket === "fxd") return { label: GOV_META.fxd.label, icon: GOV_META.fxd.icon, color: GOV_META.fxd.color, taxFree: false };
+    return { label: fundLabel, icon: <Wallet className="w-4 h-4" />, color: "text-emerald-400", taxFree: false };
   }
 
   const totalContributed = summary?.totalContributed ?? 0;
   const remainingToTarget = summary?.remainingToTarget ?? liveTarget;
   const taxLiability = summary?.taxLiability ?? 0;
-  const taxBreakdown = summary?.taxBreakdown ?? { mmf: 0, tbill: 0, ifb: 0, fxd: 0 };
+  const taxBreakdown = summary?.taxBreakdown ?? { mmf: 0, tbill: 0, ifb: 0, fxd: 0, secondaryMmf: 0, bank: 0 };
   const byBucket = summary?.byBucket ?? { mmf: 0, tbill: 0, ifb: 0, fxd: 0 };
+  const bankBalance = summary?.bankBalance ?? 0;
+  const secondaryMmfBalance = summary?.secondaryMmfBalance ?? 0;
   const progressPct = liveTarget > 0 ? Math.min(100, (totalContributed / liveTarget) * 100) : 0;
+
+  const bankTotal = useMemo(() => bankHoldings.reduce((s, h) => s + h.principal, 0), [bankHoldings]);
 
   return (
     <div className="p-8 space-y-8 max-w-5xl mx-auto">
@@ -166,11 +212,11 @@ export default function Deposits() {
         <div>
           <h1 className="text-3xl font-serif font-bold text-foreground">Live Deposit Tracker</h1>
           <p className="text-muted-foreground mt-1">
-            Record every real deposit you make — this drives your live actuals on the dashboard.
+            Record every real deposit into the exact account it went to — this drives your live actuals on the dashboard.
           </p>
         </div>
         <Button
-          onClick={() => setDialogOpen(true)}
+          onClick={openDrawer}
           className="bg-[#c9a84c] hover:bg-[#b8943f] text-black font-semibold gap-2"
         >
           <PlusCircle className="w-4 h-4" />
@@ -180,86 +226,146 @@ export default function Deposits() {
 
       {/* Summary Cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        {/* Total Contributed */}
         <div className="rounded-xl border border-white/10 bg-white/5 p-5 space-y-2">
-          <p className="text-xs font-medium uppercase tracking-widest text-muted-foreground">
-            Total Contributed
-          </p>
-          <p className="text-2xl font-serif font-bold text-[#c9a84c]">
-            {formatKES(totalContributed)}
-          </p>
+          <p className="text-xs font-medium uppercase tracking-widest text-muted-foreground">Total Contributed</p>
+          <p className="text-2xl font-serif font-bold text-[#c9a84c]">{formatKES(totalContributed)}</p>
           <div className="w-full h-1.5 rounded-full bg-white/10 overflow-hidden">
-            <div
-              className="h-full rounded-full bg-[#c9a84c] transition-all duration-500"
-              style={{ width: `${progressPct}%` }}
-            />
+            <div className="h-full rounded-full bg-[#c9a84c] transition-all duration-500" style={{ width: `${progressPct}%` }} />
           </div>
           <p className="text-xs text-muted-foreground">
-            {progressPct.toFixed(1)}% of {formatKES(liveTarget)} goal
+            {liveTarget > 0 ? `${progressPct.toFixed(1)}% of ${formatKES(liveTarget)} goal` : "No target set"}
           </p>
         </div>
 
-        {/* Remaining to Target */}
         <div className="rounded-xl border border-white/10 bg-white/5 p-5 space-y-2">
-          <p className="text-xs font-medium uppercase tracking-widest text-muted-foreground">
-            Remaining to Target
-          </p>
-          <p className="text-2xl font-serif font-bold text-foreground">
-            {formatKES(remainingToTarget)}
-          </p>
+          <p className="text-xs font-medium uppercase tracking-widest text-muted-foreground">Remaining to Target</p>
+          <p className="text-2xl font-serif font-bold text-foreground">{formatKES(remainingToTarget)}</p>
           <p className="text-xs text-muted-foreground">
-            Based on {formatKES(liveTarget)} goal
+            {liveTarget > 0 ? `Based on ${formatKES(liveTarget)} goal` : "Set a target in Settings"}
           </p>
         </div>
 
-        {/* Estimated Tax Liability */}
         <div className="rounded-xl border border-white/10 bg-white/5 p-5 space-y-2">
           <div className="flex items-center gap-2">
-            <p className="text-xs font-medium uppercase tracking-widest text-muted-foreground">
-              Est. Tax Liability
-            </p>
+            <p className="text-xs font-medium uppercase tracking-widest text-muted-foreground">Est. Tax Liability</p>
             <div className="group relative">
               <Info className="w-3 h-3 text-muted-foreground cursor-help" />
               <div className="absolute bottom-5 left-0 z-10 hidden group-hover:block w-56 rounded-lg bg-popover border border-border p-3 text-xs text-muted-foreground shadow-xl">
-15% WHT is deducted at source on MMF interest, T-Bill discount, and FXD coupons — all are final taxes for resident individuals. IFB bonds are fully tax-exempt.
+                15% WHT is deducted at source on MMF interest, bank deposit interest, T-Bill discount, and FXD coupons — all final taxes for resident individuals. IFB bonds are fully tax-exempt.
               </div>
             </div>
           </div>
-          <p className="text-2xl font-serif font-bold text-red-400">
-            {formatKES(taxLiability)}
-          </p>
+          <p className="text-2xl font-serif font-bold text-red-400">{formatKES(taxLiability)}</p>
           <div className="text-xs text-muted-foreground space-y-0.5">
             {taxBreakdown.mmf > 0 && <p>MMF: {formatKES(taxBreakdown.mmf)}</p>}
+            {(taxBreakdown.bank ?? 0) > 0 && <p>Bank: {formatKES(taxBreakdown.bank)}</p>}
             {taxBreakdown.tbill > 0 && <p>T-Bill: {formatKES(taxBreakdown.tbill)}</p>}
             {taxBreakdown.fxd > 0 && <p>FXD: {formatKES(taxBreakdown.fxd)}</p>}
-            {byBucket.ifb > 0 && <p>IFB: Tax-exempt</p>}
+            {byBucket.ifb > 0 && <p className="text-emerald-400">IFB: Tax-exempt</p>}
             {taxLiability === 0 && byBucket.ifb === 0 && <p>No deposits recorded yet</p>}
-            {taxLiability === 0 && byBucket.ifb > 0 && <p>Estimated annual WHT (final tax)</p>}
           </div>
         </div>
       </div>
 
-      {/* Bucket Breakdown */}
+      {/* Destination Breakdown */}
       <div className="rounded-xl border border-white/10 bg-white/5 p-5">
         <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-widest mb-4">
-          Deposits by Bucket
+          Where your money is
         </h2>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          {(Object.entries(BUCKET_META) as [Bucket, typeof BUCKET_META[Bucket]][]).map(
-            ([key, meta]) => (
-              <div key={key} className="space-y-1">
-                <div className={`flex items-center gap-2 ${meta.color}`}>
-                  {meta.icon}
-                  <span className="text-xs font-medium">{key === "mmf" ? fundLabel : meta.label}</span>
-                </div>
-                <p className="text-lg font-serif font-bold text-foreground">
-                  {formatKES(byBucket[key])}
-                </p>
-                <p className="text-xs text-muted-foreground">{meta.taxNote}</p>
-              </div>
-            )
-          )}
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
+          <div className="space-y-1">
+            <div className="flex items-center gap-2 text-emerald-400"><Wallet className="w-4 h-4" /><span className="text-xs font-medium">{fundLabel}</span></div>
+            <p className="text-lg font-serif font-bold text-foreground">{formatKES(byBucket.mmf)}</p>
+            <p className="text-xs text-muted-foreground">Primary MMF</p>
+          </div>
+          <div className="space-y-1">
+            <div className="flex items-center gap-2 text-emerald-300"><PiggyBank className="w-4 h-4" /><span className="text-xs font-medium">Other MMFs</span></div>
+            <p className="text-lg font-serif font-bold text-foreground">{formatKES(secondaryMmfBalance)}</p>
+            <p className="text-xs text-muted-foreground">{secondaries.length} account{secondaries.length !== 1 ? "s" : ""}</p>
+          </div>
+          <div className="space-y-1">
+            <div className="flex items-center gap-2 text-sky-300"><Building2 className="w-4 h-4" /><span className="text-xs font-medium">Bank</span></div>
+            <p className="text-lg font-serif font-bold text-foreground">{formatKES(bankBalance)}</p>
+            <p className="text-xs text-muted-foreground">{bankHoldings.length} instrument{bankHoldings.length !== 1 ? "s" : ""}</p>
+          </div>
+          <div className="space-y-1">
+            <div className="flex items-center gap-2 text-blue-400"><TrendingUp className="w-4 h-4" /><span className="text-xs font-medium">T-Bills</span></div>
+            <p className="text-lg font-serif font-bold text-foreground">{formatKES(byBucket.tbill)}</p>
+            <p className="text-xs text-muted-foreground">15% WHT</p>
+          </div>
+          <div className="space-y-1">
+            <div className="flex items-center gap-2 text-violet-400"><ShieldCheck className="w-4 h-4" /><span className="text-xs font-medium">IFB / FXD</span></div>
+            <p className="text-lg font-serif font-bold text-foreground">{formatKES(byBucket.ifb + byBucket.fxd)}</p>
+            <p className="text-xs text-muted-foreground">Bonds</p>
+          </div>
         </div>
+      </div>
+
+      {/* Bank Instruments */}
+      <div className="rounded-xl border border-white/10 bg-white/5 overflow-hidden">
+        <div className="px-5 py-4 border-b border-white/10 flex items-center gap-2">
+          <Building2 className="w-4 h-4 text-sky-300" />
+          <h2 className="text-sm font-semibold text-foreground">Bank Instruments</h2>
+          <span className="text-xs text-muted-foreground">— call & fixed deposits ({formatKES(bankTotal)})</span>
+          <Button
+            size="sm"
+            variant="outline"
+            className="ml-auto border-white/10 bg-white/5 gap-1.5 h-7 text-xs"
+            onClick={() => { setBankForm(EMPTY_BANK); setBankDialogOpen(true); }}
+          >
+            <PlusCircle className="w-3.5 h-3.5" /> Add Instrument
+          </Button>
+        </div>
+        {bankHoldings.length === 0 ? (
+          <div className="p-8 text-center space-y-2">
+            <Building2 className="w-8 h-8 text-muted-foreground mx-auto opacity-30" />
+            <p className="text-muted-foreground text-sm">No bank instruments tracked.</p>
+            <p className="text-muted-foreground text-xs">Add a call or fixed deposit to record money held at a commercial bank.</p>
+          </div>
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow className="border-white/10 hover:bg-transparent">
+                <TableHead className="text-muted-foreground text-xs">Instrument</TableHead>
+                <TableHead className="text-muted-foreground text-xs">Type</TableHead>
+                <TableHead className="text-muted-foreground text-xs text-right">Principal</TableHead>
+                <TableHead className="text-muted-foreground text-xs text-right">Rate</TableHead>
+                <TableHead className="text-muted-foreground text-xs">Rate as-of</TableHead>
+                <TableHead className="text-muted-foreground text-xs w-20"></TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {bankHoldings.map((h) => (
+                <TableRow key={h.id} className="border-white/10 hover:bg-white/5">
+                  <TableCell className="text-sm text-foreground">
+                    <div className="font-medium">{h.label || h.bankName}</div>
+                    <div className="text-xs text-muted-foreground">{h.bankName}{h.isNegotiable ? " · negotiable" : ""}</div>
+                  </TableCell>
+                  <TableCell>
+                    <Badge className="bg-sky-500/15 text-sky-300 border-sky-500/30 text-xs">
+                      {h.instrumentType === "fixed_deposit" ? "Fixed Deposit" : "Call Deposit"}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="text-right font-mono font-semibold text-foreground">{formatKES(h.principal)}</TableCell>
+                  <TableCell className="text-right font-mono text-foreground">{h.interestRate.toFixed(2)}%</TableCell>
+                  <TableCell className="text-xs text-muted-foreground">
+                    {h.rateAsOfDate ? new Date(h.rateAsOfDate).toLocaleDateString("en-KE", { day: "numeric", month: "short", year: "numeric" }) : "—"}
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex items-center gap-1">
+                      <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-foreground" onClick={() => openBankEdit(h)}>
+                        <Pencil className="w-3.5 h-3.5" />
+                      </Button>
+                      <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-red-400" onClick={() => setDeleteBankId(h.id)}>
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </Button>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
       </div>
 
       {/* Deposit History Table */}
@@ -278,16 +384,14 @@ export default function Deposits() {
           <div className="p-12 text-center space-y-2">
             <ArrowDownCircle className="w-8 h-8 text-muted-foreground mx-auto opacity-40" />
             <p className="text-muted-foreground text-sm">No deposits recorded yet.</p>
-            <p className="text-muted-foreground text-xs">
-              Click "Record Deposit" to log your first real contribution.
-            </p>
+            <p className="text-muted-foreground text-xs">Click "Record Deposit" to log your first real contribution.</p>
           </div>
         ) : (
           <Table>
             <TableHeader>
               <TableRow className="border-white/10 hover:bg-transparent">
                 <TableHead className="text-muted-foreground text-xs">Date</TableHead>
-                <TableHead className="text-muted-foreground text-xs">Bucket</TableHead>
+                <TableHead className="text-muted-foreground text-xs">Destination</TableHead>
                 <TableHead className="text-muted-foreground text-xs text-right">Amount</TableHead>
                 <TableHead className="text-muted-foreground text-xs">Tax Treatment</TableHead>
                 <TableHead className="text-muted-foreground text-xs">Notes</TableHead>
@@ -296,47 +400,30 @@ export default function Deposits() {
             </TableHeader>
             <TableBody>
               {deposits.map((d) => {
-                const meta = BUCKET_META[d.bucket as Bucket];
+                const dest = destLabelFor(d as never);
                 const amount = parseFloat(String(d.amount));
                 return (
                   <TableRow key={d.id} className="border-white/10 hover:bg-white/5">
                     <TableCell className="text-sm text-foreground">
-                      {new Date(d.depositDate).toLocaleDateString("en-KE", {
-                        year: "numeric",
-                        month: "short",
-                        day: "numeric",
-                      })}
+                      {new Date(d.depositDate).toLocaleDateString("en-KE", { year: "numeric", month: "short", day: "numeric" })}
                     </TableCell>
                     <TableCell>
-                      <div className={`flex items-center gap-2 ${meta.color}`}>
-                        {meta.icon}
-                        <span className="text-sm font-medium">{d.bucket === "mmf" ? fundLabel : meta.label}</span>
+                      <div className={`flex items-center gap-2 ${dest.color}`}>
+                        {dest.icon}
+                        <span className="text-sm font-medium">{dest.label}</span>
                       </div>
                     </TableCell>
-                    <TableCell className="text-right font-mono font-semibold text-foreground">
-                      {formatKES(amount)}
-                    </TableCell>
+                    <TableCell className="text-right font-mono font-semibold text-foreground">{formatKES(amount)}</TableCell>
                     <TableCell>
-                      {d.bucket === "ifb" ? (
-                        <Badge className="bg-emerald-500/20 text-emerald-400 border-emerald-500/30 text-xs">
-                          Tax-Exempt
-                        </Badge>
+                      {dest.taxFree ? (
+                        <Badge className="bg-emerald-500/20 text-emerald-400 border-emerald-500/30 text-xs">Tax-Exempt</Badge>
                       ) : (
-                        <Badge className="bg-red-500/20 text-red-400 border-red-500/30 text-xs">
-                          15% WHT
-                        </Badge>
+                        <Badge className="bg-red-500/20 text-red-400 border-red-500/30 text-xs">15% WHT</Badge>
                       )}
                     </TableCell>
-                    <TableCell className="text-xs text-muted-foreground max-w-[180px] truncate">
-                      {d.notes ?? "—"}
-                    </TableCell>
+                    <TableCell className="text-xs text-muted-foreground max-w-[180px] truncate">{d.notes ?? "—"}</TableCell>
                     <TableCell>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-7 w-7 text-muted-foreground hover:text-red-400"
-                        onClick={() => setDeleteId(d.id)}
-                      >
+                      <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-red-400" onClick={() => setDeleteId(d.id)}>
                         <Trash2 className="w-3.5 h-3.5" />
                       </Button>
                     </TableCell>
@@ -348,116 +435,79 @@ export default function Deposits() {
         )}
       </div>
 
-      {/* Add Deposit Dialog */}
-      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+      {/* Bank instrument dialog */}
+      <Dialog open={bankDialogOpen} onOpenChange={setBankDialogOpen}>
         <DialogContent className="bg-[#0f1117] border-white/10 text-foreground max-w-md">
           <DialogHeader>
-            <DialogTitle className="font-serif text-xl">Record a Deposit</DialogTitle>
+            <DialogTitle className="font-serif text-xl">{bankForm.id ? "Edit" : "Add"} Bank Instrument</DialogTitle>
           </DialogHeader>
-
-          <div className="space-y-5 py-2">
-            {/* Bucket */}
-            <div className="space-y-2">
-              <Label className="text-sm text-muted-foreground">Investment Bucket</Label>
-              <Select
-                value={form.bucket}
-                onValueChange={(v) => setForm((f) => ({ ...f, bucket: v as Bucket }))}
-              >
-                <SelectTrigger className="bg-white/5 border-white/10">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent className="bg-[#0f1117] border-white/10">
-                  {(Object.entries(BUCKET_META) as [Bucket, typeof BUCKET_META[Bucket]][]).map(
-                    ([key, meta]) => (
-                      <SelectItem key={key} value={key}>
-                        <div className="flex items-center gap-2">
-                          <span className={meta.color}>{meta.icon}</span>
-                          <span>{key === "mmf" ? fundLabel : meta.label}</span>
-                        </div>
-                      </SelectItem>
-                    )
-                  )}
-                </SelectContent>
-              </Select>
-              <p className="text-xs text-muted-foreground">
-                {form.bucket === "mmf" ? `${fundName} — daily accrual, ${fundEar.toFixed(2)}% p.a. gross` : BUCKET_META[form.bucket].description}
-              </p>
-              {form.bucket === "fxd" && (
-                <div className="flex items-start gap-2 rounded-lg bg-red-500/10 border border-red-500/20 p-3 text-xs text-red-300">
-                  <Info className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
-                  <span>
-                    FXD bond coupon income is subject to 15% withholding tax. This will be
-                    reflected in your tax liability estimate.
-                  </span>
-                </div>
-              )}
-              {form.bucket === "ifb" && (
-                <div className="flex items-start gap-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20 p-3 text-xs text-emerald-300">
-                  <ShieldCheck className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
-                  <span>IFB bond coupons are fully tax-exempt.</span>
-                </div>
-              )}
+          <div className="space-y-4 py-2">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label className="text-xs text-muted-foreground">Bank name</Label>
+                <Input value={bankForm.bankName} onChange={(e) => setBankForm((f) => ({ ...f, bankName: e.target.value }))} placeholder="e.g. KCB" className="bg-white/5 border-white/10 h-9 text-sm" />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs text-muted-foreground">Label (optional)</Label>
+                <Input value={bankForm.label} onChange={(e) => setBankForm((f) => ({ ...f, label: e.target.value }))} placeholder="e.g. Emergency fund" className="bg-white/5 border-white/10 h-9 text-sm" />
+              </div>
             </div>
-
-            {/* Amount */}
-            <div className="space-y-2">
-              <Label className="text-sm text-muted-foreground">Amount (KES)</Label>
-              <Input
-                type="number"
-                min="1"
-                step="100"
-                placeholder="e.g. 50000"
-                value={form.amount}
-                onChange={(e) => setForm((f) => ({ ...f, amount: e.target.value }))}
-                className="bg-white/5 border-white/10 font-mono"
-              />
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label className="text-xs text-muted-foreground">Type</Label>
+                <Select value={bankForm.instrumentType} onValueChange={(v) => setBankForm((f) => ({ ...f, instrumentType: v as "call_deposit" | "fixed_deposit" }))}>
+                  <SelectTrigger className="bg-white/5 border-white/10 h-9 text-sm"><SelectValue /></SelectTrigger>
+                  <SelectContent className="bg-[#0f1117] border-white/10">
+                    <SelectItem value="call_deposit">Call Deposit</SelectItem>
+                    <SelectItem value="fixed_deposit">Fixed Deposit</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs text-muted-foreground">Principal (KES)</Label>
+                <Input type="number" min="0" step="1000" value={bankForm.principal} onChange={(e) => setBankForm((f) => ({ ...f, principal: e.target.value }))} placeholder="e.g. 200000" className="bg-white/5 border-white/10 font-mono h-9 text-sm" />
+              </div>
             </div>
-
-            {/* Date */}
-            <div className="space-y-2">
-              <Label className="text-sm text-muted-foreground">Deposit Date</Label>
-              <Input
-                type="date"
-                value={form.depositDate}
-                onChange={(e) => setForm((f) => ({ ...f, depositDate: e.target.value }))}
-                className="bg-white/5 border-white/10"
-              />
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label className="text-xs text-muted-foreground">Interest rate (% p.a.)</Label>
+                <Input type="number" min="0" step="0.01" value={bankForm.interestRate} onChange={(e) => setBankForm((f) => ({ ...f, interestRate: e.target.value }))} placeholder="e.g. 9.50" className="bg-white/5 border-white/10 font-mono h-9 text-sm" />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs text-muted-foreground">Rate as-of date</Label>
+                <Input type="date" value={bankForm.rateAsOfDate} onChange={(e) => setBankForm((f) => ({ ...f, rateAsOfDate: e.target.value }))} className="bg-white/5 border-white/10 h-9 text-sm" />
+              </div>
             </div>
-
-            {/* Notes */}
-            <div className="space-y-2">
-              <Label className="text-sm text-muted-foreground">Notes (optional)</Label>
-              <Textarea
-                placeholder="e.g. July 2026 monthly contribution"
-                value={form.notes}
-                onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
-                className="bg-white/5 border-white/10 resize-none h-20"
-              />
+            {bankForm.instrumentType === "fixed_deposit" && (
+              <div className="space-y-1.5">
+                <Label className="text-xs text-muted-foreground">Tenor (months, optional)</Label>
+                <Input type="number" min="0" value={bankForm.tenorMonths} onChange={(e) => setBankForm((f) => ({ ...f, tenorMonths: e.target.value }))} placeholder="e.g. 12" className="bg-white/5 border-white/10 font-mono h-9 text-sm" />
+              </div>
+            )}
+            <div className="flex items-center justify-between rounded-lg bg-white/5 border border-white/10 px-3 py-2.5">
+              <div>
+                <Label className="text-xs text-foreground">Negotiated rate</Label>
+                <p className="text-xs text-muted-foreground">This rate was individually negotiated with the bank</p>
+              </div>
+              <Switch checked={bankForm.isNegotiable} onCheckedChange={(c) => setBankForm((f) => ({ ...f, isNegotiable: c }))} />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs text-muted-foreground">Notes (optional)</Label>
+              <Textarea value={bankForm.notes} onChange={(e) => setBankForm((f) => ({ ...f, notes: e.target.value }))} className="bg-white/5 border-white/10 resize-none h-14 text-sm" />
             </div>
           </div>
-
           <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => { setDialogOpen(false); resetForm(); }}
-              className="border-white/10"
-            >
-              Cancel
-            </Button>
-            <Button
-              onClick={handleSubmit}
-              disabled={addMutation.isPending}
-              className="bg-[#c9a84c] hover:bg-[#b8943f] text-black font-semibold"
-            >
-              {addMutation.isPending ? "Saving…" : "Record Deposit"}
+            <Button variant="outline" className="border-white/10" onClick={() => setBankDialogOpen(false)}>Cancel</Button>
+            <Button className="bg-[#c9a84c] hover:bg-[#b8943f] text-black font-semibold" onClick={submitBank} disabled={addBank.isPending || updateBank.isPending}>
+              {addBank.isPending || updateBank.isPending ? "Saving…" : "Save"}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      {/* Delete Confirmation */}
+      {/* Delete deposit confirmation */}
       <AlertDialog open={deleteId !== null} onOpenChange={(o) => !o && setDeleteId(null)}>
-        <AlertDialogContent className="bg-[#0f1117] border-white/10 text-foreground">
+        <AlertDialogContent className="bg-[#0d1117] border-white/10 text-foreground">
           <AlertDialogHeader>
             <AlertDialogTitle>Remove this deposit?</AlertDialogTitle>
             <AlertDialogDescription className="text-muted-foreground">
@@ -466,12 +516,23 @@ export default function Deposits() {
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel className="border-white/10">Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => deleteId !== null && deleteMutation.mutate({ portfolioId: portfolioId!, id: deleteId })}
-              className="bg-red-600 hover:bg-red-700 text-white"
-            >
-              Remove
-            </AlertDialogAction>
+            <AlertDialogAction onClick={() => deleteId !== null && portfolioId && deleteMutation.mutate({ portfolioId, id: deleteId })} className="bg-red-600 hover:bg-red-700 text-white">Remove</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Delete bank instrument confirmation */}
+      <AlertDialog open={deleteBankId !== null} onOpenChange={(o) => !o && setDeleteBankId(null)}>
+        <AlertDialogContent className="bg-[#0d1117] border-white/10 text-foreground">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove this bank instrument?</AlertDialogTitle>
+            <AlertDialogDescription className="text-muted-foreground">
+              This removes the instrument and its principal from your actuals. Deposit history rows that referenced it will remain but show as a generic bank deposit.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel className="border-white/10">Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={() => deleteBankId !== null && portfolioId && deleteBank.mutate({ id: deleteBankId, portfolioId })} className="bg-red-600 hover:bg-red-700 text-white">Remove</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

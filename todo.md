@@ -314,3 +314,24 @@
 - [x] R16.13 MMF Strategy page: pin selected "Your Fund" to top of both views; consistent segment colors/order; right-aligned tabular % ; metadata to footer
 - [x] R16.14 Verify non-owner sync path end-to-end (no portfolio -> empty state -> create portfolio with different target/horizon/fund -> all pages reflect it; secondary funds in projection)
 - [x] R16.15 Run tsc --noEmit + pnpm test; screenshot; save checkpoint
+
+
+## Round 17 — Live actuals everywhere, test mode, destination-aware deposits, bank holdings, guided Getting Started
+- [x] R17.1 Research current 2026 Kenyan rates (MMF EARs, T-bill 91/182/364, IFB/FXD coupons, bank call/fixed deposit rates) with source + as-of
+- [x] R17.2 Schema: add `isSandbox` (mode) to portfolios; queries scope by mode per user
+- [x] R17.3 Schema: extend deposit_entries with destination (institutionType + mmfFundId/bankHoldingId/bucket); keep bucket for back-compat
+- [x] R17.4 Schema: new `bank_instrument_holdings` table (per portfolio, live actuals)
+- [x] R17.5 Migration applied (additive ALTERs via SQL); existing MMF deposits backfilled to primary fund
+- [x] R17.6 Backend: mode-scoped portfolio queries; destination-aware deposit add/list/delete + summary
+- [x] R17.7 Backend: bank-holdings CRUD with manual rate + as-of editing
+- [x] R17.8 Backend: sample-portfolio seed + reset test data (sandbox only)
+- [x] R17.9 Engine/accrual: bank holdings earn interest (rate, day-count, 15% WHT; fixed pays at maturity, call accrues); into accrual ledger, month ledger, tax, scenarios base; maturities in liquidity calendar
+- [x] R17.10 Secondary MMFs: route fund-aware deposits into each fund balance; per-fund in accrual + tax then totaled; add/edit/remove re-runs projection + reflows all pages
+- [x] R17.11 Test-mode toggle + persistent banner + Load sample / Reset buttons in top nav; mode context re-renders every page
+- [x] R17.12 Destination-aware Record Deposit UI: pick account first (MMF funds primary+secondary, bank holdings, gov buckets), then amount/date/notes; fund/institution-aware history; mirror in DepositDrawer
+- [x] R17.13 Live bank-holdings UI (per portfolio) alongside reference catalog
+- [x] R17.14 Dashboard unified live-actuals: each MMF balance, each bank instrument, each gov security — single net-worth total + allocation bar; projections clearly separated
+- [x] R17.15 Rate Settings audit: FXD gross 12.35% standardized (confirmed consistent); per-portfolio snapshot + rerun already wired; added active-rate-source clarifier (engine uses manual MMF Yield vs fund published EAR)
+- [x] R17.16 Getting Started: guided demo — Load-sample CTA (Test mode), first-5-steps path linking each page, terms glossary (EAR/WHT/T-bill/IFB/FXD/call/fixed/duration)
+- [x] R17.17 Sync audit + integration test (actualsSync.test.ts — 8 tests, double-count guards): record one deposit to each destination type; assert dashboard/net worth, accrual, ledger, scenarios, tax all reflect it
+- [x] R17.18 Full tsc --noEmit + pnpm test (103 pass, 0 TS errors); screenshot; checkpoint; deliver

@@ -72,6 +72,12 @@ export const portfolios = mysqlTable("portfolios", {
    * If null, engine falls back to rate_settings.mmfYield.
    */
   mmfFundId: int("mmfFundId"),
+  /**
+   * Test/live boundary. When true, this portfolio belongs to the user's
+   * sandbox (Test mode) and must never mix with live portfolios.
+   * All portfolio-scoped queries filter by the active mode.
+   */
+  isSandbox: boolean("isSandbox").notNull().default(false),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
@@ -169,7 +175,22 @@ export type InsertContributionOverride = typeof contributionOverrides.$inferInse
 export const depositEntries = mysqlTable("deposit_entries", {
   id: int("id").autoincrement().primaryKey(),
   portfolioId: int("portfolioId").notNull(),
+  /**
+   * Legacy bucket. Kept for backward compatibility and for government
+   * securities (T-bill/IFB/FXD). Derived from the destination where possible.
+   */
   bucket: mysqlEnum("bucket", ["mmf", "tbill", "ifb", "fxd"]).notNull(),
+  /**
+   * Destination institution type. Names WHERE the money actually went:
+   * - mmf_fund: an MMF account (mmfFundId set; primary or a secondary fund)
+   * - bank_instrument: a live bank holding (bankHoldingId set)
+   * - government_security: a CBK T-bill/IFB/FXD bucket (bucket set)
+   */
+  institutionType: mysqlEnum("institutionType", ["mmf_fund", "bank_instrument", "government_security"]).notNull().default("government_security"),
+  /** FK to mmf_funds.id when institutionType = mmf_fund */
+  mmfFundId: int("mmfFundId"),
+  /** FK to bank_instrument_holdings.id when institutionType = bank_instrument */
+  bankHoldingId: int("bankHoldingId"),
   amount: decimal("amount", { precision: 14, scale: 2 }).notNull(),
   depositDate: date("depositDate").notNull(),
   notes: text("notes"),
@@ -428,6 +449,57 @@ export const bankInstruments = mysqlTable("bank_instruments", {
 
 export type BankInstrument = typeof bankInstruments.$inferSelect;
 export type InsertBankInstrument = typeof bankInstruments.$inferInsert;
+
+/**
+ * Bank Instrument Holdings — LIVE actual money the user has placed in a
+ * bank call/fixed deposit, per portfolio. This is the actuals counterpart
+ * to the global `bankInstruments` reference catalog.
+ *
+ * These holdings are real recorded money: they appear in net worth and the
+ * allocation breakdown, earn interest in the accrual ledger (rate, day-count,
+ * 15% WHT where applicable), and their maturities show in the liquidity calendar.
+ * Fixed deposits typically pay at maturity; call deposits accrue and are
+ * withdrawable on call. Rates are manually editable with as-of dates.
+ */
+export const bankInstrumentHoldings = mysqlTable("bank_instrument_holdings", {
+  id: int("id").autoincrement().primaryKey(),
+  portfolioId: int("portfolioId").notNull(),
+  /** Bank name, e.g. "Equity Bank" */
+  bankName: varchar("bankName", { length: 200 }).notNull(),
+  /** Optional user label, e.g. "Equity 3-month FD" */
+  label: varchar("label", { length: 200 }),
+  /** Instrument type */
+  instrumentType: mysqlEnum("instrumentType", ["call_deposit", "fixed_deposit"]).notNull(),
+  /** Principal placed (KES) */
+  principal: decimal("principal", { precision: 14, scale: 2 }).notNull().default("0.00"),
+  /** Annual interest rate (% p.a.) — manually editable */
+  interestRate: decimal("interestRate", { precision: 6, scale: 4 }).notNull().default("0.0000"),
+  /** As-of date for the interest rate */
+  rateAsOfDate: date("rateAsOfDate"),
+  /** Whether the rate is negotiable */
+  isNegotiable: boolean("isNegotiable").notNull().default(true),
+  /** Day-count basis for accrual: 365 or 360 */
+  dayCountBasis: int("dayCountBasis").notNull().default(365),
+  /** Withholding tax rate on interest (%) — default 15 */
+  whtRate: decimal("whtRate", { precision: 6, scale: 4 }).notNull().default("15.0000"),
+  /** Start / placement date */
+  startDate: date("startDate"),
+  /** Tenor in months (for fixed deposits); null/0 for open-ended call deposits */
+  tenorMonths: int("tenorMonths"),
+  /** Maturity date (fixed deposits); null for call deposits */
+  maturityDate: date("maturityDate"),
+  /** Payout frequency, e.g. "maturity", "monthly", "quarterly" */
+  payoutFrequency: mysqlEnum("payoutFrequency", ["maturity", "monthly", "quarterly", "on_call"]).notNull().default("maturity"),
+  /** Current accrued value (KES) — updated manually or computed */
+  currentValue: decimal("currentValue", { precision: 14, scale: 2 }).notNull().default("0.00"),
+  notes: text("notes"),
+  isActive: boolean("isActive").notNull().default(true),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type BankInstrumentHolding = typeof bankInstrumentHoldings.$inferSelect;
+export type InsertBankInstrumentHolding = typeof bankInstrumentHoldings.$inferInsert;
 
 /**
  * Benchmark inputs — editable macro benchmarks for comparison.

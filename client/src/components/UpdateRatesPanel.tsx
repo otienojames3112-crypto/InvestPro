@@ -223,6 +223,9 @@ export function UpdateRatesPanel({ portfolioId }: Props) {
 
           <div className="space-y-4">
             <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Enter New Rates (% p.a., gross before WHT)</p>
+            <div className="rounded-lg border border-border/50 bg-background/40 p-3 text-xs text-muted-foreground">
+              <span className="font-medium text-foreground">Which rate is used where?</span> The projection engine and accrual ledger use the <span className="font-medium text-amber-300">MMF Yield</span> you set here (gross, before WHT). Your selected fund <span className="font-medium text-foreground">{selectedFundName}</span> publishes its own effective annual yield, which you can copy into the MMF Yield field to keep them aligned. T-Bill / IFB / FXD rates feed the corresponding buckets only.
+            </div>
             <div className="grid grid-cols-2 gap-3">
               {[
                 { label: "MMF Yield", value: mmfYield, setter: setMmfYield },

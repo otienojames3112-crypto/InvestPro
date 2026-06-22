@@ -11,11 +11,33 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   CheckCircle2, Circle, ChevronRight, ChevronDown, ExternalLink, Smartphone, CreditCard,
   FileText, Shield, Building2, BookOpen, AlertCircle, Phone, Globe, Clock, Search,
-  TrendingUp, Landmark, Users, Star
+  TrendingUp, Landmark, Users, Star, Wand2, BookMarked, ArrowRight, LayoutDashboard,
+  Wallet, Receipt, SlidersHorizontal
 } from "lucide-react";
 import { useState, useEffect, useMemo } from "react";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
+import { Link } from "wouter";
+
+// ─── Guided demo: first-steps path + glossary ───────────────────────────────
+const FIRST_STEPS: { icon: React.ElementType; title: string; desc: string; href: string; cta: string }[] = [
+  { icon: SlidersHorizontal, title: "1. Set your plan & rates", desc: "Confirm your target, horizon, monthly contribution and the current MMF/T-bill/bond rates.", href: "/settings", cta: "Open Settings" },
+  { icon: Wallet, title: "2. Record where your money is", desc: "Log deposits into each MMF, bank deposit or government security so the tracker mirrors reality.", href: "/deposits", cta: "Record a deposit" },
+  { icon: LayoutDashboard, title: "3. Read your dashboard", desc: "See your live net worth, allocation and the projection toward your goal in one place.", href: "/", cta: "View Dashboard" },
+  { icon: TrendingUp, title: "4. Test scenarios", desc: "Find the minimum monthly contribution that reaches your target, and try what-ifs.", href: "/scenarios", cta: "Open Scenarios" },
+  { icon: Receipt, title: "5. Check your tax", desc: "Review the 15% withholding tax on each income source and your blended net yield.", href: "/tax", cta: "Open Tax Summary" },
+];
+
+const GLOSSARY: { term: string; def: string }[] = [
+  { term: "EAR (Effective Annual Rate)", def: "The true annualised yield once compounding is included. MMFs quote a net EAR after the manager's fee; the tracker applies 15% withholding tax on top." },
+  { term: "WHT (Withholding Tax)", def: "Tax deducted at source before you receive interest. In Kenya it is 15% on MMF, T-bill and FXD income. IFB (infrastructure bond) interest is tax-exempt." },
+  { term: "T-Bill", def: "A short-term government security sold at a discount over 91, 182 or 364 days. You earn the difference between the discounted price and the face value at maturity." },
+  { term: "IFB (Infrastructure Bond)", def: "A long-dated government bond funding infrastructure. Its coupon is tax-exempt, making its net yield higher than a comparable taxable bond." },
+  { term: "FXD (Fixed-Coupon Treasury Bond)", def: "A government bond paying a fixed semi-annual coupon (around 12.35% gross). The 15% WHT is deducted before the coupon reaches you." },
+  { term: "Call deposit", def: "A bank deposit that earns interest while remaining accessible on short notice. Rates are usually negotiable for larger balances." },
+  { term: "Fixed deposit", def: "A bank deposit locked for a set term at an agreed rate; interest is typically paid at maturity." },
+  { term: "Duration", def: "A measure of how sensitive a bond's price is to interest-rate changes. Longer duration means larger price swings when rates move." },
+];
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -1161,7 +1183,11 @@ function MmfFundCard({ fund }: { fund: MmfFundInfo }) {
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export default function GettingStarted() {
-  const { portfolioId } = usePortfolio();
+  const { portfolioId, mode, setMode } = usePortfolio();
+  const seedSample = trpc.testMode.seedSample.useMutation({
+    onSuccess: () => toast.success("Sample data loaded in Test mode. Explore freely — your live data is untouched."),
+    onError: (err) => toast.error(`Could not load sample data: ${err.message}`),
+  });
   const { fundName, fundLabel, fundCompany } = useSelectedFund();
   const [openDialog, setOpenDialog] = useState<"mmf" | "dhow" | null>(null);
 
@@ -1268,6 +1294,71 @@ export default function GettingStarted() {
           <p className="text-sm text-muted-foreground mt-0.5">
             Step-by-step guide to opening your investment accounts — your primary strategy accounts and all 27 CMA-regulated Kenyan MMFs.
           </p>
+        </div>
+
+        {/* Guided demo: sample data + first steps + glossary */}
+        <div className="grid gap-4 lg:grid-cols-3">
+          <Card className="lg:col-span-3 border-primary/30 bg-primary/5">
+            <CardContent className="p-5 flex flex-col sm:flex-row sm:items-center gap-4 justify-between">
+              <div className="flex items-start gap-3">
+                <div className="rounded-lg bg-primary/15 p-2 mt-0.5"><Wand2 className="h-5 w-5 text-primary" /></div>
+                <div>
+                  <p className="text-sm font-semibold text-foreground">New here? Try it instantly with sample data</p>
+                  <p className="text-xs text-muted-foreground mt-0.5 max-w-xl">
+                    Load a realistic demo portfolio (two MMFs, a bank fixed deposit and government securities) into an isolated <span className="font-medium text-foreground">Test mode</span>. Your live data is never touched, and you can reset it anytime.
+                  </p>
+                </div>
+              </div>
+              <Button
+                className="shrink-0"
+                disabled={seedSample.isPending}
+                onClick={() => {
+                  if (mode !== "sandbox") setMode("sandbox");
+                  seedSample.mutate();
+                }}
+              >
+                {seedSample.isPending ? "Loading sample…" : (<>Load sample data <ArrowRight className="ml-1 h-4 w-4" /></>)}
+              </Button>
+            </CardContent>
+          </Card>
+
+          <Card className="lg:col-span-3">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base font-semibold flex items-center gap-2">
+                <CheckCircle2 className="h-4 w-4 text-emerald-400" /> Your first 5 steps
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+              {FIRST_STEPS.map((s) => (
+                <Link key={s.title} href={s.href}>
+                  <div className="group h-full rounded-lg border border-border/60 bg-background/40 p-3 transition-colors hover:border-primary/50 hover:bg-primary/5 cursor-pointer flex flex-col">
+                    <s.icon className="h-4 w-4 text-primary mb-2" />
+                    <p className="text-sm font-medium leading-snug">{s.title}</p>
+                    <p className="text-xs text-muted-foreground mt-1 flex-1">{s.desc}</p>
+                    <span className="mt-2 text-xs font-medium text-primary inline-flex items-center gap-1">
+                      {s.cta} <ChevronRight className="h-3 w-3 transition-transform group-hover:translate-x-0.5" />
+                    </span>
+                  </div>
+                </Link>
+              ))}
+            </CardContent>
+          </Card>
+
+          <Card className="lg:col-span-3">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base font-semibold flex items-center gap-2">
+                <BookMarked className="h-4 w-4 text-amber-400" /> Terms glossary
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="grid gap-x-6 gap-y-3 sm:grid-cols-2">
+              {GLOSSARY.map((g) => (
+                <div key={g.term} className="text-xs">
+                  <span className="font-semibold text-foreground">{g.term}.</span>{" "}
+                  <span className="text-muted-foreground">{g.def}</span>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
         </div>
 
         {/* Tab switcher */}

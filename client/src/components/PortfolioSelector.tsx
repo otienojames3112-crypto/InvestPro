@@ -34,7 +34,7 @@ export function CreatePortfolioDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
-  const { setPortfolioId, refetch } = usePortfolio();
+  const { setPortfolioId, refetch, mode } = usePortfolio();
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [targetAmount, setTargetAmount] = useState("");
@@ -85,6 +85,7 @@ export function CreatePortfolioDialog({
       stepUpAmount: Number.isNaN(stepUp) ? 0 : stepUp,
       stepUpMonths: 6,
       safetyFloor: 50000,
+      isSandbox: mode === "sandbox",
     });
   }
 

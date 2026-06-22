@@ -52,6 +52,11 @@ import {
   addBankInstrument,
   updateBankInstrument,
   deleteBankInstrument,
+  getBankInstrumentHoldings,
+  addBankInstrumentHolding,
+  updateBankInstrumentHolding,
+  deleteBankInstrumentHolding,
+  getActualsSummary,
   getBenchmarkInputs,
   upsertBenchmarkInput,
   addAuditLog,
@@ -245,31 +250,34 @@ export const appRouter = router({
 
   // ─── Portfolios ─────────────────────────────────────────────────────────────
   portfolios: router({
-    /** List all portfolios owned by the current user. */
-    list: protectedProcedure.query(async ({ ctx }) => {
-      const rows = await getPortfolios(ctx.user.id);
-      return rows.map((p) => ({
-        id: p.id,
-        name: p.name,
-        description: p.description,
-        targetAmount: parseFloat(String(p.targetAmount)),
-        startDate: normaliseDate(p.startDate),
-        horizonMonths: p.horizonMonths,
-        startingContribution: parseFloat(String(p.startingContribution)),
-        stepUpAmount: parseFloat(String(p.stepUpAmount)),
-        stepUpMonths: p.stepUpMonths,
-        safetyFloor: parseFloat(String(p.safetyFloor)),
-        foundationFrac: parseFloat(String(p.foundationFrac)),
-        growthFrac: parseFloat(String(p.growthFrac)),
-        deRiskingFrac: parseFloat(String(p.deRiskingFrac)),
-        cbkSourceUrl: p.cbkSourceUrl,
-        sanlamSourceUrl: p.sanlamSourceUrl,
-        ratesLastUpdatedAt: p.ratesLastUpdatedAt ?? null,
-        mmfFundId: p.mmfFundId ?? null,
-        createdAt: p.createdAt,
-        updatedAt: p.updatedAt,
-      }));
-    }),
+    /** List portfolios owned by the current user, optionally scoped by mode (live vs sandbox). */
+    list: protectedProcedure
+      .input(z.object({ isSandbox: z.boolean().optional() }).optional())
+      .query(async ({ ctx, input }) => {
+        const rows = await getPortfolios(ctx.user.id, input?.isSandbox);
+        return rows.map((p) => ({
+          id: p.id,
+          name: p.name,
+          description: p.description,
+          targetAmount: parseFloat(String(p.targetAmount)),
+          startDate: normaliseDate(p.startDate),
+          horizonMonths: p.horizonMonths,
+          startingContribution: parseFloat(String(p.startingContribution)),
+          stepUpAmount: parseFloat(String(p.stepUpAmount)),
+          stepUpMonths: p.stepUpMonths,
+          safetyFloor: parseFloat(String(p.safetyFloor)),
+          foundationFrac: parseFloat(String(p.foundationFrac)),
+          growthFrac: parseFloat(String(p.growthFrac)),
+          deRiskingFrac: parseFloat(String(p.deRiskingFrac)),
+          cbkSourceUrl: p.cbkSourceUrl,
+          sanlamSourceUrl: p.sanlamSourceUrl,
+          ratesLastUpdatedAt: p.ratesLastUpdatedAt ?? null,
+          mmfFundId: p.mmfFundId ?? null,
+          isSandbox: p.isSandbox,
+          createdAt: p.createdAt,
+          updatedAt: p.updatedAt,
+        }));
+      }),
 
     /** Get a single portfolio by ID (must belong to current user). */
     get: protectedProcedure.input(portfolioIdInput).query(async ({ ctx, input }) => {
@@ -292,14 +300,18 @@ export const appRouter = router({
         sanlamSourceUrl: p.sanlamSourceUrl,
         ratesLastUpdatedAt: p.ratesLastUpdatedAt ?? null,
         mmfFundId: p.mmfFundId ?? null,
+        isSandbox: p.isSandbox,
         createdAt: p.createdAt,
       };
     }),
 
     /** Create a new portfolio. Also creates a default rate_settings row for it. */
-    create: protectedProcedure.input(portfolioCreateInput).mutation(async ({ ctx, input }) => {
+    create: protectedProcedure
+      .input(portfolioCreateInput.extend({ isSandbox: z.boolean().optional() }))
+      .mutation(async ({ ctx, input }) => {
       const p = await createPortfolio({
         userId: ctx.user.id,
+        isSandbox: input.isSandbox ?? false,
         name: input.name,
         description: input.description,
         targetAmount: String(input.targetAmount),
@@ -591,29 +603,74 @@ export const appRouter = router({
     add: protectedProcedure
       .input(z.object({
         portfolioId: z.number().int().positive(),
-        bucket: z.enum(["mmf", "tbill", "ifb", "fxd"]),
+        // Destination-aware: where the money actually went.
+        institutionType: z.enum(["mmf_fund", "bank_instrument", "government_security"]).optional(),
+        mmfFundId: z.number().int().positive().optional(),
+        bankHoldingId: z.number().int().positive().optional(),
+        // bucket is required for government securities; for MMF/bank it is derived.
+        bucket: z.enum(["mmf", "tbill", "ifb", "fxd"]).optional(),
         amount: z.number().positive(),
         depositDate: z.string(),
         notes: z.string().optional(),
       }))
       .mutation(async ({ ctx, input }) => {
         await requirePortfolio(input.portfolioId, ctx.user.id);
+        // Resolve destination + legacy bucket.
+        const institutionType =
+          input.institutionType ??
+          (input.mmfFundId ? "mmf_fund" : input.bankHoldingId ? "bank_instrument" : "government_security");
+        let bucket: "mmf" | "tbill" | "ifb" | "fxd";
+        if (institutionType === "mmf_fund" || institutionType === "bank_instrument") {
+          bucket = "mmf"; // bank/MMF cash classified under the liquid (mmf-like) bucket for back-compat
+        } else {
+          if (!input.bucket) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: "A government-security bucket is required." });
+          }
+          bucket = input.bucket;
+        }
         const entry = await addDepositEntry({
           portfolioId: input.portfolioId,
-          bucket: input.bucket,
+          bucket,
+          institutionType,
+          mmfFundId: input.mmfFundId ?? null,
+          bankHoldingId: input.bankHoldingId ?? null,
           amount: String(input.amount),
           depositDate: new Date(input.depositDate),
           notes: input.notes,
         });
+        // If the deposit targets a bank holding, increase its principal to keep actuals in sync.
+        if (institutionType === "bank_instrument" && input.bankHoldingId) {
+          const holdings = await getBankInstrumentHoldings(input.portfolioId);
+          const h = holdings.find((x) => x.id === input.bankHoldingId);
+          if (h) {
+            const newPrincipal = (parseFloat(String(h.principal)) || 0) + input.amount;
+            await updateBankInstrumentHolding(input.bankHoldingId, input.portfolioId, {
+              principal: String(newPrincipal),
+            });
+          }
+        }
+        // If the deposit targets a secondary MMF account, increase its balance.
+        if (institutionType === "mmf_fund" && input.mmfFundId) {
+          const p = await getPortfolio(input.portfolioId, ctx.user.id);
+          // Only adjust secondary accounts; the primary fund balance is the deposit ledger itself.
+          if (p && p.mmfFundId !== input.mmfFundId) {
+            const secs = await getSecondaryMmfs(input.portfolioId);
+            const sec = secs.find((s) => s.mmfFundId === input.mmfFundId);
+            if (sec) {
+              const newBal = (parseFloat(String(sec.currentBalance)) || 0) + input.amount;
+              await updateSecondaryMmf(sec.id, input.portfolioId, { currentBalance: String(newBal) });
+            }
+          }
+        }
         await addAuditLog({
           portfolioId: input.portfolioId,
           entity: "deposit",
           action: "create",
-          field: input.bucket,
+          field: institutionType,
           newValue: String(input.amount),
           changedByOpenId: ctx.user.openId,
           changedByName: ctx.user.name ?? null,
-          summary: `Recorded ${input.bucket.toUpperCase()} deposit of KES ${input.amount.toLocaleString()} on ${input.depositDate}`,
+          summary: `Recorded ${institutionType.replace("_", " ")} deposit of KES ${input.amount.toLocaleString()} on ${input.depositDate}`,
         });
         return { success: true, entry };
       }),
@@ -652,39 +709,46 @@ export const appRouter = router({
         lumpSum: o.lumpSum ? parseFloat(String(o.lumpSum)) : undefined,
       }));
       runProjection(settings, mappedOverrides, rh, actualDeposits, actualSecurities);
-      const byBucket = { mmf: 0, tbill: 0, ifb: 0, fxd: 0 };
-      let totalContributed = 0;
-      for (const d of depositRows) {
-        const amt = parseFloat(String(d.amount));
-        totalContributed += amt;
-        byBucket[d.bucket as keyof typeof byBucket] += amt;
-      }
-      const remainingToTarget = Math.max(0, settings.targetAmount - totalContributed);
 
-      // Estimate annualised WHT per bucket from CURRENT deposited balances
-      // and the portfolio's live rates. IFB coupon income is tax-exempt.
-      const whtFrac = settings.withholdingTax / 100;
-      const mmfWht = byBucket.mmf * (settings.mmfYield / 100) * whtFrac;
-      const tbillWht = byBucket.tbill * (settings.tbill364Rate / 100) * whtFrac;
-      const fxdCouponIncome = byBucket.fxd * (settings.fxdCouponRate / 100);
-      const fxdWht = fxdCouponIncome * whtFrac;
-      const ifbWht = 0; // Infrastructure bonds are tax-exempt in Kenya
+      // Destination-aware live actuals: deposits + secondary MMFs + bank holdings.
+      const summary = await getActualsSummary(
+        input.portfolioId,
+        settings.targetAmount,
+        settings.withholdingTax,
+        settings.fxdCouponRate,
+        settings.mmfYield,
+        settings.tbill364Rate,
+      );
       const round2 = (n: number) => Math.round(n * 100) / 100;
-      const taxBreakdown = {
-        mmf: round2(mmfWht),
-        tbill: round2(tbillWht),
-        ifb: ifbWht,
-        fxd: round2(fxdWht),
-      };
-      const taxLiability = round2(mmfWht + tbillWht + fxdWht + ifbWht);
+      if (!summary) {
+        return {
+          totalContributed: 0,
+          depositsContributed: 0,
+          secondaryMmfBalance: 0,
+          bankBalance: 0,
+          remainingToTarget: settings.targetAmount,
+          taxLiability: 0,
+          taxBreakdown: { mmf: 0, tbill: 0, ifb: 0, fxd: 0, secondaryMmf: 0, bank: 0 },
+          annualFxdCouponIncome: 0,
+          byBucket: { mmf: 0, tbill: 0, ifb: 0, fxd: 0 },
+          secondaryCount: 0,
+          bankHoldingCount: 0,
+          entryCount: 0,
+        };
+      }
       return {
-        totalContributed,
-        remainingToTarget,
-        taxLiability,
-        taxBreakdown,
-        annualFxdCouponIncome: round2(fxdCouponIncome),
-        byBucket,
-        entryCount: depositRows.length,
+        totalContributed: round2(summary.totalContributed),
+        depositsContributed: round2(summary.depositsContributed),
+        secondaryMmfBalance: round2(summary.secondaryMmfBalance),
+        bankBalance: round2(summary.bankBalance),
+        remainingToTarget: round2(summary.remainingToTarget),
+        taxLiability: round2(summary.taxLiability),
+        taxBreakdown: summary.taxBreakdown,
+        annualFxdCouponIncome: round2(summary.annualFxdCouponIncome),
+        byBucket: summary.byBucket,
+        secondaryCount: summary.secondaryCount,
+        bankHoldingCount: summary.bankHoldingCount,
+        entryCount: summary.entryCount,
       };
     }),
   }),
@@ -1190,6 +1254,136 @@ export const appRouter = router({
       }),
   }),
 
+  /** Bank instrument holdings — per-portfolio LIVE call/fixed deposits */
+  bankHoldings: router({
+    list: protectedProcedure
+      .input(z.object({ portfolioId: z.number().int().positive() }))
+      .query(async ({ ctx, input }) => {
+        await requirePortfolio(input.portfolioId, ctx.user.id);
+        const rows = await getBankInstrumentHoldings(input.portfolioId);
+        return rows.map((r) => ({
+          id: r.id,
+          portfolioId: r.portfolioId,
+          bankName: r.bankName,
+          label: r.label ?? null,
+          instrumentType: r.instrumentType,
+          principal: Number(r.principal),
+          interestRate: Number(r.interestRate),
+          rateAsOfDate: r.rateAsOfDate ? normaliseDate(r.rateAsOfDate) : null,
+          isNegotiable: r.isNegotiable,
+          dayCountBasis: r.dayCountBasis,
+          whtRate: Number(r.whtRate),
+          startDate: r.startDate ? normaliseDate(r.startDate) : null,
+          tenorMonths: r.tenorMonths ?? null,
+          maturityDate: r.maturityDate ? normaliseDate(r.maturityDate) : null,
+          payoutFrequency: r.payoutFrequency,
+          currentValue: Number(r.currentValue),
+          notes: r.notes ?? null,
+          isActive: r.isActive,
+          createdAt: r.createdAt,
+          updatedAt: r.updatedAt,
+        }));
+      }),
+    add: protectedProcedure
+      .input(z.object({
+        portfolioId: z.number().int().positive(),
+        bankName: z.string().min(1).max(200),
+        label: z.string().max(200).optional(),
+        instrumentType: z.enum(["call_deposit", "fixed_deposit"]),
+        principal: z.number().min(0).default(0),
+        interestRate: z.number().min(0).max(100).default(0),
+        rateAsOfDate: z.string().optional(),
+        isNegotiable: z.boolean().default(true),
+        dayCountBasis: z.number().int().default(365),
+        whtRate: z.number().min(0).max(100).default(15),
+        startDate: z.string().optional(),
+        tenorMonths: z.number().int().min(0).optional(),
+        maturityDate: z.string().optional(),
+        payoutFrequency: z.enum(["maturity", "monthly", "quarterly", "on_call"]).default("maturity"),
+        notes: z.string().max(1000).optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        await requirePortfolio(input.portfolioId, ctx.user.id);
+        await addBankInstrumentHolding({
+          portfolioId: input.portfolioId,
+          bankName: input.bankName,
+          label: input.label,
+          instrumentType: input.instrumentType,
+          principal: String(input.principal),
+          interestRate: String(input.interestRate),
+          rateAsOfDate: input.rateAsOfDate ? new Date(`${input.rateAsOfDate}T12:00:00.000Z`) : null,
+          isNegotiable: input.isNegotiable,
+          dayCountBasis: input.dayCountBasis,
+          whtRate: String(input.whtRate),
+          startDate: input.startDate ? new Date(`${input.startDate}T12:00:00.000Z`) : null,
+          tenorMonths: input.tenorMonths ?? null,
+          maturityDate: input.maturityDate ? new Date(`${input.maturityDate}T12:00:00.000Z`) : null,
+          payoutFrequency: input.payoutFrequency,
+          currentValue: String(input.principal),
+        });
+        await addAuditLog({
+          portfolioId: input.portfolioId,
+          entity: "bank_holding",
+          action: "create",
+          field: input.bankName,
+          newValue: String(input.principal),
+          changedByOpenId: ctx.user.openId,
+          changedByName: ctx.user.name ?? null,
+          summary: `Added ${input.instrumentType.replace("_", " ")} at ${input.bankName} (KES ${input.principal.toLocaleString()})`,
+        });
+        return { success: true };
+      }),
+    update: protectedProcedure
+      .input(z.object({
+        id: z.number().int().positive(),
+        portfolioId: z.number().int().positive(),
+        bankName: z.string().min(1).max(200).optional(),
+        label: z.string().max(200).optional(),
+        instrumentType: z.enum(["call_deposit", "fixed_deposit"]).optional(),
+        principal: z.number().min(0).optional(),
+        interestRate: z.number().min(0).max(100).optional(),
+        rateAsOfDate: z.string().optional(),
+        isNegotiable: z.boolean().optional(),
+        dayCountBasis: z.number().int().optional(),
+        whtRate: z.number().min(0).max(100).optional(),
+        startDate: z.string().optional(),
+        tenorMonths: z.number().int().min(0).optional(),
+        maturityDate: z.string().optional(),
+        payoutFrequency: z.enum(["maturity", "monthly", "quarterly", "on_call"]).optional(),
+        notes: z.string().max(1000).optional(),
+        isActive: z.boolean().optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        await requirePortfolio(input.portfolioId, ctx.user.id);
+        const { id, portfolioId, ...rest } = input;
+        await updateBankInstrumentHolding(id, portfolioId, {
+          ...(rest.bankName !== undefined && { bankName: rest.bankName }),
+          ...(rest.label !== undefined && { label: rest.label }),
+          ...(rest.instrumentType !== undefined && { instrumentType: rest.instrumentType }),
+          ...(rest.principal !== undefined && { principal: String(rest.principal) }),
+          ...(rest.interestRate !== undefined && { interestRate: String(rest.interestRate) }),
+          ...(rest.rateAsOfDate !== undefined && { rateAsOfDate: new Date(`${rest.rateAsOfDate}T12:00:00.000Z`) }),
+          ...(rest.isNegotiable !== undefined && { isNegotiable: rest.isNegotiable }),
+          ...(rest.dayCountBasis !== undefined && { dayCountBasis: rest.dayCountBasis }),
+          ...(rest.whtRate !== undefined && { whtRate: String(rest.whtRate) }),
+          ...(rest.startDate !== undefined && { startDate: new Date(`${rest.startDate}T12:00:00.000Z`) }),
+          ...(rest.tenorMonths !== undefined && { tenorMonths: rest.tenorMonths }),
+          ...(rest.maturityDate !== undefined && { maturityDate: new Date(`${rest.maturityDate}T12:00:00.000Z`) }),
+          ...(rest.payoutFrequency !== undefined && { payoutFrequency: rest.payoutFrequency }),
+          ...(rest.notes !== undefined && { notes: rest.notes }),
+          ...(rest.isActive !== undefined && { isActive: rest.isActive }),
+        });
+        return { success: true };
+      }),
+    remove: protectedProcedure
+      .input(z.object({ id: z.number().int().positive(), portfolioId: z.number().int().positive() }))
+      .mutation(async ({ ctx, input }) => {
+        await requirePortfolio(input.portfolioId, ctx.user.id);
+        await deleteBankInstrumentHolding(input.id, input.portfolioId);
+        return { success: true };
+      }),
+  }),
+
   // ─── Round 12: MMF Composition / Strategy reference (global) ──────────────
   mmfComposition: router({
     list: publicProcedure.query(async () => {
@@ -1483,6 +1677,114 @@ export const appRouter = router({
         });
         return { success: true };
       }),
+  }),
+
+  // ─── Test / Sandbox mode ────────────────────────────────────────────
+  testMode: router({
+    /** Seed a realistic sample sandbox portfolio (isolated from live data). */
+    seedSample: protectedProcedure.mutation(async ({ ctx }) => {
+      const funds = await getMmfFunds();
+      const pickFund = (needle: string) =>
+        funds.find((f) => f.fundName.toLowerCase().includes(needle.toLowerCase()));
+      const primary = pickFund("nabo") ?? funds[0];
+      const secondaryA = pickFund("cytonn") ?? funds[1] ?? primary;
+      const secondaryB = pickFund("etica") ?? funds[2] ?? primary;
+
+      const p = await createPortfolio({
+        userId: ctx.user.id,
+        isSandbox: true,
+        name: "Sample Portfolio (Demo)",
+        description: "Auto-generated demo data — safe to explore, edit, or reset.",
+        targetAmount: "5000000",
+        startDate: new Date("2026-07-01T12:00:00.000Z"),
+        horizonMonths: 120,
+        startingContribution: "30000",
+        stepUpAmount: "3000",
+        stepUpMonths: 6,
+        safetyFloor: "50000",
+        foundationFrac: "0.20",
+        growthFrac: "0.50",
+        deRiskingFrac: "0.15",
+        mmfFundId: primary?.id ?? null,
+      });
+      if (!p) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Failed to seed sample." });
+      await ensureRateSettings(p.id);
+
+      // A few primary-fund (MMF) and government-security deposits.
+      const seedDeposit = (
+        bucket: "mmf" | "tbill" | "ifb" | "fxd",
+        institutionType: "mmf_fund" | "government_security",
+        amount: number,
+        date: string,
+        mmfFundId?: number,
+      ) =>
+        addDepositEntry({
+          portfolioId: p.id,
+          bucket,
+          institutionType,
+          mmfFundId: mmfFundId ?? null,
+          bankHoldingId: null,
+          amount: String(amount),
+          depositDate: new Date(`${date}T12:00:00.000Z`),
+          notes: "Sample data",
+        });
+      await seedDeposit("mmf", "mmf_fund", 90000, "2026-07-05", primary?.id);
+      await seedDeposit("mmf", "mmf_fund", 30000, "2026-08-05", primary?.id);
+      await seedDeposit("tbill", "government_security", 50000, "2026-08-15");
+      await seedDeposit("fxd", "government_security", 100000, "2026-09-01");
+
+      // Two secondary MMF accounts.
+      if (secondaryA && secondaryA.id !== primary?.id) {
+        await addSecondaryMmf({
+          portfolioId: p.id,
+          mmfFundId: secondaryA.id,
+          label: "Emergency pot",
+          currentBalance: "120000",
+          monthlyContribution: "5000",
+          notes: "Sample data",
+        });
+      }
+      if (secondaryB && secondaryB.id !== primary?.id && secondaryB.id !== secondaryA?.id) {
+        await addSecondaryMmf({
+          portfolioId: p.id,
+          mmfFundId: secondaryB.id,
+          label: "Short-term savings",
+          currentBalance: "60000",
+          monthlyContribution: "0",
+          notes: "Sample data",
+        });
+      }
+
+      // A bank fixed deposit (live actual), 2026 negotiated rate.
+      await addBankInstrumentHolding({
+        portfolioId: p.id,
+        bankName: "Equity Bank",
+        label: "6-month fixed deposit",
+        instrumentType: "fixed_deposit",
+        principal: "200000",
+        interestRate: "10.5000",
+        rateAsOfDate: new Date("2026-06-19T12:00:00.000Z"),
+        isNegotiable: true,
+        dayCountBasis: 365,
+        whtRate: "15.0000",
+        startDate: new Date("2026-06-19T12:00:00.000Z"),
+        tenorMonths: 6,
+        maturityDate: new Date("2026-12-19T12:00:00.000Z"),
+        payoutFrequency: "maturity",
+        currentValue: "200000",
+      });
+
+      return { success: true, portfolioId: p.id };
+    }),
+
+    /** Delete ALL sandbox portfolios (and their child data) for the current user. */
+    reset: protectedProcedure.mutation(async ({ ctx }) => {
+      const sandboxes = await getPortfolios(ctx.user.id, true);
+      for (const s of sandboxes) {
+        await deletePortfolio(s.id, ctx.user.id);
+      }
+      return { success: true, deleted: sandboxes.length };
+    }),
   }),
 });
 export type AppRouter = typeof appRouter;

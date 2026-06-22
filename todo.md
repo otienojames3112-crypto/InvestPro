@@ -209,3 +209,54 @@
 - [x] Frontend AppShell: replace hardcoded "SanlamAllianz MMF + CBK DhowCSD" with dynamic fund name
 - [x] Frontend GettingStarted: mark the selected fund dynamically (not always "sanlam")
 - [x] Support multiple MMF accounts: add secondary MMF tracking with full CRUD (add, edit, remove, view balances)
+
+## Round 12 — Professional Knowledge & Accuracy Layer
+
+### Research (current 2026 data, record source + as-of date on every seeded row)
+- [x] Research MMF composition/allocation factsheets: Nabo, Cytonn, Etica, CIC, Sanlam, Old Mutual, + others
+- [x] Research Kenyan bank call/fixed deposit products: Equity, KCB, Co-op, Stanbic, NCBA, Absa
+- [x] Research MMF market average yield benchmark + CBR + inflation (2026)
+- [x] Confirm Kenyan tax mechanics: 15% WHT on MMF interest, T-bill discount WHT, FXD coupon WHT, IFB exempt
+
+### Data layer
+- [x] Add mmf_composition table (fund_id, bucket allocations %, notes, source, as_of)
+- [x] Add bank_instruments table (bank, type, min amount, tenor, rate, negotiable, notes, source, as_of)
+- [x] Add benchmark_inputs (global: mmf market avg, leaders avg, CBR, inflation, tbill, deposit rate, editable)
+- [x] Add audit_log table (entity, entity_id, field, old_value, new_value, changed_by, changed_at)
+- [x] Add per-fund settings: day_count_basis (365/360), crediting_frequency (daily/monthly), wht_rate
+- [x] Generate migrations, apply via webdev_execute_sql, seed data (benchmarks, banks, compositions)
+- [x] Add db helpers + tRPC routers for all new tables (full CRUD)
+
+### Daily MMF Accrual Ledger (MmfAccrualLedger.tsx) — per-portfolio
+- [x] Daily accrual engine (shared/accrual.ts): gross = balance × (rate ÷ day-count); WHT deducted per period; daily vs monthly crediting
+- [x] What-if mode (defaults to current MMF balance, adjustable amount + horizon)
+- [x] Per-day breakdown: opening, gross, WHT, net added, closing
+- [x] Period roll-ups (gross/WHT/net totals over horizon)
+- [x] "Withdraw today" readout: net interest earned, WHT deducted, amount receivable
+- [x] Plain-language Kenyan MMF tax explainer + disclaimer
+- [x] Vitest coverage for accrual + WHT math (10 tests)
+
+### Tax Summary (TaxSummary.tsx) — per-portfolio
+- [x] Rollup: MMF WHT, T-bill WHT, FXD coupon WHT, IFB exempt, dividends 5%, holdings income
+- [x] WHT rate sourced from editable Rate Settings
+
+### MMF Strategy & Composition (MmfStrategy.tsx) — global
+- [x] Per-fund allocation breakdown + plain-English bucket explanations
+- [x] Editable composition (Edit Composition mode) with source + as-of
+
+### Banking Sector Instruments (BankInstruments.tsx) — global
+- [x] Editable bank instruments table + call vs fixed deposit explainer
+- [x] Fixed vs call deposit sections with negotiability + WHT notes
+
+### Money-manager features
+- [x] Client/portfolio summary printable export (Print / Save as PDF via browser)
+- [x] Net worth across all asset classes on Portfolio Review + allocation
+- [x] Effective vs nominal yield reconciliation (gross → WHT → take-home) on Tax Summary
+- [x] Liquidity / cash-flow calendar (CBK security maturities)
+- [x] Benchmark comparison (your fund vs MMF avg/leaders/T-bill/CBR/inflation, editable)
+- [x] Audit trail / change log: audit_log table + router, and writes wired into rate updates, deposit create/delete, composition + benchmark edits (verified end-to-end)
+
+### Cross-cutting
+- [x] Added all new pages to grouped nav (Tracking / Analysis / Knowledge); per-portfolio pages respect selected portfolio
+- [x] Maintained educate-and-track boundary (no buy recommendations)
+- [x] 81/81 tests pass, 0 TS errors, screenshots verified

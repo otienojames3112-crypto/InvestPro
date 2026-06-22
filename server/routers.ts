@@ -45,6 +45,18 @@ import {
   addSecondaryMmf,
   updateSecondaryMmf,
   deleteSecondaryMmf,
+  getMmfCompositions,
+  upsertMmfComposition,
+  deleteMmfComposition,
+  getBankInstruments,
+  addBankInstrument,
+  updateBankInstrument,
+  deleteBankInstrument,
+  getBenchmarkInputs,
+  upsertBenchmarkInput,
+  addAuditLog,
+  getAuditLog,
+  updateMmfFundAccrualSettings,
 } from "./db";
 import {
   runProjection,
@@ -576,6 +588,16 @@ export const appRouter = router({
           depositDate: new Date(input.depositDate),
           notes: input.notes,
         });
+        await addAuditLog({
+          portfolioId: input.portfolioId,
+          entity: "deposit",
+          action: "create",
+          field: input.bucket,
+          newValue: String(input.amount),
+          changedByOpenId: ctx.user.openId,
+          changedByName: ctx.user.name ?? null,
+          summary: `Recorded ${input.bucket.toUpperCase()} deposit of KES ${input.amount.toLocaleString()} on ${input.depositDate}`,
+        });
         return { success: true, entry };
       }),
 
@@ -584,6 +606,15 @@ export const appRouter = router({
       .mutation(async ({ ctx, input }) => {
         await requirePortfolio(input.portfolioId, ctx.user.id);
         await deleteDepositEntry(input.id, input.portfolioId);
+        await addAuditLog({
+          portfolioId: input.portfolioId,
+          entity: "deposit",
+          entityId: input.id,
+          action: "delete",
+          changedByOpenId: ctx.user.openId,
+          changedByName: ctx.user.name ?? null,
+          summary: `Deleted deposit entry #${input.id}`,
+        });
         return { success: true };
       }),
 
@@ -768,6 +799,19 @@ export const appRouter = router({
           changeNote: input.changeNote ?? "Manual rate update",
         });
 
+        await addAuditLog({
+          portfolioId: input.portfolioId,
+          entity: "rate_settings",
+          action: "update",
+          field: "mmfYield",
+          newValue: String(input.mmfYield),
+          changedByOpenId: ctx.user.openId,
+          changedByName: ctx.user.name ?? null,
+          summary:
+            input.changeNote ??
+            `Rates updated — MMF ${input.mmfYield}%, 364d T-bill ${input.tbill364Rate}%, IFB ${input.ifbCouponRate}%, WHT ${input.withholdingTax}%`,
+        });
+
         return { success: true, updatedAt: now };
       }),
 
@@ -801,14 +845,16 @@ export const appRouter = router({
         managementFee: parseFloat(String(f.managementFee)),
         minInvestment: parseFloat(String(f.minInvestment)),
         aumMillions: f.aumMillions ? parseFloat(String(f.aumMillions)) : null,
-        asOfDate: f.asOfDate ? normaliseDate(f.asOfDate) : null,
+                asOfDate: f.asOfDate ? normaliseDate(f.asOfDate) : null,
         source: f.source ?? null,
         isActive: f.isActive,
+        dayCountBasis: f.dayCountBasis ?? 365,
+        creditingFrequency: f.creditingFrequency ?? "daily",
+        whtRate: parseFloat(String(f.whtRate ?? "15")),
         createdAt: f.createdAt,
         updatedAt: f.updatedAt,
       }));
     }),
-
     /** Add a new MMF fund. */
     add: protectedProcedure
       .input(z.object({
@@ -1107,6 +1153,268 @@ export const appRouter = router({
       .mutation(async ({ ctx, input }) => {
         await requirePortfolio(input.portfolioId, ctx.user.id);
         await deleteSecondaryMmf(input.id, input.portfolioId);
+        return { success: true };
+      }),
+  }),
+
+  // ─── Round 12: MMF Composition / Strategy reference (global) ──────────────
+  mmfComposition: router({
+    list: publicProcedure.query(async () => {
+      const rows = await getMmfCompositions();
+      return rows.map((r) => ({
+        id: r.id,
+        mmfFundId: r.mmfFundId,
+        govSecurities: Number(r.govSecurities),
+        bankInstruments: Number(r.bankInstruments),
+        corporateDebt: Number(r.corporateDebt),
+        cashEquivalents: Number(r.cashEquivalents),
+        offshoreRegional: Number(r.offshoreRegional),
+        notes: r.notes ?? null,
+        asOfDate: r.asOfDate,
+        source: r.source ?? null,
+        isEstimate: Boolean(r.isEstimate),
+        updatedAt: r.updatedAt,
+        fundName: r.fundName,
+        company: r.company,
+        ear: Number(r.ear),
+        grossYield: Number(r.grossYield),
+        managementFee: Number(r.managementFee),
+      }));
+    }),
+    upsert: protectedProcedure
+      .input(z.object({
+        mmfFundId: z.number().int().positive(),
+        govSecurities: z.number().min(0).max(100),
+        bankInstruments: z.number().min(0).max(100),
+        corporateDebt: z.number().min(0).max(100),
+        cashEquivalents: z.number().min(0).max(100),
+        offshoreRegional: z.number().min(0).max(100),
+        notes: z.string().max(2000).optional(),
+        asOfDate: z.string().optional(),
+        source: z.string().max(500).optional(),
+        isEstimate: z.boolean().default(false),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        await upsertMmfComposition({
+          mmfFundId: input.mmfFundId,
+          govSecurities: String(input.govSecurities),
+          bankInstruments: String(input.bankInstruments),
+          corporateDebt: String(input.corporateDebt),
+          cashEquivalents: String(input.cashEquivalents),
+          offshoreRegional: String(input.offshoreRegional),
+          notes: input.notes,
+          asOfDate: input.asOfDate ? new Date(input.asOfDate) : undefined,
+          source: input.source,
+          isEstimate: input.isEstimate,
+        });
+        await addAuditLog({
+          entity: "mmf_composition",
+          entityId: input.mmfFundId,
+          action: "update",
+          changedByOpenId: ctx.user.openId,
+          changedByName: ctx.user.name ?? null,
+          summary: `Updated composition for fund #${input.mmfFundId}`,
+        });
+        return { success: true };
+      }),
+    remove: protectedProcedure
+      .input(z.object({ id: z.number().int().positive() }))
+      .mutation(async ({ input }) => {
+        await deleteMmfComposition(input.id);
+        return { success: true };
+      }),
+  }),
+
+  // ─── Round 12: Bank Sector Instruments reference (global) ─────────────────
+  bankInstruments: router({
+    list: publicProcedure.query(async () => {
+      const rows = await getBankInstruments();
+      return rows.map((r) => ({
+        id: r.id,
+        bankName: r.bankName,
+        instrumentType: r.instrumentType,
+        minAmount: Number(r.minAmount),
+        typicalTenor: r.typicalTenor ?? null,
+        indicativeRate: r.indicativeRate === null ? null : Number(r.indicativeRate),
+        isNegotiable: Boolean(r.isNegotiable),
+        notes: r.notes ?? null,
+        asOfDate: r.asOfDate,
+        source: r.source ?? null,
+        isActive: Boolean(r.isActive),
+      }));
+    }),
+    add: protectedProcedure
+      .input(z.object({
+        bankName: z.string().min(1).max(200),
+        instrumentType: z.enum(["call_deposit", "fixed_deposit"]),
+        minAmount: z.number().min(0).default(0),
+        typicalTenor: z.string().max(100).optional(),
+        indicativeRate: z.number().min(0).max(100).optional(),
+        isNegotiable: z.boolean().default(true),
+        notes: z.string().max(2000).optional(),
+        asOfDate: z.string().optional(),
+        source: z.string().max(500).optional(),
+      }))
+      .mutation(async ({ input }) => {
+        await addBankInstrument({
+          bankName: input.bankName,
+          instrumentType: input.instrumentType,
+          minAmount: String(input.minAmount),
+          typicalTenor: input.typicalTenor,
+          indicativeRate: input.indicativeRate === undefined ? null : String(input.indicativeRate),
+          isNegotiable: input.isNegotiable,
+          notes: input.notes,
+          asOfDate: input.asOfDate ? new Date(input.asOfDate) : undefined,
+          source: input.source,
+        });
+        return { success: true };
+      }),
+    update: protectedProcedure
+      .input(z.object({
+        id: z.number().int().positive(),
+        bankName: z.string().min(1).max(200).optional(),
+        instrumentType: z.enum(["call_deposit", "fixed_deposit"]).optional(),
+        minAmount: z.number().min(0).optional(),
+        typicalTenor: z.string().max(100).optional(),
+        indicativeRate: z.number().min(0).max(100).nullable().optional(),
+        isNegotiable: z.boolean().optional(),
+        notes: z.string().max(2000).optional(),
+        asOfDate: z.string().optional(),
+        source: z.string().max(500).optional(),
+      }))
+      .mutation(async ({ input }) => {
+        const { id, ...rest } = input;
+        await updateBankInstrument(id, {
+          ...(rest.bankName !== undefined && { bankName: rest.bankName }),
+          ...(rest.instrumentType !== undefined && { instrumentType: rest.instrumentType }),
+          ...(rest.minAmount !== undefined && { minAmount: String(rest.minAmount) }),
+          ...(rest.typicalTenor !== undefined && { typicalTenor: rest.typicalTenor }),
+          ...(rest.indicativeRate !== undefined && { indicativeRate: rest.indicativeRate === null ? null : String(rest.indicativeRate) }),
+          ...(rest.isNegotiable !== undefined && { isNegotiable: rest.isNegotiable }),
+          ...(rest.notes !== undefined && { notes: rest.notes }),
+          ...(rest.asOfDate !== undefined && { asOfDate: new Date(rest.asOfDate) }),
+          ...(rest.source !== undefined && { source: rest.source }),
+        });
+        return { success: true };
+      }),
+    remove: protectedProcedure
+      .input(z.object({ id: z.number().int().positive() }))
+      .mutation(async ({ input }) => {
+        await deleteBankInstrument(input.id);
+        return { success: true };
+      }),
+  }),
+
+  // ─── Round 12: Benchmark inputs (global) ──────────────────────────────────
+  benchmarks: router({
+    list: publicProcedure.query(async () => {
+      const rows = await getBenchmarkInputs();
+      return rows.map((r) => ({
+        id: r.id,
+        metricKey: r.metricKey,
+        label: r.label,
+        value: Number(r.value),
+        asOfDate: r.asOfDate,
+        source: r.source ?? null,
+        notes: r.notes ?? null,
+        updatedAt: r.updatedAt,
+      }));
+    }),
+    upsert: protectedProcedure
+      .input(z.object({
+        metricKey: z.string().min(1).max(64),
+        label: z.string().min(1).max(200),
+        value: z.number().min(0).max(100),
+        asOfDate: z.string().optional(),
+        source: z.string().max(500).optional(),
+        notes: z.string().max(2000).optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        await upsertBenchmarkInput({
+          metricKey: input.metricKey,
+          label: input.label,
+          value: String(input.value),
+          asOfDate: input.asOfDate ? new Date(input.asOfDate) : undefined,
+          source: input.source,
+          notes: input.notes,
+        });
+        await addAuditLog({
+          entity: "benchmark_inputs",
+          action: "update",
+          field: input.metricKey,
+          newValue: String(input.value),
+          changedByOpenId: ctx.user.openId,
+          changedByName: ctx.user.name ?? null,
+          summary: `Updated benchmark ${input.label} to ${input.value}%`,
+        });
+        return { success: true };
+      }),
+  }),
+
+  // ─── Round 12: Audit log (per-portfolio) ──────────────────────────────────
+  audit: router({
+    list: protectedProcedure
+      .input(z.object({ portfolioId: z.number().int().positive(), limit: z.number().int().min(1).max(500).default(100) }))
+      .query(async ({ ctx, input }) => {
+        await requirePortfolio(input.portfolioId, ctx.user.id);
+        const rows = await getAuditLog(input.portfolioId, input.limit);
+        return rows.map((r) => ({
+          id: r.id,
+          entity: r.entity,
+          entityId: r.entityId,
+          action: r.action,
+          field: r.field ?? null,
+          oldValue: r.oldValue ?? null,
+          newValue: r.newValue ?? null,
+          changedByName: r.changedByName ?? null,
+          summary: r.summary ?? null,
+          createdAt: r.createdAt,
+        }));
+      }),
+    record: protectedProcedure
+      .input(z.object({
+        portfolioId: z.number().int().positive(),
+        entity: z.string().max(64),
+        entityId: z.number().int().optional(),
+        action: z.enum(["create", "update", "delete"]),
+        field: z.string().max(100).optional(),
+        oldValue: z.string().max(2000).optional(),
+        newValue: z.string().max(2000).optional(),
+        summary: z.string().max(2000).optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        await requirePortfolio(input.portfolioId, ctx.user.id);
+        await addAuditLog({
+          portfolioId: input.portfolioId,
+          entity: input.entity,
+          entityId: input.entityId,
+          action: input.action,
+          field: input.field,
+          oldValue: input.oldValue,
+          newValue: input.newValue,
+          changedByOpenId: ctx.user.openId,
+          changedByName: ctx.user.name ?? null,
+          summary: input.summary,
+        });
+        return { success: true };
+      }),
+  }),
+
+  // ─── Round 12: MMF fund accrual settings ──────────────────────────────────
+  mmfAccrual: router({
+    updateSettings: protectedProcedure
+      .input(z.object({
+        id: z.number().int().positive(),
+        dayCountBasis: z.union([z.literal(360), z.literal(365)]).optional(),
+        creditingFrequency: z.enum(["daily", "monthly"]).optional(),
+        whtRate: z.number().min(0).max(100).optional(),
+      }))
+      .mutation(async ({ input }) => {
+        await updateMmfFundAccrualSettings(input.id, {
+          ...(input.dayCountBasis !== undefined && { dayCountBasis: input.dayCountBasis }),
+          ...(input.creditingFrequency !== undefined && { creditingFrequency: input.creditingFrequency }),
+          ...(input.whtRate !== undefined && { whtRate: String(input.whtRate) }),
+        });
         return { success: true };
       }),
   }),

@@ -16,6 +16,11 @@ import GettingStarted from "./pages/GettingStarted";
 import Deposits from "./pages/Deposits";
 import MmfFunds from "./pages/MmfFunds";
 import OtherAssets from "./pages/OtherAssets";
+import MmfAccrual from "./pages/MmfAccrual";
+import TaxSummary from "./pages/TaxSummary";
+import MmfStrategy from "./pages/MmfStrategy";
+import BankInstruments from "./pages/BankInstruments";
+import PortfolioReview from "./pages/PortfolioReview";
 
 function Router() {
   return (
@@ -29,6 +34,11 @@ function Router() {
       <Route path="/getting-started" component={GettingStarted} />
       <Route path="/deposits" component={Deposits} />
       <Route path="/mmf-funds" component={MmfFunds} />
+      <Route path="/mmf-accrual" component={MmfAccrual} />
+      <Route path="/mmf-strategy" component={MmfStrategy} />
+      <Route path="/bank-instruments" component={BankInstruments} />
+      <Route path="/tax-summary" component={TaxSummary} />
+      <Route path="/portfolio-review" component={PortfolioReview} />
       <Route path="/other-assets" component={OtherAssets} />
       <Route path="/404" component={NotFound} />
       <Route component={NotFound} />

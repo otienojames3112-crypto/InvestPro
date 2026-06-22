@@ -19,22 +19,52 @@ import {
   MapPin,
   PiggyBank,
   Briefcase,
+  CalendarClock,
+  Receipt,
+  PieChart,
+  Building2,
+  ClipboardCheck,
   X,
 } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { Button } from "./ui/button";
 import { Skeleton } from "./ui/skeleton";
 
-const navItems = [
-  { href: "/", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/ledger", label: "Month Ledger", icon: BookOpen },
-  { href: "/contributions", label: "Contributions", icon: TrendingUp },
-  { href: "/securities", label: "CBK Securities", icon: Landmark },
-  { href: "/scenarios", label: "Scenarios", icon: BarChart3 },
-  { href: "/mmf-funds", label: "MMF Funds", icon: PiggyBank },
-  { href: "/other-assets", label: "Other Assets", icon: Briefcase },
-  { href: "/settings", label: "Rate Settings", icon: Settings },
-  { href: "/getting-started", label: "Getting Started", icon: MapPin },
+const navGroups = [
+  {
+    title: "Tracking",
+    items: [
+      { href: "/", label: "Dashboard", icon: LayoutDashboard },
+      { href: "/ledger", label: "Month Ledger", icon: BookOpen },
+      { href: "/contributions", label: "Contributions", icon: TrendingUp },
+      { href: "/securities", label: "CBK Securities", icon: Landmark },
+      { href: "/mmf-funds", label: "MMF Funds", icon: PiggyBank },
+      { href: "/other-assets", label: "Other Assets", icon: Briefcase },
+    ],
+  },
+  {
+    title: "Analysis",
+    items: [
+      { href: "/scenarios", label: "Scenarios", icon: BarChart3 },
+      { href: "/portfolio-review", label: "Portfolio Review", icon: ClipboardCheck },
+      { href: "/mmf-accrual", label: "Daily Accrual", icon: CalendarClock },
+      { href: "/tax-summary", label: "Tax Summary", icon: Receipt },
+    ],
+  },
+  {
+    title: "Knowledge",
+    items: [
+      { href: "/mmf-strategy", label: "MMF Strategy", icon: PieChart },
+      { href: "/bank-instruments", label: "Bank Instruments", icon: Building2 },
+      { href: "/getting-started", label: "Getting Started", icon: MapPin },
+    ],
+  },
+  {
+    title: "Setup",
+    items: [
+      { href: "/settings", label: "Rate Settings", icon: Settings },
+    ],
+  },
 ];
 
 function SidebarContent({
@@ -76,54 +106,55 @@ function SidebarContent({
       </div>
 
       {/* Navigation */}
-      <nav className="flex-1 px-3 py-4 overflow-y-auto">
-        <p className="px-3 mb-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-          Navigation
-        </p>
-        <ul className="space-y-0.5">
-          {/* Record Deposits — opens drawer, not a page */}
-          <li>
-            <button
-              onClick={() => { openDrawer(); onNavClick?.(); }}
-              className={cn(
-                "w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-150 cursor-pointer group",
-                "text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
-              )}
-            >
-              <ArrowDownCircle className="w-4 h-4 shrink-0 transition-colors text-muted-foreground group-hover:text-sidebar-accent-foreground" />
-              <span className="flex-1 text-left">Record Deposits</span>
-              <span className="text-xs bg-primary/20 text-primary px-1.5 py-0.5 rounded font-medium">Live</span>
-            </button>
-          </li>
+      <nav className="flex-1 px-3 py-4 overflow-y-auto space-y-4">
+        {/* Record Deposits — opens drawer, not a page */}
+        <button
+          onClick={() => { openDrawer(); onNavClick?.(); }}
+          className={cn(
+            "w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-150 cursor-pointer group",
+            "text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+          )}
+        >
+          <ArrowDownCircle className="w-4 h-4 shrink-0 transition-colors text-muted-foreground group-hover:text-sidebar-accent-foreground" />
+          <span className="flex-1 text-left">Record Deposits</span>
+          <span className="text-xs bg-primary/20 text-primary px-1.5 py-0.5 rounded font-medium">Live</span>
+        </button>
 
-          {/* Regular nav items */}
-          {navItems.map(({ href, label, icon: Icon }) => {
-            const isActive = location === href;
-            return (
-              <li key={href}>
-                <Link href={href} onClick={onNavClick}>
-                  <div
-                    className={cn(
-                      "flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-150 cursor-pointer group",
-                      isActive
-                        ? "bg-sidebar-accent text-primary"
-                        : "text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
-                    )}
-                  >
-                    <Icon
-                      className={cn(
-                        "w-4 h-4 shrink-0 transition-colors",
-                        isActive ? "text-primary" : "text-muted-foreground group-hover:text-sidebar-accent-foreground"
-                      )}
-                    />
-                    <span className="flex-1">{label}</span>
-                    {isActive && <ChevronRight className="w-3 h-3 text-primary" />}
-                  </div>
-                </Link>
-              </li>
-            );
-          })}
-        </ul>
+        {navGroups.map((group) => (
+          <div key={group.title}>
+            <p className="px-3 mb-1.5 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+              {group.title}
+            </p>
+            <ul className="space-y-0.5">
+              {group.items.map(({ href, label, icon: Icon }) => {
+                const isActive = location === href;
+                return (
+                  <li key={href}>
+                    <Link href={href} onClick={onNavClick}>
+                      <div
+                        className={cn(
+                          "flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-150 cursor-pointer group",
+                          isActive
+                            ? "bg-sidebar-accent text-primary"
+                            : "text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+                        )}
+                      >
+                        <Icon
+                          className={cn(
+                            "w-4 h-4 shrink-0 transition-colors",
+                            isActive ? "text-primary" : "text-muted-foreground group-hover:text-sidebar-accent-foreground"
+                          )}
+                        />
+                        <span className="flex-1">{label}</span>
+                        {isActive && <ChevronRight className="w-3 h-3 text-primary" />}
+                      </div>
+                    </Link>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        ))}
       </nav>
 
       {/* User profile */}
@@ -159,7 +190,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [mobileOpen, setMobileOpen] = useState(false);
 
   // Current page label for the mobile top bar
-  const currentPage = navItems.find((n) => n.href === location)?.label ?? "KES 5M Tracker";
+  const currentPage =
+    navGroups
+      .flatMap((g) => g.items)
+      .find((n) => n.href === location)?.label ?? "KES 5M Tracker";
 
   if (loading) {
     return (

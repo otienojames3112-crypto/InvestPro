@@ -662,3 +662,176 @@ export async function deleteSecondaryMmf(id: number, portfolioId: number) {
       )
     );
 }
+
+
+// ============================================================================
+// Round 12 — Knowledge & Accuracy Layer helpers
+// ============================================================================
+import {
+  mmfComposition,
+  bankInstruments,
+  benchmarkInputs,
+  auditLog,
+  type InsertMmfComposition,
+  type InsertBankInstrument,
+  type InsertBenchmarkInput,
+  type InsertAuditLog,
+} from "../drizzle/schema";
+
+/** ---------------- MMF Composition (global reference) ---------------- */
+
+/** List all MMF compositions joined with fund name/company/ear. */
+export async function getMmfCompositions() {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select({
+      id: mmfComposition.id,
+      mmfFundId: mmfComposition.mmfFundId,
+      govSecurities: mmfComposition.govSecurities,
+      bankInstruments: mmfComposition.bankInstruments,
+      corporateDebt: mmfComposition.corporateDebt,
+      cashEquivalents: mmfComposition.cashEquivalents,
+      offshoreRegional: mmfComposition.offshoreRegional,
+      notes: mmfComposition.notes,
+      asOfDate: mmfComposition.asOfDate,
+      source: mmfComposition.source,
+      isEstimate: mmfComposition.isEstimate,
+      updatedAt: mmfComposition.updatedAt,
+      fundName: mmfFunds.fundName,
+      company: mmfFunds.company,
+      ear: mmfFunds.ear,
+      grossYield: mmfFunds.grossYield,
+      managementFee: mmfFunds.managementFee,
+    })
+    .from(mmfComposition)
+    .innerJoin(mmfFunds, eq(mmfComposition.mmfFundId, mmfFunds.id))
+    .orderBy(desc(mmfFunds.ear));
+}
+
+export async function getMmfCompositionByFund(mmfFundId: number) {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db
+    .select()
+    .from(mmfComposition)
+    .where(eq(mmfComposition.mmfFundId, mmfFundId))
+    .limit(1);
+  return rows[0] ?? null;
+}
+
+export async function upsertMmfComposition(data: InsertMmfComposition) {
+  const db = await getDb();
+  if (!db) return null;
+  const existing = await getMmfCompositionByFund(data.mmfFundId);
+  if (existing) {
+    await db
+      .update(mmfComposition)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(mmfComposition.id, existing.id));
+    return existing.id;
+  }
+  await db.insert(mmfComposition).values(data);
+  return null;
+}
+
+export async function deleteMmfComposition(id: number) {
+  const db = await getDb();
+  if (!db) return;
+  await db.delete(mmfComposition).where(eq(mmfComposition.id, id));
+}
+
+/** ---------------- Bank Instruments (global reference) ---------------- */
+
+export async function getBankInstruments() {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select()
+    .from(bankInstruments)
+    .orderBy(bankInstruments.bankName);
+}
+
+export async function addBankInstrument(data: InsertBankInstrument) {
+  const db = await getDb();
+  if (!db) return null;
+  await db.insert(bankInstruments).values(data);
+  return true;
+}
+
+export async function updateBankInstrument(
+  id: number,
+  data: Partial<InsertBankInstrument>
+) {
+  const db = await getDb();
+  if (!db) return;
+  await db
+    .update(bankInstruments)
+    .set({ ...data, updatedAt: new Date() })
+    .where(eq(bankInstruments.id, id));
+}
+
+export async function deleteBankInstrument(id: number) {
+  const db = await getDb();
+  if (!db) return;
+  await db.delete(bankInstruments).where(eq(bankInstruments.id, id));
+}
+
+/** ---------------- Benchmark Inputs (global reference) ---------------- */
+
+export async function getBenchmarkInputs() {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(benchmarkInputs).orderBy(benchmarkInputs.id);
+}
+
+export async function upsertBenchmarkInput(data: InsertBenchmarkInput) {
+  const db = await getDb();
+  if (!db) return;
+  const existing = await db
+    .select()
+    .from(benchmarkInputs)
+    .where(eq(benchmarkInputs.metricKey, data.metricKey))
+    .limit(1);
+  if (existing[0]) {
+    await db
+      .update(benchmarkInputs)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(benchmarkInputs.id, existing[0].id));
+  } else {
+    await db.insert(benchmarkInputs).values(data);
+  }
+}
+
+/** ---------------- Audit Log ---------------- */
+
+export async function addAuditLog(data: InsertAuditLog) {
+  const db = await getDb();
+  if (!db) return;
+  await db.insert(auditLog).values(data);
+}
+
+export async function getAuditLog(portfolioId: number, limit = 100) {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select()
+    .from(auditLog)
+    .where(eq(auditLog.portfolioId, portfolioId))
+    .orderBy(desc(auditLog.createdAt))
+    .limit(limit);
+}
+
+/** ---------------- MMF fund accrual settings ---------------- */
+
+export async function updateMmfFundAccrualSettings(
+  id: number,
+  data: { dayCountBasis?: number; creditingFrequency?: "daily" | "monthly"; whtRate?: string }
+) {
+  const db = await getDb();
+  if (!db) return;
+  await db
+    .update(mmfFunds)
+    .set({ ...data, updatedAt: new Date() })
+    .where(eq(mmfFunds.id, id));
+}

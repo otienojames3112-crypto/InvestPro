@@ -250,6 +250,12 @@ export const mmfFunds = mysqlTable("mmf_funds", {
   source: varchar("source", { length: 500 }),
   /** Whether this fund is active / still available */
   isActive: boolean("isActive").notNull().default(true),
+  /** Day-count basis for daily accrual: 365 (actual/365) or 360 */
+  dayCountBasis: int("dayCountBasis").notNull().default(365),
+  /** Crediting / compounding frequency: "daily" (net joins balance daily) or "monthly" (accrues daily, paid month-end) */
+  creditingFrequency: mysqlEnum("creditingFrequency", ["daily", "monthly"]).notNull().default("daily"),
+  /** Per-fund withholding tax rate on interest (% ) — default 15 */
+  whtRate: decimal("whtRate", { precision: 6, scale: 4 }).notNull().default("15.0000"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
@@ -338,3 +344,126 @@ export const portfolioSecondaryMmfs = mysqlTable("portfolio_secondary_mmfs", {
 });
 export type PortfolioSecondaryMmf = typeof portfolioSecondaryMmfs.$inferSelect;
 export type InsertPortfolioSecondaryMmf = typeof portfolioSecondaryMmfs.$inferInsert;
+
+
+/**
+ * MMF composition — editable asset-allocation breakdown per fund.
+ * Linked to mmfFunds.id. Buckets stored as percentages (0–100).
+ * Seeded from published 2026 factsheets; fully user-editable.
+ */
+export const mmfComposition = mysqlTable("mmf_composition", {
+  id: int("id").autoincrement().primaryKey(),
+  /** References mmfFunds.id */
+  mmfFundId: int("mmfFundId").notNull(),
+  /** % in Government Securities (T-bills, T-bonds) */
+  govSecurities: decimal("govSecurities", { precision: 6, scale: 2 }).notNull().default("0.00"),
+  /** % in Banking Sector Instruments (fixed / call / demand deposits) */
+  bankInstruments: decimal("bankInstruments", { precision: 6, scale: 2 }).notNull().default("0.00"),
+  /** % in Corporate Short-Term Debt (commercial paper, corporate notes) */
+  corporateDebt: decimal("corporateDebt", { precision: 6, scale: 2 }).notNull().default("0.00"),
+  /** % in Cash & Cash Equivalents */
+  cashEquivalents: decimal("cashEquivalents", { precision: 6, scale: 2 }).notNull().default("0.00"),
+  /** % in Collective Investment Schemes / Regional / Offshore */
+  offshoreRegional: decimal("offshoreRegional", { precision: 6, scale: 2 }).notNull().default("0.00"),
+  /** Plain-language notes on strategy / how the fund earns its return */
+  notes: text("notes"),
+  /** "As of" date for this composition snapshot */
+  asOfDate: date("asOfDate"),
+  /** Source URL or description (factsheet) */
+  source: varchar("source", { length: 500 }),
+  /** Whether figures are exact (from factsheet) or estimated */
+  isEstimate: boolean("isEstimate").notNull().default(false),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type MmfComposition = typeof mmfComposition.$inferSelect;
+export type InsertMmfComposition = typeof mmfComposition.$inferInsert;
+
+/**
+ * Bank Sector Instruments — editable reference table of Kenyan bank
+ * call / fixed deposit products. Global (shared across portfolios).
+ */
+export const bankInstruments = mysqlTable("bank_instruments", {
+  id: int("id").autoincrement().primaryKey(),
+  /** Bank name, e.g. "Equity Bank" */
+  bankName: varchar("bankName", { length: 200 }).notNull(),
+  /** Instrument type */
+  instrumentType: mysqlEnum("instrumentType", ["call_deposit", "fixed_deposit"]).notNull(),
+  /** Minimum amount (KES) */
+  minAmount: decimal("minAmount", { precision: 14, scale: 2 }).notNull().default("0.00"),
+  /** Typical tenor, e.g. "1–12 months" */
+  typicalTenor: varchar("typicalTenor", { length: 100 }),
+  /** Indicative rate (% p.a.) — negotiated rates vary */
+  indicativeRate: decimal("indicativeRate", { precision: 6, scale: 2 }),
+  /** Whether the rate is negotiable */
+  isNegotiable: boolean("isNegotiable").notNull().default(true),
+  /** Notes */
+  notes: text("notes"),
+  /** "As of" date */
+  asOfDate: date("asOfDate"),
+  /** Source URL */
+  source: varchar("source", { length: 500 }),
+  isActive: boolean("isActive").notNull().default(true),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type BankInstrument = typeof bankInstruments.$inferSelect;
+export type InsertBankInstrument = typeof bankInstruments.$inferInsert;
+
+/**
+ * Benchmark inputs — editable macro benchmarks for comparison.
+ * Global (one shared set) but each row carries source + as-of.
+ * Used by the benchmark-comparison view (blended return vs market / inflation).
+ */
+export const benchmarkInputs = mysqlTable("benchmark_inputs", {
+  id: int("id").autoincrement().primaryKey(),
+  /** Stable key, e.g. "mmf_market_avg", "cbr", "inflation", "tbill_91" */
+  metricKey: varchar("metricKey", { length: 64 }).notNull().unique(),
+  /** Human label, e.g. "MMF Market Average Yield" */
+  label: varchar("label", { length: 200 }).notNull(),
+  /** Value (% p.a.) */
+  value: decimal("value", { precision: 8, scale: 4 }).notNull(),
+  /** "As of" date */
+  asOfDate: date("asOfDate"),
+  /** Source URL or description */
+  source: varchar("source", { length: 500 }),
+  notes: text("notes"),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type BenchmarkInput = typeof benchmarkInputs.$inferSelect;
+export type InsertBenchmarkInput = typeof benchmarkInputs.$inferInsert;
+
+/**
+ * Audit log — change trail for rate and deposit edits (defensibility).
+ * Records who changed what, when, and the before/after values.
+ */
+export const auditLog = mysqlTable("audit_log", {
+  id: int("id").autoincrement().primaryKey(),
+  /** Portfolio this change relates to (nullable for global edits) */
+  portfolioId: int("portfolioId"),
+  /** Entity changed, e.g. "rate_settings", "deposit_entry", "mmf_fund" */
+  entity: varchar("entity", { length: 64 }).notNull(),
+  /** Optional entity row id */
+  entityId: int("entityId"),
+  /** Action: create | update | delete */
+  action: mysqlEnum("action", ["create", "update", "delete"]).notNull(),
+  /** Field name changed (for updates) */
+  field: varchar("field", { length: 100 }),
+  /** Previous value (stringified) */
+  oldValue: text("oldValue"),
+  /** New value (stringified) */
+  newValue: text("newValue"),
+  /** User open id who made the change */
+  changedByOpenId: varchar("changedByOpenId", { length: 64 }),
+  /** User display name who made the change */
+  changedByName: varchar("changedByName", { length: 200 }),
+  /** Free-text summary */
+  summary: text("summary"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type AuditLog = typeof auditLog.$inferSelect;
+export type InsertAuditLog = typeof auditLog.$inferInsert;

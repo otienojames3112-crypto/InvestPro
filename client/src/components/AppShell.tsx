@@ -32,6 +32,51 @@ import {
 import { Link, useLocation } from "wouter";
 import { Button } from "./ui/button";
 import { Skeleton } from "./ui/skeleton";
+import { trpc } from "@/lib/trpc";
+import { rateStaleness } from "@/lib/rateStaleness";
+import { Clock } from "lucide-react";
+
+/**
+ * Compact rate-staleness badge for the sidebar, visible on every page. Reads
+ * the current portfolio's rate snapshot freshness and links to Rate Settings.
+ * Mirrors the Dashboard rate-card thresholds (green / amber / red).
+ */
+function SidebarRateStaleness({
+  portfolioId,
+  onNavClick,
+}: {
+  portfolioId: number | null | undefined;
+  onNavClick?: () => void;
+}) {
+  const { data } = trpc.settings.get.useQuery(
+    { portfolioId: portfolioId as number },
+    { enabled: !!portfolioId }
+  );
+  if (!portfolioId || !data) return null;
+  const s = rateStaleness((data as { ratesLastUpdatedAt?: Date | string | null }).ratesLastUpdatedAt ?? null);
+  const tone = s.isVeryStale
+    ? "border-red-500/40 bg-red-500/10 text-red-400"
+    : s.isStale
+      ? "border-amber-500/40 bg-amber-500/10 text-amber-400"
+      : "border-emerald-500/30 bg-emerald-500/10 text-emerald-400";
+  return (
+    <Link href="/settings" onClick={onNavClick}>
+      <div
+        className={cn(
+          "flex items-center gap-2 rounded-lg border px-3 py-2 text-xs transition-colors cursor-pointer hover:brightness-110",
+          tone
+        )}
+        title={s.isStale ? "Your saved rates may be out of date — update them to keep projections accurate." : "Rates are up to date."}
+      >
+        <Clock className="w-3.5 h-3.5 shrink-0" />
+        <span className="flex-1 min-w-0 truncate">
+          Rates updated {s.label}
+        </span>
+        {s.isStale && <span className="font-semibold shrink-0">Update</span>}
+      </div>
+    </Link>
+  );
+}
 
 const navGroups = [
   {
@@ -78,6 +123,7 @@ function SidebarContent({
   onNavClick,
   appTitle,
   appSubtitle,
+  portfolioId,
 }: {
   location: string;
   openDrawer: () => void;
@@ -86,6 +132,7 @@ function SidebarContent({
   onNavClick?: () => void;
   appTitle: string;
   appSubtitle: string;
+  portfolioId: number | null | undefined;
 }) {
   return (
     <div className="flex flex-col h-full">
@@ -112,6 +159,7 @@ function SidebarContent({
       <div className="px-3 py-3 border-b border-sidebar-border space-y-3">
         <ModeSwitcher />
         <PortfolioSelector />
+        <SidebarRateStaleness portfolioId={portfolioId} onNavClick={onNavClick} />
       </div>
 
       {/* Navigation */}
@@ -196,7 +244,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const { user, loading, isAuthenticated, logout } = useAuth();
   const [location] = useLocation();
   const { openDrawer } = useDepositDrawer();
-  const { portfolio } = usePortfolio();
+  const { portfolio, portfolioId } = usePortfolio();
   const [mobileOpen, setMobileOpen] = useState(false);
 
   // Portfolio-driven app identity. Falls back to a neutral label before a
@@ -280,6 +328,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           logout={logout}
           appTitle={appTitle}
           appSubtitle={appSubtitle}
+          portfolioId={portfolioId}
         />
       </aside>
 
@@ -314,6 +363,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           onNavClick={() => setMobileOpen(false)}
           appTitle={appTitle}
           appSubtitle={appSubtitle}
+          portfolioId={portfolioId}
         />
       </aside>
 

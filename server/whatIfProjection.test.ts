@@ -108,3 +108,51 @@ describe("what-if secondary MMF contribution overlay", () => {
     expect(deltaSmall).toBeGreaterThan(0);
   });
 });
+
+describe("what-if primary contribution + step-up overlay", () => {
+  it("raising the primary starting contribution increases the ending value", () => {
+    const baseline = runProjection(BASE);
+    const whatIf = runProjection({ ...BASE, startingContribution: BASE.startingContribution + 20000 });
+    expect(finalTotal(whatIf)).toBeGreaterThan(finalTotal(baseline));
+  });
+
+  it("raising the step-up amount increases the ending value", () => {
+    const baseline = runProjection(BASE);
+    const whatIf = runProjection({ ...BASE, stepUpAmount: BASE.stepUpAmount + 5000 });
+    expect(finalTotal(whatIf)).toBeGreaterThan(finalTotal(baseline));
+  });
+
+  it("lowering both primary contribution and step-up to zero decreases the ending value", () => {
+    const baseline = runProjection(BASE);
+    const whatIf = runProjection({ ...BASE, startingContribution: 0, stepUpAmount: 0 });
+    expect(finalTotal(whatIf)).toBeLessThan(finalTotal(baseline));
+  });
+
+  it("identical primary overrides reproduce the baseline exactly", () => {
+    const baseline = runProjection(BASE);
+    const whatIf = runProjection({
+      ...BASE,
+      startingContribution: BASE.startingContribution,
+      stepUpAmount: BASE.stepUpAmount,
+    });
+    expect(finalTotal(whatIf)).toBeCloseTo(finalTotal(baseline), 2);
+  });
+
+  it("primary and secondary overrides combine additively", () => {
+    const secondaries: SecondaryMmfInput[] = [
+      { id: 1, currentBalance: 0, monthlyContribution: 1000, ear: 12, whtRate: 15 },
+    ];
+    const baseline = runProjection(BASE, [], [], [], [], secondaries);
+    const primaryOnly = runProjection(
+      { ...BASE, startingContribution: BASE.startingContribution + 10000 },
+      [], [], [], [], secondaries,
+    );
+    const both = runProjection(
+      { ...BASE, startingContribution: BASE.startingContribution + 10000 },
+      [], [], [], [],
+      secondaries.map((s) => ({ ...s, monthlyContribution: 6000 })),
+    );
+    expect(finalTotal(primaryOnly)).toBeGreaterThan(finalTotal(baseline));
+    expect(finalTotal(both)).toBeGreaterThan(finalTotal(primaryOnly));
+  });
+});

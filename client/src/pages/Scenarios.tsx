@@ -370,7 +370,14 @@ export default function Scenarios() {
         </Card>
 
         {/* What-if overlay for secondary MMF contributions */}
-        {portfolioId && <SecondaryWhatIf portfolioId={portfolioId} />}
+        {portfolioId && (
+          <SecondaryWhatIf
+            portfolioId={portfolioId}
+            primaryContribution={currentStart}
+            primaryStepUp={currentStepUp}
+            stepUpMonths={stepUpMonths}
+          />
+        )}
 
         {/* Methodology note */}
         <Card className="border-border/60">

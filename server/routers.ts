@@ -503,6 +503,10 @@ export const appRouter = router({
           secondaryMmfId: z.number().int().positive(),
           monthlyContribution: z.number().min(0),
         })).max(50),
+        /** Optional override of the primary starting monthly contribution (KES). */
+        primaryContribution: z.number().min(0).max(10000000).optional(),
+        /** Optional override of the primary step-up amount (KES). */
+        primaryStepUpAmount: z.number().min(0).max(10000000).optional(),
       }))
       .query(async ({ ctx, input }) => {
         const p = await requirePortfolio(input.portfolioId, ctx.user.id);
@@ -523,8 +527,15 @@ export const appRouter = router({
             : s,
         );
 
+        // What-if settings: optionally override the PRIMARY contribution and/or step-up.
+        const whatIfSettings = {
+          ...settings,
+          ...(input.primaryContribution !== undefined && { startingContribution: input.primaryContribution }),
+          ...(input.primaryStepUpAmount !== undefined && { stepUpAmount: input.primaryStepUpAmount }),
+        };
+
         const baselineSeries = runProjection(settings, contribOverrides, rh, [], [], baselineSecondary);
-        const whatIfSeries = runProjection(settings, contribOverrides, rh, [], [], whatIfSecondary);
+        const whatIfSeries = runProjection(whatIfSettings, contribOverrides, rh, [], [], whatIfSecondary);
         const last = (arr: typeof baselineSeries) => arr[arr.length - 1];
         const baselineFinal = last(baselineSeries)?.totalEnd ?? 0;
         const whatIfFinal = last(whatIfSeries)?.totalEnd ?? 0;
@@ -532,6 +543,10 @@ export const appRouter = router({
         return {
           target: settings.targetAmount,
           horizonMonths: settings.horizonMonths ?? baselineSeries.length,
+          primaryBaseline: {
+            startingContribution: settings.startingContribution,
+            stepUpAmount: settings.stepUpAmount,
+          },
           baseline: {
             finalValue: baselineFinal,
             series: baselineSeries.map((m) => ({ month: m.monthNumber, total: m.totalEnd })),
@@ -543,9 +558,58 @@ export const appRouter = router({
           delta: whatIfFinal - baselineFinal,
         };
       }),
+
+    /**
+     * Apply a what-if: persist the explored secondary-MMF monthly contributions
+     * (and optionally the primary contribution / step-up) back to the live
+     * accounts/portfolio. This turns an exploration into a saved plan change.
+     */
+    applyWhatIf: protectedProcedure
+      .input(z.object({
+        portfolioId: z.number().int().positive(),
+        overrides: z.array(z.object({
+          secondaryMmfId: z.number().int().positive(),
+          monthlyContribution: z.number().min(0),
+        })).max(50),
+        primaryContribution: z.number().min(0).max(10000000).optional(),
+        primaryStepUpAmount: z.number().min(0).max(10000000).optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        await requirePortfolio(input.portfolioId, ctx.user.id);
+        // Persist secondary MMF contribution changes.
+        const secs = await getSecondaryMmfs(input.portfolioId);
+        const secIds = new Set(secs.map((s) => s.id));
+        let applied = 0;
+        for (const o of input.overrides) {
+          if (!secIds.has(o.secondaryMmfId)) continue;
+          await updateSecondaryMmf(o.secondaryMmfId, input.portfolioId, {
+            monthlyContribution: String(o.monthlyContribution),
+          });
+          applied++;
+        }
+        // Persist primary contribution / step-up changes.
+        const portfolioPatch: { startingContribution?: string; stepUpAmount?: string } = {};
+        if (input.primaryContribution !== undefined) portfolioPatch.startingContribution = String(input.primaryContribution);
+        if (input.primaryStepUpAmount !== undefined) portfolioPatch.stepUpAmount = String(input.primaryStepUpAmount);
+        if (Object.keys(portfolioPatch).length > 0) {
+          await updatePortfolio(input.portfolioId, ctx.user.id, portfolioPatch);
+        }
+        await addAuditLog({
+          portfolioId: input.portfolioId,
+          entity: "portfolio",
+          entityId: input.portfolioId,
+          action: "update",
+          changedByOpenId: ctx.user.openId,
+          changedByName: ctx.user.name ?? undefined,
+          summary: `Applied what-if: ${applied} secondary MMF contribution(s)` +
+            (input.primaryContribution !== undefined ? `, primary contribution → ${input.primaryContribution}` : "") +
+            (input.primaryStepUpAmount !== undefined ? `, step-up → ${input.primaryStepUpAmount}` : ""),
+        });
+        return { success: true, appliedSecondaries: applied, portfolioUpdated: Object.keys(portfolioPatch).length > 0 };
+      }),
   }),
 
-  // ─── Ledger ───────────────────────────────────────────────────────────────────
+  // ─── Ledger ─────────────────────────────────────────────────────
   ledger: router({
     list: protectedProcedure.input(portfolioIdInput).query(async ({ ctx, input }) => {
       await requirePortfolio(input.portfolioId, ctx.user.id);

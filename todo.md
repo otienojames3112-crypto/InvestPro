@@ -341,3 +341,12 @@
 - [x] R18.2 MMF Funds: "Set as primary" control on any tracked MMF; updates portfolio selected fund + reruns projection
 - [x] R18.3 Scenarios: "what-if" overlay (SecondaryWhatIf component + projection.whatIf) to change a secondary-MMF monthly contribution and see projection impact (baseline vs what-if)
 - [x] R18.4 Tests for what-if projection delta (whatIfProjection.test.ts, 5 tests); full tsc + pnpm test (108 pass, 0 TS errors); checkpoint; deliver
+
+## Round 19 — Bug fixes + what-if enhancements
+- [x] R19.1 BUG: Tax Summary page "broken" — root cause: step-5 link pointed to /tax (404); actual route is /tax-summary. Fixed href.
+- [x] R19.2 BUG: Test sample data failed — root cause: 7 legacy NOT-NULL `userId` orphan columns on portfolio-scoped tables (rate_settings, deposit_entries, contribution_overrides, ledger_entries, securities, rate_history, account_status) from an old migration, not in Drizzle schema. Dropped the 6 orphans (kept portfolios.userId). Seed now completes end-to-end.
+- [x] R19.3 BUG: step 5 href /tax → /tax-summary (same fix as R19.1)
+- [x] R19.4 What-if: one-click "Apply this what-if" button (projection.applyWhatIf) saves explored secondary + primary back to account/portfolio, with confirm dialog
+- [x] R19.5 What-if: overlay also varies primary starting contribution + step-up amount (whatIf accepts primaryContribution/primaryStepUpAmount)
+- [x] R19.6 Sidebar: rate-staleness badge (SidebarRateStaleness in AppShell, shared rateStaleness helper) visible on every page, links to Rate Settings
+- [x] R19.7 Tests + full tsc + pnpm test (113 pass, 0 TS errors; +5 primary what-if tests); checkpoint; deliver

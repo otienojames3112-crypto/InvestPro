@@ -25,7 +25,7 @@ const FIRST_STEPS: { icon: React.ElementType; title: string; desc: string; href:
   { icon: Wallet, title: "2. Record where your money is", desc: "Log deposits into each MMF, bank deposit or government security so the tracker mirrors reality.", href: "/deposits", cta: "Record a deposit" },
   { icon: LayoutDashboard, title: "3. Read your dashboard", desc: "See your live net worth, allocation and the projection toward your goal in one place.", href: "/", cta: "View Dashboard" },
   { icon: TrendingUp, title: "4. Test scenarios", desc: "Find the minimum monthly contribution that reaches your target, and try what-ifs.", href: "/scenarios", cta: "Open Scenarios" },
-  { icon: Receipt, title: "5. Check your tax", desc: "Review the 15% withholding tax on each income source and your blended net yield.", href: "/tax", cta: "Open Tax Summary" },
+  { icon: Receipt, title: "5. Check your tax", desc: "Review the 15% withholding tax on each income source and your blended net yield.", href: "/tax-summary", cta: "Open Tax Summary" },
 ];
 
 const GLOSSARY: { term: string; def: string }[] = [

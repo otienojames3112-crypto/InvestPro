@@ -74,6 +74,7 @@ import {
   type EngineSettings,
   type ActualDeposit,
   type ActualSecurity,
+  type ActualBankHolding,
   type SecondaryMmfInput,
 } from "./engine";
 import { COOKIE_NAME } from "../shared/const";
@@ -167,6 +168,24 @@ function mapActualDeposits(rows: Awaited<ReturnType<typeof getDepositEntries>>):
     bucket: d.bucket as "mmf" | "tbill" | "ifb" | "fxd",
     amount: parseFloat(String(d.amount)),
     depositDate: normaliseDate(d.depositDate),
+    institutionType:
+      (d as { institutionType?: string | null }).institutionType as ActualDeposit["institutionType"] ?? null,
+    mmfFundId: (d as { mmfFundId?: number | null }).mmfFundId ?? null,
+    bankHoldingId: (d as { bankHoldingId?: number | null }).bankHoldingId ?? null,
+  }));
+}
+
+/** Map DB bank instrument holdings into engine actuals inputs. */
+function mapActualBankHoldings(
+  rows: Awaited<ReturnType<typeof getBankInstrumentHoldings>>
+): ActualBankHolding[] {
+  return rows.map((b) => ({
+    principal: parseFloat(String(b.principal ?? "0")) || 0,
+    interestRate: parseFloat(String(b.interestRate ?? "0")) || 0,
+    whtRate: b.whtRate != null ? parseFloat(String(b.whtRate)) : null,
+    dayCountBasis: (b as { dayCountBasis?: number | null }).dayCountBasis ?? 365,
+    startDate: normaliseDate((b as { startDate?: Date | string | null }).startDate),
+    isActive: !!b.isActive,
   }));
 }
 
@@ -429,7 +448,17 @@ export const appRouter = router({
       const securityRows = await getSecurities(input.portfolioId);
       const actualSecurities = mapActualSecurities(securityRows);
       const secondaryMmfs = mapSecondaryMmfs(await getSecondaryMmfs(input.portfolioId));
-      return runProjection(settings, mappedOverrides, rh, actualDeposits, actualSecurities, secondaryMmfs);
+      const bankHoldings = mapActualBankHoldings(await getBankInstrumentHoldings(input.portfolioId));
+      return runProjection(
+        settings,
+        mappedOverrides,
+        rh,
+        actualDeposits,
+        actualSecurities,
+        secondaryMmfs,
+        bankHoldings,
+        p.mmfFundId ?? null
+      );
     }),
 
     scenarios: protectedProcedure.input(portfolioIdInput).query(async ({ ctx, input }) => {
@@ -826,7 +855,7 @@ export const appRouter = router({
         overrideAmount: o.overrideAmount ? parseFloat(String(o.overrideAmount)) : undefined,
         lumpSum: o.lumpSum ? parseFloat(String(o.lumpSum)) : undefined,
       }));
-      runProjection(settings, mappedOverrides, rh, actualDeposits, actualSecurities);
+      void mappedOverrides; void actualDeposits; void actualSecurities;
 
       // Destination-aware live actuals: deposits + secondary MMFs + bank holdings.
       const summary = await getActualsSummary(
@@ -1808,13 +1837,26 @@ export const appRouter = router({
       const secondaryA = pickFund("cytonn") ?? funds[1] ?? primary;
       const secondaryB = pickFund("etica") ?? funds[2] ?? primary;
 
+      // Anchor the demo to a start date ~7 months in the PAST so the sample
+      // portfolio actually exercises the elapsed-month (actuals) path. Using a
+      // future date would make currentMonth=0 and hide every recorded deposit.
+      const now = new Date();
+      const startBase = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 7, 1, 12, 0, 0));
+      const iso = (year: number, monthIndex: number, day: number) =>
+        `${year}-${String(monthIndex + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+      // Helper: ISO date `k` months after the start month (clamped day 5/15).
+      const monthsAfterStart = (k: number, day: number) => {
+        const d = new Date(Date.UTC(startBase.getUTCFullYear(), startBase.getUTCMonth() + k, day, 12, 0, 0));
+        return iso(d.getUTCFullYear(), d.getUTCMonth(), day);
+      };
+
       const p = await createPortfolio({
         userId: ctx.user.id,
         isSandbox: true,
         name: "Sample Portfolio (Demo)",
         description: "Auto-generated demo data — safe to explore, edit, or reset.",
         targetAmount: "5000000",
-        startDate: new Date("2026-07-01T12:00:00.000Z"),
+        startDate: startBase,
         horizonMonths: 120,
         startingContribution: "30000",
         stepUpAmount: "3000",
@@ -1846,10 +1888,13 @@ export const appRouter = router({
           depositDate: new Date(`${date}T12:00:00.000Z`),
           notes: "Sample data",
         });
-      await seedDeposit("mmf", "mmf_fund", 90000, "2026-07-05", primary?.id);
-      await seedDeposit("mmf", "mmf_fund", 30000, "2026-08-05", primary?.id);
-      await seedDeposit("tbill", "government_security", 50000, "2026-08-15");
-      await seedDeposit("fxd", "government_security", 100000, "2026-09-01");
+      // Primary-fund MMF deposits dated across the elapsed months (months 1, 2, 4).
+      await seedDeposit("mmf", "mmf_fund", 90000, monthsAfterStart(0, 5), primary?.id);
+      await seedDeposit("mmf", "mmf_fund", 30000, monthsAfterStart(1, 5), primary?.id);
+      await seedDeposit("mmf", "mmf_fund", 30000, monthsAfterStart(3, 5), primary?.id);
+      // Government-security deposits (T-bill + FXD) in elapsed months 2 and 3.
+      await seedDeposit("tbill", "government_security", 50000, monthsAfterStart(1, 15));
+      await seedDeposit("fxd", "government_security", 100000, monthsAfterStart(2, 1));
 
       // Two secondary MMF accounts.
       if (secondaryA && secondaryA.id !== primary?.id) {
@@ -1873,7 +1918,9 @@ export const appRouter = router({
         });
       }
 
-      // A bank fixed deposit (live actual), 2026 negotiated rate.
+      // A bank fixed deposit (live actual) opened in elapsed month 3, 6-month tenor.
+      const bankStart = new Date(Date.UTC(startBase.getUTCFullYear(), startBase.getUTCMonth() + 2, 19, 12, 0, 0));
+      const bankMaturity = new Date(Date.UTC(startBase.getUTCFullYear(), startBase.getUTCMonth() + 8, 19, 12, 0, 0));
       await addBankInstrumentHolding({
         portfolioId: p.id,
         bankName: "Equity Bank",
@@ -1881,13 +1928,13 @@ export const appRouter = router({
         instrumentType: "fixed_deposit",
         principal: "200000",
         interestRate: "10.5000",
-        rateAsOfDate: new Date("2026-06-19T12:00:00.000Z"),
+        rateAsOfDate: bankStart,
         isNegotiable: true,
         dayCountBasis: 365,
         whtRate: "15.0000",
-        startDate: new Date("2026-06-19T12:00:00.000Z"),
+        startDate: bankStart,
         tenorMonths: 6,
-        maturityDate: new Date("2026-12-19T12:00:00.000Z"),
+        maturityDate: bankMaturity,
         payoutFrequency: "maturity",
         currentValue: "200000",
       });

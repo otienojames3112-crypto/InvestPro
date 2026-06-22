@@ -141,6 +141,38 @@ export interface ActualDeposit {
   amount: number;
   /** ISO date string YYYY-MM-DD */
   depositDate: string;
+  /**
+   * Destination of the deposit. Mirrors the destination-aware deposit fields
+   * added in Round 17. When omitted, the deposit is attributed to the primary
+   * plan via its `bucket` (legacy behaviour).
+   *   - "mmf_fund"           → primary or secondary MMF fund (see mmfFundId)
+   *   - "government_security"→ a T-bill/IFB/FXD lot held at face value
+   *   - "bank_instrument"    → a bank call/fixed deposit (tracked separately)
+   */
+  institutionType?: "mmf_fund" | "government_security" | "bank_instrument" | null;
+  /** Fund id when institutionType is "mmf_fund". Used to detect secondary-fund deposits. */
+  mmfFundId?: number | null;
+  /** Bank holding id when institutionType is "bank_instrument". */
+  bankHoldingId?: number | null;
+}
+
+/**
+ * A bank instrument holding (call / fixed deposit) tracked as a live actual.
+ * During elapsed (actual) months it accrues simple interest on its principal
+ * using its own rate, WHT, and day-count, on the same monthly footing as the
+ * primary MMF, so identical money grows identically regardless of pocket.
+ */
+export interface ActualBankHolding {
+  principal: number;
+  /** Gross annual interest rate % (WHT applied internally). */
+  interestRate: number;
+  /** WHT % applied to this holding's interest. Defaults to portfolio WHT. */
+  whtRate?: number | null;
+  /** Day-count basis (365 or 360). Defaults to 365. */
+  dayCountBasis?: number | null;
+  /** ISO date the holding started accruing (YYYY-MM-DD). */
+  startDate?: string | null;
+  isActive?: boolean;
 }
 
 /** Actual security from the database (for actuals-seeded projection). */
@@ -167,6 +199,8 @@ export interface MonthResult {
   totalEnd: number;
   /** Combined projected balance of all secondary MMF accounts this month. */
   secondaryMmfEnd: number;
+  /** Combined projected balance of all bank instrument holdings this month. */
+  bankEnd: number;
   phase: "foundation" | "growth" | "de-risking" | "final-liquidity";
   sweepTarget: "tbill" | "ifb" | "fxd" | null;
   /** Total WHT withheld this month (MMF + T-Bill + FXD). */
@@ -359,6 +393,24 @@ export function getSweepTargetForMonth(
   }
 }
 
+/**
+ * 1-based month offset of a given ISO date relative to the plan start date.
+ * Month 1 = the start month. Returns null when the date is missing/invalid.
+ * A date before the start date clamps to 1; the caller decides further clamping.
+ */
+export function monthOffsetFromStart(
+  isoDate: string | null | undefined,
+  startDate: Date
+): number | null {
+  if (!isoDate) return null;
+  const d = new Date(isoDate.split("T")[0] + "T12:00:00Z");
+  if (isNaN(d.getTime())) return null;
+  const offset =
+    (d.getFullYear() - startDate.getFullYear()) * 12 +
+    (d.getMonth() - startDate.getMonth());
+  return offset + 1; // 1-based: the start month is month 1
+}
+
 // ─── Main projection engine ───────────────────────────────────────────────────
 
 /**
@@ -369,6 +421,12 @@ export function getSweepTargetForMonth(
  * @param rateHistory      - Historical rate snapshots for time-locked per-month rates.
  * @param actualDeposits   - Real deposit entries (for actuals-seeded mode).
  * @param actualSecurities - Real securities from the register (for actuals-seeded mode).
+ * @param secondaryMmfs    - Secondary MMF accounts projected alongside the primary.
+ * @param bankHoldings     - Bank call/fixed deposits tracked as live actuals.
+ * @param primaryFundId    - Id of the portfolio's primary MMF fund. Deposits whose
+ *                           mmfFundId differs (secondary funds) or whose destination
+ *                           is a bank instrument are excluded from the primary MMF so
+ *                           their balances are not double-counted.
  */
 export function runProjection(
   settings: EngineSettings,
@@ -376,7 +434,9 @@ export function runProjection(
   rateHistory: RateSnapshot[] = [],
   actualDeposits: ActualDeposit[] = [],
   actualSecurities: ActualSecurity[] = [],
-  secondaryMmfs: SecondaryMmfInput[] = []
+  secondaryMmfs: SecondaryMmfInput[] = [],
+  bankHoldings: ActualBankHolding[] = [],
+  primaryFundId: number | null = null
 ): MonthResult[] {
   const horizonMonths = settings.horizonMonths ?? 120;
   const isShortHorizon = horizonMonths < SHORT_HORIZON_THRESHOLD;
@@ -414,13 +474,71 @@ export function runProjection(
     whtRate: s.whtRate,
   }));
 
-  let actualsMMF = 0;
+  // ── Bank instrument holdings (live actuals) ──
+  // Each accrues simple interest on its principal during elapsed months on the
+  // same monthly footing as the primary MMF (own rate, WHT, day-count).
+  const bankState = bankHoldings
+    .filter((b) => b.isActive !== false)
+    .map((b) => ({
+      balance: b.principal || 0,
+      principal: b.principal || 0,
+      interestRate: b.interestRate || 0,
+      whtRate: b.whtRate ?? null,
+      // Month offset (1-based) at which the holding begins accruing.
+      startMonth: monthOffsetFromStart(b.startDate, startDate) ?? 1,
+    }));
+
+  // ── Per-month placement of actual primary-MMF deposits ──
+  // Deposits attributed to the PRIMARY plan (primary MMF fund, or legacy bucket
+  // "mmf" with no destination) are placed in the month they actually occurred so
+  // they compound through the elapsed period exactly like the forward path.
+  // Secondary-fund and bank-instrument deposits are EXCLUDED here because their
+  // balances are represented by `secondaryState` / `bankState` respectively
+  // (mirrors the double-counting rule in shared/actuals.ts:computeActualsTotals).
+  const actualMmfByMonth = new Map<number, number>();
 
   if (hasActuals && currentMonth > 0) {
     for (const d of actualDeposits) {
-      if (d.bucket === "mmf") actualsMMF += d.amount;
+      const dest = d.institutionType ?? null;
+      // Government-security deposits become lots (handled below).
+      if (dest === "government_security") continue;
+      // Bank-instrument deposits are represented by bankState; skip.
+      if (dest === "bank_instrument") continue;
+      // Secondary-fund deposits are represented by secondaryState; skip.
+      if (dest === "mmf_fund" && d.mmfFundId != null && primaryFundId != null && d.mmfFundId !== primaryFundId) {
+        continue;
+      }
+      // Remaining: primary-MMF fund deposits, or legacy bucket==="mmf" with no
+      // destination metadata. Only bucket==="mmf" lands in the MMF balance;
+      // a legacy non-mmf bucket with no destination falls through to lots below.
+      if (d.bucket === "mmf") {
+        const offset = monthOffsetFromStart(d.depositDate, startDate) ?? 1;
+        const placeMonth = Math.max(1, Math.min(offset, currentMonth));
+        actualMmfByMonth.set(placeMonth, (actualMmfByMonth.get(placeMonth) ?? 0) + d.amount);
+      }
     }
 
+    // Government-security deposits without a matching security register row are
+    // materialised as face-value lots dated to their deposit month, so they
+    // appear in the total and accrue/mature on real dates.
+    for (const d of actualDeposits) {
+      if (d.institutionType !== "government_security") continue;
+      if (d.bucket === "mmf") continue; // not a security
+      const offset = monthOffsetFromStart(d.depositDate, startDate) ?? 1;
+      const issueMonth = Math.max(1, offset);
+      const tenorMonths = d.bucket === "tbill" ? 12 : 24;
+      lots.push({
+        id: `actual-dep-${lotIdCounter++}`,
+        bucket: d.bucket as "tbill" | "ifb" | "fxd",
+        faceValue: d.amount,
+        issueMonth,
+        tenorMonths,
+        couponRate: d.bucket === "ifb" ? settings.ifbCouponRate : d.bucket === "fxd" ? settings.fxdCouponRate : 0,
+        isTaxExempt: d.bucket === "ifb",
+      });
+    }
+
+    // Logged securities from the register (preferred over inferred deposit lots).
     for (const sec of actualSecurities) {
       if (sec.isMatured) continue;
       const issueDate = new Date(sec.issueDate + "T12:00:00Z");
@@ -474,24 +592,29 @@ export function runProjection(
 
     const isActualMonth = hasActuals && m <= currentMonth;
 
-    if (hasActuals && m === currentMonth + 1 && currentMonth > 0) {
-      mmf = actualsMMF;
-    }
-
     let contribution = 0;
     let whtThisMonth = 0;
 
     if (!isActualMonth) {
+      // Forward (future) months: scheduled contribution + overrides flow to MMF.
       const scheduled = getScheduledContribution(m, settings);
       contribution = override?.overrideAmount !== undefined ? override.overrideAmount : scheduled;
       const lumpSum = override?.lumpSum ?? 0;
       contribution += lumpSum;
       mmf += contribution;
     } else {
-      contribution = getScheduledContribution(m, settings);
+      // Elapsed (actual) months: place this month's REAL primary-MMF deposits in
+      // the month they actually occurred (Fix #4), so the actual-period curve is
+      // correct, not just the endpoint. `contribution` reflects real money in.
+      contribution = actualMmfByMonth.get(m) ?? 0;
+      mmf += contribution;
     }
 
-    if (!isActualMonth) {
+    // Primary MMF compounds EVERY month — actual and forward alike (Fix #3, #5).
+    // During actual months the real deposits accrue interest through the elapsed
+    // period exactly as the forward projection would, so the projected balance at
+    // "today" matches the daily-accrual ledger for the same deposits.
+    {
       const interestGross = mmf * monthlyRate(rates.mmfYield);
       const interestWHT = interestGross * wht;
       whtThisMonth += interestWHT;
@@ -502,19 +625,48 @@ export function runProjection(
     // Each is contribution-driven plus its own net compounding. We always
     // accrue/contribute (even in actuals-seeded months) because these balances
     // are tracked separately from the primary plan's deposit ledger.
+    //
+    // Unified accounting basis (Fix #5): `currentBalance` is the balance AS OF
+    // TODAY. During elapsed (actual) months we hold each secondary balance flat
+    // (no extra contribution, no layered interest) so the projected total at
+    // "today" equals the dashboard's principal-only figure. From the forward
+    // period onward, each fund contributes monthly and compounds on its net EAR,
+    // exactly on the same monthly footing as the primary MMF.
     let secondaryMmfEnd = 0;
     for (const sec of secondaryState) {
       if (sec.balance === 0 && sec.monthlyContribution === 0) continue;
-      const secWhtPct = sec.whtRate ?? rates.withholdingTax;
-      const secWht = secWhtPct / 100;
-      // Add this fund's own monthly contribution.
-      sec.balance += sec.monthlyContribution;
-      // Compound on the fund's gross EAR, then withhold tax on the interest.
-      const grossInterest = sec.balance * monthlyRate(sec.ear);
-      const netInterest = grossInterest * (1 - secWht);
-      whtThisMonth += grossInterest * secWht;
-      sec.balance += netInterest;
+      if (!isActualMonth) {
+        const secWhtPct = sec.whtRate ?? rates.withholdingTax;
+        const secWht = secWhtPct / 100;
+        // Add this fund's own monthly contribution.
+        sec.balance += sec.monthlyContribution;
+        // Compound on the fund's gross EAR, then withhold tax on the interest.
+        const grossInterest = sec.balance * monthlyRate(sec.ear);
+        const netInterest = grossInterest * (1 - secWht);
+        whtThisMonth += grossInterest * secWht;
+        sec.balance += netInterest;
+      }
       secondaryMmfEnd += sec.balance;
+    }
+
+    // ── Bank instrument holdings ──
+    // Same unified rule: principal is held flat through elapsed months (so the
+    // "today" total equals the recorded principal), then accrues simple monthly
+    // interest on its own rate/WHT/day-count going forward. Bank deposits do not
+    // compound into the MMF; they grow in place as a separate pocket.
+    let bankEnd = 0;
+    for (const b of bankState) {
+      if (b.balance === 0) continue;
+      if (!isActualMonth && m >= b.startMonth) {
+        const bWhtPct = b.whtRate ?? rates.withholdingTax;
+        const bWht = bWhtPct / 100;
+        // Monthly simple interest = principal × annualRate × (1/12), net of WHT.
+        const grossInterest = b.balance * (b.interestRate / 100) / 12;
+        const netInterest = grossInterest * (1 - bWht);
+        whtThisMonth += grossInterest * bWht;
+        b.balance += netInterest;
+      }
+      bankEnd += b.balance;
     }
 
     let cbkCashIn = 0;
@@ -616,7 +768,10 @@ export function runProjection(
         const tenorYears = lot.tenorMonths / 12;
         const grossDiscount = lot.faceValue * (rates.tbill364Rate / 100) * tenorYears;
         const netDiscount = grossDiscount * (1 - wht);
-        const accruedDiscount = age > 0 ? netDiscount * (age / lot.tenorMonths) : 0;
+        // During elapsed (actual) months hold the lot flat at face value so the
+        // "today" snapshot reconciles with recorded principal; accrue the discount
+        // only across the forward horizon (Fix #5 — unified basis).
+        const accruedDiscount = !isActualMonth && age > 0 ? netDiscount * (age / lot.tenorMonths) : 0;
         tbillEnd += lot.faceValue + accruedDiscount;
       } else if (lot.bucket === "ifb") {
         ifbEnd += lot.faceValue;
@@ -639,7 +794,7 @@ export function runProjection(
       mainAction = "Deposit to MMF; no DhowCSD sweep this month";
     }
 
-    const total = mmf + tbillEnd + ifbEnd + fxdEnd + secondaryMmfEnd;
+    const total = mmf + tbillEnd + ifbEnd + fxdEnd + secondaryMmfEnd + bankEnd;
 
     results.push({
       monthNumber: m,
@@ -653,6 +808,7 @@ export function runProjection(
       fxdEnd:   Math.round(fxdEnd   * 100) / 100,
       totalEnd: Math.round(total    * 100) / 100,
       secondaryMmfEnd: Math.round(secondaryMmfEnd * 100) / 100,
+      bankEnd: Math.round(bankEnd * 100) / 100,
       phase,
       sweepTarget,
       whtThisMonth: Math.round(whtThisMonth * 100) / 100,

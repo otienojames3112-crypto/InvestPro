@@ -350,3 +350,15 @@
 - [x] R19.5 What-if: overlay also varies primary starting contribution + step-up amount (whatIf accepts primaryContribution/primaryStepUpAmount)
 - [x] R19.6 Sidebar: rate-staleness badge (SidebarRateStaleness in AppShell, shared rateStaleness helper) visible on every page, links to Rate Settings
 - [x] R19.7 Tests + full tsc + pnpm test (113 pass, 0 TS errors; +5 primary what-if tests); checkpoint; deliver
+
+## Round 20 — Actuals reconciliation engine fix
+- [x] R20.1 Seed: sample portfolio uses future start date (currentMonth=0) so actuals never render. Set startDate ~6 months in past, date deposits across elapsed months, across all destination types.
+- [x] R20.2 Engine: non-MMF actual deposits (tbill/ifb/fxd) are dropped from total. Make actuals path destination-aware (institutionType, mmfFundId, bankHoldingId) — every deposit represented per destination.
+- [x] R20.3 Engine: real money earns no interest during elapsed months (lump-at-handoff). Simulate elapsed months: place each deposit in its actual month, accrue MMF compounding / T-bill discount / coupons through elapsed period.
+- [x] R20.4 Engine: replace single actualsMMF lump with per-month placement (map of actual contributions by month offset), so the actual-period curve is correct not just the endpoint.
+- [x] R20.5 Engine: unify accounting basis across primary MMF, secondary MMFs, bank holdings, securities during actual months (same monthly basis, own rate/WHT/day-count, summed on same footing).
+- [x] R20.6 Reconciliation test: projection total at "today" == daily-accrual ledger total for identical deposit set (within rounding).
+- [x] R20.7 Integration test: seed one deposit of each destination type; assert dashboard total == accrual-ledger total == sum of per-instrument balances.
+- [x] R20.8 Regression: forward projection unchanged (m120 = KES 4,763,385, delta 0.00%; 120 tests pass) for no-actuals portfolio (~KES 4.76M @ m120, year checkpoints intact).
+- [x] R20.9 Robustness: currentMonth handles future-start-date gracefully for ANY portfolio — show zero actuals cleanly, don't drop recorded deposits.
+- [x] R20.10 Full tsc (0 errors) + pnpm test (120 pass, +7 reconciliation tests); UI verify; checkpoint; deliver.

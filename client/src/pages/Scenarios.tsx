@@ -17,6 +17,7 @@ import {
   YAxis,
 } from "recharts";
 import { BarChart3, CheckCircle2, XCircle, Info, AlertTriangle, Lightbulb } from "lucide-react";
+import { SecondaryWhatIf } from "@/components/SecondaryWhatIf";
 
 function CustomTooltip({ active, payload, label }: { active?: boolean; payload?: Array<{ value: number; name: string }>; label?: string }) {
   if (!active || !payload?.length) return null;
@@ -367,6 +368,9 @@ export default function Scenarios() {
             )}
           </CardContent>
         </Card>
+
+        {/* What-if overlay for secondary MMF contributions */}
+        {portfolioId && <SecondaryWhatIf portfolioId={portfolioId} />}
 
         {/* Methodology note */}
         <Card className="border-border/60">

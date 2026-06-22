@@ -335,3 +335,9 @@
 - [x] R17.16 Getting Started: guided demo — Load-sample CTA (Test mode), first-5-steps path linking each page, terms glossary (EAR/WHT/T-bill/IFB/FXD/call/fixed/duration)
 - [x] R17.17 Sync audit + integration test (actualsSync.test.ts — 8 tests, double-count guards): record one deposit to each destination type; assert dashboard/net worth, accrual, ledger, scenarios, tax all reflect it
 - [x] R17.18 Full tsc --noEmit + pnpm test (103 pass, 0 TS errors); screenshot; checkpoint; deliver
+
+## Round 18 — Rate staleness, set-primary, what-if overlay
+- [x] R18.1 Dashboard: "Rates last updated" timestamp + staleness reminder (green/amber/red) linking to Rate Settings
+- [x] R18.2 MMF Funds: "Set as primary" control on any tracked MMF; updates portfolio selected fund + reruns projection
+- [x] R18.3 Scenarios: "what-if" overlay (SecondaryWhatIf component + projection.whatIf) to change a secondary-MMF monthly contribution and see projection impact (baseline vs what-if)
+- [x] R18.4 Tests for what-if projection delta (whatIfProjection.test.ts, 5 tests); full tsc + pnpm test (108 pass, 0 TS errors); checkpoint; deliver

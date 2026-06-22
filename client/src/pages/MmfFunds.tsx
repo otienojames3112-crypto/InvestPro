@@ -9,7 +9,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
-import { ArrowUpDown, ArrowUp, ArrowDown, Search, Plus, Pencil, Trash2, CheckCircle2, Circle, Info, PlusCircle, X } from "lucide-react";
+import { ArrowUpDown, ArrowUp, ArrowDown, Search, Plus, Pencil, Trash2, CheckCircle2, Circle, Info, PlusCircle, X, Star } from "lucide-react";
 import { formatKES } from "@/lib/format";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
@@ -498,7 +498,7 @@ export default function MmfFunds() {
                 Additional MMF Accounts
               </CardTitle>
               <CardDescription className="mt-1 text-xs">
-                Track other MMF funds you invest in alongside your primary fund. Balances are for reference only — the projection engine uses the primary fund's EAR.
+                Track other MMF funds you invest in alongside your primary fund. Each is projected forward with its own EAR and contribution. Use <strong>Set as primary</strong> to make any account drive the headline projection.
               </CardDescription>
             </div>
             <Button size="sm" onClick={() => { setSecondaryForm({ mmfFundId: "", label: "", currentBalance: "", monthlyContribution: "", notes: "" }); setAddSecondaryOpen(true); }} disabled={!portfolioId}>
@@ -522,6 +522,11 @@ export default function MmfFunds() {
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="font-medium text-sm text-foreground">{item.label || item.fundName}</span>
                       <Badge variant="secondary" className="text-[10px] px-1.5 py-0">{item.ear.toFixed(2)}% EAR</Badge>
+                      {item.mmfFundId != null && item.mmfFundId === selectedFundId && (
+                        <Badge className="text-[10px] px-1.5 py-0 bg-primary text-primary-foreground">
+                          <Star className="w-2.5 h-2.5 mr-0.5" /> Primary
+                        </Badge>
+                      )}
                     </div>
                     <p className="text-xs text-muted-foreground mt-0.5">{item.company}</p>
                     <div className="flex items-center gap-4 mt-1.5 text-xs text-muted-foreground">
@@ -531,6 +536,18 @@ export default function MmfFunds() {
                     {item.notes && <p className="text-xs text-muted-foreground mt-1 italic">{item.notes}</p>}
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
+                    {item.mmfFundId != null && item.mmfFundId !== selectedFundId && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-7 text-xs"
+                        onClick={() => portfolioId && item.mmfFundId != null && selectFundMutation.mutate({ portfolioId, mmfFundId: item.mmfFundId })}
+                        disabled={selectFundMutation.isPending}
+                        title="Use this fund's EAR to drive the projection"
+                      >
+                        <Star className="w-3 h-3 mr-1" /> Set as primary
+                      </Button>
+                    )}
                     <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => openEditSecondary(item)}>
                       <Pencil className="w-3 h-3" />
                     </Button>

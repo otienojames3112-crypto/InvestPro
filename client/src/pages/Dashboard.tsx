@@ -44,6 +44,7 @@ import {
   HelpCircle,
   Pencil,
   Info,
+  Clock,
 } from "lucide-react";
 import { Link } from "wouter";
 import { useDepositDrawer } from "@/contexts/DepositDrawerContext";
@@ -52,6 +53,25 @@ import { CreatePortfolioDialog } from "@/components/PortfolioSelector";
 import { Plus, Compass } from "lucide-react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
+
+/** Compute human-readable freshness of the portfolio rate snapshot. */
+function rateStaleness(updatedAt: Date | string | null | undefined): {
+  label: string;
+  isStale: boolean;
+  isVeryStale: boolean;
+} {
+  if (!updatedAt) return { label: "never", isStale: true, isVeryStale: true };
+  const ms = Date.now() - new Date(updatedAt).getTime();
+  const days = Math.floor(ms / 86_400_000);
+  const hours = Math.floor(ms / 3_600_000);
+  const minutes = Math.floor(ms / 60_000);
+  let label: string;
+  if (minutes < 2) label = "just now";
+  else if (minutes < 60) label = `${minutes} minutes ago`;
+  else if (hours < 24) label = `${hours} hour${hours !== 1 ? "s" : ""} ago`;
+  else label = `${days} day${days !== 1 ? "s" : ""} ago`;
+  return { label, isStale: days >= 7, isVeryStale: days >= 30 };
+}
 
 function StatCard({
   title,
@@ -831,6 +851,35 @@ export default function Dashboard() {
                   </span>
                 </Link>
               </div>
+              {(() => {
+                const s = rateStaleness((settings as any).ratesLastUpdatedAt);
+                const tone = s.isVeryStale
+                  ? "bg-red-500/10 text-red-400 border-red-500/30"
+                  : s.isStale
+                  ? "bg-amber-500/10 text-amber-400 border-amber-500/30"
+                  : "bg-emerald-500/10 text-emerald-400 border-emerald-500/30";
+                const Icon = s.isStale ? AlertTriangle : CheckCircle2;
+                return (
+                  <div className={`mt-3 flex flex-wrap items-center gap-2 rounded-lg border px-3 py-2 text-xs ${tone}`}>
+                    <Icon className="w-3.5 h-3.5 shrink-0" />
+                    <span className="font-medium">Rates last updated: {s.label}</span>
+                    {s.isVeryStale ? (
+                      <span className="opacity-90">— more than 30 days old. CBK auction rates change frequently; update them so this projection stays accurate.</span>
+                    ) : s.isStale ? (
+                      <span className="opacity-90">— over a week old. Consider refreshing from the latest CBK results.</span>
+                    ) : (
+                      <span className="opacity-90">— recently refreshed.</span>
+                    )}
+                    {s.isStale && (
+                      <Link href="/settings">
+                        <span className="underline underline-offset-2 cursor-pointer font-medium ml-auto flex items-center gap-1">
+                          <Clock className="w-3 h-3" /> Update now
+                        </span>
+                      </Link>
+                    )}
+                  </div>
+                );
+              })()}
             </CardHeader>
             <CardContent className="p-4 pt-0">
               <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">

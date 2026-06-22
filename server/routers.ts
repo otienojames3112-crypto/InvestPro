@@ -489,6 +489,60 @@ export const appRouter = router({
         const secondaryMmfs = mapSecondaryMmfs(await getSecondaryMmfs(input.portfolioId));
         return solveForContribution(settings, stepUp, rh, secondaryMmfs);
       }),
+
+    /**
+     * What-if overlay: re-run the projection with one or more secondary-MMF
+     * monthly contributions replaced, and return both the baseline and the
+     * what-if month series + final values so the UI can compare them.
+     * Engine math is untouched — we only swap the secondary contribution input.
+     */
+    whatIf: protectedProcedure
+      .input(z.object({
+        portfolioId: z.number().int().positive(),
+        overrides: z.array(z.object({
+          secondaryMmfId: z.number().int().positive(),
+          monthlyContribution: z.number().min(0),
+        })).max(50),
+      }))
+      .query(async ({ ctx, input }) => {
+        const p = await requirePortfolio(input.portfolioId, ctx.user.id);
+        const [rates, fundEar] = await Promise.all([getRateSettings(input.portfolioId), getSelectedFundEar(p)]);
+        const settings = dbToEngine(rates, p, fundEar);
+        const rateHistoryRows = await getRateHistory(input.portfolioId);
+        const rh = mapRateHistory(rateHistoryRows);
+        const contribOverrides = (await getContributionOverrides(input.portfolioId)).map((o) => ({
+          monthNumber: o.monthNumber,
+          overrideAmount: o.overrideAmount ? parseFloat(String(o.overrideAmount)) : undefined,
+          lumpSum: o.lumpSum ? parseFloat(String(o.lumpSum)) : undefined,
+        }));
+        const baselineSecondary = mapSecondaryMmfs(await getSecondaryMmfs(input.portfolioId));
+        const overrideMap = new Map(input.overrides.map((o) => [o.secondaryMmfId, o.monthlyContribution]));
+        const whatIfSecondary = baselineSecondary.map((s) =>
+          s.id != null && overrideMap.has(s.id)
+            ? { ...s, monthlyContribution: overrideMap.get(s.id)! }
+            : s,
+        );
+
+        const baselineSeries = runProjection(settings, contribOverrides, rh, [], [], baselineSecondary);
+        const whatIfSeries = runProjection(settings, contribOverrides, rh, [], [], whatIfSecondary);
+        const last = (arr: typeof baselineSeries) => arr[arr.length - 1];
+        const baselineFinal = last(baselineSeries)?.totalEnd ?? 0;
+        const whatIfFinal = last(whatIfSeries)?.totalEnd ?? 0;
+
+        return {
+          target: settings.targetAmount,
+          horizonMonths: settings.horizonMonths ?? baselineSeries.length,
+          baseline: {
+            finalValue: baselineFinal,
+            series: baselineSeries.map((m) => ({ month: m.monthNumber, total: m.totalEnd })),
+          },
+          whatIf: {
+            finalValue: whatIfFinal,
+            series: whatIfSeries.map((m) => ({ month: m.monthNumber, total: m.totalEnd })),
+          },
+          delta: whatIfFinal - baselineFinal,
+        };
+      }),
   }),
 
   // ─── Ledger ───────────────────────────────────────────────────────────────────

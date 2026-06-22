@@ -634,8 +634,7 @@ export const appRouter = router({
         overrideAmount: o.overrideAmount ? parseFloat(String(o.overrideAmount)) : undefined,
         lumpSum: o.lumpSum ? parseFloat(String(o.lumpSum)) : undefined,
       }));
-      const projResults = runProjection(settings, mappedOverrides, rh, actualDeposits, actualSecurities);
-      const annualWHT = projResults.reduce((sum, r) => sum + r.whtThisMonth, 0);
+      runProjection(settings, mappedOverrides, rh, actualDeposits, actualSecurities);
       const byBucket = { mmf: 0, tbill: 0, ifb: 0, fxd: 0 };
       let totalContributed = 0;
       for (const d of depositRows) {
@@ -644,12 +643,29 @@ export const appRouter = router({
         byBucket[d.bucket as keyof typeof byBucket] += amt;
       }
       const remainingToTarget = Math.max(0, settings.targetAmount - totalContributed);
+
+      // Estimate annualised WHT per bucket from CURRENT deposited balances
+      // and the portfolio's live rates. IFB coupon income is tax-exempt.
+      const whtFrac = settings.withholdingTax / 100;
+      const mmfWht = byBucket.mmf * (settings.mmfYield / 100) * whtFrac;
+      const tbillWht = byBucket.tbill * (settings.tbill364Rate / 100) * whtFrac;
+      const fxdCouponIncome = byBucket.fxd * (settings.fxdCouponRate / 100);
+      const fxdWht = fxdCouponIncome * whtFrac;
+      const ifbWht = 0; // Infrastructure bonds are tax-exempt in Kenya
+      const round2 = (n: number) => Math.round(n * 100) / 100;
+      const taxBreakdown = {
+        mmf: round2(mmfWht),
+        tbill: round2(tbillWht),
+        ifb: ifbWht,
+        fxd: round2(fxdWht),
+      };
+      const taxLiability = round2(mmfWht + tbillWht + fxdWht + ifbWht);
       return {
         totalContributed,
         remainingToTarget,
-        taxLiability: Math.round(annualWHT * 100) / 100,
-        taxBreakdown: { mmf: 0, tbill: 0, ifb: 0, fxd: Math.round(annualWHT * 100) / 100 },
-        annualFxdCouponIncome: byBucket.fxd * (settings.fxdCouponRate / 100),
+        taxLiability,
+        taxBreakdown,
+        annualFxdCouponIncome: round2(fxdCouponIncome),
         byBucket,
         entryCount: depositRows.length,
       };
@@ -1165,6 +1181,9 @@ export const appRouter = router({
         id: r.id,
         mmfFundId: r.mmfFundId,
         govSecurities: Number(r.govSecurities),
+        govTbills: Number(r.govTbills),
+        govTbonds: Number(r.govTbonds),
+        govIfb: Number(r.govIfb),
         bankInstruments: Number(r.bankInstruments),
         corporateDebt: Number(r.corporateDebt),
         cashEquivalents: Number(r.cashEquivalents),
@@ -1185,6 +1204,9 @@ export const appRouter = router({
       .input(z.object({
         mmfFundId: z.number().int().positive(),
         govSecurities: z.number().min(0).max(100),
+        govTbills: z.number().min(0).max(100).default(0),
+        govTbonds: z.number().min(0).max(100).default(0),
+        govIfb: z.number().min(0).max(100).default(0),
         bankInstruments: z.number().min(0).max(100),
         corporateDebt: z.number().min(0).max(100),
         cashEquivalents: z.number().min(0).max(100),
@@ -1198,6 +1220,9 @@ export const appRouter = router({
         await upsertMmfComposition({
           mmfFundId: input.mmfFundId,
           govSecurities: String(input.govSecurities),
+          govTbills: String(input.govTbills),
+          govTbonds: String(input.govTbonds),
+          govIfb: String(input.govIfb),
           bankInstruments: String(input.bankInstruments),
           corporateDebt: String(input.corporateDebt),
           cashEquivalents: String(input.cashEquivalents),

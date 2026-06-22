@@ -232,7 +232,9 @@ export default function Deposits() {
             {taxBreakdown.mmf > 0 && <p>MMF: {formatKES(taxBreakdown.mmf)}</p>}
             {taxBreakdown.tbill > 0 && <p>T-Bill: {formatKES(taxBreakdown.tbill)}</p>}
             {taxBreakdown.fxd > 0 && <p>FXD: {formatKES(taxBreakdown.fxd)}</p>}
-            {taxLiability === 0 && <p>No deposits recorded yet</p>}
+            {byBucket.ifb > 0 && <p>IFB: Tax-exempt</p>}
+            {taxLiability === 0 && byBucket.ifb === 0 && <p>No deposits recorded yet</p>}
+            {taxLiability === 0 && byBucket.ifb > 0 && <p>Estimated annual WHT (final tax)</p>}
           </div>
         </div>
       </div>

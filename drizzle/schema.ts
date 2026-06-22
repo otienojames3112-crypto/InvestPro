@@ -355,8 +355,14 @@ export const mmfComposition = mysqlTable("mmf_composition", {
   id: int("id").autoincrement().primaryKey(),
   /** References mmfFunds.id */
   mmfFundId: int("mmfFundId").notNull(),
-  /** % in Government Securities (T-bills, T-bonds) */
+  /** % in Government Securities (T-bills, T-bonds, IFBs) — total */
   govSecurities: decimal("govSecurities", { precision: 6, scale: 2 }).notNull().default("0.00"),
+  /** Sub-breakdown of govSecurities: % of the WHOLE fund in Treasury Bills */
+  govTbills: decimal("govTbills", { precision: 6, scale: 2 }).notNull().default("0.00"),
+  /** Sub-breakdown of govSecurities: % of the WHOLE fund in Treasury Bonds (FXD) */
+  govTbonds: decimal("govTbonds", { precision: 6, scale: 2 }).notNull().default("0.00"),
+  /** Sub-breakdown of govSecurities: % of the WHOLE fund in Infrastructure Bonds (IFB) */
+  govIfb: decimal("govIfb", { precision: 6, scale: 2 }).notNull().default("0.00"),
   /** % in Banking Sector Instruments (fixed / call / demand deposits) */
   bankInstruments: decimal("bankInstruments", { precision: 6, scale: 2 }).notNull().default("0.00"),
   /** % in Corporate Short-Term Debt (commercial paper, corporate notes) */

@@ -45,6 +45,9 @@ interface CompositionRow {
   id: number;
   mmfFundId: number;
   govSecurities: number;
+  govTbills: number;
+  govTbonds: number;
+  govIfb: number;
   bankInstruments: number;
   corporateDebt: number;
   cashEquivalents: number;
@@ -59,6 +62,12 @@ interface CompositionRow {
   grossYield: number;
   managementFee: number;
 }
+
+const GOV_SUB = [
+  { key: "govTbills", label: "T-Bills" },
+  { key: "govTbonds", label: "T-Bonds" },
+  { key: "govIfb", label: "IFB" },
+] as const;
 
 const SEGMENTS = [
   { key: "govSecurities", label: "Government Securities", icon: Landmark, color: "bg-emerald-500" },
@@ -97,6 +106,9 @@ export default function MmfStrategy() {
   const [form, setForm] = useState({
     mmfFundId: 0,
     govSecurities: "0",
+    govTbills: "0",
+    govTbonds: "0",
+    govIfb: "0",
     bankInstruments: "0",
     corporateDebt: "0",
     cashEquivalents: "0",
@@ -120,6 +132,9 @@ export default function MmfStrategy() {
     [rows]
   );
 
+  const govSubTotal =
+    Number(form.govTbills) + Number(form.govTbonds) + Number(form.govIfb);
+
   const formTotal =
     Number(form.govSecurities) +
     Number(form.bankInstruments) +
@@ -132,6 +147,9 @@ export default function MmfStrategy() {
       setForm({
         mmfFundId: row.mmfFundId,
         govSecurities: String(row.govSecurities),
+        govTbills: String(row.govTbills),
+        govTbonds: String(row.govTbonds),
+        govIfb: String(row.govIfb),
         bankInstruments: String(row.bankInstruments),
         corporateDebt: String(row.corporateDebt),
         cashEquivalents: String(row.cashEquivalents),
@@ -144,6 +162,9 @@ export default function MmfStrategy() {
       setForm({
         mmfFundId: funds?.[0]?.id ?? 0,
         govSecurities: "0",
+        govTbills: "0",
+        govTbonds: "0",
+        govIfb: "0",
         bankInstruments: "0",
         corporateDebt: "0",
         cashEquivalents: "0",
@@ -165,9 +186,18 @@ export default function MmfStrategy() {
       toast.error(`Allocations must sum to 100% (currently ${formTotal.toFixed(1)}%)`);
       return;
     }
+    if (govSubTotal > 0 && Math.abs(govSubTotal - Number(form.govSecurities)) > 0.5) {
+      toast.error(
+        `Gov-securities breakdown (${govSubTotal.toFixed(1)}%) must match the Government Securities total (${Number(form.govSecurities).toFixed(1)}%)`
+      );
+      return;
+    }
     upsert.mutate({
       mmfFundId: form.mmfFundId,
       govSecurities: Number(form.govSecurities),
+      govTbills: Number(form.govTbills),
+      govTbonds: Number(form.govTbonds),
+      govIfb: Number(form.govIfb),
       bankInstruments: Number(form.bankInstruments),
       corporateDebt: Number(form.corporateDebt),
       cashEquivalents: Number(form.cashEquivalents),
@@ -274,6 +304,31 @@ export default function MmfStrategy() {
                         );
                       })}
                     </div>
+                    {row.govSecurities > 0 && (row.govTbills > 0 || row.govTbonds > 0 || row.govIfb > 0) && (
+                      <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3 space-y-1.5">
+                        <div className="flex items-center gap-1.5 text-xs font-medium text-emerald-600 dark:text-emerald-400">
+                          <Landmark className="w-3 h-3" />
+                          Government Securities breakdown ({row.govSecurities}% of fund)
+                        </div>
+                        <div className="grid grid-cols-3 gap-2 text-[11px]">
+                          <div className="flex flex-col">
+                            <span className="font-semibold tabular-nums text-foreground">{row.govTbills}%</span>
+                            <span className="text-muted-foreground">Treasury Bills</span>
+                          </div>
+                          <div className="flex flex-col">
+                            <span className="font-semibold tabular-nums text-foreground">{row.govTbonds}%</span>
+                            <span className="text-muted-foreground">Treasury Bonds (FXD)</span>
+                          </div>
+                          <div className="flex flex-col">
+                            <span className="font-semibold tabular-nums text-foreground">{row.govIfb}%</span>
+                            <span className="text-muted-foreground">Infrastructure (IFB)</span>
+                          </div>
+                        </div>
+                        <p className="text-[10px] text-muted-foreground/80 pt-0.5">
+                          Percentages are of the whole fund. T-bills dominate the short end; IFB coupons are tax-exempt.
+                        </p>
+                      </div>
+                    )}
                     {row.notes && (
                       <p className="text-xs text-muted-foreground border-t pt-2">
                         {row.notes}
@@ -365,6 +420,41 @@ export default function MmfStrategy() {
                   />
                 </div>
               ))}
+            </div>
+            {/* Government Securities sub-breakdown */}
+            <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3 space-y-2">
+              <div className="flex items-center justify-between">
+                <Label className="text-xs flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400">
+                  <Landmark className="w-3 h-3" /> Government Securities breakdown
+                </Label>
+                <span
+                  className={
+                    Math.abs(govSubTotal - Number(form.govSecurities)) > 0.5
+                      ? "text-[11px] text-red-500 font-semibold"
+                      : "text-[11px] text-muted-foreground"
+                  }
+                >
+                  {govSubTotal.toFixed(1)}% / {Number(form.govSecurities).toFixed(1)}%
+                </span>
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                {GOV_SUB.map((s) => (
+                  <div key={s.key} className="space-y-1">
+                    <Label className="text-[10px] text-muted-foreground">{s.label}</Label>
+                    <Input
+                      type="number"
+                      inputMode="decimal"
+                      value={form[s.key]}
+                      onChange={(e) =>
+                        setForm((f) => ({ ...f, [s.key]: e.target.value }))
+                      }
+                    />
+                  </div>
+                ))}
+              </div>
+              <p className="text-[10px] text-muted-foreground">
+                These three should add up to the Government Securities total above. Percentages are of the whole fund.
+              </p>
             </div>
             <div className="space-y-1.5">
               <Label className="text-xs">Source (URL or note)</Label>

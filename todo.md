@@ -260,3 +260,13 @@
 - [x] Added all new pages to grouped nav (Tracking / Analysis / Knowledge); per-portfolio pages respect selected portfolio
 - [x] Maintained educate-and-track boundary (no buy recommendations)
 - [x] 81/81 tests pass, 0 TS errors, screenshots verified
+
+## Round 13 — Composition depth, bank coverage, WHT fix
+
+- [x] Add more banks to Call Deposit section — now 10 banks (Equity, StanChart, KCB, Co-op, NCBA, Stanbic, Absa, I&M, DTB, Family)
+- [x] Expand MMF composition to all 27 funds (verified 27/27 comp rows)
+- [x] Add Government Securities sub-breakdown per fund (gov_tbills/gov_tbonds/gov_ifb columns + seeded for all 27)
+- [x] Fix hardcoded WHT on Record Deposits — rewrote deposits.summary to compute per-bucket WHT from real balances (MMF/T-bill/FXD taxed, IFB exempt)
+- [x] Update MMF Strategy UI to render gov-sec sub-breakdown panel + editable sub-fields with validation
+- [x] Bank Instruments UI renders additional call deposits generically (verified 10 call / 6 fixed)
+- [x] Added 6 vitest tax-breakdown tests; 87/87 tests pass, 0 TS errors; screenshots verified

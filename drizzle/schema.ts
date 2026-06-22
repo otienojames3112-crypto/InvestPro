@@ -371,6 +371,17 @@ export const mmfComposition = mysqlTable("mmf_composition", {
   cashEquivalents: decimal("cashEquivalents", { precision: 6, scale: 2 }).notNull().default("0.00"),
   /** % in Collective Investment Schemes / Regional / Offshore */
   offshoreRegional: decimal("offshoreRegional", { precision: 6, scale: 2 }).notNull().default("0.00"),
+  /** % in Real Estate / Property (most pure MMFs hold 0; some affiliated funds have exposure) */
+  realEstate: decimal("realEstate", { precision: 6, scale: 2 }).notNull().default("0.00"),
+  /** % in any other asset class not covered above (structured notes, etc.) */
+  otherAssets: decimal("otherAssets", { precision: 6, scale: 2 }).notNull().default("0.00"),
+  /** Per-segment detail notes (which holdings + indicative rates) */
+  bankNote: text("bankNote"),
+  corporateNote: text("corporateNote"),
+  cashNote: text("cashNote"),
+  offshoreNote: text("offshoreNote"),
+  realEstateNote: text("realEstateNote"),
+  otherNote: text("otherNote"),
   /** Plain-language notes on strategy / how the fund earns its return */
   notes: text("notes"),
   /** "As of" date for this composition snapshot */

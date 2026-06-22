@@ -270,3 +270,12 @@
 - [x] Update MMF Strategy UI to render gov-sec sub-breakdown panel + editable sub-fields with validation
 - [x] Bank Instruments UI renders additional call deposits generically (verified 10 call / 6 fixed)
 - [x] Added 6 vitest tax-breakdown tests; 87/87 tests pass, 0 TS errors; screenshots verified
+
+## Round 14 — Fixed-deposit parity + full segment breakdowns
+
+- [x] Added missing Fixed Deposit banks (StanChart, I&M, DTB, Family) — now 10 fixed / 10 call parity
+- [x] Extended mmf_composition with segment notes (bank/corporate/cash/offshore) + realEstate/otherAssets %s + realEstateNote/otherNote
+- [x] Seeded per-segment detail for all 27 funds (holdings, indicative rates, real-estate exposure incl. manager-level notes)
+- [x] Updated db helper + composition router to return + accept new fields
+- [x] Updated MMF Strategy UI: per-segment detail panels with rates + real-estate note (shown even at 0%) + editable note inputs
+- [x] 87/87 tests pass, 0 TS errors, screenshots verified

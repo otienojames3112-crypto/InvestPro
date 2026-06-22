@@ -52,6 +52,14 @@ interface CompositionRow {
   corporateDebt: number;
   cashEquivalents: number;
   offshoreRegional: number;
+  realEstate: number;
+  otherAssets: number;
+  bankNote: string | null;
+  corporateNote: string | null;
+  cashNote: string | null;
+  offshoreNote: string | null;
+  realEstateNote: string | null;
+  otherNote: string | null;
   notes: string | null;
   asOfDate: string | Date | null;
   source: string | null;
@@ -75,6 +83,18 @@ const SEGMENTS = [
   { key: "corporateDebt", label: "Corporate Debt / CP", icon: Building2, color: "bg-amber-500" },
   { key: "cashEquivalents", label: "Cash & Equivalents", icon: Wallet, color: "bg-violet-500" },
   { key: "offshoreRegional", label: "Offshore / Regional", icon: Globe, color: "bg-rose-500" },
+  { key: "realEstate", label: "Real Estate / Property", icon: Building2, color: "bg-orange-600" },
+  { key: "otherAssets", label: "Other", icon: Wallet, color: "bg-slate-500" },
+] as const;
+
+// Maps each allocation segment to its detail-note field for the per-segment readout.
+const SEGMENT_NOTES = [
+  { key: "bankInstruments", noteKey: "bankNote", label: "Bank Deposits & CDs", icon: Banknote, color: "text-sky-600 dark:text-sky-400", bg: "border-sky-500/20 bg-sky-500/5" },
+  { key: "corporateDebt", noteKey: "corporateNote", label: "Corporate Debt / Commercial Paper", icon: Building2, color: "text-amber-600 dark:text-amber-400", bg: "border-amber-500/20 bg-amber-500/5" },
+  { key: "cashEquivalents", noteKey: "cashNote", label: "Cash & Equivalents", icon: Wallet, color: "text-violet-600 dark:text-violet-400", bg: "border-violet-500/20 bg-violet-500/5" },
+  { key: "offshoreRegional", noteKey: "offshoreNote", label: "Offshore / Regional", icon: Globe, color: "text-rose-600 dark:text-rose-400", bg: "border-rose-500/20 bg-rose-500/5" },
+  { key: "realEstate", noteKey: "realEstateNote", label: "Real Estate / Property", icon: Building2, color: "text-orange-600 dark:text-orange-400", bg: "border-orange-500/20 bg-orange-500/5" },
+  { key: "otherAssets", noteKey: "otherNote", label: "Other Assets", icon: Wallet, color: "text-slate-600 dark:text-slate-400", bg: "border-slate-500/20 bg-slate-500/5" },
 ] as const;
 
 function AllocationBar({ row }: { row: CompositionRow }) {
@@ -113,6 +133,14 @@ export default function MmfStrategy() {
     corporateDebt: "0",
     cashEquivalents: "0",
     offshoreRegional: "0",
+    realEstate: "0",
+    otherAssets: "0",
+    bankNote: "",
+    corporateNote: "",
+    cashNote: "",
+    offshoreNote: "",
+    realEstateNote: "",
+    otherNote: "",
     notes: "",
     source: "",
     isEstimate: true,
@@ -140,7 +168,9 @@ export default function MmfStrategy() {
     Number(form.bankInstruments) +
     Number(form.corporateDebt) +
     Number(form.cashEquivalents) +
-    Number(form.offshoreRegional);
+    Number(form.offshoreRegional) +
+    Number(form.realEstate) +
+    Number(form.otherAssets);
 
   function openEdit(row?: CompositionRow) {
     if (row) {
@@ -154,6 +184,14 @@ export default function MmfStrategy() {
         corporateDebt: String(row.corporateDebt),
         cashEquivalents: String(row.cashEquivalents),
         offshoreRegional: String(row.offshoreRegional),
+        realEstate: String(row.realEstate),
+        otherAssets: String(row.otherAssets),
+        bankNote: row.bankNote ?? "",
+        corporateNote: row.corporateNote ?? "",
+        cashNote: row.cashNote ?? "",
+        offshoreNote: row.offshoreNote ?? "",
+        realEstateNote: row.realEstateNote ?? "",
+        otherNote: row.otherNote ?? "",
         notes: row.notes ?? "",
         source: row.source ?? "",
         isEstimate: row.isEstimate,
@@ -169,6 +207,14 @@ export default function MmfStrategy() {
         corporateDebt: "0",
         cashEquivalents: "0",
         offshoreRegional: "0",
+        realEstate: "0",
+        otherAssets: "0",
+        bankNote: "",
+        corporateNote: "",
+        cashNote: "",
+        offshoreNote: "",
+        realEstateNote: "",
+        otherNote: "",
         notes: "",
         source: "",
         isEstimate: true,
@@ -202,6 +248,14 @@ export default function MmfStrategy() {
       corporateDebt: Number(form.corporateDebt),
       cashEquivalents: Number(form.cashEquivalents),
       offshoreRegional: Number(form.offshoreRegional),
+      realEstate: Number(form.realEstate),
+      otherAssets: Number(form.otherAssets),
+      bankNote: form.bankNote || undefined,
+      corporateNote: form.corporateNote || undefined,
+      cashNote: form.cashNote || undefined,
+      offshoreNote: form.offshoreNote || undefined,
+      realEstateNote: form.realEstateNote || undefined,
+      otherNote: form.otherNote || undefined,
       notes: form.notes || undefined,
       source: form.source || undefined,
       isEstimate: form.isEstimate,
@@ -326,6 +380,40 @@ export default function MmfStrategy() {
                         </div>
                         <p className="text-[10px] text-muted-foreground/80 pt-0.5">
                           Percentages are of the whole fund. T-bills dominate the short end; IFB coupons are tax-exempt.
+                        </p>
+                      </div>
+                    )}
+                    {/* Per-segment detail breakdowns with indicative rates */}
+                    {SEGMENT_NOTES.some((s) => (row[s.key] as number) > 0 && row[s.noteKey]) && (
+                      <div className="space-y-2 border-t pt-2">
+                        {SEGMENT_NOTES.map((s) => {
+                          const pct = row[s.key] as number;
+                          const note = row[s.noteKey] as string | null;
+                          if (pct <= 0 || !note) return null;
+                          const Icon = s.icon;
+                          return (
+                            <div key={s.key} className={`rounded-lg border p-2.5 ${s.bg}`}>
+                              <div className={`flex items-center gap-1.5 text-xs font-medium ${s.color}`}>
+                                <Icon className="w-3 h-3" />
+                                {s.label} ({pct}% of fund)
+                              </div>
+                              <p className="text-[11px] text-muted-foreground mt-1 leading-relaxed">
+                                {note}
+                              </p>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                    {/* Real estate note shown even at 0% to clarify MMFs cannot hold property */}
+                    {row.realEstate === 0 && row.realEstateNote && (
+                      <div className="rounded-lg border border-orange-500/20 bg-orange-500/5 p-2.5">
+                        <div className="flex items-center gap-1.5 text-xs font-medium text-orange-600 dark:text-orange-400">
+                          <Building2 className="w-3 h-3" />
+                          Real Estate / Property (0%)
+                        </div>
+                        <p className="text-[11px] text-muted-foreground mt-1 leading-relaxed">
+                          {row.realEstateNote}
                         </p>
                       </div>
                     )}
@@ -455,6 +543,21 @@ export default function MmfStrategy() {
               <p className="text-[10px] text-muted-foreground">
                 These three should add up to the Government Securities total above. Percentages are of the whole fund.
               </p>
+            </div>
+            {/* Per-segment detail notes */}
+            <div className="rounded-lg border p-3 space-y-2">
+              <Label className="text-xs font-medium">Segment detail notes (holdings + indicative rates)</Label>
+              {SEGMENT_NOTES.map((s) => (
+                <div key={s.noteKey} className="space-y-1">
+                  <Label className="text-[10px] text-muted-foreground">{s.label}</Label>
+                  <Textarea
+                    rows={2}
+                    value={form[s.noteKey]}
+                    onChange={(e) => setForm((f) => ({ ...f, [s.noteKey]: e.target.value }))}
+                    placeholder={`e.g. how this fund uses ${s.label.toLowerCase()}`}
+                  />
+                </div>
+              ))}
             </div>
             <div className="space-y-1.5">
               <Label className="text-xs">Source (URL or note)</Label>

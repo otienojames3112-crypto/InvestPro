@@ -39,6 +39,10 @@ import {
   Globe,
   Wallet,
   Info,
+  ChevronDown,
+  ChevronUp,
+  ArrowUpDown,
+  Pin,
 } from "lucide-react";
 
 interface CompositionRow {
@@ -97,9 +101,9 @@ const SEGMENT_NOTES = [
   { key: "otherAssets", noteKey: "otherNote", label: "Other Assets", icon: Wallet, color: "text-slate-600 dark:text-slate-400", bg: "border-slate-500/20 bg-slate-500/5" },
 ] as const;
 
-function AllocationBar({ row }: { row: CompositionRow }) {
+function AllocationBar({ row, className = "h-3" }: { row: CompositionRow; className?: string }) {
   return (
-    <div className="flex h-3 w-full overflow-hidden rounded-full bg-muted">
+    <div className={`flex w-full overflow-hidden rounded-full bg-muted ${className}`}>
       {SEGMENTS.map((s) => {
         const v = row[s.key] as number;
         if (v <= 0) return null;
@@ -116,6 +120,128 @@ function AllocationBar({ row }: { row: CompositionRow }) {
   );
 }
 
+// Compact label for the single largest allocation segment, for the table row summary.
+function topSegment(row: CompositionRow) {
+  let best: { label: string; v: number } | null = null;
+  for (const s of SEGMENTS) {
+    const v = row[s.key] as number;
+    if (v > 0 && (!best || v > best.v)) best = { label: s.label, v };
+  }
+  return best;
+}
+
+type SortKey = "ear" | "grossYield" | "managementFee" | "fundName";
+
+// Expanded detail row content for a single fund composition (progressive disclosure).
+function CompositionDetail({ row, onEdit }: { row: CompositionRow; onEdit: () => void }) {
+  return (
+    <div className="px-4 py-4 space-y-4">
+      {/* Full-width allocation bar with per-segment percentages */}
+      <div className="space-y-2">
+        <AllocationBar row={row} className="h-3" />
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-1.5 text-xs">
+          {SEGMENTS.map((s) => {
+            const v = row[s.key] as number;
+            if (v <= 0) return null;
+            return (
+              <div key={s.key} className="flex items-center justify-between">
+                <span className="text-muted-foreground flex items-center gap-1.5">
+                  <span className={`w-2 h-2 rounded-sm ${s.color}`} />
+                  {s.label}
+                </span>
+                <span className="font-medium tabular-nums">{v}%</span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Yield + fee summary chips */}
+      <div className="flex flex-wrap gap-2 text-[11px]">
+        <span className="rounded-md border border-border bg-background px-2 py-1">
+          Net EAR <strong className="text-primary tabular-nums">{row.ear.toFixed(2)}%</strong>
+        </span>
+        <span className="rounded-md border border-border bg-background px-2 py-1">
+          Gross <strong className="tabular-nums">{row.grossYield.toFixed(2)}%</strong>
+        </span>
+        <span className="rounded-md border border-border bg-background px-2 py-1">
+          Mgmt fee <strong className="tabular-nums">{row.managementFee.toFixed(2)}%</strong>
+        </span>
+      </div>
+
+      {/* Government securities breakdown */}
+      {row.govSecurities > 0 && (row.govTbills > 0 || row.govTbonds > 0 || row.govIfb > 0) && (
+        <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3 space-y-1.5">
+          <div className="flex items-center gap-1.5 text-xs font-medium text-emerald-600 dark:text-emerald-400">
+            <Landmark className="w-3 h-3" />
+            Government Securities breakdown ({row.govSecurities}% of fund)
+          </div>
+          <div className="grid grid-cols-3 gap-2 text-[11px]">
+            <div className="flex flex-col">
+              <span className="font-semibold tabular-nums text-foreground">{row.govTbills}%</span>
+              <span className="text-muted-foreground">Treasury Bills</span>
+            </div>
+            <div className="flex flex-col">
+              <span className="font-semibold tabular-nums text-foreground">{row.govTbonds}%</span>
+              <span className="text-muted-foreground">Treasury Bonds (FXD)</span>
+            </div>
+            <div className="flex flex-col">
+              <span className="font-semibold tabular-nums text-foreground">{row.govIfb}%</span>
+              <span className="text-muted-foreground">Infrastructure (IFB)</span>
+            </div>
+          </div>
+          <p className="text-[10px] text-muted-foreground/80 pt-0.5">
+            Percentages are of the whole fund. T-bills dominate the short end; IFB coupons are tax-exempt.
+          </p>
+        </div>
+      )}
+
+      {/* Per-segment detail notes */}
+      {SEGMENT_NOTES.some((s) => (row[s.key] as number) > 0 && row[s.noteKey]) && (
+        <div className="grid sm:grid-cols-2 gap-2">
+          {SEGMENT_NOTES.map((s) => {
+            const pct = row[s.key] as number;
+            const note = row[s.noteKey] as string | null;
+            if (pct <= 0 || !note) return null;
+            const Icon = s.icon;
+            return (
+              <div key={s.key} className={`rounded-lg border p-2.5 ${s.bg}`}>
+                <div className={`flex items-center gap-1.5 text-xs font-medium ${s.color}`}>
+                  <Icon className="w-3 h-3" />
+                  {s.label} ({pct}% of fund)
+                </div>
+                <p className="text-[11px] text-muted-foreground mt-1 leading-relaxed">{note}</p>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Real estate note shown even at 0% to clarify MMFs cannot hold property */}
+      {row.realEstate === 0 && row.realEstateNote && (
+        <div className="rounded-lg border border-orange-500/20 bg-orange-500/5 p-2.5">
+          <div className="flex items-center gap-1.5 text-xs font-medium text-orange-600 dark:text-orange-400">
+            <Building2 className="w-3 h-3" />
+            Real Estate / Property (0%)
+          </div>
+          <p className="text-[11px] text-muted-foreground mt-1 leading-relaxed">{row.realEstateNote}</p>
+        </div>
+      )}
+
+      {row.notes && (
+        <p className="text-xs text-muted-foreground border-t pt-2">{row.notes}</p>
+      )}
+
+      <div className="flex items-center justify-between text-[11px] text-muted-foreground pt-1 border-t">
+        <span>{row.source ? `Source: ${row.source}` : row.isEstimate ? "Estimated from fund mandate" : "From published factsheet"}</span>
+        <button onClick={onEdit} className="hover:text-foreground flex items-center gap-1">
+          <Pencil className="w-3 h-3" /> Edit
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function MmfStrategy() {
   const fund = useSelectedFund();
   const utils = trpc.useUtils();
@@ -123,6 +249,9 @@ export default function MmfStrategy() {
   const { data: funds } = trpc.mmfFunds.list.useQuery();
 
   const [editOpen, setEditOpen] = useState(false);
+  const [sortKey, setSortKey] = useState<SortKey>("ear");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  const [expandedId, setExpandedId] = useState<number | null>(null);
   const [form, setForm] = useState({
     mmfFundId: 0,
     govSecurities: "0",
@@ -155,10 +284,32 @@ export default function MmfStrategy() {
     onError: (e) => toast.error(e.message),
   });
 
-  const sorted = useMemo(
-    () => [...(rows ?? [])].sort((a, b) => b.ear - a.ear),
-    [rows]
-  );
+  // Sort by the chosen column, then always float the user's selected fund to
+  // the very top so it is easy to locate when comparing.
+  const sorted = useMemo(() => {
+    const list = [...(rows ?? [])];
+    list.sort((a, b) => {
+      let cmp: number;
+      if (sortKey === "fundName") cmp = a.fundName.localeCompare(b.fundName);
+      else cmp = (a[sortKey] as number) - (b[sortKey] as number);
+      return sortDir === "asc" ? cmp : -cmp;
+    });
+    list.sort((a, b) => {
+      const aSel = a.mmfFundId === fund.fundId ? 0 : 1;
+      const bSel = b.mmfFundId === fund.fundId ? 0 : 1;
+      return aSel - bSel;
+    });
+    return list;
+  }, [rows, sortKey, sortDir, fund.fundId]);
+
+  function toggleSort(key: SortKey) {
+    if (sortKey === key) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortKey(key);
+      setSortDir(key === "fundName" ? "asc" : "desc");
+    }
+  }
 
   const govSubTotal =
     Number(form.govTbills) + Number(form.govTbonds) + Number(form.govIfb);
@@ -304,7 +455,7 @@ export default function MmfStrategy() {
           </CardContent>
         </Card>
 
-        {/* Composition cards */}
+        {/* Comparison table (default scannable view) */}
         {isLoading ? (
           <p className="text-sm text-muted-foreground">Loading…</p>
         ) : sorted.length === 0 ? (
@@ -314,138 +465,84 @@ export default function MmfStrategy() {
             </CardContent>
           </Card>
         ) : (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            {sorted.map((row) => {
-              const isSelected = row.mmfFundId === fund.fundId;
-              return (
-                <Card
-                  key={row.id}
-                  className={isSelected ? "border-primary/50 ring-1 ring-primary/20" : ""}
-                >
-                  <CardHeader className="pb-3">
-                    <div className="flex items-start justify-between gap-2">
-                      <div>
-                        <CardTitle className="text-base flex items-center gap-2">
-                          {row.fundName}
-                          {isSelected && (
-                            <Badge className="text-[10px]">Your Fund</Badge>
-                          )}
-                        </CardTitle>
-                        <CardDescription>{row.company}</CardDescription>
-                      </div>
-                      <div className="text-right">
-                        <p className="text-lg font-bold text-primary">
-                          {row.ear.toFixed(2)}%
-                        </p>
-                        <p className="text-[10px] text-muted-foreground">net EAR</p>
-                      </div>
-                    </div>
-                  </CardHeader>
-                  <CardContent className="space-y-3">
-                    <AllocationBar row={row} />
-                    <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
-                      {SEGMENTS.map((s) => {
-                        const v = row[s.key] as number;
-                        if (v <= 0) return null;
-                        return (
-                          <div key={s.key} className="flex items-center justify-between">
-                            <span className="text-muted-foreground flex items-center gap-1.5">
-                              <span className={`w-2 h-2 rounded-sm ${s.color}`} />
-                              {s.label}
-                            </span>
-                            <span className="font-medium tabular-nums">{v}%</span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                    {row.govSecurities > 0 && (row.govTbills > 0 || row.govTbonds > 0 || row.govIfb > 0) && (
-                      <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3 space-y-1.5">
-                        <div className="flex items-center gap-1.5 text-xs font-medium text-emerald-600 dark:text-emerald-400">
-                          <Landmark className="w-3 h-3" />
-                          Government Securities breakdown ({row.govSecurities}% of fund)
-                        </div>
-                        <div className="grid grid-cols-3 gap-2 text-[11px]">
-                          <div className="flex flex-col">
-                            <span className="font-semibold tabular-nums text-foreground">{row.govTbills}%</span>
-                            <span className="text-muted-foreground">Treasury Bills</span>
-                          </div>
-                          <div className="flex flex-col">
-                            <span className="font-semibold tabular-nums text-foreground">{row.govTbonds}%</span>
-                            <span className="text-muted-foreground">Treasury Bonds (FXD)</span>
-                          </div>
-                          <div className="flex flex-col">
-                            <span className="font-semibold tabular-nums text-foreground">{row.govIfb}%</span>
-                            <span className="text-muted-foreground">Infrastructure (IFB)</span>
-                          </div>
-                        </div>
-                        <p className="text-[10px] text-muted-foreground/80 pt-0.5">
-                          Percentages are of the whole fund. T-bills dominate the short end; IFB coupons are tax-exempt.
-                        </p>
-                      </div>
-                    )}
-                    {/* Per-segment detail breakdowns with indicative rates */}
-                    {SEGMENT_NOTES.some((s) => (row[s.key] as number) > 0 && row[s.noteKey]) && (
-                      <div className="space-y-2 border-t pt-2">
-                        {SEGMENT_NOTES.map((s) => {
-                          const pct = row[s.key] as number;
-                          const note = row[s.noteKey] as string | null;
-                          if (pct <= 0 || !note) return null;
-                          const Icon = s.icon;
-                          return (
-                            <div key={s.key} className={`rounded-lg border p-2.5 ${s.bg}`}>
-                              <div className={`flex items-center gap-1.5 text-xs font-medium ${s.color}`}>
-                                <Icon className="w-3 h-3" />
-                                {s.label} ({pct}% of fund)
-                              </div>
-                              <p className="text-[11px] text-muted-foreground mt-1 leading-relaxed">
-                                {note}
-                              </p>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                    {/* Real estate note shown even at 0% to clarify MMFs cannot hold property */}
-                    {row.realEstate === 0 && row.realEstateNote && (
-                      <div className="rounded-lg border border-orange-500/20 bg-orange-500/5 p-2.5">
-                        <div className="flex items-center gap-1.5 text-xs font-medium text-orange-600 dark:text-orange-400">
-                          <Building2 className="w-3 h-3" />
-                          Real Estate / Property (0%)
-                        </div>
-                        <p className="text-[11px] text-muted-foreground mt-1 leading-relaxed">
-                          {row.realEstateNote}
-                        </p>
-                      </div>
-                    )}
-                    {row.notes && (
-                      <p className="text-xs text-muted-foreground border-t pt-2">
-                        {row.notes}
-                      </p>
-                    )}
-                    <div className="flex items-center justify-between text-[11px] text-muted-foreground pt-1">
-                      <span>
-                        {row.isEstimate ? (
-                          <Badge variant="outline" className="text-[10px]">
-                            Estimate
-                          </Badge>
-                        ) : (
-                          <Badge variant="secondary" className="text-[10px]">
-                            From factsheet
-                          </Badge>
-                        )}
-                      </span>
-                      <button
-                        onClick={() => openEdit(row)}
-                        className="hover:text-foreground flex items-center gap-1"
-                      >
-                        <Pencil className="w-3 h-3" /> Edit
+          <Card className="overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-border bg-muted/40 text-xs text-muted-foreground">
+                    <th className="text-left font-medium py-2.5 px-4">
+                      <button onClick={() => toggleSort("fundName")} className="inline-flex items-center gap-1 hover:text-foreground">
+                        Fund <ArrowUpDown className="w-3 h-3 opacity-60" />
                       </button>
-                    </div>
-                  </CardContent>
-                </Card>
-              );
-            })}
-          </div>
+                    </th>
+                    <th className="text-right font-medium py-2.5 px-3 whitespace-nowrap">
+                      <button onClick={() => toggleSort("ear")} className="inline-flex items-center gap-1 hover:text-foreground">
+                        Net EAR <ArrowUpDown className="w-3 h-3 opacity-60" />
+                      </button>
+                    </th>
+                    <th className="text-right font-medium py-2.5 px-3 whitespace-nowrap hidden sm:table-cell">
+                      <button onClick={() => toggleSort("grossYield")} className="inline-flex items-center gap-1 hover:text-foreground">
+                        Gross <ArrowUpDown className="w-3 h-3 opacity-60" />
+                      </button>
+                    </th>
+                    <th className="text-right font-medium py-2.5 px-3 whitespace-nowrap hidden sm:table-cell">
+                      <button onClick={() => toggleSort("managementFee")} className="inline-flex items-center gap-1 hover:text-foreground">
+                        Fee <ArrowUpDown className="w-3 h-3 opacity-60" />
+                      </button>
+                    </th>
+                    <th className="text-left font-medium py-2.5 px-3 w-[34%] hidden md:table-cell">Allocation</th>
+                    <th className="py-2.5 px-3 w-8"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sorted.map((row) => {
+                    const isSelected = row.mmfFundId === fund.fundId;
+                    const isOpen = expandedId === row.id;
+                    const top = topSegment(row);
+                    return (
+                      <>
+                        <tr
+                          key={row.id}
+                          onClick={() => setExpandedId(isOpen ? null : row.id)}
+                          className={`border-b border-border cursor-pointer transition-colors hover:bg-muted/40 ${isSelected ? "bg-primary/5" : ""}`}
+                        >
+                          <td className="py-2.5 px-4">
+                            <div className="flex items-center gap-2">
+                              {isSelected && <Pin className="w-3 h-3 text-primary shrink-0" />}
+                              <div className="min-w-0">
+                                <div className="font-medium text-foreground flex items-center gap-1.5 flex-wrap">
+                                  <span className="truncate">{row.fundName}</span>
+                                  {isSelected && <Badge className="text-[10px]">Your Fund</Badge>}
+                                  {row.isEstimate ? (
+                                    <Badge variant="outline" className="text-[9px]">Estimate</Badge>
+                                  ) : (
+                                    <Badge variant="secondary" className="text-[9px]">Factsheet</Badge>
+                                  )}
+                                </div>
+                                <div className="text-xs text-muted-foreground truncate">{row.company}{top ? ` \u00b7 mostly ${top.label} (${top.v}%)` : ""}</div>
+                              </div>
+                            </div>
+                          </td>
+                          <td className="py-2.5 px-3 text-right font-semibold text-primary tabular-nums whitespace-nowrap">{row.ear.toFixed(2)}%</td>
+                          <td className="py-2.5 px-3 text-right text-muted-foreground tabular-nums whitespace-nowrap hidden sm:table-cell">{row.grossYield.toFixed(2)}%</td>
+                          <td className="py-2.5 px-3 text-right text-muted-foreground tabular-nums whitespace-nowrap hidden sm:table-cell">{row.managementFee.toFixed(2)}%</td>
+                          <td className="py-2.5 px-3 hidden md:table-cell"><AllocationBar row={row} className="h-2.5" /></td>
+                          <td className="py-2.5 px-3 text-muted-foreground">{isOpen ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}</td>
+                        </tr>
+                        {isOpen && (
+                          <tr className="border-b border-border bg-muted/20">
+                            <td colSpan={6} className="p-0">
+                              <CompositionDetail row={row} onEdit={() => openEdit(row)} />
+                            </td>
+                          </tr>
+                        )}
+                      </>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </Card>
         )}
 
         <p className="text-xs text-muted-foreground flex items-start gap-2">

@@ -110,6 +110,31 @@ export interface MonthlyContributionOverride {
   lumpSum?: number;
 }
 
+/**
+ * A secondary MMF account held alongside the primary fund.
+ * Each is projected forward independently using its own net yield, starting
+ * balance, and monthly contribution, then folded into the portfolio total.
+ */
+export interface SecondaryMmfInput {
+  /** Stable identifier (db row id), used only for traceability. */
+  id?: number;
+  /** Display label. */
+  label?: string;
+  /** Current balance (KES) at the start of the projection. */
+  currentBalance: number;
+  /** Monthly contribution assigned to this fund (KES). 0 if none. */
+  monthlyContribution: number;
+  /**
+   * Gross effective annual yield % for this fund (e.g. 12.0). WHT is applied
+   * inside the engine — matching how the primary MMF treats its fund EAR.
+   */
+  ear: number;
+  /**
+   * WHT % applied to this fund's interest. Defaults to the portfolio WHT when omitted.
+   */
+  whtRate?: number;
+}
+
 /** Actual deposit entry from the database (for actuals-seeded projection). */
 export interface ActualDeposit {
   bucket: "mmf" | "tbill" | "ifb" | "fxd";
@@ -140,6 +165,8 @@ export interface MonthResult {
   ifbEnd: number;
   fxdEnd: number;
   totalEnd: number;
+  /** Combined projected balance of all secondary MMF accounts this month. */
+  secondaryMmfEnd: number;
   phase: "foundation" | "growth" | "de-risking" | "final-liquidity";
   sweepTarget: "tbill" | "ifb" | "fxd" | null;
   /** Total WHT withheld this month (MMF + T-Bill + FXD). */
@@ -348,7 +375,8 @@ export function runProjection(
   overrides: MonthlyContributionOverride[] = [],
   rateHistory: RateSnapshot[] = [],
   actualDeposits: ActualDeposit[] = [],
-  actualSecurities: ActualSecurity[] = []
+  actualSecurities: ActualSecurity[] = [],
+  secondaryMmfs: SecondaryMmfInput[] = []
 ): MonthResult[] {
   const horizonMonths = settings.horizonMonths ?? 120;
   const isShortHorizon = horizonMonths < SHORT_HORIZON_THRESHOLD;
@@ -375,6 +403,16 @@ export function runProjection(
   let lotIdCounter = 0;
   let sweepCount = 0;
   let lastPhase = "";
+
+  // Secondary MMF accounts: each projected forward independently from its own
+  // current balance, using its own gross EAR (WHT applied here) and any monthly
+  // contribution. Balances are folded into the portfolio total every month.
+  const secondaryState = secondaryMmfs.map((s) => ({
+    balance: s.currentBalance || 0,
+    monthlyContribution: s.monthlyContribution || 0,
+    ear: s.ear || 0,
+    whtRate: s.whtRate,
+  }));
 
   let actualsMMF = 0;
 
@@ -458,6 +496,25 @@ export function runProjection(
       const interestWHT = interestGross * wht;
       whtThisMonth += interestWHT;
       mmf = mmf * (1 + mmfMonthly);
+    }
+
+    // ── Secondary MMF accounts ──
+    // Each is contribution-driven plus its own net compounding. We always
+    // accrue/contribute (even in actuals-seeded months) because these balances
+    // are tracked separately from the primary plan's deposit ledger.
+    let secondaryMmfEnd = 0;
+    for (const sec of secondaryState) {
+      if (sec.balance === 0 && sec.monthlyContribution === 0) continue;
+      const secWhtPct = sec.whtRate ?? rates.withholdingTax;
+      const secWht = secWhtPct / 100;
+      // Add this fund's own monthly contribution.
+      sec.balance += sec.monthlyContribution;
+      // Compound on the fund's gross EAR, then withhold tax on the interest.
+      const grossInterest = sec.balance * monthlyRate(sec.ear);
+      const netInterest = grossInterest * (1 - secWht);
+      whtThisMonth += grossInterest * secWht;
+      sec.balance += netInterest;
+      secondaryMmfEnd += sec.balance;
     }
 
     let cbkCashIn = 0;
@@ -582,7 +639,7 @@ export function runProjection(
       mainAction = "Deposit to MMF; no DhowCSD sweep this month";
     }
 
-    const total = mmf + tbillEnd + ifbEnd + fxdEnd;
+    const total = mmf + tbillEnd + ifbEnd + fxdEnd + secondaryMmfEnd;
 
     results.push({
       monthNumber: m,
@@ -595,6 +652,7 @@ export function runProjection(
       ifbEnd:   Math.round(ifbEnd   * 100) / 100,
       fxdEnd:   Math.round(fxdEnd   * 100) / 100,
       totalEnd: Math.round(total    * 100) / 100,
+      secondaryMmfEnd: Math.round(secondaryMmfEnd * 100) / 100,
       phase,
       sweepTarget,
       whtThisMonth: Math.round(whtThisMonth * 100) / 100,
@@ -611,12 +669,13 @@ export function runProjection(
 export function runScenarios(
   baseSettings: EngineSettings,
   stepUps: number[] = SCENARIO_STEPUPS,
-  rateHistory: RateSnapshot[] = []
+  rateHistory: RateSnapshot[] = [],
+  secondaryMmfs: SecondaryMmfInput[] = []
 ): ScenarioResult[] {
   const horizonMonths = baseSettings.horizonMonths ?? 120;
   return stepUps.map((stepUp) => {
     const settings = { ...baseSettings, stepUpAmount: stepUp };
-    const results = runProjection(settings, [], rateHistory);
+    const results = runProjection(settings, [], rateHistory, [], [], secondaryMmfs);
     const last = results[results.length - 1];
 
     let totalContributed = 0;
@@ -638,10 +697,13 @@ export function runScenarios(
  * Generate per-portfolio year-end milestones from a clean projection run.
  * Works for any horizon: generates one milestone per year up to horizonMonths.
  */
-export function generateMilestones(settings?: EngineSettings): YearMilestone[] {
+export function generateMilestones(
+  settings?: EngineSettings,
+  secondaryMmfs: SecondaryMmfInput[] = []
+): YearMilestone[] {
   const s = settings ?? DEFAULT_SETTINGS_FOR_MILESTONES;
   const horizonMonths = s.horizonMonths ?? 120;
-  const results = runProjection(s);
+  const results = runProjection(s, [], [], [], [], secondaryMmfs);
   const milestones: YearMilestone[] = [];
   const totalYears = Math.floor(horizonMonths / 12);
   for (let year = 1; year <= totalYears; year++) {
@@ -686,14 +748,15 @@ export function checkMilestones(
   currentMonth: number,
   currentTotal: number,
   settings: EngineSettings,
-  rateHistory: RateSnapshot[] = []
+  rateHistory: RateSnapshot[] = [],
+  secondaryMmfs: SecondaryMmfInput[] = []
 ): {
   milestone: YearMilestone | null;
   status: "on-track" | "behind" | "ahead";
   gap: number;
   recommendation: string;
 } {
-  const milestones = generateMilestones(settings);
+  const milestones = generateMilestones(settings, secondaryMmfs);
   const rawMilestone = milestones.find((m) => m.month === currentMonth);
   if (!rawMilestone) {
     return { milestone: null, status: "on-track", gap: 0, recommendation: "" };
@@ -736,7 +799,8 @@ export function checkMilestones(
 export function solveForContribution(
   settings: EngineSettings,
   stepUpAmount = 0,
-  rateHistory: RateSnapshot[] = []
+  rateHistory: RateSnapshot[] = [],
+  secondaryMmfs: SecondaryMmfInput[] = []
 ): SolverResult {
   const horizonMonths = settings.horizonMonths ?? 120;
   const isShortHorizon = horizonMonths < SHORT_HORIZON_THRESHOLD;
@@ -744,7 +808,7 @@ export function solveForContribution(
 
   const project = (startingContribution: number): number => {
     const s: EngineSettings = { ...settings, startingContribution, stepUpAmount };
-    const results = runProjection(s, [], rateHistory);
+    const results = runProjection(s, [], rateHistory, [], [], secondaryMmfs);
     return results[results.length - 1]?.totalEnd ?? 0;
   };
 
@@ -783,7 +847,7 @@ export function solveForContribution(
 
   // Compute total contributed
   const s: EngineSettings = { ...settings, startingContribution: requiredStartingContribution, stepUpAmount };
-  const results = runProjection(s, [], rateHistory);
+  const results = runProjection(s, [], rateHistory, [], [], secondaryMmfs);
   let totalContributed = 0;
   for (const r of results) totalContributed += r.contribution;
 

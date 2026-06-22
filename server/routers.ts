@@ -69,6 +69,7 @@ import {
   type EngineSettings,
   type ActualDeposit,
   type ActualSecurity,
+  type SecondaryMmfInput,
 } from "./engine";
 import { COOKIE_NAME } from "../shared/const";
 
@@ -173,6 +174,18 @@ function mapActualSecurities(rows: Awaited<ReturnType<typeof getSecurities>>): A
     couponRate: parseFloat(String(s.couponRate)),
     isTaxExempt: s.isTaxExempt,
     isMatured: s.isMatured,
+  }));
+}
+
+/** Map DB secondary MMF rows into engine inputs (fund EAR treated as gross, WHT applied in engine). */
+function mapSecondaryMmfs(rows: Awaited<ReturnType<typeof getSecondaryMmfs>>): SecondaryMmfInput[] {
+  return rows.map((s) => ({
+    id: s.id,
+    label: s.label ?? undefined,
+    currentBalance: parseFloat(String(s.currentBalance)) || 0,
+    monthlyContribution: parseFloat(String(s.monthlyContribution)) || 0,
+    ear: parseFloat(String(s.ear)) || 0,
+    whtRate: s.whtRate != null ? parseFloat(String(s.whtRate)) : undefined,
   }));
 }
 
@@ -403,7 +416,8 @@ export const appRouter = router({
       const actualDeposits = mapActualDeposits(depositRows);
       const securityRows = await getSecurities(input.portfolioId);
       const actualSecurities = mapActualSecurities(securityRows);
-      return runProjection(settings, mappedOverrides, rh, actualDeposits, actualSecurities);
+      const secondaryMmfs = mapSecondaryMmfs(await getSecondaryMmfs(input.portfolioId));
+      return runProjection(settings, mappedOverrides, rh, actualDeposits, actualSecurities, secondaryMmfs);
     }),
 
     scenarios: protectedProcedure.input(portfolioIdInput).query(async ({ ctx, input }) => {
@@ -412,14 +426,16 @@ export const appRouter = router({
       const settings = dbToEngine(rates, p, fundEar);
       const rateHistoryRows = await getRateHistory(input.portfolioId);
       const rh = mapRateHistory(rateHistoryRows);
-      return runScenarios(settings, SCENARIO_STEPUPS, rh);
+      const secondaryMmfs = mapSecondaryMmfs(await getSecondaryMmfs(input.portfolioId));
+      return runScenarios(settings, SCENARIO_STEPUPS, rh, secondaryMmfs);
     }),
 
     milestones: protectedProcedure.input(portfolioIdInput).query(async ({ ctx, input }) => {
       const p = await requirePortfolio(input.portfolioId, ctx.user.id);
       const [rates, fundEar] = await Promise.all([getRateSettings(input.portfolioId), getSelectedFundEar(p)]);
       const settings = dbToEngine(rates, p, fundEar);
-      return generateMilestones(settings);
+      const secondaryMmfs = mapSecondaryMmfs(await getSecondaryMmfs(input.portfolioId));
+      return generateMilestones(settings, secondaryMmfs);
     }),
 
     contributionSchedule: protectedProcedure.input(portfolioIdInput).query(async ({ ctx, input }) => {
@@ -458,7 +474,8 @@ export const appRouter = router({
         const rateHistoryRows = await getRateHistory(input.portfolioId);
         const rh = mapRateHistory(rateHistoryRows);
         const stepUp = input.stepUpAmount ?? settings.stepUpAmount;
-        return solveForContribution(settings, stepUp, rh);
+        const secondaryMmfs = mapSecondaryMmfs(await getSecondaryMmfs(input.portfolioId));
+        return solveForContribution(settings, stepUp, rh, secondaryMmfs);
       }),
   }),
 

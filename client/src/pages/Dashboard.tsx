@@ -48,16 +48,10 @@ import {
 import { Link } from "wouter";
 import { useDepositDrawer } from "@/contexts/DepositDrawerContext";
 import { useSelectedFund } from "@/hooks/useSelectedFund";
+import { CreatePortfolioDialog } from "@/components/PortfolioSelector";
+import { Plus, Compass } from "lucide-react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
-
-const PHASE_BANDS = [
-  { start: 1, end: 24, label: "Foundation", color: "oklch(0.65 0.15 200 / 0.08)" },
-  { start: 25, end: 84, label: "Growth", color: "oklch(0.70 0.12 160 / 0.08)" },
-  { start: 85, end: 102, label: "De-risking", color: "oklch(0.78 0.14 85 / 0.08)" },
-  { start: 103, end: 120, label: "Final Liquidity", color: "oklch(0.65 0.15 280 / 0.08)" },
-];
-
 
 function StatCard({
   title,
@@ -123,7 +117,8 @@ function ChartTooltip({ active, payload, label }: { active?: boolean; payload?: 
 }
 
 export default function Dashboard() {
-  const { portfolioId, portfolio } = usePortfolio();
+  const { portfolioId, portfolio, portfolios, isLoading: portfoliosLoading } = usePortfolio();
+  const [createOpen, setCreateOpen] = useState(false);
   const utils = trpc.useUtils();
   const { data: projection, isLoading: projLoading } = trpc.projection.run.useQuery(
     { portfolioId: portfolioId! },
@@ -163,7 +158,7 @@ export default function Dashboard() {
   const [targetInput, setTargetInput] = useState("");
 
   function openTargetDialog() {
-    setTargetInput(String(portfolio?.targetAmount ?? 5000000));
+    setTargetInput(String(Number(portfolio?.targetAmount) || 0));
     setTargetDialogOpen(true);
   }
 
@@ -189,8 +184,8 @@ export default function Dashboard() {
   }
 
   const { fundName, fundLabel, fundEar } = useSelectedFund();
-  const targetAmount = portfolio?.targetAmount ?? 5000000;
-  const horizonMonths = portfolio?.horizonMonths ?? 120;
+  const targetAmount = Number(portfolio?.targetAmount) || 0;
+  const horizonMonths = portfolio?.horizonMonths ?? 0;
   const horizonYears = Math.round((horizonMonths / 12) * 10) / 10;
   const horizonYearsLabel = Number.isInteger(horizonYears) ? `${horizonYears}` : horizonYears.toFixed(1);
   // Year gridlines/ticks derived from the actual horizon (every 12 months, plus the final month).
@@ -221,7 +216,82 @@ export default function Dashboard() {
     }));
   }, [projection]);
 
+  // Whether this plan ever holds government securities (T-bills / IFB / FXD).
+  // Short-horizon or MMF-only plans never do, so we avoid claiming "CBK securities".
+  const usesGovSecurities = useMemo(
+    () => !!projection?.some((r) => r.tbillEnd > 0 || r.ifbEnd > 0 || r.fxdEnd > 0),
+    [projection]
+  );
+  const strategyDescriptor = usesGovSecurities ? `${fundLabel} + CBK securities` : fundLabel;
+
+  // Phase legend derived from the actual projection so band ranges match this
+  // portfolio's horizon and phase fractions (not a hardcoded 120-month layout).
+  const phaseLegend = useMemo(() => {
+    if (!projection?.length) return [] as { label: string; start: number; end: number; color: string }[];
+    const colorFor: Record<string, string> = {
+      foundation: "oklch(0.65 0.15 200 / 0.5)",
+      growth: "oklch(0.70 0.12 160 / 0.5)",
+      "de-risking": "oklch(0.78 0.14 85 / 0.5)",
+      derisking: "oklch(0.78 0.14 85 / 0.5)",
+      "final-liquidity": "oklch(0.65 0.15 280 / 0.5)",
+      liquidity: "oklch(0.65 0.15 280 / 0.5)",
+    };
+    const bands: { label: string; start: number; end: number; color: string }[] = [];
+    for (const r of projection) {
+      const label = getPhaseName(r.phase);
+      const last = bands[bands.length - 1];
+      if (last && last.label === label) {
+        last.end = r.monthNumber;
+      } else {
+        bands.push({ label, start: r.monthNumber, end: r.monthNumber, color: colorFor[r.phase] ?? "oklch(0.65 0.15 200 / 0.5)" });
+      }
+    }
+    return bands;
+  }, [projection]);
+
   const currentPhase = currentData ? currentData.phase : "foundation";
+
+  // ── Onboarding empty state: authenticated but no portfolios yet ──────────
+  if (!portfoliosLoading && portfolios.length === 0) {
+    return (
+      <AppShell>
+        <div className="min-h-[70vh] flex items-center justify-center p-6">
+          <div className="max-w-lg text-center">
+            <div className="w-16 h-16 rounded-2xl bg-primary/15 flex items-center justify-center mx-auto mb-5">
+              <Compass className="w-8 h-8 text-primary" />
+            </div>
+            <h1
+              className="text-2xl font-bold text-foreground mb-2"
+              style={{ fontFamily: "'Playfair Display', serif" }}
+            >
+              Create your first portfolio
+            </h1>
+            <p className="text-sm text-muted-foreground leading-relaxed mb-6">
+              A portfolio is a single savings goal — its own target amount, time horizon,
+              monthly contribution, and Money Market Fund. Once you create one, the dashboard
+              will project your journey month by month and track your real deposits against it.
+            </p>
+            <Button
+              size="lg"
+              className="font-semibold"
+              onClick={() => setCreateOpen(true)}
+            >
+              <Plus className="w-4 h-4 mr-1.5" />
+              Create a portfolio
+            </Button>
+            <p className="text-xs text-muted-foreground mt-6">
+              New to fixed-income investing in Kenya?{" "}
+              <Link href="/getting-started">
+                <span className="text-primary underline cursor-pointer">Read the Getting Started guide</span>
+              </Link>
+              .
+            </p>
+          </div>
+        </div>
+        <CreatePortfolioDialog open={createOpen} onOpenChange={setCreateOpen} />
+      </AppShell>
+    );
+  }
 
   return (
     <AppShell>
@@ -234,7 +304,7 @@ export default function Dashboard() {
               Investment Dashboard
             </h1>
             <p className="text-sm text-muted-foreground mt-0.5">
-              {horizonYearsLabel}-year journey to {formatKES(targetAmount)} · {fundLabel} + CBK DhowCSD
+              {horizonYearsLabel}-year journey to {formatKES(targetAmount)} · {strategyDescriptor}
             </p>
           </div>
           <Badge variant="outline" className={`text-xs px-3 py-1 border ${getPhaseColorClass(currentPhase)}`}>
@@ -526,9 +596,9 @@ export default function Dashboard() {
               </ResponsiveContainer>
             )}
             <div className="flex flex-wrap gap-3 mt-3 pt-3 border-t border-border">
-              {PHASE_BANDS.map((b) => (
+              {phaseLegend.map((b) => (
                 <div key={b.label} className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                  <div className="w-3 h-2 rounded-sm" style={{ background: b.color.replace("0.08", "0.5") }} />
+                  <div className="w-3 h-2 rounded-sm" style={{ background: b.color }} />
                   <span>{b.label} (M{b.start}–{b.end})</span>
                 </div>
               ))}

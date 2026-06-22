@@ -614,6 +614,7 @@ export async function getSecondaryMmfs(portfolioId: number) {
       fundName: mmfFunds.fundName,
       company: mmfFunds.company,
       ear: mmfFunds.ear,
+      whtRate: mmfFunds.whtRate,
     })
     .from(portfolioSecondaryMmfs)
     .innerJoin(mmfFunds, eq(portfolioSecondaryMmfs.mmfFundId, mmfFunds.id))

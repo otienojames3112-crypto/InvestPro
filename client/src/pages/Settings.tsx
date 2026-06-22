@@ -296,7 +296,7 @@ export default function Settings() {
               <div className="space-y-1.5">
                 <Label className="text-xs font-medium">MMF Safety Floor (KES)</Label>
                 <Input type="number" step="1000" min="0" {...planForm.register("safetyFloor", { valueAsNumber: true })} />
-                <p className="text-xs text-muted-foreground">Minimum MMF balance before sweeping to DhowCSD</p>
+                <p className="text-xs text-muted-foreground">Minimum MMF balance kept before sweeping surplus into government securities (when your plan uses them)</p>
               </div>
             </CardContent>
           </Card>

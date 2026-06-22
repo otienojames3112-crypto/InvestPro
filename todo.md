@@ -295,4 +295,22 @@
 - [x] R15.5 TaxSummary: per-fund WHT breakdown + combined total
 - [x] R15.5 Adding/removing secondary fund instantly reflows dashboard/accrual/tax
 - [x] R15.6 End-to-end sync audit across all pages; switching portfolio fully re-renders, no stale values
-- [ ] R15 Run tsc --noEmit + pnpm test; screenshot; save checkpoint
+- [x] R15 Run tsc --noEmit + pnpm test; screenshot; save checkpoint
+
+
+## Round 16 — Empty state, secondary-MMF projection, MMF Strategy redesign
+- [x] R16.1 Dashboard: remove 5M/120 display fallbacks from render path
+- [x] R16.2 Dashboard: add empty/onboarding state when no active portfolio (welcome + Create first portfolio CTA; no chart/numbers)
+- [x] R16.3 Dashboard: make strategy descriptor portfolio-driven (drop literal "+ CBK DhowCSD"); MMF-only short-horizon must not claim gov securities
+- [x] R16.4 Surface "Manage MMF accounts / Add another fund" prominently (dashboard MMF card / Funds page)
+- [x] R16.5 Engine: project each secondary MMF forward (own EAR, day-count, fee, WHT, monthly contribution), compound like primary
+- [x] R16.6 Engine/router: add secondary projected balances into total portfolio value at every month (chart, milestones, target, surplus)
+- [x] R16.7 Confirm add/edit/remove secondary MMF invalidates + re-runs forward projection
+- [x] R16.8 Keep per-fund separation in accrual ledger + tax summary (already done) — verify still totals
+- [x] R16.9 GettingStarted + Settings: gate DhowCSD walkthrough on gov-securities usage; use selected fund name; drop SanlamAllianz assumption
+- [x] R16.10 Sweep client for 5,000,000 / 10-year / Month 120 / DhowCSD / SanlamAllianz / 2026 / 3,000 step-up in rendered copy — make portfolio-derived or generic
+- [x] R16.11 MMF Strategy page: add compact sortable comparison table as default view + toggle to detailed cards
+- [x] R16.12 MMF Strategy page: progressive disclosure for gov-securities sub-breakdown + per-segment notes (Details toggle)
+- [x] R16.13 MMF Strategy page: pin selected "Your Fund" to top of both views; consistent segment colors/order; right-aligned tabular % ; metadata to footer
+- [x] R16.14 Verify non-owner sync path end-to-end (no portfolio -> empty state -> create portfolio with different target/horizon/fund -> all pages reflect it; secondary funds in projection)
+- [x] R16.15 Run tsc --noEmit + pnpm test; screenshot; save checkpoint

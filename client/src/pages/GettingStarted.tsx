@@ -1162,8 +1162,36 @@ function MmfFundCard({ fund }: { fund: MmfFundInfo }) {
 
 export default function GettingStarted() {
   const { portfolioId } = usePortfolio();
-  const { fundName, fundLabel } = useSelectedFund();
+  const { fundName, fundLabel, fundCompany } = useSelectedFund();
   const [openDialog, setOpenDialog] = useState<"mmf" | "dhow" | null>(null);
+
+  // Match the portfolio's selected MMF to the catalog so the walkthrough uses
+  // its real website / contacts / minimum, instead of a hardcoded provider.
+  const selectedFundRecord = useMemo(() => {
+    if (!fundName) return undefined;
+    const q = fundName.toLowerCase();
+    return (
+      MMF_FUNDS.find((f) => f.name.toLowerCase() === q) ??
+      MMF_FUNDS.find((f) => f.name.toLowerCase().includes(q) || q.includes(f.company.toLowerCase()))
+    );
+  }, [fundName]);
+  const providerName = fundCompany && fundCompany !== "—" ? fundCompany : (selectedFundRecord?.company ?? fundName ?? "your MMF provider");
+  const providerSite = selectedFundRecord?.website;
+  const providerPortal = selectedFundRecord?.portalUrl ?? selectedFundRecord?.website;
+  const providerPhone = selectedFundRecord?.phone;
+  const providerEmail = selectedFundRecord?.email;
+  const providerMin = selectedFundRecord?.minInvestment ?? "the fund minimum";
+
+  // Whether the active portfolio actually holds government securities. If not
+  // (MMF-only or very short horizon), we hide the CBK DhowCSD walkthrough.
+  const { data: projection } = trpc.projection.run.useQuery(
+    { portfolioId: portfolioId! },
+    { enabled: !!portfolioId }
+  );
+  const usesGovSecurities = useMemo(
+    () => !!projection?.some((r) => r.tbillEnd > 0 || r.ifbEnd > 0 || r.fxdEnd > 0),
+    [projection]
+  );
   const [searchQuery, setSearchQuery] = useState("");
   const [activeCategory, setActiveCategory] = useState<FundCategory | "all">("all");
   const [activeTab, setActiveTab] = useState<"primary" | "all-mmfs">("primary");
@@ -1280,7 +1308,7 @@ export default function GettingStarted() {
                   <div className="flex items-start justify-between gap-2">
                     <div>
                       <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">Money Market Fund</p>
-                      <p className="text-sm font-semibold text-foreground mt-0.5">{fundName || "SanlamAllianz MMF"}</p>
+                      <p className="text-sm font-semibold text-foreground mt-0.5">{fundName || "Your Money Market Fund"}</p>
                       {mmf.status === "opened" && mmf.details.accountNumber && (
                         <p className="text-xs text-muted-foreground mt-1">Ref: {mmf.details.accountNumber}</p>
                       )}
@@ -1299,7 +1327,8 @@ export default function GettingStarted() {
                 </CardContent>
               </Card>
 
-              {/* DhowCSD Card */}
+              {/* DhowCSD Card — only when the plan uses government securities */}
+              {usesGovSecurities && (
               <Card className="relative overflow-hidden">
                 <div className={`absolute top-0 left-0 w-1 h-full ${dhow.status === "opened" ? "bg-emerald-400" : dhow.status === "in_progress" ? "bg-amber-400" : "bg-muted"}`} />
                 <CardContent className="p-4 pl-5">
@@ -1324,13 +1353,18 @@ export default function GettingStarted() {
                   </div>
                 </CardContent>
               </Card>
+              )}
             </div>
 
             {/* Estimated time */}
             <div className="bg-primary/5 border border-primary/20 rounded-lg p-4 flex gap-3">
               <AlertCircle className="w-4 h-4 text-primary shrink-0 mt-0.5" />
               <div className="text-xs text-muted-foreground leading-relaxed">
-                <strong className="text-foreground">Estimated time to open both accounts:</strong> {fundName || "Your MMF"} takes 1–3 business days after submitting your application. CBK DhowCSD takes 3–5 business days. You can start both processes simultaneously. Once both are open, you are ready to make your first investment contribution.
+                {usesGovSecurities ? (
+                  <><strong className="text-foreground">Estimated time to open both accounts:</strong> {providerName} typically takes 1–3 business days after you submit your application. CBK DhowCSD takes 3–5 business days. You can start both processes simultaneously. Once both are open, you are ready to make your first investment contribution.</>
+                ) : (
+                  <><strong className="text-foreground">Estimated time to open your account:</strong> {providerName} typically takes 1–3 business days after you submit your application. Once it is open, you are ready to make your first investment contribution. This plan invests through your Money Market Fund only — no CBK securities account is required.</>
+                )}
               </div>
             </div>
 
@@ -1342,23 +1376,24 @@ export default function GettingStarted() {
                 </div>
                 <div>
                   <h2 className="text-base font-bold text-foreground" style={{ fontFamily: "'Playfair Display', serif" }}>
-                    Part 1 — Open Your {fundName || "MMF"} Account
+                    {usesGovSecurities ? "Part 1 — " : ""}Open Your {fundName || "MMF"} Account
                   </h2>
-                  <p className="text-xs text-muted-foreground">Your monthly contributions land here first before sweeping to DhowCSD</p>
+                  <p className="text-xs text-muted-foreground">{usesGovSecurities ? "Your monthly contributions land here first before sweeping to government securities" : "Your monthly contributions are invested here"}</p>
                 </div>
               </div>
 
               <div className="ml-4 border-l border-border pl-4">
-                <Step number={1} icon={Globe} title="Visit the SanlamAllianz website" description="Go to the SanlamAllianz Kenya website and navigate to the Money Market Fund section. You can also call their customer care line to request an application form." link="https://www.sanlamallianz.co.ke" linkLabel="sanlamallianz.co.ke" badge="Online" />
-                <Step number={2} icon={FileText} title="Download and complete the MMF application form" description="Fill in your personal details: full name, ID/passport number, KRA PIN, physical address, and bank account details (for redemptions). The form is available on the website or at any SanlamAllianz branch." detail="Tip: Your KRA PIN is mandatory. If you do not have one, register at itax.kra.go.ke before applying." />
+                <Step number={1} icon={Globe} title={`Visit the ${providerName} website`} description={`Go to the ${providerName} website and navigate to the Money Market Fund section. You can also call their customer care line to request an application form.`} link={providerSite} linkLabel={providerSite ? providerSite.replace(/^https?:\/\//, "") : undefined} badge={providerSite ? "Online" : undefined} />
+                <Step number={2} icon={FileText} title="Download and complete the MMF application form" description={`Fill in your personal details: full name, ID/passport number, KRA PIN, physical address, and bank account details (for redemptions). The form is available on the ${providerName} website or at any branch.`} detail="Tip: Your KRA PIN is mandatory. If you do not have one, register at itax.kra.go.ke before applying." />
                 <Step number={3} icon={CreditCard} title="Prepare your KYC documents" description="You will need: (1) Copy of your National ID or Passport, (2) Copy of your KRA PIN certificate, (3) One passport-sized photo, (4) Proof of address (utility bill or bank statement not older than 3 months)." badge="Required" />
-                <Step number={4} icon={FileText} title="Submit your application" description="Submit the completed form and KYC documents by email, at a SanlamAllianz branch, or through their online portal. You will receive a confirmation email and your account number within 1–3 business days." link="https://www.sanlamallianz.co.ke/contact-us" linkLabel="Find nearest branch" />
-                <Step number={5} icon={Smartphone} title="Make your first deposit via M-Pesa or bank transfer" description="Once your account is activated, deposit your first KES 2,500 contribution via M-Pesa (Paybill: check your welcome letter) or bank transfer. The minimum initial investment is KES 2,500." detail="Your MMF starts earning interest from the day your deposit is received and confirmed. Interest accrues daily and is credited monthly." />
+                <Step number={4} icon={FileText} title="Submit your application" description={`Submit the completed form and KYC documents by email, at a ${providerName} branch, or through their online portal. You will receive a confirmation email and your account number within 1–3 business days.`} link={providerSite} linkLabel={providerSite ? "Visit provider site" : undefined} />
+                <Step number={5} icon={Smartphone} title="Make your first deposit via M-Pesa or bank transfer" description={`Once your account is activated, make your first contribution via M-Pesa (Paybill: check your welcome letter) or bank transfer. The minimum initial investment is ${providerMin}.`} detail="Your MMF starts earning interest from the day your deposit is received and confirmed. Interest accrues daily and is credited monthly." />
                 <Step number={6} icon={Phone} title="Set up monthly standing order" description="Automate your monthly contributions by setting up a standing order from your bank or M-Pesa. This ensures you never miss a contribution and removes the discipline burden." detail="Recommended: set the standing order for the 1st of each month to align with your contribution schedule in this tracker." />
               </div>
             </div>
 
-            {/* ── SECTION 2: CBK DhowCSD ── */}
+            {/* ── SECTION 2: CBK DhowCSD — only when the plan uses gov securities ── */}
+            {usesGovSecurities && (
             <div>
               <div className="flex items-center gap-3 mb-5">
                 <div className="w-8 h-8 rounded-full bg-primary flex items-center justify-center shrink-0">
@@ -1382,6 +1417,7 @@ export default function GettingStarted() {
                 <Step number={7} icon={BookOpen} title="Log your purchase in the CBK Securities Register" description="After your bid is accepted, go to the CBK Securities page in this tracker and log your purchase with the face value, issue date, maturity date, and coupon rate. The tracker will automatically calculate your next coupon date and maturity event." />
               </div>
             </div>
+            )}
 
             {/* Key contacts */}
             <Card>
@@ -1394,13 +1430,19 @@ export default function GettingStarted() {
               <CardContent className="p-4 pt-0">
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
                   <div className="space-y-1">
-                    <p className="font-semibold text-foreground">{fundLabel || "SanlamAllianz Kenya"}</p>
-                    <p className="text-muted-foreground">Customer Care: 0800 723 456 (toll-free)</p>
-                    <p className="text-muted-foreground">Email: info@sanlamallianz.co.ke</p>
-                    <a href="https://www.sanlamallianz.co.ke" target="_blank" rel="noopener noreferrer" className="text-primary hover:text-primary/80 flex items-center gap-1">
-                      sanlamallianz.co.ke <ExternalLink className="w-3 h-3" />
-                    </a>
+                    <p className="font-semibold text-foreground">{providerName}</p>
+                    {providerPhone && <p className="text-muted-foreground">Phone: {providerPhone}</p>}
+                    {providerEmail && <p className="text-muted-foreground">Email: {providerEmail}</p>}
+                    {providerSite && (
+                      <a href={providerSite} target="_blank" rel="noopener noreferrer" className="text-primary hover:text-primary/80 flex items-center gap-1">
+                        {providerSite.replace(/^https?:\/\//, "")} <ExternalLink className="w-3 h-3" />
+                      </a>
+                    )}
+                    {!providerPhone && !providerEmail && !providerSite && (
+                      <p className="text-muted-foreground">Contact details are available on your fund's welcome letter.</p>
+                    )}
                   </div>
+                  {usesGovSecurities && (
                   <div className="space-y-1">
                     <p className="font-semibold text-foreground">CBK DhowCSD Support</p>
                     <p className="text-muted-foreground">Phone: 0709 081 000</p>
@@ -1409,6 +1451,7 @@ export default function GettingStarted() {
                       dhowcsd.centralbank.go.ke <ExternalLink className="w-3 h-3" />
                     </a>
                   </div>
+                  )}
                 </div>
               </CardContent>
             </Card>

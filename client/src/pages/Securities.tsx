@@ -11,8 +11,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Landmark, Plus, Trash2, CheckCircle2, Clock, Pencil, Link2, Info } from "lucide-react";
-import { useState, useMemo } from "react";
+import { Landmark, Plus, Trash2, CheckCircle2, Clock, Pencil, Link2, Info, RefreshCw, Wallet, RotateCcw } from "lucide-react";
+import { useState, useMemo, useEffect } from "react";
 import { toast } from "sonner";
 import { useForm, Controller } from "react-hook-form";
 
@@ -67,6 +67,13 @@ export default function Securities() {
     },
     onError: () => toast.error("Failed to remove security"),
   });
+  function invalidateAll() {
+    utils.securities.list.invalidate();
+    utils.deposits.list.invalidate({ portfolioId: portfolioId! });
+    utils.deposits.summary.invalidate({ portfolioId: portfolioId! });
+    utils.projection.run.invalidate({ portfolioId: portfolioId! });
+    utils.projection.milestones.invalidate({ portfolioId: portfolioId! });
+  }
   const updateMutation = trpc.securities.update.useMutation({
     onSuccess: (res) => {
       toast.success(
@@ -74,15 +81,26 @@ export default function Securities() {
           ? "Security updated — linked deposit synced"
           : "Security updated"
       );
-      utils.securities.list.invalidate();
-      utils.deposits.list.invalidate({ portfolioId: portfolioId! });
-      utils.deposits.summary.invalidate({ portfolioId: portfolioId! });
-      utils.projection.run.invalidate({ portfolioId: portfolioId! });
-      utils.projection.milestones.invalidate({ portfolioId: portfolioId! });
+      invalidateAll();
       setEditId(null);
     },
     onError: () => toast.error("Failed to update security"),
   });
+  const recycleMutation = trpc.securities.recycle.useMutation({
+    onSuccess: (res) => {
+      toast.success(
+        res?.mode === "mmf"
+          ? `Rolled KES ${Math.round(res.amount).toLocaleString()} into your primary MMF`
+          : `Re-bought KES ${Math.round(res?.amount ?? 0).toLocaleString()} on rollover`
+      );
+      invalidateAll();
+      setRecycleFor(null);
+    },
+    onError: () => toast.error("Failed to recycle security"),
+  });
+
+  // ── Maturity-recycling prompt state ────────────────────────────────────
+  const [recycleFor, setRecycleFor] = useState<NonNullable<typeof securities>[number] | null>(null);
 
   // Deposits list lets us flag which register rows have a linked deposit that
   // will be synced automatically when the security is edited.
@@ -331,11 +349,22 @@ export default function Securities() {
                           </td>
                           <td className="px-4 py-3 text-muted-foreground">
                             {new Date(s.maturityDate).toLocaleDateString("en-KE", { day: "numeric", month: "short", year: "numeric" })}
+                            {s.updatedAt && (
+                              <span className="block text-[10px] text-muted-foreground/60 mt-0.5">
+                                edited {new Date(s.updatedAt).toLocaleDateString("en-KE", { day: "numeric", month: "short", year: "numeric" })}
+                              </span>
+                            )}
                           </td>
                           <td className="px-4 py-3 text-right">
-                            <span className={days < 30 ? "text-destructive font-semibold" : days < 90 ? "text-primary font-medium" : "text-muted-foreground"}>
-                              {days > 0 ? `${days}d` : "Matured"}
-                            </span>
+                            {days > 0 ? (
+                              <span className={days < 30 ? "text-destructive font-semibold" : days < 90 ? "text-primary font-medium" : "text-muted-foreground"}>
+                                {days}d
+                              </span>
+                            ) : (
+                              <Badge variant="outline" className="text-xs border-amber-500/40 text-amber-400 gap-1">
+                                <Clock className="w-3 h-3" /> Due
+                              </Badge>
+                            )}
                           </td>
                           <td className="px-4 py-3 text-right text-foreground">
                             {isBondType ? formatPct(parseFloat(String(s.couponRate))) : "Discount"}
@@ -354,6 +383,17 @@ export default function Securities() {
                           </td>
                           <td className="px-4 py-3 text-right">
                             <div className="flex items-center justify-end gap-1">
+                              {days <= 0 && (
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="w-7 h-7 text-amber-400 hover:text-amber-300"
+                                  title="Recycle proceeds (roll into MMF or re-buy)"
+                                  onClick={() => setRecycleFor(s)}
+                                >
+                                  <RefreshCw className="w-3.5 h-3.5" />
+                                </Button>
+                              )}
                               <Button
                                 variant="ghost"
                                 size="icon"
@@ -410,11 +450,12 @@ export default function Securities() {
                       <th className="text-right px-4 py-3 text-muted-foreground font-medium">Face Value</th>
                       <th className="text-left px-4 py-3 text-muted-foreground font-medium">Maturity Date</th>
                       <th className="text-right px-4 py-3 text-muted-foreground font-medium">Coupon Rate</th>
+                      <th className="text-right px-4 py-3 text-muted-foreground font-medium">Action</th>
                     </tr>
                   </thead>
                   <tbody>
                     {matured.map((s) => (
-                      <tr key={s.id} className="border-b border-border/40 opacity-60">
+                      <tr key={s.id} className="border-b border-border/40">
                         <td className="px-4 py-2.5">
                           <Badge variant="outline" className="text-xs opacity-60">
                             {getSecurityLabel(s.securityType)}
@@ -428,6 +469,16 @@ export default function Securities() {
                         </td>
                         <td className="px-4 py-2.5 text-right text-muted-foreground">
                           {!s.securityType.startsWith("tbill") ? formatPct(parseFloat(String(s.couponRate))) : "Discount"}
+                        </td>
+                        <td className="px-4 py-2.5 text-right">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-7 gap-1.5 text-xs"
+                            onClick={() => setRecycleFor(s)}
+                          >
+                            <RefreshCw className="w-3 h-3" /> Roll over
+                          </Button>
                         </td>
                       </tr>
                     ))}
@@ -525,7 +576,117 @@ export default function Securities() {
             </form>
           </DialogContent>
         </Dialog>
+
+        {/* ── Maturity Recycling Dialog ──────────────────────────────── */}
+        <RecycleDialog
+          security={recycleFor}
+          onClose={() => setRecycleFor(null)}
+          onConfirm={(mode, amount, depositDate) =>
+            recycleFor && recycleMutation.mutate({ id: recycleFor.id, mode, amount, depositDate })
+          }
+          isPending={recycleMutation.isPending}
+        />
       </div>
     </AppShell>
+  );
+}
+
+// ── Maturity-recycling prompt ───────────────────────────────────────────────
+function RecycleDialog({
+  security,
+  onClose,
+  onConfirm,
+  isPending,
+}: {
+  security: { id: number; securityType: string; faceValue: string } | null;
+  onClose: () => void;
+  onConfirm: (mode: "mmf" | "rebuy", amount: number, depositDate: string) => void;
+  isPending: boolean;
+}) {
+  const face = security ? parseFloat(String(security.faceValue)) || 0 : 0;
+  const [amount, setAmount] = useState<number>(face);
+  const [depositDate, setDepositDate] = useState<string>(new Date().toISOString().split("T")[0]);
+
+  // Reset the form whenever a new security is selected.
+  useEffect(() => {
+    if (security) {
+      setAmount(parseFloat(String(security.faceValue)) || 0);
+      setDepositDate(new Date().toISOString().split("T")[0]);
+    }
+  }, [security]);
+
+  const typeLabel = security ? getSecurityLabel(security.securityType) : "";
+  const isGov = true; // every register row is a CBK security
+  void isGov;
+
+  return (
+    <Dialog open={security != null} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <RefreshCw className="w-4 h-4 text-amber-400" /> Recycle Matured Proceeds
+          </DialogTitle>
+        </DialogHeader>
+        <div className="space-y-4 mt-1">
+          <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-muted-foreground">
+            Your <span className="font-medium text-foreground">{typeLabel}</span> has reached
+            maturity. Choose where the redeemed cash goes — this marks the old lot closed and
+            records the redeployment so your live actuals stay accurate.
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label className="text-xs">Amount (KES)</Label>
+              <Input
+                type="number"
+                step="1000"
+                min="1"
+                value={Number.isFinite(amount) ? amount : 0}
+                onChange={(e) => setAmount(parseFloat(e.target.value) || 0)}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs">Redeploy date</Label>
+              <Input type="date" value={depositDate} onChange={(e) => setDepositDate(e.target.value)} />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 gap-2.5">
+            <button
+              type="button"
+              disabled={isPending || amount <= 0}
+              onClick={() => onConfirm("mmf", amount, depositDate)}
+              className="flex items-start gap-3 rounded-lg border border-border bg-card px-3 py-3 text-left transition-colors hover:border-primary/50 hover:bg-primary/5 disabled:opacity-50"
+            >
+              <Wallet className="w-4 h-4 text-primary mt-0.5 shrink-0" />
+              <span>
+                <span className="block text-sm font-medium text-foreground">Roll into primary MMF</span>
+                <span className="block text-xs text-muted-foreground">
+                  Park the cash in your money-market fund as a liquid deposit.
+                </span>
+              </span>
+            </button>
+            <button
+              type="button"
+              disabled={isPending || amount <= 0}
+              onClick={() => onConfirm("rebuy", amount, depositDate)}
+              className="flex items-start gap-3 rounded-lg border border-border bg-card px-3 py-3 text-left transition-colors hover:border-primary/50 hover:bg-primary/5 disabled:opacity-50"
+            >
+              <RotateCcw className="w-4 h-4 text-primary mt-0.5 shrink-0" />
+              <span>
+                <span className="block text-sm font-medium text-foreground">Re-buy the same instrument</span>
+                <span className="block text-xs text-muted-foreground">
+                  Create a fresh {typeLabel} for the same tenor, issued on the redeploy date.
+                </span>
+              </span>
+            </button>
+          </div>
+
+          <Button type="button" variant="outline" className="w-full" onClick={onClose} disabled={isPending}>
+            Cancel
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }

@@ -384,3 +384,11 @@
 - [x] R22.5 Frontend: edit dialog on CBK Securities page; linked rows show a chain icon + "updates automatically" note; invalidates deposits/projection/milestones on save.
 - [x] R22.6 Tests: server/round22.test.ts (6 tests) - projection 'today' selection, register re-valuation on face/type edit, deposit-sync bucket mapping. 136 tests pass; forward regression unchanged (m120 = KES 4,763,385, 0.00%); tsc clean.
 - [x] R22.7 UI verify (tsc clean, HMR applied, 136 tests pass); checkpoint; deliver.
+
+## Round 23 — Maturity recycling, drift badge, edit-history note
+- [x] R23.1 Schema: NO change needed — securities table already has updatedAt with onUpdateNow(), so the audit timestamp advances automatically on every edit.
+- [x] R23.2 Backend: securities.recycle procedure (mode 'mmf' rolls matured face into a primary-MMF deposit; mode 'rebuy' records a gov-security deposit + auto-creates a fresh linked register row, preserving original tenor), with getSecurityById + requirePortfolio ownership check and audit log. securities.update already stamps updatedAt via onUpdateNow.
+- [x] R23.3 Frontend Securities: maturity-recycling prompt — RefreshCw button on active rows past maturity (days<=0, shown as a 'Due' badge) + 'Roll over' button on matured rows; RecycleDialog with editable amount + redeploy date and two one-click choices (Roll into MMF / Re-buy same instrument).
+- [x] R23.4 Frontend Securities: 'edited {date}' note under the maturity-date cell on active register rows.
+- [x] R23.5 Sidebar: SidebarDriftBadge on the Dashboard nav item via shared useReconciliationDrift hook (amber 1-5%, red >5%, hidden <=1%), with tooltip.
+- [x] R23.6 Tests: server/round23.test.ts (8 tests) — re-buy keeps lot in pocket, mmf moves to MMF pocket, tenor preservation, drift thresholds. 144 tests pass; forward regression unchanged (m120 = KES 4,763,385, 0.00%); tsc clean.

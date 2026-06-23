@@ -811,6 +811,110 @@ export const appRouter = router({
         await deleteSecurity(input.id);
         return { success: true };
       }),
+
+    /**
+     * Recycle a matured security. Marks the original register row matured (so it
+     * leaves net worth), then redeploys the proceeds in one click:
+     *  - mode "mmf": records a primary-MMF deposit for the face value.
+     *  - mode "rebuy": records a fresh government-security deposit, which
+     *    auto-creates a new linked register row (same single-source-of-truth
+     *    flow as deposits.add), letting the user roll the T-bill/bond over.
+     */
+    recycle: protectedProcedure
+      .input(z.object({
+        id: z.number(),
+        mode: z.enum(["mmf", "rebuy"]),
+        // Defaults to the matured security's face value; editable for partial rollovers.
+        amount: z.number().positive().optional(),
+        // Defaults to today; the date the proceeds were redeployed.
+        depositDate: z.string().optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const existing = await getSecurityById(input.id);
+        if (!existing) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Security not found." });
+        }
+        const portfolio = await requirePortfolio(existing.portfolioId, ctx.user.id);
+        const portfolioId = existing.portfolioId;
+        const amount = input.amount ?? (parseFloat(String(existing.faceValue)) || 0);
+        if (amount <= 0) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Recycle amount must be positive." });
+        }
+        const depositDateStr = input.depositDate ?? new Date().toISOString().split("T")[0];
+        const depositDate = new Date(depositDateStr + "T12:00:00Z");
+
+        // 1) Retire the matured security so it no longer counts toward net worth.
+        if (!existing.isMatured) {
+          await updateSecurity(input.id, { isMatured: true } as Partial<typeof existing>);
+        }
+
+        if (input.mode === "mmf") {
+          // Roll proceeds into the primary MMF account.
+          await addDepositEntry({
+            portfolioId,
+            bucket: "mmf",
+            institutionType: "mmf_fund",
+            mmfFundId: portfolio.mmfFundId ?? null,
+            bankHoldingId: null,
+            amount: String(amount),
+            depositDate,
+            notes: `Recycled from matured ${existing.securityType} (face KES ${Number(existing.faceValue).toLocaleString()})`,
+          });
+        } else {
+          // Re-buy: same type/coupon/tax flag, new tenor from the redeploy date.
+          const bucket: "tbill" | "ifb" | "fxd" =
+            existing.securityType === "ifb" ? "ifb"
+            : existing.securityType === "fxd" ? "fxd"
+            : "tbill";
+          const entry = await addDepositEntry({
+            portfolioId,
+            bucket,
+            institutionType: "government_security",
+            mmfFundId: null,
+            bankHoldingId: null,
+            amount: String(amount),
+            depositDate,
+            notes: `Re-bought on rollover of matured ${existing.securityType}`,
+          });
+          // Preserve the original tenor length so the rollover matches the
+          // instrument being replaced (e.g. a 364-day bill rolls to 364 days).
+          const origIssue = new Date(existing.issueDate);
+          const origMaturity = new Date(existing.maturityDate);
+          const tenorMs = Math.max(origMaturity.getTime() - origIssue.getTime(), 0);
+          const tenorMonths = tenorMs > 0 ? Math.round(tenorMs / (1000 * 60 * 60 * 24 * 30.4375)) : (bucket === "tbill" ? 12 : 24);
+          const maturity = new Date(depositDate);
+          maturity.setMonth(maturity.getMonth() + Math.max(tenorMonths, 1));
+          const sec = await addSecurity({
+            portfolioId,
+            securityType: existing.securityType,
+            faceValue: String(amount),
+            issueDate: depositDate,
+            maturityDate: maturity,
+            couponRate: String(parseFloat(String(existing.couponRate)) || 0),
+            isTaxExempt: existing.isTaxExempt,
+            notes: `Rolled over from security #${existing.id} on ${depositDateStr}`,
+          });
+          if (sec?.id && entry?.id) {
+            await updateDepositEntry(entry.id, portfolioId, { securityId: sec.id } as never);
+          }
+        }
+
+        await addAuditLog({
+          portfolioId,
+          entity: "security",
+          action: "update",
+          field: `recycle_${input.mode}`,
+          newValue: String(amount),
+          changedByOpenId: ctx.user.openId,
+          changedByName: ctx.user.name ?? null,
+          summary:
+            input.mode === "mmf"
+              ? `Rolled matured ${existing.securityType} (KES ${amount.toLocaleString()}) into the primary MMF on ${depositDateStr}`
+              : `Re-bought ${existing.securityType} (KES ${amount.toLocaleString()}) on rollover on ${depositDateStr}`,
+        });
+
+        return { success: true, mode: input.mode, amount };
+      }),
   }),
 
   // ─── Deposit Entries (Live Actuals) ──────────────────────────────────────────

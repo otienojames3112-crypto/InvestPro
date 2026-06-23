@@ -34,6 +34,7 @@ import { Button } from "./ui/button";
 import { Skeleton } from "./ui/skeleton";
 import { trpc } from "@/lib/trpc";
 import { rateStaleness } from "@/lib/rateStaleness";
+import { useReconciliationDrift } from "@/hooks/useReconciliationDrift";
 import { Clock } from "lucide-react";
 
 /**
@@ -75,6 +76,34 @@ function SidebarRateStaleness({
         {s.isStale && <span className="font-semibold shrink-0">Update</span>}
       </div>
     </Link>
+  );
+}
+
+/**
+ * Reconciliation-drift badge shown next to the Dashboard nav item. Surfaces a
+ * small amber/red pill whenever live actuals diverge from the projection
+ * engine's seeded "today" value by more than ~1%, so portfolio drift is
+ * visible without opening the Dashboard reconciliation card. Hidden when the
+ * numbers match (or there is nothing to reconcile yet).
+ */
+function SidebarDriftBadge({ portfolioId }: { portfolioId: number | null | undefined }) {
+  const drift = useReconciliationDrift(portfolioId);
+  if (!drift || drift.level === "match") return null;
+  const tone =
+    drift.level === "major"
+      ? "bg-red-500/15 text-red-400 border-red-500/30"
+      : "bg-amber-500/15 text-amber-400 border-amber-500/30";
+  const sign = drift.delta >= 0 ? "+" : "−";
+  return (
+    <span
+      className={cn(
+        "shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] font-semibold leading-none tabular-nums",
+        tone
+      )}
+      title={`Live actuals are ${sign}${drift.absPct.toFixed(1)}% vs the projection engine's value for today. Open the Dashboard reconciliation card for details.`}
+    >
+      {sign}{drift.absPct.toFixed(1)}%
+    </span>
   );
 }
 
@@ -203,6 +232,7 @@ function SidebarContent({
                           )}
                         />
                         <span className="flex-1">{label}</span>
+                        {href === "/" && <SidebarDriftBadge portfolioId={portfolioId} />}
                         {isActive && <ChevronRight className="w-3 h-3 text-primary" />}
                       </div>
                     </Link>

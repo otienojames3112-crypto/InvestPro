@@ -91,12 +91,27 @@ export default function MmfAccrual() {
     { portfolioId: portfolioId! },
     { enabled: !!portfolioId }
   );
+  // Primary-MMF balance = primary-MMF deposit rows only. Bank-instrument and
+  // secondary-MMF deposits also carry bucket "mmf" but belong to their own
+  // accounts (each secondary is simulated separately below), and government
+  // securities live in the register, so all of those are excluded here.
+  const secondaryFundIds = useMemo(
+    () => new Set((secondaryMmfs ?? []).map((s) => s.mmfFundId).filter((id): id is number => typeof id === "number")),
+    [secondaryMmfs]
+  );
   const mmfBalance = useMemo(() => {
     if (!deposits) return 0;
     return deposits
-      .filter((d) => d.bucket === "mmf")
+      .filter((d) => {
+        if (d.bucket !== "mmf") return false;
+        const inst = (d as { institutionType?: string | null }).institutionType;
+        if (inst === "bank_instrument" || inst === "government_security") return false;
+        const fundId = (d as { mmfFundId?: number | null }).mmfFundId;
+        if (inst === "mmf_fund" && fundId != null && secondaryFundIds.has(fundId)) return false;
+        return true;
+      })
       .reduce((s, d) => s + Number(d.amount), 0);
-  }, [deposits]);
+  }, [deposits, secondaryFundIds]);
 
   // Primary fund accrual settings (fall back to sane defaults).
   const primaryDayCount = (fundRecord?.dayCountBasis as number) ?? 365;

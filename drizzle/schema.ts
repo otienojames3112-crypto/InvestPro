@@ -191,6 +191,13 @@ export const depositEntries = mysqlTable("deposit_entries", {
   mmfFundId: int("mmfFundId"),
   /** FK to bank_instrument_holdings.id when institutionType = bank_instrument */
   bankHoldingId: int("bankHoldingId"),
+  /**
+   * FK to securities.id when institutionType = government_security.
+   * A government-security deposit auto-creates a register row; this links the
+   * two so the register stays the single source of truth (no double-counting)
+   * and deleting the deposit can remove its register entry.
+   */
+  securityId: int("securityId"),
   amount: decimal("amount", { precision: 14, scale: 2 }).notNull(),
   depositDate: date("depositDate").notNull(),
   notes: text("notes"),

@@ -226,6 +226,14 @@ export default function Settings() {
     updatePortfolioMutation.mutate({ portfolioId, ...data });
   }
 
+  // Auto-derived MMF safety floor recommendation, recomputed live from the
+  // currently-entered starting contribution (falls back to the saved value).
+  const watchedContribution = planForm.watch("startingContribution");
+  const { data: derivedFloor } = trpc.settings.derivedSafetyFloor.useQuery(
+    { portfolioId: portfolioId!, startingContribution: Number(watchedContribution) || undefined },
+    { enabled: !!portfolioId }
+  );
+
   if (!portfolioId) {
     return (
       <AppShell>
@@ -296,7 +304,25 @@ export default function Settings() {
               <div className="space-y-1.5">
                 <Label className="text-xs font-medium">MMF Safety Floor (KES)</Label>
                 <Input type="number" step="1000" min="0" {...planForm.register("safetyFloor", { valueAsNumber: true })} />
-                <p className="text-xs text-muted-foreground">Minimum MMF balance kept before sweeping surplus into government securities (when your plan uses them)</p>
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-xs text-muted-foreground">Minimum MMF balance kept before sweeping surplus into government securities (when your plan uses them)</p>
+                </div>
+                {derivedFloor && (
+                  <div className="flex items-center gap-2 text-xs">
+                    <span className="text-muted-foreground">
+                      Recommended: <strong className="text-foreground">{derivedFloor.derived.toLocaleString("en-KE")}</strong>{" "}
+                      <span className="text-muted-foreground/70">(auto from your contribution &amp; sweep lot)</span>
+                    </span>
+                    <button
+                      type="button"
+                      className="text-primary hover:underline disabled:opacity-50"
+                      disabled={Number(planForm.watch("safetyFloor")) === derivedFloor.derived}
+                      onClick={() => planForm.setValue("safetyFloor", derivedFloor.derived, { shouldDirty: true })}
+                    >
+                      Use auto value
+                    </button>
+                  </div>
+                )}
               </div>
             </CardContent>
           </Card>

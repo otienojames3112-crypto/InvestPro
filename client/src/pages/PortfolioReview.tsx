@@ -95,14 +95,26 @@ export default function PortfolioReview() {
   );
 
   // ─── Net worth allocation ───────────────────────────────────────────────
+  // MMF bucket = primary-MMF deposit rows only. Bank- and secondary-MMF
+  // deposits are represented by their own balances (secondaryTotal / holdings),
+  // and government securities are valued from the REGISTER (source of truth),
+  // so those deposit rows are excluded here to avoid double-counting.
   const buckets = useMemo(() => {
     const acc = { mmf: 0, tbill: 0, ifb: 0, fxd: 0 };
     (deposits ?? []).forEach((d) => {
-      const k = d.bucket as keyof typeof acc;
-      if (k in acc) acc[k] += Number(d.amount);
+      const inst = (d as { institutionType?: string | null }).institutionType;
+      if (inst === "government_security" || inst === "bank_instrument") return;
+      if (d.bucket === "mmf") acc.mmf += Number(d.amount);
+    });
+    (securities ?? []).forEach((s) => {
+      if (s.isMatured) return;
+      const face = Number(s.faceValue);
+      if (s.securityType.startsWith("tbill")) acc.tbill += face;
+      else if (s.securityType === "ifb") acc.ifb += face;
+      else acc.fxd += face;
     });
     return acc;
-  }, [deposits]);
+  }, [deposits, securities]);
 
   const secondaryTotal = useMemo(
     () =>

@@ -5,6 +5,7 @@ import {
   type EngineSettings,
   type ActualDeposit,
   type ActualBankHolding,
+  type ActualSecurity,
   type SecondaryMmfInput,
 } from "./engine";
 
@@ -84,12 +85,19 @@ describe("actuals reconciliation — every pocket represented once", () => {
     expect(today.mmfEnd).toBeLessThan(115000);
   });
 
-  it("represents T-bill and FXD government-security deposits at face value (Fix #2)", () => {
+  it("represents T-bill and FXD government securities at face value, from the REGISTER (Fix #2)", () => {
+    // A government-security deposit auto-creates a register row; the engine
+    // builds the lot from the register (single source of truth), so we supply
+    // the gov holdings as register securities here.
     const deposits: ActualDeposit[] = [
       { bucket: "tbill", amount: 50000, depositDate: monthsAfter(START, 1, 15), institutionType: "government_security", mmfFundId: null },
       { bucket: "fxd", amount: 100000, depositDate: monthsAfter(START, 2, 1), institutionType: "government_security", mmfFundId: null },
     ];
-    const results = runProjection(SETTINGS, [], [], deposits, [], [], [], PRIMARY_FUND);
+    const securities: ActualSecurity[] = [
+      { securityType: "tbill_364", faceValue: 50000, issueDate: monthsAfter(START, 1, 15), maturityDate: monthsAfter(START, 13, 15), couponRate: 0, isTaxExempt: false, isMatured: false },
+      { securityType: "fxd", faceValue: 100000, issueDate: monthsAfter(START, 2, 1), maturityDate: monthsAfter(START, 26, 1), couponRate: 12.35, isTaxExempt: false, isMatured: false },
+    ];
+    const results = runProjection(SETTINGS, [], [], deposits, securities, [], [], PRIMARY_FUND);
     const today = todaySnapshot(results);
     // These would have been DROPPED entirely by the old engine.
     expect(today.tbillEnd).toBeCloseTo(50000, 0);
@@ -129,13 +137,17 @@ describe("actuals reconciliation — every pocket represented once", () => {
       { bucket: "mmf", amount: 30000, depositDate: monthsAfter(START, 1, 5), institutionType: "mmf_fund", mmfFundId: SECONDARY_FUND },
       { bucket: "mmf", amount: 200000, depositDate: monthsAfter(START, 2, 5), institutionType: "bank_instrument", mmfFundId: null },
     ];
+    const securities: ActualSecurity[] = [
+      { securityType: "tbill_364", faceValue: 50000, issueDate: monthsAfter(START, 1, 15), maturityDate: monthsAfter(START, 13, 15), couponRate: 0, isTaxExempt: false, isMatured: false },
+      { securityType: "fxd", faceValue: 100000, issueDate: monthsAfter(START, 2, 1), maturityDate: monthsAfter(START, 26, 1), couponRate: 12.35, isTaxExempt: false, isMatured: false },
+    ];
     const secondaries: SecondaryMmfInput[] = [
       { currentBalance: 30000, monthlyContribution: 0, ear: 12, whtRate: 15 },
     ];
     const bank: ActualBankHolding[] = [
       { principal: 200000, interestRate: 10.5, whtRate: 15, startDate: monthsAfter(START, 2, 5), isActive: true },
     ];
-    const results = runProjection(SETTINGS, [], [], deposits, [], secondaries, bank, PRIMARY_FUND);
+    const results = runProjection(SETTINGS, [], [], deposits, securities, secondaries, bank, PRIMARY_FUND);
     const today = todaySnapshot(results);
     const sumOfPockets =
       today.mmfEnd + today.tbillEnd + today.ifbEnd + today.fxdEnd + today.secondaryMmfEnd + today.bankEnd;

@@ -245,8 +245,15 @@ export async function getSecurities(portfolioId: number) {
 
 export async function addSecurity(data: InsertSecurity) {
   const db = await getDb();
-  if (!db) return;
+  if (!db) return null;
   await db.insert(securities).values(data);
+  const rows = await db
+    .select()
+    .from(securities)
+    .where(eq(securities.portfolioId, data.portfolioId))
+    .orderBy(desc(securities.id))
+    .limit(1);
+  return rows[0] ?? null;
 }
 
 export async function updateSecurity(id: number, data: Partial<InsertSecurity>) {
@@ -369,12 +376,36 @@ export async function addDepositEntry(data: InsertDepositEntry) {
   return rows[0] ?? null;
 }
 
-export async function deleteDepositEntry(id: number, portfolioId: number) {
+export async function updateDepositEntry(
+  id: number,
+  portfolioId: number,
+  data: Partial<InsertDepositEntry>,
+) {
   const db = await getDb();
   if (!db) return;
   await db
+    .update(depositEntries)
+    .set({ ...data, updatedAt: new Date() })
+    .where(and(eq(depositEntries.id, id), eq(depositEntries.portfolioId, portfolioId)));
+}
+
+export async function deleteDepositEntry(id: number, portfolioId: number) {
+  const db = await getDb();
+  if (!db) return;
+  // Cascade: a government-security deposit owns a register row; remove it too so
+  // the register stays the single source of truth (no orphaned holdings).
+  const existing = await db
+    .select()
+    .from(depositEntries)
+    .where(and(eq(depositEntries.id, id), eq(depositEntries.portfolioId, portfolioId)))
+    .limit(1);
+  const linkedSecurityId = (existing[0] as { securityId?: number | null } | undefined)?.securityId;
+  await db
     .delete(depositEntries)
     .where(and(eq(depositEntries.id, id), eq(depositEntries.portfolioId, portfolioId)));
+  if (linkedSecurityId) {
+    await db.delete(securities).where(eq(securities.id, linkedSecurityId));
+  }
 }
 
 export async function getActualsSummary(
@@ -395,6 +426,7 @@ export async function getActualsSummary(
 
   const secondaries = await getSecondaryMmfs(portfolioId);
   const bankHoldings = await getBankInstrumentHoldings(portfolioId);
+  const securityRows = await getSecurities(portfolioId);
 
   // Delegate the (double-counting-safe) aggregation to the pure, unit-tested helper.
   const agg = computeActualsTotals(
@@ -417,6 +449,13 @@ export async function getActualsSummary(
       isActive: !!b.isActive,
     })),
     { withholdingTax, mmfYield, tbillRate, fxdCouponRate },
+    securityRows.map((s) => ({
+      securityType: String(s.securityType),
+      faceValue: parseFloat(String(s.faceValue ?? "0")) || 0,
+      couponRate: parseFloat(String(s.couponRate ?? "0")) || 0,
+      isTaxExempt: !!s.isTaxExempt,
+      isMatured: !!s.isMatured,
+    })),
   );
 
   const annualFxdCouponIncome = agg.byBucket.fxd * (fxdCouponRate / 100);
@@ -425,6 +464,7 @@ export async function getActualsSummary(
   return {
     totalContributed: agg.totalContributed,
     depositsContributed: agg.depositsContributed,
+    securitiesValue: agg.securitiesValue,
     secondaryMmfBalance: agg.secondaryMmfBalance,
     bankBalance: agg.bankBalance,
     remainingToTarget,

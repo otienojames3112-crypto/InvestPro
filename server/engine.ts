@@ -256,19 +256,6 @@ export const SCENARIO_STEPUPS = [0, 500, 1000, 1500, 2000, 2500, 3000, 4000, 500
 /** Maximum starting contribution the solver will try before declaring infeasible. */
 const SOLVER_MAX_CONTRIBUTION = 1_000_000;
 
-const MILESTONE_LABELS: Record<number, string> = {
-  1:  "Still building the base. Do not panic if most money is still in MMF.",
-  2:  "Still building the base. Do not panic if most money is still in MMF.",
-  3:  "Growth stage. Coupons and reinvestment should begin helping noticeably.",
-  4:  "Growth stage. Coupons and reinvestment should begin helping noticeably.",
-  5:  "Growth stage. Coupons and reinvestment should begin helping noticeably.",
-  6:  "Growth stage. Coupons and reinvestment should begin helping noticeably.",
-  7:  "Growth stage. Coupons and reinvestment should begin helping noticeably.",
-  8:  "De-risking stage. More value should move toward T-bills and MMF.",
-  9:  "De-risking stage. More value should move toward T-bills and MMF.",
-  10: "Goal stage. Most or all money should be liquid or near-liquid.",
-};
-
 const DEFAULT_SETTINGS_FOR_MILESTONES: EngineSettings = {
   mmfYield: 8.78,
   tbill91Rate: 8.8206,
@@ -285,6 +272,32 @@ const DEFAULT_SETTINGS_FOR_MILESTONES: EngineSettings = {
   startDate: "2026-07-01",
   horizonMonths: 120,
 };
+
+/**
+ * The fixed lot size used by the monthly CBK sweep. Every gov-security purchase
+ * is a whole multiple of this; the MMF must keep at least one lot's worth of
+ * liquidity plus a working buffer before sweeping.
+ */
+export const SWEEP_LOT_SIZE = 50000;
+
+/**
+ * Auto-derive a sensible MMF safety floor from the user's contribution level and
+ * the sweep lot size — so the user does not have to set it by hand. The floor is
+ * the larger of (a) one sweep lot (you must always be able to keep a lot's worth
+ * liquid) and (b) ~2 months of the current monthly contribution (a short working
+ * buffer), rounded UP to a whole sweep lot for clean sweeps. The user may still
+ * override it explicitly; this only supplies the default.
+ */
+export function deriveSafetyFloor(
+  monthlyContribution: number,
+  lotSize: number = SWEEP_LOT_SIZE,
+  bufferMonths = 2,
+): number {
+  const byContribution = Math.max(0, monthlyContribution) * bufferMonths;
+  const raw = Math.max(lotSize, byContribution);
+  // Round up to a whole lot so the sweep arithmetic stays clean.
+  return Math.ceil(raw / lotSize) * lotSize;
+}
 
 // ─── Phase helpers ────────────────────────────────────────────────────────────
 
@@ -518,27 +531,11 @@ export function runProjection(
       }
     }
 
-    // Government-security deposits without a matching security register row are
-    // materialised as face-value lots dated to their deposit month, so they
-    // appear in the total and accrue/mature on real dates.
-    for (const d of actualDeposits) {
-      if (d.institutionType !== "government_security") continue;
-      if (d.bucket === "mmf") continue; // not a security
-      const offset = monthOffsetFromStart(d.depositDate, startDate) ?? 1;
-      const issueMonth = Math.max(1, offset);
-      const tenorMonths = d.bucket === "tbill" ? 12 : 24;
-      lots.push({
-        id: `actual-dep-${lotIdCounter++}`,
-        bucket: d.bucket as "tbill" | "ifb" | "fxd",
-        faceValue: d.amount,
-        issueMonth,
-        tenorMonths,
-        couponRate: d.bucket === "ifb" ? settings.ifbCouponRate : d.bucket === "fxd" ? settings.fxdCouponRate : 0,
-        isTaxExempt: d.bucket === "ifb",
-      });
-    }
-
-    // Logged securities from the register (preferred over inferred deposit lots).
+    // Government securities are sourced EXCLUSIVELY from the securities register
+    // (the single source of truth). A government-security deposit auto-creates a
+    // register row (see deposits.add in routers.ts), so we deliberately do NOT
+    // build a lot from the deposit itself — that would double-count the holding.
+    // Build every gov-security lot from the register below.
     for (const sec of actualSecurities) {
       if (sec.isMatured) continue;
       const issueDate = new Date(sec.issueDate + "T12:00:00Z");
@@ -722,7 +719,7 @@ export function runProjection(
     const noNewLongBonds = m > deRiskingEnd;
 
     if (!isActualMonth) {
-      const maxLots = Math.floor((mmf - settings.safetyFloor) / 50000);
+      const maxLots = Math.floor((mmf - settings.safetyFloor) / SWEEP_LOT_SIZE);
       if (maxLots > 0) {
         const target = getSweepTargetForMonth(m, sweepCount, horizonMonths, fractions, isShortHorizon);
         if (target) {
@@ -732,7 +729,7 @@ export function runProjection(
 
           sweepTarget = effectiveBucket.bucket;
           const lotsCount = maxLots;
-          const totalSweep = lotsCount * 50000;
+          const totalSweep = lotsCount * SWEEP_LOT_SIZE;
 
           if (mmf - totalSweep >= settings.safetyFloor) {
             mmf -= totalSweep;
@@ -850,9 +847,30 @@ export function runScenarios(
 // ─── Milestones ───────────────────────────────────────────────────────────────
 
 /**
- * Generate per-portfolio year-end milestones from a clean projection run.
- * Works for any horizon: generates one milestone per year up to horizonMonths.
+ * Build a milestone narrative from the portfolio's PHASE at that month, so the
+ * story matches any horizon (a 15-year plan no longer falls back to a generic
+ * "Year N checkpoint" for years 11+). The phase is derived from the portfolio's
+ * own phase fractions, not a hardcoded 10-year map.
  */
+export function phaseMilestoneLabel(
+  phase: "foundation" | "growth" | "de-risking" | "final-liquidity",
+  isFinalYear: boolean,
+): string {
+  if (isFinalYear) {
+    return "Goal stage. Most or all money should be liquid or near-liquid as you approach the target.";
+  }
+  switch (phase) {
+    case "foundation":
+      return "Foundation phase. Still building the base — do not worry if most money is still in the MMF and short T-bills.";
+    case "growth":
+      return "Growth phase. Coupons and reinvestment from IFBs and FXDs should start compounding noticeably.";
+    case "de-risking":
+      return "De-risking phase. Value should be shifting back toward T-bills and the MMF to lock in gains.";
+    case "final-liquidity":
+      return "Final-liquidity phase. Holdings should be mostly liquid or near-liquid, ready to draw down.";
+  }
+}
+
 export function generateMilestones(
   settings?: EngineSettings,
   secondaryMmfs: SecondaryMmfInput[] = []
@@ -868,12 +886,18 @@ export function generateMilestones(
     const row = results.find(r => r.monthNumber === month);
     if (!row) continue;
     const projected = row.totalEnd;
+    const phase = getPhase(month, horizonMonths, s.phaseFractions);
+    // The healthy checkpoint is 90% in the early phases (more variance is fine
+    // while building) and tightens to 95% once de-risking begins, since the
+    // plan should be converging on target.
+    const checkpointFrac = phase === "de-risking" || phase === "final-liquidity" ? 0.95 : 0.9;
+    const isFinalYear = month === horizonMonths || (year === totalYears);
     milestones.push({
       year,
       month,
       projectedTotal: Math.round(projected),
-      minHealthyCheckpoint: Math.round(projected * 0.9),
-      label: MILESTONE_LABELS[year] ?? `Year ${year} checkpoint.`,
+      minHealthyCheckpoint: Math.round(projected * checkpointFrac),
+      label: phaseMilestoneLabel(phase, isFinalYear),
     });
   }
   return milestones;

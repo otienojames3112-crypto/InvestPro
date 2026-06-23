@@ -90,6 +90,11 @@ export default function Scenarios() {
           <p className="text-sm text-muted-foreground mt-0.5">
             Side-by-side projections for different step-up amounts — see which path reaches {formatKES(targetAmount)} over {horizonMonths} months
           </p>
+          <p className="text-xs text-muted-foreground/80 mt-1.5 max-w-3xl">
+            These are <strong>forward-looking</strong> projections from today over the full {horizonMonths}-month horizon. They start from your scheduled
+            primary contribution and include your tracked secondary MMF accounts, but they do <strong>not</strong> replay past recorded deposits —
+            every scenario uses the same engine, target and accounts so the only thing that differs between them is the step-up.
+          </p>
         </div>
 
         {/* ── Your current plan: real status from the solver/projection ── */}

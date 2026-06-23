@@ -5,6 +5,7 @@ import {
   type SecondaryMmfActual,
   type BankHoldingActual,
   type ActualsRates,
+  type SecurityActual,
 } from "../shared/actuals";
 
 const RATES: ActualsRates = {
@@ -35,18 +36,38 @@ describe("destination-aware live actuals sync", () => {
     expect(r.depositsContributed).toBe(100000);
   });
 
-  it("reflects T-bill and FXD government-security deposits in their buckets", () => {
+  it("values T-bill and FXD government securities from the REGISTER, not the deposit row", () => {
+    // Register is the single source of truth: the deposit rows are excluded from
+    // the contribution sum, and the register securities supply the value.
     const deposits: DepositRow[] = [
       { amount: 50000, bucket: "tbill", institutionType: "government_security", mmfFundId: null },
       { amount: 80000, bucket: "fxd", institutionType: "government_security", mmfFundId: null },
     ];
-    const r = computeActualsTotals(deposits, [], [], RATES);
+    const securities: SecurityActual[] = [
+      { securityType: "tbill_364", faceValue: 50000, couponRate: 0, isTaxExempt: false },
+      { securityType: "fxd", faceValue: 80000, couponRate: 12.35, isTaxExempt: false },
+    ];
+    const r = computeActualsTotals(deposits, [], [], RATES, securities);
     expect(r.totalContributed).toBe(130000);
+    expect(r.securitiesValue).toBe(130000);
     expect(r.byBucket.tbill).toBe(50000);
     expect(r.byBucket.fxd).toBe(80000);
+    expect(r.depositsContributed).toBe(0); // gov deposit rows excluded from primary sum
     // FXD is taxable at 15% on the gross coupon; T-bill likewise.
     expect(r.taxBreakdown.fxd).toBeCloseTo(80000 * 0.1235 * 0.15, 2);
     expect(r.taxBreakdown.tbill).toBeCloseTo(50000 * 0.0897 * 0.15, 2);
+  });
+
+  it("does NOT double-count a government security (register + deposit both present)", () => {
+    const deposits: DepositRow[] = [
+      { amount: 50000, bucket: "tbill", institutionType: "government_security", mmfFundId: null },
+    ];
+    const securities: SecurityActual[] = [
+      { securityType: "tbill_364", faceValue: 50000, couponRate: 0, isTaxExempt: false },
+    ];
+    const r = computeActualsTotals(deposits, [], [], RATES, securities);
+    expect(r.totalContributed).toBe(50000); // not 100000
+    expect(r.securitiesValue).toBe(50000);
   });
 
   it("does NOT double-count a deposit attributed to a secondary MMF account", () => {
@@ -94,10 +115,15 @@ describe("destination-aware live actuals sync", () => {
     const bank: BankHoldingActual[] = [
       { principal: 200000, interestRate: 10.5, whtRate: 15, isActive: true },
     ];
-    const r = computeActualsTotals(deposits, secondaries, bank, RATES);
+    const securities: SecurityActual[] = [
+      { securityType: "tbill_364", faceValue: 50000, couponRate: 0, isTaxExempt: false },
+      { securityType: "fxd", faceValue: 80000, couponRate: 12.35, isTaxExempt: false },
+    ];
+    const r = computeActualsTotals(deposits, secondaries, bank, RATES, securities);
     // primary 100k + tbill 50k + fxd 80k + secondary 30k + bank 200k = 460k
     expect(r.totalContributed).toBe(460000);
-    expect(r.depositsContributed).toBe(230000); // 100k + 50k + 80k
+    expect(r.depositsContributed).toBe(100000); // only the primary-MMF deposit
+    expect(r.securitiesValue).toBe(130000);
     expect(r.secondaryMmfBalance).toBe(30000);
     expect(r.bankBalance).toBe(200000);
   });
@@ -111,12 +137,16 @@ describe("destination-aware live actuals sync", () => {
     expect(r.totalContributed).toBe(0);
   });
 
-  it("treats IFB coupons as tax-exempt", () => {
+  it("treats IFB coupons as tax-exempt (valued from register)", () => {
     const deposits: DepositRow[] = [
       { amount: 100000, bucket: "ifb", institutionType: "government_security", mmfFundId: null },
     ];
-    const r = computeActualsTotals(deposits, [], [], RATES);
+    const securities: SecurityActual[] = [
+      { securityType: "ifb", faceValue: 100000, couponRate: 13.5, isTaxExempt: true },
+    ];
+    const r = computeActualsTotals(deposits, [], [], RATES, securities);
     expect(r.byBucket.ifb).toBe(100000);
+    expect(r.securitiesValue).toBe(100000);
     expect(r.taxBreakdown.ifb).toBe(0);
   });
 });

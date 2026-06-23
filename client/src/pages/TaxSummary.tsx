@@ -65,15 +65,28 @@ export default function TaxSummary() {
     { enabled: !!portfolioId }
   );
 
-  // Bucket balances
+  // Bucket balances.
+  // MMF bucket = primary-MMF deposit rows only (gov-security, bank, and
+  // secondary-MMF deposits are represented by their own destinations and are
+  // excluded here to avoid double-counting). T-bill / IFB / FXD buckets come
+  // from the SECURITIES REGISTER — the single source of truth — using unmatured
+  // face values, so this page reconciles with the Dashboard's Live Net Worth.
   const buckets = useMemo(() => {
     const acc = { mmf: 0, tbill: 0, ifb: 0, fxd: 0 };
     (deposits ?? []).forEach((d) => {
-      const k = d.bucket as keyof typeof acc;
-      if (k in acc) acc[k] += Number(d.amount);
+      const inst = (d as { institutionType?: string | null }).institutionType;
+      if (inst === "government_security" || inst === "bank_instrument") return;
+      if (d.bucket === "mmf") acc.mmf += Number(d.amount);
+    });
+    (securities ?? []).forEach((s) => {
+      if (s.isMatured) return;
+      const face = Number(s.faceValue);
+      if (s.securityType.startsWith("tbill")) acc.tbill += face;
+      else if (s.securityType === "ifb") acc.ifb += face;
+      else acc.fxd += face;
     });
     return acc;
-  }, [deposits]);
+  }, [deposits, securities]);
 
   const whtRate = settings?.withholdingTax ?? 15;
   const mmfYield = fund.fundEar || settings?.mmfYield || 8.78;

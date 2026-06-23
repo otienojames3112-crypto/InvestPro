@@ -23,6 +23,7 @@ import {
   deleteContributionOverride,
   getDepositEntries,
   addDepositEntry,
+  updateDepositEntry,
   deleteDepositEntry,
   addRateHistorySnapshot,
   getRateHistory,
@@ -70,6 +71,8 @@ import {
   getScheduledContribution,
   generateMilestones,
   solveForContribution,
+  deriveSafetyFloor,
+  SWEEP_LOT_SIZE,
   SCENARIO_STEPUPS,
   type EngineSettings,
   type ActualDeposit,
@@ -233,7 +236,8 @@ const portfolioCreateInput = z.object({
   startingContribution: z.number().min(0),
   stepUpAmount: z.number().min(0),
   stepUpMonths: z.number().int().min(1).max(24),
-  safetyFloor: z.number().min(0),
+  // Optional: when omitted, the safety floor is auto-derived from the contribution.
+  safetyFloor: z.number().min(0).optional(),
   foundationFrac: z.number().min(0.05).max(0.5).optional(),
   growthFrac: z.number().min(0.1).max(0.7).optional(),
   deRiskingFrac: z.number().min(0.05).max(0.4).optional(),
@@ -339,7 +343,7 @@ export const appRouter = router({
         startingContribution: String(input.startingContribution),
         stepUpAmount: String(input.stepUpAmount),
         stepUpMonths: input.stepUpMonths,
-        safetyFloor: String(input.safetyFloor),
+        safetyFloor: String(input.safetyFloor ?? deriveSafetyFloor(input.startingContribution)),
         foundationFrac: String(input.foundationFrac ?? 0.20),
         growthFrac: String(input.growthFrac ?? 0.50),
         deRiskingFrac: String(input.deRiskingFrac ?? 0.15),
@@ -364,7 +368,7 @@ export const appRouter = router({
           startingContribution: String(input.startingContribution),
           stepUpAmount: String(input.stepUpAmount),
           stepUpMonths: input.stepUpMonths,
-          safetyFloor: String(input.safetyFloor),
+          safetyFloor: String(input.safetyFloor ?? deriveSafetyFloor(input.startingContribution)),
           foundationFrac: String(input.foundationFrac ?? 0.20),
           growthFrac: String(input.growthFrac ?? 0.50),
           deRiskingFrac: String(input.deRiskingFrac ?? 0.15),
@@ -407,6 +411,29 @@ export const appRouter = router({
         selectedFundName: selectedFund?.fundName ?? null,
         selectedFundCompany: selectedFund?.company ?? null,
         selectedFundEar: selectedFundEar,
+      };
+    }),
+
+    /**
+     * Auto-derived MMF safety floor for this portfolio, computed from its current
+     * monthly contribution and the sweep lot size. Returns the derived value, the
+     * value currently stored on the portfolio, and whether the stored value is an
+     * explicit override (i.e. differs from the derived default).
+     */
+    derivedSafetyFloor: protectedProcedure
+      .input(z.object({ portfolioId: z.number().int().positive(), startingContribution: z.number().min(0).optional() }))
+      .query(async ({ ctx, input }) => {
+      const p = await requirePortfolio(input.portfolioId, ctx.user.id);
+      const monthlyContribution = input.startingContribution ?? (parseFloat(String(p.startingContribution)) || 0);
+      const derived = deriveSafetyFloor(monthlyContribution);
+      const stored = parseFloat(String(p.safetyFloor)) || 0;
+      return {
+        derived,
+        stored,
+        lotSize: SWEEP_LOT_SIZE,
+        bufferMonths: 2,
+        monthlyContribution,
+        isOverridden: Math.abs(stored - derived) > 0.5,
       };
     }),
 
@@ -785,6 +812,42 @@ export const appRouter = router({
           depositDate: new Date(input.depositDate),
           notes: input.notes,
         });
+        // If the deposit targets a GOVERNMENT SECURITY, auto-create a register
+        // row (the single source of truth) and link it to the deposit so the
+        // engine + dashboard value it ONCE, from the register.
+        if (institutionType === "government_security" && entry) {
+          const [rates, fundEar] = await Promise.all([
+            getRateSettings(input.portfolioId),
+            getSelectedFundEar(await requirePortfolio(input.portfolioId, ctx.user.id)),
+          ]);
+          void fundEar;
+          // Map the legacy bucket to a register securityType + default tenor.
+          const securityType: "tbill_364" | "ifb" | "fxd" =
+            bucket === "tbill" ? "tbill_364" : bucket === "ifb" ? "ifb" : "fxd";
+          const tenorMonths = bucket === "tbill" ? 12 : 24;
+          const issue = new Date(input.depositDate + "T12:00:00Z");
+          const maturity = new Date(issue);
+          maturity.setMonth(maturity.getMonth() + tenorMonths);
+          const couponRate =
+            bucket === "ifb"
+              ? parseFloat(String(rates?.ifbCouponRate ?? "0")) || 0
+              : bucket === "fxd"
+                ? parseFloat(String(rates?.fxdCouponRate ?? "0")) || 0
+                : 0;
+          const sec = await addSecurity({
+            portfolioId: input.portfolioId,
+            securityType,
+            faceValue: String(input.amount),
+            issueDate: issue,
+            maturityDate: maturity,
+            couponRate: String(couponRate),
+            isTaxExempt: bucket === "ifb",
+            notes: `Auto-created from deposit on ${input.depositDate}`,
+          });
+          if (sec?.id) {
+            await updateDepositEntry(entry.id, input.portfolioId, { securityId: sec.id });
+          }
+        }
         // If the deposit targets a bank holding, increase its principal to keep actuals in sync.
         if (institutionType === "bank_instrument" && input.bankHoldingId) {
           const holdings = await getBankInstrumentHoldings(input.portfolioId);

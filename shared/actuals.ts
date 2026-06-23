@@ -1,15 +1,20 @@
+import { WHT_RATES, whtOn } from "./accrual";
+
 /**
  * Pure, framework-free aggregation of a portfolio's LIVE actuals (net worth)
- * across every destination the user owns: government-security + primary-MMF
- * deposit rows, secondary MMF account balances, and bank instrument principals.
+ * across every destination the user owns: primary-MMF deposit rows, the
+ * government-securities REGISTER (the single source of truth for T-bill/IFB/FXD),
+ * secondary MMF account balances, and bank instrument principals.
  *
  * This is the single source of truth used by `getActualsSummary` (server/db.ts)
  * and is unit-tested directly so the "deposit reflects everywhere" guarantee is
  * locked in without needing a live database.
  *
- * Double-counting rule: a deposit attributed to a secondary MMF fund or a bank
- * instrument is represented by that destination's running balance/principal, so
- * its deposit row must be EXCLUDED from the primary contribution sum.
+ * Double-counting rule: a deposit attributed to a secondary MMF fund, a bank
+ * instrument, OR a government security is represented by that destination's
+ * own running balance (secondary balance, bank principal) or register row
+ * (gov securities), so its deposit row must be EXCLUDED from the primary
+ * contribution sum. Only primary-MMF deposits feed `depositsContributed`.
  */
 
 export type DepositRow = {
@@ -17,6 +22,15 @@ export type DepositRow = {
   bucket: "mmf" | "tbill" | "ifb" | "fxd";
   institutionType?: string | null;
   mmfFundId?: number | null;
+};
+
+export type SecurityActual = {
+  /** "tbill_91" | "tbill_182" | "tbill_364" | "ifb" | "fxd" */
+  securityType: string;
+  faceValue: number;
+  couponRate: number; // annual %, gross
+  isTaxExempt: boolean;
+  isMatured?: boolean;
 };
 
 export type SecondaryMmfActual = {
@@ -45,16 +59,20 @@ export function computeActualsTotals(
   secondaries: SecondaryMmfActual[],
   bankHoldings: BankHoldingActual[],
   rates: ActualsRates,
+  securities: SecurityActual[] = [],
 ) {
   const secondaryFundIds = new Set(
     secondaries.map((s) => s.mmfFundId).filter((id): id is number => typeof id === "number"),
   );
 
+  // ── Primary-MMF deposits only ──────────────────────────────────────────────
+  // Government-security, bank-instrument, and secondary-MMF deposits are each
+  // represented by their own destination state (register / principal / balance),
+  // so they are excluded here to avoid double-counting.
   let depositsContributed = 0;
-  const byBucket = { mmf: 0, tbill: 0, ifb: 0, fxd: 0 };
-
   for (const row of deposits) {
     if (row.institutionType === "bank_instrument") continue;
+    if (row.institutionType === "government_security") continue;
     if (
       row.institutionType === "mmf_fund" &&
       row.mmfFundId != null &&
@@ -63,38 +81,65 @@ export function computeActualsTotals(
       continue;
     }
     depositsContributed += row.amount;
-    byBucket[row.bucket] += row.amount;
   }
 
+  // ── Government securities: valued from the REGISTER (source of truth) ────────
+  // All withholding tax flows through the shared `whtOn` helper and the
+  // `WHT_RATES` table in shared/accrual.ts, so there is one tax authority.
+  const govWht = rates.withholdingTax || WHT_RATES.tbill;
+  const byBucket = { mmf: depositsContributed, tbill: 0, ifb: 0, fxd: 0 };
+  let securitiesValue = 0;
+  let tbillTax = 0;
+  let fxdTax = 0;
+  for (const s of securities) {
+    if (s.isMatured) continue;
+    securitiesValue += s.faceValue;
+    const isTbill = s.securityType.startsWith("tbill");
+    const isIfb = s.securityType === "ifb";
+    if (isTbill) {
+      byBucket.tbill += s.faceValue;
+      // T-bill return is the discount; approximate annual interest = face * rate.
+      tbillTax += whtOn(s.faceValue * (rates.tbillRate / 100), govWht);
+    } else if (isIfb) {
+      byBucket.ifb += s.faceValue; // IFB coupons are tax-exempt in Kenya
+    } else {
+      // FXD bond
+      byBucket.fxd += s.faceValue;
+      const coupon = s.couponRate > 0 ? s.couponRate : rates.fxdCouponRate;
+      fxdTax += whtOn(s.faceValue * (coupon / 100), govWht);
+    }
+  }
+
+  // ── Secondary MMF accounts ───────────────────────────────────────────────────
   let secondaryMmfBalance = 0;
   let secondaryMmfTax = 0;
   for (const s of secondaries) {
-    const sWht = (s.whtRate ?? 15) / 100;
+    const sWht = s.whtRate ?? WHT_RATES.mmfInterest;
     secondaryMmfBalance += s.currentBalance;
-    secondaryMmfTax += s.currentBalance * (s.ear / 100) * sWht;
+    secondaryMmfTax += whtOn(s.currentBalance * (s.ear / 100), sWht);
   }
 
+  // ── Bank instruments ─────────────────────────────────────────────────────────
   let bankBalance = 0;
   let bankTax = 0;
   for (const b of bankHoldings) {
     if (b.isActive === false) continue;
-    const bWht = (b.whtRate ?? 15) / 100;
+    const bWht = b.whtRate ?? WHT_RATES.bankInterest;
     bankBalance += b.principal;
-    bankTax += b.principal * (b.interestRate / 100) * bWht;
+    bankTax += whtOn(b.principal * (b.interestRate / 100), bWht);
   }
 
-  const wht = rates.withholdingTax / 100;
-  const mmfTax = byBucket.mmf * (rates.mmfYield / 100) * wht;
-  const tbillTax = byBucket.tbill * (rates.tbillRate / 100) * wht;
-  const fxdTax = byBucket.fxd * (rates.fxdCouponRate / 100) * wht;
+  const mmfTax = whtOn(depositsContributed * (rates.mmfYield / 100), rates.withholdingTax || WHT_RATES.mmfInterest);
   const ifbTax = 0; // IFB coupons are tax-exempt in Kenya
 
-  const totalContributed = depositsContributed + secondaryMmfBalance + bankBalance;
+  const totalContributed =
+    depositsContributed + securitiesValue + secondaryMmfBalance + bankBalance;
   const taxLiability = mmfTax + tbillTax + ifbTax + fxdTax + secondaryMmfTax + bankTax;
 
   return {
     totalContributed,
     depositsContributed,
+    securitiesValue,
     secondaryMmfBalance,
     bankBalance,
     byBucket,

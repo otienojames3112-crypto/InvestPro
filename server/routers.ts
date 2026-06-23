@@ -823,9 +823,13 @@ export const appRouter = router({
     recycle: protectedProcedure
       .input(z.object({
         id: z.number(),
-        mode: z.enum(["mmf", "rebuy"]),
-        // Defaults to the matured security's face value; editable for partial rollovers.
+        // "split" rolls part of the proceeds into the MMF and re-buys the rest in one action.
+        mode: z.enum(["mmf", "rebuy", "split"]),
+        // For mmf/rebuy: defaults to the matured security's face value; editable for partial rollovers.
         amount: z.number().positive().optional(),
+        // For split: explicit portions. Each must be >= 0 and at least one positive.
+        mmfAmount: z.number().min(0).optional(),
+        rebuyAmount: z.number().min(0).optional(),
         // Defaults to today; the date the proceeds were redeployed.
         depositDate: z.string().optional(),
       }))
@@ -836,32 +840,56 @@ export const appRouter = router({
         }
         const portfolio = await requirePortfolio(existing.portfolioId, ctx.user.id);
         const portfolioId = existing.portfolioId;
-        const amount = input.amount ?? (parseFloat(String(existing.faceValue)) || 0);
-        if (amount <= 0) {
-          throw new TRPCError({ code: "BAD_REQUEST", message: "Recycle amount must be positive." });
-        }
         const depositDateStr = input.depositDate ?? new Date().toISOString().split("T")[0];
         const depositDate = new Date(depositDateStr + "T12:00:00Z");
+
+        // Resolve the MMF and re-buy portions for whichever mode was chosen.
+        const face = parseFloat(String(existing.faceValue)) || 0;
+        let mmfPortion = 0;
+        let rebuyPortion = 0;
+        if (input.mode === "mmf") {
+          mmfPortion = input.amount ?? face;
+        } else if (input.mode === "rebuy") {
+          rebuyPortion = input.amount ?? face;
+        } else {
+          // split — both portions explicit; default to a 50/50 face split if omitted.
+          mmfPortion = input.mmfAmount ?? face / 2;
+          rebuyPortion = input.rebuyAmount ?? face / 2;
+        }
+        mmfPortion = Math.round(mmfPortion * 100) / 100;
+        rebuyPortion = Math.round(rebuyPortion * 100) / 100;
+        const total = mmfPortion + rebuyPortion;
+        if (total <= 0) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Recycle amount must be positive." });
+        }
+        if (input.mode === "split" && (mmfPortion <= 0 || rebuyPortion <= 0)) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "A split rollover needs a positive amount on both the MMF and re-buy sides.",
+          });
+        }
 
         // 1) Retire the matured security so it no longer counts toward net worth.
         if (!existing.isMatured) {
           await updateSecurity(input.id, { isMatured: true } as Partial<typeof existing>);
         }
 
-        if (input.mode === "mmf") {
-          // Roll proceeds into the primary MMF account.
+        // 2a) Roll the MMF portion into the primary MMF account.
+        if (mmfPortion > 0) {
           await addDepositEntry({
             portfolioId,
             bucket: "mmf",
             institutionType: "mmf_fund",
             mmfFundId: portfolio.mmfFundId ?? null,
             bankHoldingId: null,
-            amount: String(amount),
+            amount: String(mmfPortion),
             depositDate,
             notes: `Recycled from matured ${existing.securityType} (face KES ${Number(existing.faceValue).toLocaleString()})`,
           });
-        } else {
-          // Re-buy: same type/coupon/tax flag, new tenor from the redeploy date.
+        }
+
+        // 2b) Re-buy: same type/coupon/tax flag, new tenor from the redeploy date.
+        if (rebuyPortion > 0) {
           const bucket: "tbill" | "ifb" | "fxd" =
             existing.securityType === "ifb" ? "ifb"
             : existing.securityType === "fxd" ? "fxd"
@@ -872,7 +900,7 @@ export const appRouter = router({
             institutionType: "government_security",
             mmfFundId: null,
             bankHoldingId: null,
-            amount: String(amount),
+            amount: String(rebuyPortion),
             depositDate,
             notes: `Re-bought on rollover of matured ${existing.securityType}`,
           });
@@ -887,7 +915,7 @@ export const appRouter = router({
           const sec = await addSecurity({
             portfolioId,
             securityType: existing.securityType,
-            faceValue: String(amount),
+            faceValue: String(rebuyPortion),
             issueDate: depositDate,
             maturityDate: maturity,
             couponRate: String(parseFloat(String(existing.couponRate)) || 0),
@@ -899,21 +927,25 @@ export const appRouter = router({
           }
         }
 
+        const summary =
+          input.mode === "mmf"
+            ? `Rolled matured ${existing.securityType} (KES ${mmfPortion.toLocaleString()}) into the primary MMF on ${depositDateStr}`
+            : input.mode === "rebuy"
+              ? `Re-bought ${existing.securityType} (KES ${rebuyPortion.toLocaleString()}) on rollover on ${depositDateStr}`
+              : `Split rollover of matured ${existing.securityType} on ${depositDateStr}: KES ${mmfPortion.toLocaleString()} to MMF + KES ${rebuyPortion.toLocaleString()} re-bought`;
+
         await addAuditLog({
           portfolioId,
           entity: "security",
           action: "update",
           field: `recycle_${input.mode}`,
-          newValue: String(amount),
+          newValue: String(total),
           changedByOpenId: ctx.user.openId,
           changedByName: ctx.user.name ?? null,
-          summary:
-            input.mode === "mmf"
-              ? `Rolled matured ${existing.securityType} (KES ${amount.toLocaleString()}) into the primary MMF on ${depositDateStr}`
-              : `Re-bought ${existing.securityType} (KES ${amount.toLocaleString()}) on rollover on ${depositDateStr}`,
+          summary,
         });
 
-        return { success: true, mode: input.mode, amount };
+        return { success: true, mode: input.mode, amount: total, mmfPortion, rebuyPortion };
       }),
   }),
 

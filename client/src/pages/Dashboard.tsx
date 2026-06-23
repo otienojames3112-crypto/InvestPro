@@ -51,9 +51,10 @@ import { useDepositDrawer } from "@/contexts/DepositDrawerContext";
 import { useSelectedFund } from "@/hooks/useSelectedFund";
 import { CreatePortfolioDialog } from "@/components/PortfolioSelector";
 import { Plus, Compass } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { rateStaleness } from "@/lib/rateStaleness";
+import { cn } from "@/lib/utils";
 
 function StatCard({
   title,
@@ -212,6 +213,24 @@ export default function Dashboard() {
     }
     return last;
   }, [projection]);
+
+  // Deep-link: when arriving via the sidebar drift badge (/?reconcile=1), scroll
+  // the reconciliation card into view and flash a brief highlight, then strip the
+  // query param so a refresh doesn't re-trigger it.
+  const reconcileRef = useRef<HTMLDivElement | null>(null);
+  const [reconcileFlash, setReconcileFlash] = useState(false);
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("reconcile") !== "1") return;
+    const timer = window.setTimeout(() => {
+      reconcileRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+      setReconcileFlash(true);
+      window.setTimeout(() => setReconcileFlash(false), 2200);
+    }, 300);
+    // Clean the param without adding a history entry.
+    window.history.replaceState({}, "", window.location.pathname);
+    return () => window.clearTimeout(timer);
+  }, []);
 
   const projectedFinalValue = lastData?.totalEnd ?? 0;
   const progressPct = targetAmount > 0 ? Math.min((projectedFinalValue / targetAmount) * 100, 100) : 0;
@@ -727,7 +746,14 @@ export default function Dashboard() {
           const ReconIcon = absPct <= 1 ? CheckCircle2 : AlertTriangle;
 
           return (
-            <Card>
+            <Card
+              ref={reconcileRef}
+              id="reconciliation-card"
+              className={cn(
+                "scroll-mt-24 transition-shadow duration-500",
+                reconcileFlash && "ring-2 ring-primary ring-offset-2 ring-offset-background shadow-lg"
+              )}
+            >
               <CardHeader className="pb-2">
                 <CardTitle className="text-sm font-semibold text-foreground flex items-center gap-2">
                   <Wallet className="w-4 h-4 text-primary" />

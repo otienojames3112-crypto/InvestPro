@@ -86,24 +86,40 @@ function SidebarRateStaleness({
  * visible without opening the Dashboard reconciliation card. Hidden when the
  * numbers match (or there is nothing to reconcile yet).
  */
-function SidebarDriftBadge({ portfolioId }: { portfolioId: number | null | undefined }) {
+function SidebarDriftBadge({
+  portfolioId,
+  onNavClick,
+}: {
+  portfolioId: number | null | undefined;
+  onNavClick?: () => void;
+}) {
+  const [, setLocation] = useLocation();
   const drift = useReconciliationDrift(portfolioId);
   if (!drift || drift.level === "match") return null;
   const tone =
     drift.level === "major"
-      ? "bg-red-500/15 text-red-400 border-red-500/30"
-      : "bg-amber-500/15 text-amber-400 border-amber-500/30";
+      ? "bg-red-500/15 text-red-400 border-red-500/30 hover:bg-red-500/25"
+      : "bg-amber-500/15 text-amber-400 border-amber-500/30 hover:bg-amber-500/25";
   const sign = drift.delta >= 0 ? "+" : "−";
   return (
-    <span
+    <button
+      type="button"
+      onClick={(e) => {
+        // The badge lives inside the Dashboard <Link>; intercept so we can add the
+        // deep-link param that tells the Dashboard to scroll to the reconciliation card.
+        e.preventDefault();
+        e.stopPropagation();
+        setLocation("/?reconcile=1");
+        onNavClick?.();
+      }}
       className={cn(
-        "shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] font-semibold leading-none tabular-nums",
+        "shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] font-semibold leading-none tabular-nums transition-colors cursor-pointer",
         tone
       )}
-      title={`Live actuals are ${sign}${drift.absPct.toFixed(1)}% vs the projection engine's value for today. Open the Dashboard reconciliation card for details.`}
+      title={`Live actuals are ${sign}${drift.absPct.toFixed(1)}% vs the projection engine's value for today. Click to open the Dashboard reconciliation card.`}
     >
       {sign}{drift.absPct.toFixed(1)}%
-    </span>
+    </button>
   );
 }
 
@@ -232,7 +248,7 @@ function SidebarContent({
                           )}
                         />
                         <span className="flex-1">{label}</span>
-                        {href === "/" && <SidebarDriftBadge portfolioId={portfolioId} />}
+                        {href === "/" && <SidebarDriftBadge portfolioId={portfolioId} onNavClick={onNavClick} />}
                         {isActive && <ChevronRight className="w-3 h-3 text-primary" />}
                       </div>
                     </Link>

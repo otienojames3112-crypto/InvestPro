@@ -392,3 +392,11 @@
 - [x] R23.4 Frontend Securities: 'edited {date}' note under the maturity-date cell on active register rows.
 - [x] R23.5 Sidebar: SidebarDriftBadge on the Dashboard nav item via shared useReconciliationDrift hook (amber 1-5%, red >5%, hidden <=1%), with tooltip.
 - [x] R23.6 Tests: server/round23.test.ts (8 tests) — re-buy keeps lot in pocket, mmf moves to MMF pocket, tenor preservation, drift thresholds. 144 tests pass; forward regression unchanged (m120 = KES 4,763,385, 0.00%); tsc clean.
+
+## Round 24 — Maturing-soon alert, partial recycling, drift badge deep-link
+- [x] R24.1 Backend: securities.recycle now accepts mode 'split' with mmfAmount + rebuyAmount; resolves portions (defaults 50/50), validates both legs > 0, retires the matured lot once, creates an MMF deposit + a re-buy gov deposit/register row in one action, and audit-logs the split summary. mmf/rebuy single modes still work.
+- [x] R24.2 Securities page: amber 'maturing soon' banner above the active table listing every active lot with days-to-maturity <= 30 (including overdue), sorted soonest-first, with face-value total and a per-lot Recycle button.
+- [x] R24.3 Securities page: RecycleDialog gained a 3-way mode switch (To MMF / Re-buy / Split); split mode shows a range slider + MMF/re-buy inputs (re-buy auto-computed as remainder) with validation that both sides are positive and sum to the total.
+- [x] R24.4 Sidebar drift badge: now a button that intercepts the click, navigates to /?reconcile=1, and closes the mobile drawer.
+- [x] R24.5 Dashboard: useEffect reads ?reconcile=1, smooth-scrolls the reconciliation card (id + ref, scroll-mt-24) into view, flashes a ~2.2s primary ring highlight, and strips the param via history.replaceState.
+- [x] R24.6 Tests: server/round24.test.ts (8 tests) — split allocation math + validation, split value-preservation across pockets, maturing-soon window. 152 tests pass; forward regression unchanged (m120 = KES 4,763,385, 0.00%); tsc clean.

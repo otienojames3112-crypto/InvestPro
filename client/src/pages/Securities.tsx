@@ -11,7 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Landmark, Plus, Trash2, CheckCircle2, Clock, Pencil, Link2, Info, RefreshCw, Wallet, RotateCcw } from "lucide-react";
+import { Landmark, Plus, Trash2, CheckCircle2, Clock, Pencil, Link2, Info, RefreshCw, Wallet, RotateCcw, AlertTriangle, SplitSquareHorizontal } from "lucide-react";
 import { useState, useMemo, useEffect } from "react";
 import { toast } from "sonner";
 import { useForm, Controller } from "react-hook-form";
@@ -88,15 +88,17 @@ export default function Securities() {
   });
   const recycleMutation = trpc.securities.recycle.useMutation({
     onSuccess: (res) => {
-      toast.success(
+      const msg =
         res?.mode === "mmf"
           ? `Rolled KES ${Math.round(res.amount).toLocaleString()} into your primary MMF`
-          : `Re-bought KES ${Math.round(res?.amount ?? 0).toLocaleString()} on rollover`
-      );
+          : res?.mode === "rebuy"
+            ? `Re-bought KES ${Math.round(res?.amount ?? 0).toLocaleString()} on rollover`
+            : `Split rollover: KES ${Math.round(res?.mmfPortion ?? 0).toLocaleString()} to MMF + KES ${Math.round(res?.rebuyPortion ?? 0).toLocaleString()} re-bought`;
+      toast.success(msg);
       invalidateAll();
       setRecycleFor(null);
     },
-    onError: () => toast.error("Failed to recycle security"),
+    onError: (err) => toast.error(err?.message ?? "Failed to recycle security"),
   });
 
   // ── Maturity-recycling prompt state ────────────────────────────────────
@@ -192,6 +194,18 @@ export default function Securities() {
   const matured = securities?.filter((s) => s.isMatured) ?? [];
 
   const totalFaceValue = active.reduce((sum, s) => sum + parseFloat(String(s.faceValue)), 0);
+
+  // Lots maturing within the next 30 days (including any already past due) so a
+  // rollover prompt is surfaced before the cash sits idle. Sorted soonest-first.
+  const maturingSoon = useMemo(
+    () =>
+      active
+        .map((s) => ({ s, days: daysUntil(s.maturityDate) }))
+        .filter(({ days }) => days <= 30)
+        .sort((a, b) => a.days - b.days),
+    [active]
+  );
+  const soonFaceValue = maturingSoon.reduce((sum, { s }) => sum + parseFloat(String(s.faceValue)), 0);
 
   return (
     <AppShell>
@@ -289,6 +303,52 @@ export default function Securities() {
             </Card>
           ))}
         </div>
+
+        {/* Maturing-soon alert */}
+        {maturingSoon.length > 0 && (
+          <div className="rounded-xl border border-amber-500/40 bg-amber-500/5 p-4 space-y-3">
+            <div className="flex items-start gap-3">
+              <div className="mt-0.5 rounded-lg bg-amber-500/15 p-1.5">
+                <AlertTriangle className="w-4 h-4 text-amber-400" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-semibold text-foreground">
+                  {maturingSoon.length} {maturingSoon.length === 1 ? "lot" : "lots"} maturing within 30 days
+                  <span className="text-muted-foreground font-normal"> · {formatKES(soonFaceValue)} face value</span>
+                </p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Roll these over so the proceeds keep earning instead of sitting idle.
+                </p>
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              {maturingSoon.map(({ s, days }) => (
+                <div
+                  key={s.id}
+                  className="flex items-center gap-3 rounded-lg border border-amber-500/20 bg-card/60 px-3 py-2"
+                >
+                  <Badge variant="outline" className="text-xs shrink-0">{getSecurityLabel(s.securityType)}</Badge>
+                  <span className="text-xs font-semibold text-foreground kes-amount shrink-0">
+                    {formatKES(parseFloat(String(s.faceValue)))}
+                  </span>
+                  <span className="text-xs text-muted-foreground flex-1 min-w-0 truncate">
+                    {days <= 0
+                      ? `Due · matured ${new Date(s.maturityDate).toLocaleDateString("en-KE", { day: "numeric", month: "short" })}`
+                      : `${days} day${days === 1 ? "" : "s"} left · ${new Date(s.maturityDate).toLocaleDateString("en-KE", { day: "numeric", month: "short" })}`}
+                  </span>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 gap-1.5 text-xs shrink-0 border-amber-500/40 text-amber-400 hover:bg-amber-500/10"
+                    onClick={() => setRecycleFor(s)}
+                  >
+                    <RefreshCw className="w-3 h-3" /> Recycle
+                  </Button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Active Securities */}
         <Card>
@@ -581,8 +641,8 @@ export default function Securities() {
         <RecycleDialog
           security={recycleFor}
           onClose={() => setRecycleFor(null)}
-          onConfirm={(mode, amount, depositDate) =>
-            recycleFor && recycleMutation.mutate({ id: recycleFor.id, mode, amount, depositDate })
+          onConfirm={(payload) =>
+            recycleFor && recycleMutation.mutate({ id: recycleFor.id, ...payload })
           }
           isPending={recycleMutation.isPending}
         />
@@ -592,6 +652,11 @@ export default function Securities() {
 }
 
 // ── Maturity-recycling prompt ───────────────────────────────────────────────
+type RecyclePayload =
+  | { mode: "mmf"; amount: number; depositDate: string }
+  | { mode: "rebuy"; amount: number; depositDate: string }
+  | { mode: "split"; mmfAmount: number; rebuyAmount: number; depositDate: string };
+
 function RecycleDialog({
   security,
   onClose,
@@ -600,24 +665,46 @@ function RecycleDialog({
 }: {
   security: { id: number; securityType: string; faceValue: string } | null;
   onClose: () => void;
-  onConfirm: (mode: "mmf" | "rebuy", amount: number, depositDate: string) => void;
+  onConfirm: (payload: RecyclePayload) => void;
   isPending: boolean;
 }) {
   const face = security ? parseFloat(String(security.faceValue)) || 0 : 0;
+  const [mode, setMode] = useState<"mmf" | "rebuy" | "split">("mmf");
   const [amount, setAmount] = useState<number>(face);
+  const [mmfAmount, setMmfAmount] = useState<number>(Math.round(face / 2));
   const [depositDate, setDepositDate] = useState<string>(new Date().toISOString().split("T")[0]);
 
   // Reset the form whenever a new security is selected.
   useEffect(() => {
     if (security) {
-      setAmount(parseFloat(String(security.faceValue)) || 0);
+      const f = parseFloat(String(security.faceValue)) || 0;
+      setMode("mmf");
+      setAmount(f);
+      setMmfAmount(Math.round(f / 2));
       setDepositDate(new Date().toISOString().split("T")[0]);
     }
   }, [security]);
 
   const typeLabel = security ? getSecurityLabel(security.securityType) : "";
-  const isGov = true; // every register row is a CBK security
-  void isGov;
+  // For split mode the re-buy side is whatever is left of the total amount.
+  const rebuyAmount = Math.max(Math.round((amount - mmfAmount) * 100) / 100, 0);
+  const splitValid = mode !== "split" || (mmfAmount > 0 && rebuyAmount > 0 && mmfAmount <= amount);
+  const canConfirm = !isPending && amount > 0 && splitValid;
+
+  function confirm() {
+    if (!canConfirm) return;
+    if (mode === "split") {
+      onConfirm({ mode: "split", mmfAmount, rebuyAmount, depositDate });
+    } else {
+      onConfirm({ mode, amount, depositDate });
+    }
+  }
+
+  const modes: { key: "mmf" | "rebuy" | "split"; label: string; icon: typeof Wallet }[] = [
+    { key: "mmf", label: "To MMF", icon: Wallet },
+    { key: "rebuy", label: "Re-buy", icon: RotateCcw },
+    { key: "split", label: "Split", icon: SplitSquareHorizontal },
+  ];
 
   return (
     <Dialog open={security != null} onOpenChange={(o) => !o && onClose()}>
@@ -634,15 +721,38 @@ function RecycleDialog({
             records the redeployment so your live actuals stay accurate.
           </div>
 
+          {/* Mode switch */}
+          <div className="grid grid-cols-3 gap-1.5 rounded-lg bg-muted/40 p-1">
+            {modes.map(({ key, label, icon: Icon }) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setMode(key)}
+                className={
+                  "flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium transition-colors " +
+                  (mode === key
+                    ? "bg-card text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground")
+                }
+              >
+                <Icon className="w-3.5 h-3.5" /> {label}
+              </button>
+            ))}
+          </div>
+
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
-              <Label className="text-xs">Amount (KES)</Label>
+              <Label className="text-xs">{mode === "split" ? "Total proceeds (KES)" : "Amount (KES)"}</Label>
               <Input
                 type="number"
                 step="1000"
                 min="1"
                 value={Number.isFinite(amount) ? amount : 0}
-                onChange={(e) => setAmount(parseFloat(e.target.value) || 0)}
+                onChange={(e) => {
+                  const v = parseFloat(e.target.value) || 0;
+                  setAmount(v);
+                  if (mmfAmount > v) setMmfAmount(v);
+                }}
               />
             </div>
             <div className="space-y-1.5">
@@ -651,40 +761,73 @@ function RecycleDialog({
             </div>
           </div>
 
-          <div className="grid grid-cols-1 gap-2.5">
-            <button
-              type="button"
-              disabled={isPending || amount <= 0}
-              onClick={() => onConfirm("mmf", amount, depositDate)}
-              className="flex items-start gap-3 rounded-lg border border-border bg-card px-3 py-3 text-left transition-colors hover:border-primary/50 hover:bg-primary/5 disabled:opacity-50"
-            >
-              <Wallet className="w-4 h-4 text-primary mt-0.5 shrink-0" />
-              <span>
-                <span className="block text-sm font-medium text-foreground">Roll into primary MMF</span>
-                <span className="block text-xs text-muted-foreground">
-                  Park the cash in your money-market fund as a liquid deposit.
+          {/* Split allocation */}
+          {mode === "split" && (
+            <div className="space-y-2 rounded-lg border border-border bg-card/50 px-3 py-3">
+              <div className="flex items-center justify-between text-xs">
+                <span className="flex items-center gap-1.5 text-muted-foreground">
+                  <Wallet className="w-3.5 h-3.5 text-primary" /> To MMF
                 </span>
-              </span>
-            </button>
-            <button
-              type="button"
-              disabled={isPending || amount <= 0}
-              onClick={() => onConfirm("rebuy", amount, depositDate)}
-              className="flex items-start gap-3 rounded-lg border border-border bg-card px-3 py-3 text-left transition-colors hover:border-primary/50 hover:bg-primary/5 disabled:opacity-50"
-            >
-              <RotateCcw className="w-4 h-4 text-primary mt-0.5 shrink-0" />
-              <span>
-                <span className="block text-sm font-medium text-foreground">Re-buy the same instrument</span>
-                <span className="block text-xs text-muted-foreground">
-                  Create a fresh {typeLabel} for the same tenor, issued on the redeploy date.
+                <span className="flex items-center gap-1.5 text-muted-foreground">
+                  Re-buy <RotateCcw className="w-3.5 h-3.5 text-primary" />
                 </span>
-              </span>
-            </button>
-          </div>
+              </div>
+              <input
+                type="range"
+                min={0}
+                max={amount}
+                step={1000}
+                value={mmfAmount}
+                onChange={(e) => setMmfAmount(parseFloat(e.target.value) || 0)}
+                className="w-full accent-primary"
+              />
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex-1 space-y-1">
+                  <Label className="text-[10px] text-muted-foreground">MMF portion</Label>
+                  <Input
+                    type="number"
+                    step="1000"
+                    min="0"
+                    max={amount}
+                    value={Number.isFinite(mmfAmount) ? mmfAmount : 0}
+                    onChange={(e) => setMmfAmount(Math.min(parseFloat(e.target.value) || 0, amount))}
+                    className="h-8 text-xs"
+                  />
+                </div>
+                <div className="flex-1 space-y-1">
+                  <Label className="text-[10px] text-muted-foreground">Re-buy portion</Label>
+                  <Input
+                    type="number"
+                    value={Number.isFinite(rebuyAmount) ? rebuyAmount : 0}
+                    readOnly
+                    className="h-8 text-xs bg-muted/40"
+                  />
+                </div>
+              </div>
+              {!splitValid && (
+                <p className="text-[11px] text-destructive">
+                  Both sides must be greater than zero and sum to the total proceeds.
+                </p>
+              )}
+            </div>
+          )}
 
-          <Button type="button" variant="outline" className="w-full" onClick={onClose} disabled={isPending}>
-            Cancel
-          </Button>
+          {mode !== "split" && (
+            <p className="text-xs text-muted-foreground">
+              {mode === "mmf"
+                ? "Parks the full amount in your money-market fund as a liquid deposit."
+                : `Creates a fresh ${typeLabel} for the same tenor, issued on the redeploy date.`}
+            </p>
+          )}
+
+          <div className="flex gap-2">
+            <Button type="button" variant="outline" className="flex-1" onClick={onClose} disabled={isPending}>
+              Cancel
+            </Button>
+            <Button type="button" className="flex-1" onClick={confirm} disabled={!canConfirm}>
+              {isPending ? "Recycling…" : mode === "split" ? "Split & redeploy" : mode === "mmf" ? "Roll into MMF" : "Re-buy"}
+            </Button>
+          </div>
         </div>
       </DialogContent>
     </Dialog>

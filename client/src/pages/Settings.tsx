@@ -126,7 +126,7 @@ function RateHistorySection({ portfolioId }: { portfolioId: number }) {
 
 export default function Settings() {
   const { portfolioId, portfolio, refetch: refetchPortfolios } = usePortfolio();
-  const { fundLabel: selectedFundLabel, fundEar: selectedFundEar } = useSelectedFund();
+  const { fundLabel: selectedFundLabel, fundEar: selectedFundEar, hasFund } = useSelectedFund();
   const utils = trpc.useUtils();
 
   // ─── Rate form ──────────────────────────────────────────────────────────────
@@ -177,6 +177,10 @@ export default function Settings() {
     if (!portfolioId) return;
     saveRatesMutation.mutate({ portfolioId, ...data });
   }
+
+  // Single coherent WHT chain shared by every rate label on this page.
+  const whtPct = Number(rateForm.watch("withholdingTax")) || 15;
+  const whtFrac = whtPct / 100;
 
   // ─── Plan form ──────────────────────────────────────────────────────────────
   const planForm = useForm<PlanForm>({
@@ -346,10 +350,25 @@ export default function Settings() {
                 <SettingsIcon className="w-4 h-4 text-primary" />
                 {selectedFundLabel} Yield
               </CardTitle>
-              <p className="text-xs text-muted-foreground mt-1">Enter the gross effective annual yield shown by {selectedFundLabel}. Current fund EAR: {selectedFundEar.toFixed(2)}%.</p>
+              <p className="text-xs text-muted-foreground mt-1">
+                {hasFund
+                  ? `The projection uses ${selectedFundLabel}'s effective annual yield (gross). Change it on the MMF Strategy page by switching funds — this field is informational while a fund is selected.`
+                  : "No MMF fund selected — the projection uses this manual gross yield as a fallback. Select a fund on the MMF Strategy page to drive it from the fund's published EAR."}
+              </p>
             </CardHeader>
             <CardContent className="p-4 pt-0 grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <RateField label={`${selectedFundLabel} Annual Yield (Gross)`} name="mmfYield" register={rateForm.register} description={`Current EAR: ${selectedFundEar.toFixed(2)}% → net ≈ ${(selectedFundEar * 0.85).toFixed(2)}%`} />
+              {hasFund ? (
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-medium">{selectedFundLabel} Annual Yield (Gross) — authoritative</Label>
+                  <div className="flex items-baseline gap-2 rounded-md border border-border bg-muted/40 px-3 py-2">
+                    <span className="text-lg font-semibold text-foreground">{selectedFundEar.toFixed(2)}%</span>
+                    <span className="text-xs text-muted-foreground">gross → net ≈ {(selectedFundEar * (1 - whtFrac)).toFixed(2)}% after {whtPct.toFixed(0)}% WHT</span>
+                  </div>
+                  <p className="text-xs text-muted-foreground">Driven by the selected fund; the manual MMF yield below is ignored while a fund is active.</p>
+                </div>
+              ) : (
+                <RateField label="MMF Annual Yield (Gross, fallback)" name="mmfYield" register={rateForm.register} description={`Used only when no fund is selected. Net ≈ ${(Number(rateForm.watch("mmfYield") || 0) * (1 - whtFrac)).toFixed(2)}% after ${whtPct.toFixed(0)}% WHT`} />
+              )}
             </CardContent>
           </Card>
 
@@ -372,7 +391,7 @@ export default function Settings() {
             </CardHeader>
             <CardContent className="p-4 pt-0 grid grid-cols-1 sm:grid-cols-3 gap-4">
               <RateField label="IFB Coupon Rate (Gross = Net)" name="ifbCouponRate" register={rateForm.register} description="Tax-exempt. Default: 12.5%" />
-              <RateField label="FXD Coupon Rate (Gross)" name="fxdCouponRate" register={rateForm.register} description="Default: 12.35% → net ≈ 10.5%" />
+              <RateField label="FXD Coupon Rate (Gross)" name="fxdCouponRate" register={rateForm.register} description={`Default 12.35%. Net ≈ ${(Number(rateForm.watch("fxdCouponRate") || 0) * (1 - whtFrac)).toFixed(2)}% after ${whtPct.toFixed(0)}% WHT`} />
               <RateField label="Withholding Tax Rate" name="withholdingTax" register={rateForm.register} description="Default: 15%" />
             </CardContent>
           </Card>

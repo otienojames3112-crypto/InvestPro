@@ -21,6 +21,7 @@ import TaxSummary from "./pages/TaxSummary";
 import MmfStrategy from "./pages/MmfStrategy";
 import BankInstruments from "./pages/BankInstruments";
 import PortfolioReview from "./pages/PortfolioReview";
+import Reconciliation from "./pages/Reconciliation";
 
 function Router() {
   return (
@@ -39,6 +40,7 @@ function Router() {
       <Route path="/bank-instruments" component={BankInstruments} />
       <Route path="/tax-summary" component={TaxSummary} />
       <Route path="/portfolio-review" component={PortfolioReview} />
+      <Route path="/reconciliation" component={Reconciliation} />
       <Route path="/other-assets" component={OtherAssets} />
       <Route path="/404" component={NotFound} />
       <Route component={NotFound} />

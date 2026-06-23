@@ -199,8 +199,8 @@ describe("runProjection", () => {
   });
 
   it("year-10 total (month 120) is in the range KES 4M–5.5M (corrected engine)", () => {
-    // Corrected engine (no double-counting): month-120 ≈ KES 4,763,385
-    // KES 3,500 step-up is needed to hit KES 5M
+    // Allocation-targeted sweep (Round 26): month-120 ≈ KES 5,010,535 with the
+    // baseline KES 3,000 step-up.
     expect(results[119].totalEnd).toBeGreaterThan(4000000);
     expect(results[119].totalEnd).toBeLessThan(5500000);
   });
@@ -278,12 +278,18 @@ describe("runScenarios", () => {
     expect(scenarios).toHaveLength(9);
   });
 
-  it("KES 3,000 step-up does NOT hit the KES 5M target (corrected engine)", () => {
-    // Corrected engine: KES 3,000 step-up → KES 4,763,385 (short of 5M)
-    // KES 3,500 step-up is the minimum that hits 5M
+  it("KES 3,000 step-up reaches the KES 5M target (allocation-targeted sweep)", () => {
+    // Round 26: the corrected sweep deploys surplus toward the phase mix and the
+    // baseline KES 3,000 step-up now lands at ≈ KES 5,010,535 — just clearing 5M.
     const s3000 = scenarios.find(s => s.stepUp === 3000)!;
-    expect(s3000.hitsTarget).toBe(false);
-    expect(s3000.projectedEndingValue).toBeLessThan(5000000);
+    expect(s3000.hitsTarget).toBe(true);
+    expect(s3000.projectedEndingValue).toBeGreaterThanOrEqual(5000000);
+  });
+
+  it("KES 2,000 step-up does NOT hit the KES 5M target", () => {
+    const s2000 = scenarios.find(s => s.stepUp === 2000)!;
+    expect(s2000.hitsTarget).toBe(false);
+    expect(s2000.projectedEndingValue).toBeLessThan(5000000);
   });
 
   it("KES 0 step-up does not hit the KES 5M target", () => {
@@ -330,9 +336,9 @@ describe("checkMilestones", () => {
   it("all 10 year-end milestones are defined in YEAR_MILESTONES", () => {
     expect(YEAR_MILESTONES).toHaveLength(10);
     expect(YEAR_MILESTONES[9].month).toBe(120);
-    // Corrected engine: month-120 ≈ KES 4,763,385 (not the old buggy 5,279,234)
+    // Allocation-targeted sweep (Round 26): month-120 ≈ KES 5,010,535.
     expect(YEAR_MILESTONES[9].projectedTotal).toBeGreaterThan(4500000);
-    expect(YEAR_MILESTONES[9].projectedTotal).toBeLessThan(5100000);
+    expect(YEAR_MILESTONES[9].projectedTotal).toBeLessThan(5300000);
   });
 });
 
@@ -419,7 +425,7 @@ describe("target amount change", () => {
   });
 
   it("changing target changes whether the plan is on-track (milestone check)", () => {
-    // Use corrected engine's M120 value (~4,763,385) for comparison
+    // Use corrected engine's M120 value (≈ 5,010,535) for comparison
     const correctedM120 = runProjection({ ...DEFAULT_SETTINGS, startDate: "2026-07-01" })[119].totalEnd;
     // At or above projected total → ahead
     const onTrack = checkMilestones(120, correctedM120 + 1, { ...DEFAULT_SETTINGS, startDate: "2026-07-01", targetAmount: 5000000 });

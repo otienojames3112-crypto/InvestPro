@@ -44,6 +44,13 @@ export default function Ledger() {
 
   const startDate = portfolio?.startDate ? String(portfolio.startDate).split("T")[0] : "2026-07-01";
 
+  // Where do recorded actuals end and the forward projection begin? The engine
+  // tags every month it seeded from real holdings with isActual=true.
+  const actualMonths = (projection ?? []).filter((r) => r.isActual).length;
+  const lastActualMonth = actualMonths > 0
+    ? Math.max(...(projection ?? []).filter((r) => r.isActual).map((r) => r.monthNumber))
+    : 0;
+
   return (
     <AppShell>
       <div className="p-6 lg:p-8 space-y-6">
@@ -53,7 +60,9 @@ export default function Ledger() {
               Month-by-Month Ledger
             </h1>
             <p className="text-sm text-muted-foreground mt-0.5">
-              Complete 120-month projection of your investment journey
+              {lastActualMonth > 0
+                ? `Months 1–${lastActualMonth} reflect your recorded holdings; later months are a forward projection.`
+                : "Complete forward projection of your investment journey. Record deposits to anchor early months to actuals."}
             </p>
           </div>
           <Button
@@ -72,7 +81,11 @@ export default function Ledger() {
           <CardHeader className="pb-3">
             <div className="flex items-center gap-3">
               <BookOpen className="w-4 h-4 text-primary" />
-              <CardTitle className="text-sm font-semibold">Transaction Ledger</CardTitle>
+                <CardTitle className="text-sm font-semibold">Transaction Ledger</CardTitle>
+              <div className="hidden sm:flex items-center gap-3 text-[11px] text-muted-foreground">
+                <span className="inline-flex items-center gap-1.5"><span className="inline-block w-2.5 h-2.5 rounded-sm bg-emerald-500/30 border border-emerald-500/50" />Actual</span>
+                <span className="inline-flex items-center gap-1.5"><span className="inline-block w-2.5 h-2.5 rounded-sm bg-muted border border-border" />Projected</span>
+              </div>
               <div className="ml-auto flex items-center gap-2">
                 <div className="relative">
                   <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
@@ -92,6 +105,7 @@ export default function Ledger() {
                 <thead>
                   <tr className="border-b border-border bg-muted/30">
                     <th className="text-left px-4 py-3 text-muted-foreground font-medium whitespace-nowrap">Mth</th>
+                    <th className="text-left px-4 py-3 text-muted-foreground font-medium whitespace-nowrap">Basis</th>
                     <th className="text-left px-4 py-3 text-muted-foreground font-medium whitespace-nowrap">Date</th>
                     <th className="text-right px-4 py-3 text-muted-foreground font-medium whitespace-nowrap">Save</th>
                     <th className="text-right px-4 py-3 text-muted-foreground font-medium whitespace-nowrap">CBK In</th>
@@ -109,7 +123,7 @@ export default function Ledger() {
                   {isLoading
                     ? Array.from({ length: 10 }).map((_, i) => (
                         <tr key={i} className="border-b border-border/50">
-                          {Array.from({ length: 12 }).map((_, j) => (
+                          {Array.from({ length: 13 }).map((_, j) => (
                             <td key={j} className="px-4 py-3">
                               <Skeleton className="h-3 w-full" />
                             </td>
@@ -119,9 +133,20 @@ export default function Ledger() {
                     : paged.map((r) => (
                         <tr
                           key={r.monthNumber}
-                          className="border-b border-border/40 hover:bg-muted/20 transition-colors"
+                          className={`border-b border-border/40 transition-colors ${
+                            r.isActual
+                              ? "bg-emerald-500/5 hover:bg-emerald-500/10"
+                              : "hover:bg-muted/20"
+                          } ${r.monthNumber === lastActualMonth ? "border-b-2 border-b-emerald-500/40" : ""}`}
                         >
                           <td className="px-4 py-2.5 font-semibold text-foreground">{r.monthNumber}</td>
+                          <td className="px-4 py-2.5">
+                            {r.isActual ? (
+                              <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-emerald-500/40 text-emerald-300">Actual</Badge>
+                            ) : (
+                              <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-border text-muted-foreground">Proj.</Badge>
+                            )}
+                          </td>
                           <td className="px-4 py-2.5 text-muted-foreground whitespace-nowrap">
                             {getMonthLabel(startDate, r.monthNumber)}
                           </td>

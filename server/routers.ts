@@ -83,6 +83,7 @@ import {
   type SecondaryMmfInput,
 } from "./engine";
 import { COOKIE_NAME } from "../shared/const";
+import { reconcile, reconcileMmf } from "../shared/reconciliation";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -506,6 +507,98 @@ export const appRouter = router({
       const settings = dbToEngine(rates, p, fundEar);
       const secondaryMmfs = mapSecondaryMmfs(await getSecondaryMmfs(input.portfolioId));
       return generateMilestones(settings, secondaryMmfs);
+    }),
+
+    /**
+     * Reconciliation: independently recompute the portfolio's "today" value from
+     * five sources and assert they agree. Reuses the EXACT helpers the live pages
+     * use (getActualsSummary + runProjection) so any disagreement surfaces here.
+     */
+    reconciliation: protectedProcedure.input(portfolioIdInput).query(async ({ ctx, input }) => {
+      const p = await requirePortfolio(input.portfolioId, ctx.user.id);
+      const [rates, fundEar] = await Promise.all([getRateSettings(input.portfolioId), getSelectedFundEar(p)]);
+      const settings = dbToEngine(rates, p, fundEar);
+
+      // ── Principal-basis sources (the same path the Dashboard uses) ──
+      const summary = await getActualsSummary(
+        input.portfolioId,
+        settings.targetAmount,
+        settings.withholdingTax,
+        settings.fxdCouponRate,
+        settings.mmfYield,
+        settings.tbill364Rate,
+      );
+
+      const secondaries = await getSecondaryMmfs(input.portfolioId);
+      const bank = await getBankInstrumentHoldings(input.portfolioId);
+      const securities = await getSecurities(input.portfolioId);
+
+      const primaryMmfBalance = summary?.depositsContributed ?? 0;
+      const secondaryMmfBalances = secondaries.map((s) => parseFloat(String(s.currentBalance ?? "0")) || 0);
+      const bankHoldingPrincipals = bank
+        .filter((b) => b.isActive)
+        .map((b) => parseFloat(String(b.principal ?? "0")) || 0);
+      const securityFaceValues = securities
+        .filter((s) => !s.isMatured)
+        .map((s) => parseFloat(String(s.faceValue ?? "0")) || 0);
+
+      const dashboardActualsTotal = summary?.totalContributed ?? 0;
+
+      // ── Engine projection "today" value ──
+      // Use the last actual-seeded month's totalEnd (the same figure the Dashboard
+      // reconciliation card reads). When there are no elapsed actual months yet,
+      // the engine has nothing seeded, so the principal sum-of-parts is the correct
+      // "today" basis — fall back to it to keep the comparison on one footing.
+      const overrides = await getContributionOverrides(input.portfolioId);
+      const mappedOverrides = overrides.map((o) => ({
+        monthNumber: o.monthNumber,
+        overrideAmount: o.overrideAmount ? parseFloat(String(o.overrideAmount)) : undefined,
+        lumpSum: o.lumpSum ? parseFloat(String(o.lumpSum)) : undefined,
+      }));
+      const rh = mapRateHistory(await getRateHistory(input.portfolioId));
+      const projection = runProjection(
+        settings,
+        mappedOverrides,
+        rh,
+        mapActualDeposits(await getDepositEntries(input.portfolioId)),
+        mapActualSecurities(securities),
+        mapSecondaryMmfs(secondaries),
+        mapActualBankHoldings(bank),
+        p.mmfFundId ?? null,
+      );
+      const sumParts =
+        primaryMmfBalance +
+        secondaryMmfBalances.reduce((a, b) => a + b, 0) +
+        bankHoldingPrincipals.reduce((a, b) => a + b, 0) +
+        securityFaceValues.reduce((a, b) => a + b, 0);
+      // The engine intentionally accrues the PRIMARY MMF through elapsed (actual)
+      // months so the projected "today" balance matches the daily-accrual ledger
+      // (see actualsReconciliation.test.ts). The other four sources are on a
+      // recorded-principal basis. To reconcile every source on ONE footing, strip
+      // the actual-period primary-MMF accrual back to recorded principal:
+      //   principalBasisToday = totalEnd - (mmfEnd_today - recordedMmfPrincipal)
+      // Secondary MMFs and bank holdings are already held flat in actual months.
+      const lastActual = [...projection].reverse().find((r) => r.isActual);
+      const projectionTodayValue = lastActual
+        ? lastActual.totalEnd - (lastActual.mmfEnd - primaryMmfBalance)
+        : sumParts;
+
+      const inputs = {
+        primaryMmfBalance,
+        secondaryMmfBalances,
+        bankHoldingPrincipals,
+        securityFaceValues,
+        otherAssetValues: [],
+        projectionTodayValue,
+        dashboardActualsTotal,
+        accrualLedgerMmfTotal: primaryMmfBalance + secondaryMmfBalances.reduce((a, b) => a + b, 0),
+        dashboardNetWorth: dashboardActualsTotal,
+      };
+
+      return {
+        full: reconcile(inputs),
+        mmf: reconcileMmf(inputs.accrualLedgerMmfTotal, inputs.primaryMmfBalance, inputs.secondaryMmfBalances),
+      };
     }),
 
     contributionSchedule: protectedProcedure.input(portfolioIdInput).query(async ({ ctx, input }) => {
@@ -2123,14 +2216,18 @@ export const appRouter = router({
       await ensureRateSettings(p.id);
 
       // A few primary-fund (MMF) and government-security deposits.
-      const seedDeposit = (
+      // For government securities we mirror deposits.add: create the deposit AND a
+      // linked register row (the single source of truth) so the sample portfolio
+      // reconciles cleanly (deposit ledger ↔ CBK register ↔ engine valuation).
+      const seedRates = await getRateSettings(p.id);
+      const seedDeposit = async (
         bucket: "mmf" | "tbill" | "ifb" | "fxd",
         institutionType: "mmf_fund" | "government_security",
         amount: number,
         date: string,
         mmfFundId?: number,
-      ) =>
-        addDepositEntry({
+      ) => {
+        const entry = await addDepositEntry({
           portfolioId: p.id,
           bucket,
           institutionType,
@@ -2140,6 +2237,33 @@ export const appRouter = router({
           depositDate: new Date(`${date}T12:00:00.000Z`),
           notes: "Sample data",
         });
+        if (institutionType === "government_security" && entry) {
+          const securityType: "tbill_364" | "ifb" | "fxd" =
+            bucket === "tbill" ? "tbill_364" : bucket === "ifb" ? "ifb" : "fxd";
+          const tenorMonths = bucket === "tbill" ? 12 : 24;
+          const issue = new Date(`${date}T12:00:00.000Z`);
+          const maturity = new Date(issue);
+          maturity.setMonth(maturity.getMonth() + tenorMonths);
+          const couponRate =
+            bucket === "ifb"
+              ? parseFloat(String(seedRates?.ifbCouponRate ?? "0")) || 0
+              : bucket === "fxd"
+                ? parseFloat(String(seedRates?.fxdCouponRate ?? "0")) || 0
+                : 0;
+          const sec = await addSecurity({
+            portfolioId: p.id,
+            securityType,
+            faceValue: String(amount),
+            issueDate: issue,
+            maturityDate: maturity,
+            couponRate: String(couponRate),
+            isTaxExempt: bucket === "ifb",
+            notes: `Auto-created from sample deposit on ${date}`,
+          });
+          if (sec?.id) await updateDepositEntry(entry.id, p.id, { securityId: sec.id });
+        }
+        return entry;
+      };
       // Primary-fund MMF deposits dated across the elapsed months (months 1, 2, 4).
       await seedDeposit("mmf", "mmf_fund", 90000, monthsAfterStart(0, 5), primary?.id);
       await seedDeposit("mmf", "mmf_fund", 30000, monthsAfterStart(1, 5), primary?.id);

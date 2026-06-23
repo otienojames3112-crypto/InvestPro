@@ -156,8 +156,28 @@ export default function Scenarios() {
           </CardContent>
         </Card>
 
-        {/* ── How to reach your target (solver-driven) ── */}
-        {!everythingLoading && solver && (
+        {/* ── Target already met: say so plainly instead of a confusing "how to reach" solver ── */}
+        {!everythingLoading && currentHits && (
+          <Card className="border-emerald-500/25">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                You're on track to reach {formatKES(targetAmount)}
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="p-5 pt-0">
+              <p className="text-sm text-foreground leading-relaxed">
+                Your current settings already project to <strong>{formatKES(currentEndingValue)}</strong> at Month {horizonMonths} —
+                a surplus of <strong className="text-emerald-400">{formatKES(currentGap)}</strong> above target. No change is required.
+                If you want a bigger cushion or a faster finish, the table below shows how higher step-ups move the ending value;
+                you can also lower the target or shorten the horizon on the Rate Settings page.
+              </p>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* ── How to reach your target (solver-driven) — only when the current plan falls short ── */}
+        {!everythingLoading && !currentHits && solver && (
           <Card className="border-primary/20">
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-semibold flex items-center gap-2">

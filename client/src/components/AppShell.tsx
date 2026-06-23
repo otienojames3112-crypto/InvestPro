@@ -27,6 +27,7 @@ import {
   PieChart,
   Building2,
   ClipboardCheck,
+  Scale,
   X,
 } from "lucide-react";
 import { Link, useLocation } from "wouter";
@@ -170,6 +171,7 @@ const navGroups = [
     items: [
       { href: "/scenarios", label: "Scenarios", icon: BarChart3 },
       { href: "/portfolio-review", label: "Portfolio Review", icon: ClipboardCheck },
+      { href: "/reconciliation", label: "Reconciliation", icon: Scale },
       { href: "/mmf-accrual", label: "Daily Accrual", icon: CalendarClock },
       { href: "/tax-summary", label: "Tax Summary", icon: Receipt },
     ],

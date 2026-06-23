@@ -56,7 +56,7 @@ interface Props {
 
 export function UpdateRatesPanel({ portfolioId }: Props) {
   const utils = trpc.useUtils();
-  const { fundName: selectedFundName, fundLabel: selectedFundLabel } = useSelectedFund();
+  const { fundName: selectedFundName, fundLabel: selectedFundLabel, fundEar: selectedFundEar, hasFund } = useSelectedFund();
   const { data: settings, isLoading } = trpc.settings.get.useQuery({ portfolioId });
 
   const [mmfYield, setMmfYield] = useState("");
@@ -224,21 +224,37 @@ export function UpdateRatesPanel({ portfolioId }: Props) {
           <div className="space-y-4">
             <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Enter New Rates (% p.a., gross before WHT)</p>
             <div className="rounded-lg border border-border/50 bg-background/40 p-3 text-xs text-muted-foreground">
-              <span className="font-medium text-foreground">Which rate is used where?</span> The projection engine and accrual ledger use the <span className="font-medium text-amber-300">MMF Yield</span> you set here (gross, before WHT). Your selected fund <span className="font-medium text-foreground">{selectedFundName}</span> publishes its own effective annual yield, which you can copy into the MMF Yield field to keep them aligned. T-Bill / IFB / FXD rates feed the corresponding buckets only.
+              <span className="font-medium text-foreground">Which rate is used where?</span>{" "}
+              {hasFund ? (
+                <>The projection and accrual ledger use <span className="font-medium text-foreground">{selectedFundName}</span>'s published effective annual yield (<span className="font-medium text-amber-300">{selectedFundEar.toFixed(2)}% gross</span>) — the manual MMF Yield field below is ignored while a fund is selected. T-Bill / IFB / FXD rates feed the corresponding buckets only.</>
+              ) : (
+                <>No fund is selected, so the projection uses the manual <span className="font-medium text-amber-300">MMF Yield</span> below (gross, before WHT) as a fallback. Select a fund on the MMF Strategy page to drive it from the fund's EAR. T-Bill / IFB / FXD rates feed the corresponding buckets only.</>
+              )}
             </div>
             <div className="grid grid-cols-2 gap-3">
-              {[
-                { label: "MMF Yield", value: mmfYield, setter: setMmfYield },
-                { label: "Withholding Tax", value: withholdingTax, setter: setWithholdingTax },
-              ].map(({ label, value, setter }) => (
-                <div key={label} className="space-y-1">
-                  <Label className="text-xs">{label}</Label>
+              {hasFund ? (
+                <div className="space-y-1">
+                  <Label className="text-xs">{selectedFundLabel} Yield (authoritative)</Label>
+                  <div className="flex h-8 items-center rounded-md border border-border/50 bg-muted/40 px-2.5 text-sm font-medium text-foreground">
+                    {selectedFundEar.toFixed(2)}%
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-1">
+                  <Label className="text-xs">MMF Yield (fallback)</Label>
                   <div className="relative">
-                    <Input type="number" step="0.01" min="0" max="100" value={value} onChange={(e) => setter(e.target.value)} className="h-8 text-sm pr-8" onClick={(e) => e.stopPropagation()} />
+                    <Input type="number" step="0.01" min="0" max="100" value={mmfYield} onChange={(e) => setMmfYield(e.target.value)} className="h-8 text-sm pr-8" onClick={(e) => e.stopPropagation()} />
                     <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">%</span>
                   </div>
                 </div>
-              ))}
+              )}
+              <div className="space-y-1">
+                <Label className="text-xs">Withholding Tax</Label>
+                <div className="relative">
+                  <Input type="number" step="0.01" min="0" max="100" value={withholdingTax} onChange={(e) => setWithholdingTax(e.target.value)} className="h-8 text-sm pr-8" onClick={(e) => e.stopPropagation()} />
+                  <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">%</span>
+                </div>
+              </div>
             </div>
             <div className="grid grid-cols-3 gap-3">
               {[

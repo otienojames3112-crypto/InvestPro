@@ -89,7 +89,9 @@ export default function TaxSummary() {
   }, [deposits, securities]);
 
   const whtRate = settings?.withholdingTax ?? 15;
-  const mmfYield = fund.fundEar || settings?.mmfYield || 8.78;
+  // Authoritative: when a fund is selected the engine uses its EAR; otherwise the
+  // manual saved mmfYield is the fallback (matches dbToEngine on the server).
+  const mmfYield = fund.hasFund ? fund.fundEar : (settings?.mmfYield ?? fund.fundEar);
   // Total balance + gross income across ALL tracked MMF accounts (primary + secondary).
   const secondaryMmfBalance = secondaryMmfs.reduce((s, m) => s + m.currentBalance, 0);
   const tbillRate = settings?.tbill364Rate ?? 8.97;

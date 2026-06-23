@@ -407,6 +407,48 @@ export function getSweepTargetForMonth(
 }
 
 /**
+ * Target NON-MMF bucket weights by phase, as fractions of the investable base
+ * (everything except the MMF safety floor). These mirror the documented plan:
+ *   Foundation:      MMF 50 / Tbill 50 / IFB  0 / FXD  0
+ *   Growth:          MMF 20 / Tbill 20 / IFB 45 / FXD 15
+ *   De-risking:      MMF 25 / Tbill 35 / IFB 30 / FXD 10
+ *   Final liquidity: MMF 40 / Tbill 45 / IFB 10 / FXD  5
+ * Short-horizon plans use MMF + 91-day T-bills only.
+ */
+export function getPhaseAllocation(
+  phase: "foundation" | "growth" | "de-risking" | "final-liquidity",
+  isShortHorizon = false
+): { mmf: number; tbill: number; ifb: number; fxd: number } {
+  if (isShortHorizon) return { mmf: 0.5, tbill: 0.5, ifb: 0, fxd: 0 };
+  switch (phase) {
+    case "foundation":
+      return { mmf: 0.5, tbill: 0.5, ifb: 0.0, fxd: 0.0 };
+    case "growth":
+      return { mmf: 0.2, tbill: 0.2, ifb: 0.45, fxd: 0.15 };
+    case "de-risking":
+      return { mmf: 0.25, tbill: 0.35, ifb: 0.3, fxd: 0.1 };
+    case "final-liquidity":
+      return { mmf: 0.4, tbill: 0.45, ifb: 0.1, fxd: 0.05 };
+    default:
+      return { mmf: 0.5, tbill: 0.5, ifb: 0, fxd: 0 };
+  }
+}
+
+/** Tenor (months) to use for a freshly-swept lot of each bucket, by phase. */
+function tenorFor(
+  bucket: "tbill" | "ifb" | "fxd",
+  phase: string,
+  isShortHorizon: boolean
+): number {
+  if (bucket === "ifb") return 24; // IFBs are long instruments
+  if (bucket === "fxd") return 24; // FXD coupon bonds
+  // T-bills: 364-day in growth/foundation, 182-day de-risking, 91-day final/short
+  if (isShortHorizon || phase === "final-liquidity") return 3;
+  if (phase === "de-risking") return 6;
+  return 12;
+}
+
+/**
  * 1-based month offset of a given ISO date relative to the plan start date.
  * Month 1 = the start month. Returns null when the date is missing/invalid.
  * A date before the start date clamps to 1; the caller decides further clamping.
@@ -714,44 +756,91 @@ export function runProjection(
 
     let mmfToDhow = 0;
     let sweepTarget: "tbill" | "ifb" | "fxd" | null = null;
+    // Per-bucket lot counts bought this month (for the ledger "main action" label).
+    const sweepBuy = { tbill: 0, ifb: 0, fxd: 0 };
 
     // No new long bonds in final-liquidity phase
     const noNewLongBonds = m > deRiskingEnd;
 
     if (!isActualMonth) {
-      const maxLots = Math.floor((mmf - settings.safetyFloor) / SWEEP_LOT_SIZE);
+      // Allocation-targeted sweep: deploy surplus TOWARD the phase's non-MMF bucket
+      // mix instead of dumping the entire surplus into a single bucket. Each month
+      // we size the desired KES in each non-MMF bucket from the phase weights, then
+      // buy whole 50k lots to close the largest gaps without exceeding the surplus.
+      const investableBase = mmf - settings.safetyFloor;
+      const maxLots = Math.floor(investableBase / SWEEP_LOT_SIZE);
+
       if (maxLots > 0) {
-        const target = getSweepTargetForMonth(m, sweepCount, horizonMonths, fractions, isShortHorizon);
-        if (target) {
-          const effectiveBucket = noNewLongBonds && target.bucket !== "tbill"
-            ? { bucket: "tbill" as const, tenorMonths: 3 }
-            : target;
+        const alloc = getPhaseAllocation(phase, isShortHorizon);
 
-          sweepTarget = effectiveBucket.bucket;
-          const lotsCount = maxLots;
-          const totalSweep = lotsCount * SWEEP_LOT_SIZE;
+        // Current KES already held in each non-MMF bucket (face value).
+        const held = { tbill: 0, ifb: 0, fxd: 0 };
+        for (const lot of lots) held[lot.bucket] += lot.faceValue;
 
-          if (mmf - totalSweep >= settings.safetyFloor) {
-            mmf -= totalSweep;
-            mmfToDhow = totalSweep;
+        // Size targets against the WHOLE portfolio (MMF + all lots), so the phase
+        // weights describe the end-state mix rather than just this month's surplus.
+        // This keeps IFB/FXD from being starved by rolling T-bill maturities: their
+        // gap stays open until they reach their share of the full portfolio.
+        const portfolioTotal = mmf + held.tbill + held.ifb + held.fxd;
+        const want = {
+          tbill: alloc.tbill * portfolioTotal,
+          ifb: alloc.ifb * portfolioTotal,
+          fxd: alloc.fxd * portfolioTotal,
+        };
 
-            for (let i = 0; i < lotsCount; i++) {
+        // Gap to close per bucket (never negative). In the final-liquidity phase,
+        // do NOT add IFB/FXD — fold their intended share into T-bills.
+        const gap = {
+          tbill: Math.max(0, want.tbill - held.tbill),
+          ifb: noNewLongBonds ? 0 : Math.max(0, want.ifb - held.ifb),
+          fxd: noNewLongBonds ? 0 : Math.max(0, want.fxd - held.fxd),
+        };
+        if (noNewLongBonds) {
+          gap.tbill += Math.max(0, want.ifb - held.ifb) + Math.max(0, want.fxd - held.fxd);
+        }
+
+        // Convert gaps to whole 50k lots, capped by the lots we can afford.
+        let remaining = maxLots;
+        const order: Array<"ifb" | "fxd" | "tbill"> = ["ifb", "fxd", "tbill"];
+        for (const b of order) {
+          if (remaining <= 0) break;
+          const lotsForB = Math.min(remaining, Math.floor(gap[b] / SWEEP_LOT_SIZE));
+          sweepBuy[b] += lotsForB;
+          remaining -= lotsForB;
+        }
+        // Any leftover affordable lots (rounding) go to T-bills for liquidity.
+        if (remaining > 0) {
+          sweepBuy.tbill += remaining;
+          remaining = 0;
+        }
+
+        const totalLots = sweepBuy.tbill + sweepBuy.ifb + sweepBuy.fxd;
+        const totalSweep = totalLots * SWEEP_LOT_SIZE;
+
+        if (totalLots > 0 && mmf - totalSweep >= settings.safetyFloor) {
+          mmf -= totalSweep;
+          mmfToDhow = totalSweep;
+          // Representative target for any single-target consumers (largest buy).
+          sweepTarget = (["ifb", "fxd", "tbill"] as const).reduce(
+            (a, b) => (sweepBuy[b] > sweepBuy[a] ? b : a),
+            "tbill" as "tbill" | "ifb" | "fxd"
+          );
+
+          for (const b of ["tbill", "ifb", "fxd"] as const) {
+            for (let i = 0; i < sweepBuy[b]; i++) {
               lots.push({
                 id: `sim-${m}-${lotIdCounter++}`,
-                bucket: effectiveBucket.bucket,
-                faceValue: 50000,
+                bucket: b,
+                faceValue: SWEEP_LOT_SIZE,
                 issueMonth: m,
-                tenorMonths: effectiveBucket.tenorMonths,
-                couponRate: effectiveBucket.bucket === "ifb"
-                  ? rates.ifbCouponRate
-                  : effectiveBucket.bucket === "fxd"
-                  ? rates.fxdCouponRate
-                  : 0,
-                isTaxExempt: effectiveBucket.bucket === "ifb",
+                tenorMonths: tenorFor(b, phase, isShortHorizon),
+                couponRate:
+                  b === "ifb" ? rates.ifbCouponRate : b === "fxd" ? rates.fxdCouponRate : 0,
+                isTaxExempt: b === "ifb",
               });
             }
-            sweepCount++;
           }
+          sweepCount++;
         }
       }
     }
@@ -778,8 +867,12 @@ export function runProjection(
     }
 
     let mainAction = "";
+    const buyParts: string[] = [];
+    if (sweepBuy.ifb > 0) buyParts.push(`${sweepBuy.ifb}×IFB`);
+    if (sweepBuy.fxd > 0) buyParts.push(`${sweepBuy.fxd}×FXD`);
+    if (sweepBuy.tbill > 0) buyParts.push(`${sweepBuy.tbill}×T-bill`);
     const sweepDesc = mmfToDhow > 0
-      ? `sweep KES ${Math.round(mmfToDhow).toLocaleString()} → ${sweepTarget?.toUpperCase()} (${Math.round(mmfToDhow / 50000)} lot${mmfToDhow > 50000 ? "s" : ""})`
+      ? `sweep KES ${Math.round(mmfToDhow).toLocaleString()} → ${buyParts.join(", ")}`
       : "";
     if (cbkActions.length > 0 && sweepDesc) {
       mainAction = `${cbkActions.join("; ")}; ${sweepDesc}`;

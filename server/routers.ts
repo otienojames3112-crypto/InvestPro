@@ -870,6 +870,8 @@ export const appRouter = router({
         }
 
         // 1) Retire the matured security so it no longer counts toward net worth.
+        //    (When there is a re-buy leg, we also stamp rolledIntoId below once the
+        //    replacement security exists, so the register can show a "rolled into #N" trail.)
         if (!existing.isMatured) {
           await updateSecurity(input.id, { isMatured: true } as Partial<typeof existing>);
         }
@@ -924,6 +926,11 @@ export const appRouter = router({
           });
           if (sec?.id && entry?.id) {
             await updateDepositEntry(entry.id, portfolioId, { securityId: sec.id } as never);
+          }
+          // Audit trail: link the matured lot to its replacement so the register
+          // can render "rolled into #N" (rebuy + split modes).
+          if (sec?.id) {
+            await updateSecurity(input.id, { rolledIntoId: sec.id } as Partial<typeof existing>);
           }
         }
 

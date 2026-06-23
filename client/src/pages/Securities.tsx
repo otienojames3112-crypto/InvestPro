@@ -11,8 +11,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Landmark, Plus, Trash2, CheckCircle2, Clock, Pencil, Link2, Info, RefreshCw, Wallet, RotateCcw, AlertTriangle, SplitSquareHorizontal } from "lucide-react";
+import { Landmark, Plus, Trash2, CheckCircle2, Clock, Pencil, Link2, Info, RefreshCw, Wallet, RotateCcw, AlertTriangle, SplitSquareHorizontal, ArrowRightLeft } from "lucide-react";
 import { useState, useMemo, useEffect } from "react";
+import { useMaturingWindow } from "@/hooks/useMaturingWindow";
 import { toast } from "sonner";
 import { useForm, Controller } from "react-hook-form";
 
@@ -195,15 +196,17 @@ export default function Securities() {
 
   const totalFaceValue = active.reduce((sum, s) => sum + parseFloat(String(s.faceValue)), 0);
 
-  // Lots maturing within the next 30 days (including any already past due) so a
+  // Lots maturing within the chosen window (including any already past due) so a
   // rollover prompt is surfaced before the cash sits idle. Sorted soonest-first.
+  // The window (30/60/90 days) is user-configurable and shared with the sidebar badge.
+  const [maturingWindow, setMaturingWindow] = useMaturingWindow();
   const maturingSoon = useMemo(
     () =>
       active
         .map((s) => ({ s, days: daysUntil(s.maturityDate) }))
-        .filter(({ days }) => days <= 30)
+        .filter(({ days }) => days <= maturingWindow)
         .sort((a, b) => a.days - b.days),
-    [active]
+    [active, maturingWindow]
   );
   const soonFaceValue = maturingSoon.reduce((sum, { s }) => sum + parseFloat(String(s.faceValue)), 0);
 
@@ -304,6 +307,30 @@ export default function Securities() {
           ))}
         </div>
 
+        {/* Maturing-soon window selector (always visible so the user can widen/narrow the lookahead) */}
+        {active.length > 0 && (
+          <div className="flex items-center justify-end gap-2">
+            <span className="text-xs text-muted-foreground">Maturing-soon window:</span>
+            <div className="inline-flex rounded-lg bg-muted/40 p-0.5">
+              {([30, 60, 90] as const).map((w) => (
+                <button
+                  key={w}
+                  type="button"
+                  onClick={() => setMaturingWindow(w)}
+                  className={
+                    "rounded-md px-2.5 py-1 text-xs font-medium tabular-nums transition-colors " +
+                    (maturingWindow === w
+                      ? "bg-card text-foreground shadow-sm"
+                      : "text-muted-foreground hover:text-foreground")
+                  }
+                >
+                  {w}d
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Maturing-soon alert */}
         {maturingSoon.length > 0 && (
           <div className="rounded-xl border border-amber-500/40 bg-amber-500/5 p-4 space-y-3">
@@ -313,7 +340,7 @@ export default function Securities() {
               </div>
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-semibold text-foreground">
-                  {maturingSoon.length} {maturingSoon.length === 1 ? "lot" : "lots"} maturing within 30 days
+                  {maturingSoon.length} {maturingSoon.length === 1 ? "lot" : "lots"} maturing within {maturingWindow} days
                   <span className="text-muted-foreground font-normal"> · {formatKES(soonFaceValue)} face value</span>
                 </p>
                 <p className="text-xs text-muted-foreground mt-0.5">
@@ -514,12 +541,27 @@ export default function Securities() {
                     </tr>
                   </thead>
                   <tbody>
-                    {matured.map((s) => (
+                    {matured.map((s) => {
+                      const rolledInto = s.rolledIntoId
+                        ? securities?.find((x) => x.id === s.rolledIntoId)
+                        : undefined;
+                      return (
                       <tr key={s.id} className="border-b border-border/40">
                         <td className="px-4 py-2.5">
-                          <Badge variant="outline" className="text-xs opacity-60">
-                            {getSecurityLabel(s.securityType)}
-                          </Badge>
+                          <div className="flex flex-col gap-1">
+                            <Badge variant="outline" className="text-xs opacity-60 w-fit">
+                              {getSecurityLabel(s.securityType)}
+                            </Badge>
+                            {s.rolledIntoId && (
+                              <span
+                                className="flex items-center gap-1 text-[10px] text-primary/80"
+                                title={rolledInto ? `Replacement: ${getSecurityLabel(rolledInto.securityType)} #${rolledInto.id}` : undefined}
+                              >
+                                <ArrowRightLeft className="w-3 h-3 shrink-0" />
+                                rolled into #{s.rolledIntoId}
+                              </span>
+                            )}
+                          </div>
                         </td>
                         <td className="px-4 py-2.5 text-right kes-amount text-muted-foreground">
                           {formatKES(parseFloat(String(s.faceValue)))}
@@ -531,17 +573,22 @@ export default function Securities() {
                           {!s.securityType.startsWith("tbill") ? formatPct(parseFloat(String(s.couponRate))) : "Discount"}
                         </td>
                         <td className="px-4 py-2.5 text-right">
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="h-7 gap-1.5 text-xs"
-                            onClick={() => setRecycleFor(s)}
-                          >
-                            <RefreshCw className="w-3 h-3" /> Roll over
-                          </Button>
+                          {s.rolledIntoId ? (
+                            <span className="text-[11px] text-muted-foreground italic">Recycled</span>
+                          ) : (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-7 gap-1.5 text-xs"
+                              onClick={() => setRecycleFor(s)}
+                            >
+                              <RefreshCw className="w-3 h-3" /> Roll over
+                            </Button>
+                          )}
                         </td>
                       </tr>
-                    ))}
+                    );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -781,6 +828,34 @@ function RecycleDialog({
                 onChange={(e) => setMmfAmount(parseFloat(e.target.value) || 0)}
                 className="w-full accent-primary"
               />
+              {/* One-tap laddering presets — set the MMF portion to a common ratio. */}
+              <div className="flex items-center gap-1.5">
+                <span className="text-[10px] text-muted-foreground mr-0.5">Ladder:</span>
+                {([
+                  { label: "25 / 75", mmf: 0.25 },
+                  { label: "50 / 50", mmf: 0.5 },
+                  { label: "75 / 25", mmf: 0.75 },
+                ] as const).map((p) => {
+                  const target = Math.round((amount * p.mmf) / 1000) * 1000;
+                  const isActivePreset = Math.abs(mmfAmount - target) < 1;
+                  return (
+                    <button
+                      key={p.label}
+                      type="button"
+                      onClick={() => setMmfAmount(Math.min(target, amount))}
+                      className={
+                        "flex-1 rounded-md border px-2 py-1 text-[11px] font-medium tabular-nums transition-colors " +
+                        (isActivePreset
+                          ? "border-primary/50 bg-primary/10 text-primary"
+                          : "border-border bg-card text-muted-foreground hover:text-foreground hover:border-primary/30")
+                      }
+                      title={`MMF ${Math.round(p.mmf * 100)}% / re-buy ${Math.round((1 - p.mmf) * 100)}%`}
+                    >
+                      {p.label}
+                    </button>
+                  );
+                })}
+              </div>
               <div className="flex items-center justify-between gap-3">
                 <div className="flex-1 space-y-1">
                   <Label className="text-[10px] text-muted-foreground">MMF portion</Label>

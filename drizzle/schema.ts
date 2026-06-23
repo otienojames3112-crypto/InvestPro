@@ -145,6 +145,8 @@ export const securities = mysqlTable("securities", {
   couponRate: decimal("couponRate", { precision: 8, scale: 4 }).notNull().default("0.0000"),
   isTaxExempt: boolean("isTaxExempt").notNull().default(false),
   isMatured: boolean("isMatured").notNull().default(false),
+  /** When this lot was recycled via re-buy/split, points at the replacement security's id (audit trail). */
+  rolledIntoId: int("rolledIntoId"),
   notes: text("notes"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),

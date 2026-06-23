@@ -35,7 +35,9 @@ import { Skeleton } from "./ui/skeleton";
 import { trpc } from "@/lib/trpc";
 import { rateStaleness } from "@/lib/rateStaleness";
 import { useReconciliationDrift } from "@/hooks/useReconciliationDrift";
+import { useMaturingWindow, daysUntilDate } from "@/hooks/useMaturingWindow";
 import { Clock } from "lucide-react";
+import { useMemo } from "react";
 
 /**
  * Compact rate-staleness badge for the sidebar, visible on every page. Reads
@@ -120,6 +122,34 @@ function SidebarDriftBadge({
     >
       {sign}{drift.absPct.toFixed(1)}%
     </button>
+  );
+}
+
+/**
+ * Count badge on the CBK Securities nav item. Shows how many active lots fall
+ * inside the user's chosen maturing-soon window (shared with the Securities page),
+ * so an upcoming rollover is visible without opening the page. Hidden when none.
+ */
+function SidebarSecuritiesBadge({ portfolioId }: { portfolioId: number | null | undefined }) {
+  const [windowDays] = useMaturingWindow();
+  const { data: securities } = trpc.securities.list.useQuery(
+    { portfolioId: portfolioId as number },
+    { enabled: portfolioId != null }
+  );
+  const count = useMemo(() => {
+    if (!securities) return 0;
+    return securities.filter(
+      (s) => !s.isMatured && daysUntilDate(s.maturityDate) <= windowDays
+    ).length;
+  }, [securities, windowDays]);
+  if (count <= 0) return null;
+  return (
+    <span
+      className="shrink-0 rounded-full border border-amber-500/30 bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold leading-none tabular-nums text-amber-400"
+      title={`${count} lot${count === 1 ? "" : "s"} maturing within ${windowDays} days`}
+    >
+      {count}
+    </span>
   );
 }
 
@@ -249,6 +279,7 @@ function SidebarContent({
                         />
                         <span className="flex-1">{label}</span>
                         {href === "/" && <SidebarDriftBadge portfolioId={portfolioId} onNavClick={onNavClick} />}
+                        {href === "/securities" && <SidebarSecuritiesBadge portfolioId={portfolioId} />}
                         {isActive && <ChevronRight className="w-3 h-3 text-primary" />}
                       </div>
                     </Link>

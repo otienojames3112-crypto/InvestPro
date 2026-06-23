@@ -400,3 +400,12 @@
 - [x] R24.4 Sidebar drift badge: now a button that intercepts the click, navigates to /?reconcile=1, and closes the mobile drawer.
 - [x] R24.5 Dashboard: useEffect reads ?reconcile=1, smooth-scrolls the reconciliation card (id + ref, scroll-mt-24) into view, flashes a ~2.2s primary ring highlight, and strips the param via history.replaceState.
 - [x] R24.6 Tests: server/round24.test.ts (8 tests) — split allocation math + validation, split value-preservation across pockets, maturing-soon window. 152 tests pass; forward regression unchanged (m120 = KES 4,763,385, 0.00%); tsc clean.
+
+## Round 25 — Laddering presets, configurable maturing-soon window, rollover trail
+- [x] R25.1 Schema: rolledIntoId (int, nullable) added to securities table (schema.ts + applied via ALTER TABLE through webdev_execute_sql, since drizzle-kit reported unrelated drift).
+- [x] R25.2 Backend: securities.recycle now stamps rolledIntoId on the matured lot once the replacement security exists (rebuy + split modes); getSecurities returns all columns so the list query exposes it.
+- [x] R25.3 Split dialog: one-tap Ladder presets (25/75, 50/50, 75/25) set the MMF portion to the rounded ratio (re-buy = remainder); active preset is highlighted.
+- [x] R25.4 Register: matured rows show an 'rolled into #N' chip (ArrowRightLeft icon, tooltip naming the replacement) and the Roll over button is replaced by a 'Recycled' label once linked.
+- [x] R25.5 Maturing-soon window: 30/60/90d selector on the Securities page (shared useMaturingWindow hook, persisted to localStorage + same-tab sync event); banner copy + filter honor it.
+- [x] R25.6 Sidebar: SidebarSecuritiesBadge on the CBK Securities nav item shows the count of active lots within the chosen window (amber pill, tooltip, hidden when zero), sharing the same persisted window.
+- [x] R25.7 Tests: server/round25.test.ts (9 tests) - preset allocation math, configurable window selection (30/60/90 incl. overdue), rollover-link gating. 161 tests pass; forward regression unchanged (m120 = KES 4,763,385, 0.00%); tsc clean.

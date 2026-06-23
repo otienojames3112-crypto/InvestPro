@@ -201,6 +201,18 @@ export default function Dashboard() {
   const currentMonth = 1;
   const currentData = projection?.[currentMonth - 1];
 
+  // "Today" per the projection engine = the ending total of the last month the
+  // engine seeded from real deposits (isActual). If there are no actuals yet,
+  // there is no engine "today" value to reconcile against.
+  const projectionToday = useMemo(() => {
+    if (!projection?.length) return null as number | null;
+    let last: number | null = null;
+    for (const r of projection) {
+      if (r.isActual) last = r.totalEnd;
+    }
+    return last;
+  }, [projection]);
+
   const projectedFinalValue = lastData?.totalEnd ?? 0;
   const progressPct = targetAmount > 0 ? Math.min((projectedFinalValue / targetAmount) * 100, 100) : 0;
   const surplusOrShortfall = projectedFinalValue - targetAmount;
@@ -683,6 +695,120 @@ export default function Dashboard() {
 
           </CardContent>
         </Card>
+
+        {/* ── Today Snapshot + Reconciliation ─────────────────────────────── */}
+        {actualsSummary && actualsSummary.entryCount > 0 && (() => {
+          const primaryMmf = actualsSummary.depositsContributed ?? actualsSummary.byBucket?.mmf ?? 0;
+          const sec = actualsSummary.secondaryMmfBalance ?? 0;
+          const bank = actualsSummary.bankBalance ?? 0;
+          const securitiesValue =
+            (actualsSummary.byBucket?.tbill ?? 0) +
+            (actualsSummary.byBucket?.ifb ?? 0) +
+            (actualsSummary.byBucket?.fxd ?? 0);
+          const actualsTotal = actualsSummary.totalContributed ?? 0;
+          const rows = [
+            { key: "pmmf", label: `${fundName} (primary MMF)`, icon: Wallet, amt: primaryMmf },
+            { key: "smmf", label: `Other MMF accounts (${actualsSummary.secondaryCount ?? 0})`, icon: PiggyBank, amt: sec },
+            { key: "bank", label: `Bank instruments (${actualsSummary.bankHoldingCount ?? 0})`, icon: Landmark, amt: bank },
+            { key: "sec", label: "CBK securities (T-Bills / IFB / FXD)", icon: Shield, amt: securitiesValue },
+          ];
+
+          // Reconciliation: live actuals vs the engine's seeded "today" value.
+          const hasEngineToday = projectionToday != null;
+          const delta = hasEngineToday ? actualsTotal - (projectionToday as number) : 0;
+          const denom = hasEngineToday && (projectionToday as number) > 0 ? (projectionToday as number) : actualsTotal || 1;
+          const deltaPct = (delta / denom) * 100;
+          const absPct = Math.abs(deltaPct);
+          const tone = absPct <= 1
+            ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/30"
+            : absPct <= 5
+            ? "bg-amber-500/10 text-amber-400 border-amber-500/30"
+            : "bg-red-500/10 text-red-400 border-red-500/30";
+          const ReconIcon = absPct <= 1 ? CheckCircle2 : AlertTriangle;
+
+          return (
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-semibold text-foreground flex items-center gap-2">
+                  <Wallet className="w-4 h-4 text-primary" />
+                  Today Snapshot &amp; Reconciliation
+                </CardTitle>
+                <p className="text-xs text-muted-foreground mt-1">
+                  What you hold right now across every instrument, and how that compares with the
+                  projection engine&rsquo;s value for today (the last month it seeds from your real deposits).
+                </p>
+              </CardHeader>
+              <CardContent className="p-4 pt-0 space-y-4">
+                {/* Per-instrument breakdown */}
+                <div className="rounded-lg border border-border divide-y divide-border">
+                  {rows.map((r) => {
+                    const Icon = r.icon;
+                    const pct = actualsTotal > 0 ? (r.amt / actualsTotal) * 100 : 0;
+                    return (
+                      <div key={r.key} className="flex items-center gap-3 px-3 py-2.5">
+                        <div className="w-7 h-7 rounded-lg bg-muted flex items-center justify-center shrink-0">
+                          <Icon className="w-3.5 h-3.5 text-muted-foreground" />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-medium text-foreground truncate">{r.label}</p>
+                          <p className="text-xs text-muted-foreground">{pct.toFixed(1)}% of holdings</p>
+                        </div>
+                        <p className="text-sm font-semibold kes-amount text-foreground shrink-0">{formatKES(r.amt)}</p>
+                      </div>
+                    );
+                  })}
+                  <div className="flex items-center justify-between px-3 py-2.5 bg-primary/5">
+                    <p className="text-sm font-semibold text-foreground">Total held today</p>
+                    <p className="text-sm font-bold kes-amount gradient-text shrink-0">{formatKES(actualsTotal)}</p>
+                  </div>
+                </div>
+
+                {/* Reconciliation row */}
+                <div className={`rounded-lg border px-3 py-3 ${tone}`}>
+                  <div className="flex items-start gap-2">
+                    <ReconIcon className="w-4 h-4 shrink-0 mt-0.5" />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-semibold">Projection vs Actuals (today)</p>
+                      {hasEngineToday ? (
+                        <div className="mt-2 grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
+                          <div>
+                            <p className="opacity-80">Engine value (today)</p>
+                            <p className="font-semibold kes-amount text-foreground">{formatKES(projectionToday as number)}</p>
+                          </div>
+                          <div>
+                            <p className="opacity-80">Actuals (today)</p>
+                            <p className="font-semibold kes-amount text-foreground">{formatKES(actualsTotal)}</p>
+                          </div>
+                          <div>
+                            <p className="opacity-80">Difference</p>
+                            <p className="font-semibold kes-amount">
+                              {delta >= 0 ? "+" : "−"}{formatKES(Math.abs(delta))} ({delta >= 0 ? "+" : "−"}{absPct.toFixed(2)}%)
+                            </p>
+                          </div>
+                        </div>
+                      ) : (
+                        <p className="mt-1 text-xs opacity-90">
+                          The engine has no seeded &ldquo;today&rdquo; value yet — your portfolio start date is in the
+                          current month, so the projection begins from month 0. Record deposits in earlier months
+                          to enable a side-by-side comparison.
+                        </p>
+                      )}
+                      {hasEngineToday && (
+                        <p className="mt-2 text-xs opacity-90 leading-relaxed">
+                          {absPct <= 1
+                            ? "Your real holdings track the plan closely — nicely on course."
+                            : delta >= 0
+                            ? "You are ahead of the plan for this point in time. The engine assumes a fixed monthly schedule; extra deposits or higher balances push actuals above the modelled curve."
+                            : "You are behind the plan for this point in time. This is expected if you started recording mid-journey or skipped some scheduled contributions — the engine assumes every month was funded on schedule."}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          );
+        })()}
 
         {/* ── Live Actuals Panel ──────────────────────────────────────────── */}
         <Card className="border-emerald-500/20">

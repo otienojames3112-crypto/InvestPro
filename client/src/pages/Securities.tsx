@@ -11,8 +11,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Landmark, Plus, Trash2, CheckCircle2, Clock } from "lucide-react";
-import { useState } from "react";
+import { Landmark, Plus, Trash2, CheckCircle2, Clock, Pencil, Link2, Info } from "lucide-react";
+import { useState, useMemo } from "react";
 import { toast } from "sonner";
 import { useForm, Controller } from "react-hook-form";
 
@@ -68,11 +68,80 @@ export default function Securities() {
     onError: () => toast.error("Failed to remove security"),
   });
   const updateMutation = trpc.securities.update.useMutation({
-    onSuccess: () => {
-      toast.success("Security updated");
+    onSuccess: (res) => {
+      toast.success(
+        res?.linkedDepositSynced
+          ? "Security updated — linked deposit synced"
+          : "Security updated"
+      );
       utils.securities.list.invalidate();
+      utils.deposits.list.invalidate({ portfolioId: portfolioId! });
+      utils.deposits.summary.invalidate({ portfolioId: portfolioId! });
+      utils.projection.run.invalidate({ portfolioId: portfolioId! });
+      utils.projection.milestones.invalidate({ portfolioId: portfolioId! });
+      setEditId(null);
+    },
+    onError: () => toast.error("Failed to update security"),
+  });
+
+  // Deposits list lets us flag which register rows have a linked deposit that
+  // will be synced automatically when the security is edited.
+  const { data: depositList } = trpc.deposits.list.useQuery(
+    { portfolioId: portfolioId! },
+    { enabled: !!portfolioId }
+  );
+  const linkedSecurityIds = useMemo(
+    () =>
+      new Set(
+        (depositList ?? [])
+          .map((d) => (d as { securityId?: number | null }).securityId)
+          .filter((id): id is number => typeof id === "number")
+      ),
+    [depositList]
+  );
+
+  // ── Edit dialog state ──────────────────────────────────────────────────
+  const [editId, setEditId] = useState<number | null>(null);
+  const editForm = useForm<SecurityForm>({
+    defaultValues: {
+      securityType: "tbill_364",
+      faceValue: 50000,
+      issueDate: new Date().toISOString().split("T")[0],
+      maturityDate: "",
+      couponRate: 0,
+      isTaxExempt: false,
+      notes: "",
     },
   });
+  const editType = editForm.watch("securityType");
+  const editIsBond = editType === "ifb" || editType === "fxd";
+
+  function openEdit(s: NonNullable<typeof securities>[number]) {
+    editForm.reset({
+      securityType: s.securityType as SecurityForm["securityType"],
+      faceValue: parseFloat(String(s.faceValue)) || 50000,
+      issueDate: new Date(s.issueDate).toISOString().split("T")[0],
+      maturityDate: new Date(s.maturityDate).toISOString().split("T")[0],
+      couponRate: parseFloat(String(s.couponRate)) || 0,
+      isTaxExempt: !!s.isTaxExempt,
+      notes: s.notes ?? "",
+    });
+    setEditId(s.id);
+  }
+
+  function onEditSubmit(data: SecurityForm) {
+    if (editId == null) return;
+    updateMutation.mutate({
+      id: editId,
+      securityType: data.securityType,
+      faceValue: data.faceValue,
+      issueDate: data.issueDate,
+      maturityDate: data.maturityDate,
+      couponRate: editIsBond ? data.couponRate : 0,
+      isTaxExempt: data.securityType === "ifb" ? true : data.isTaxExempt,
+      notes: data.notes,
+    });
+  }
 
   const [open, setOpen] = useState(false);
   const { register, handleSubmit, reset, control, watch } = useForm<SecurityForm>({
@@ -243,9 +312,16 @@ export default function Securities() {
                       return (
                         <tr key={s.id} className="border-b border-border/40 hover:bg-muted/20 transition-colors">
                           <td className="px-4 py-3">
-                            <Badge variant="outline" className="text-xs">
-                              {getSecurityLabel(s.securityType)}
-                            </Badge>
+                            <div className="flex items-center gap-1.5">
+                              <Badge variant="outline" className="text-xs">
+                                {getSecurityLabel(s.securityType)}
+                              </Badge>
+                              {linkedSecurityIds.has(s.id) && (
+                                <span title="Linked to a recorded deposit — edits sync automatically">
+                                  <Link2 className="w-3 h-3 text-primary/70" />
+                                </span>
+                              )}
+                            </div>
                           </td>
                           <td className="px-4 py-3 text-right font-semibold text-foreground kes-amount">
                             {formatKES(parseFloat(String(s.faceValue)))}
@@ -278,6 +354,15 @@ export default function Securities() {
                           </td>
                           <td className="px-4 py-3 text-right">
                             <div className="flex items-center justify-end gap-1">
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="w-7 h-7 text-muted-foreground hover:text-primary"
+                                title="Edit security"
+                                onClick={() => openEdit(s)}
+                              >
+                                <Pencil className="w-3.5 h-3.5" />
+                              </Button>
                               <Button
                                 variant="ghost"
                                 size="icon"
@@ -352,6 +437,94 @@ export default function Securities() {
             </CardContent>
           </Card>
         )}
+
+        {/* ── Edit Security Dialog ─────────────────────────────────────── */}
+        <Dialog open={editId != null} onOpenChange={(o) => !o && setEditId(null)}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>Edit CBK Security</DialogTitle>
+            </DialogHeader>
+            {editId != null && linkedSecurityIds.has(editId) && (
+              <div className="flex items-start gap-2 rounded-lg border border-primary/30 bg-primary/5 px-3 py-2 text-xs text-muted-foreground">
+                <Info className="w-3.5 h-3.5 text-primary shrink-0 mt-0.5" />
+                <span>
+                  This entry is linked to a recorded deposit. Changing the face value or
+                  issue date will update that deposit automatically so your live actuals,
+                  accrual ledger, and tax summary stay in sync.
+                </span>
+              </div>
+            )}
+            <form onSubmit={editForm.handleSubmit(onEditSubmit)} className="space-y-4 mt-2">
+              <div className="space-y-1.5">
+                <Label className="text-xs">Security Type</Label>
+                <Controller
+                  name="securityType"
+                  control={editForm.control}
+                  render={({ field }) => (
+                    <Select value={field.value} onValueChange={field.onChange}>
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="tbill_91">91-Day T-Bill</SelectItem>
+                        <SelectItem value="tbill_182">182-Day T-Bill</SelectItem>
+                        <SelectItem value="tbill_364">364-Day T-Bill</SelectItem>
+                        <SelectItem value="ifb">Infrastructure Bond (IFB) — Tax Exempt</SelectItem>
+                        <SelectItem value="fxd">Fixed Coupon Bond (FXD) — 15% WHT</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  )}
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <Label className="text-xs">Face Value (KES)</Label>
+                  <Input type="number" step="50000" min="50000" {...editForm.register("faceValue", { valueAsNumber: true })} />
+                </div>
+                {editIsBond && (
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Coupon Rate (%)</Label>
+                    <Input type="number" step="0.01" min="0" {...editForm.register("couponRate", { valueAsNumber: true })} />
+                  </div>
+                )}
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <Label className="text-xs">Issue Date</Label>
+                  <Input type="date" {...editForm.register("issueDate")} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs">Maturity Date</Label>
+                  <Input type="date" {...editForm.register("maturityDate")} required />
+                </div>
+              </div>
+              {editType !== "ifb" && editIsBond && (
+                <div className="flex items-center justify-between rounded-lg border border-border px-3 py-2">
+                  <Label className="text-xs">Tax-exempt</Label>
+                  <Controller
+                    name="isTaxExempt"
+                    control={editForm.control}
+                    render={({ field }) => (
+                      <Switch checked={field.value} onCheckedChange={field.onChange} />
+                    )}
+                  />
+                </div>
+              )}
+              <div className="space-y-1.5">
+                <Label className="text-xs">Notes (optional)</Label>
+                <Input placeholder="e.g. IFB/2026/10Y" {...editForm.register("notes")} />
+              </div>
+              <div className="flex gap-2">
+                <Button type="button" variant="outline" className="flex-1" onClick={() => setEditId(null)}>
+                  Cancel
+                </Button>
+                <Button type="submit" className="flex-1" disabled={updateMutation.isPending}>
+                  {updateMutation.isPending ? "Saving…" : "Save Changes"}
+                </Button>
+              </div>
+            </form>
+          </DialogContent>
+        </Dialog>
       </div>
     </AppShell>
   );

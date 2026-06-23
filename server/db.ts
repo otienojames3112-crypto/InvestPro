@@ -243,6 +243,24 @@ export async function getSecurities(portfolioId: number) {
     .orderBy(securities.issueDate);
 }
 
+export async function getSecurityById(id: number) {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db.select().from(securities).where(eq(securities.id, id)).limit(1);
+  return rows[0] ?? null;
+}
+
+export async function getDepositBySecurityId(securityId: number) {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db
+    .select()
+    .from(depositEntries)
+    .where(eq(depositEntries.securityId, securityId))
+    .limit(1);
+  return rows[0] ?? null;
+}
+
 export async function addSecurity(data: InsertSecurity) {
   const db = await getDb();
   if (!db) return null;

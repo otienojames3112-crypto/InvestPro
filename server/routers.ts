@@ -15,6 +15,8 @@ import {
   getLedgerEntries,
   bulkUpsertLedgerEntries,
   getSecurities,
+  getSecurityById,
+  getDepositBySecurityId,
   addSecurity,
   updateSecurity,
   deleteSecurity,
@@ -748,15 +750,59 @@ export const appRouter = router({
     update: protectedProcedure
       .input(z.object({
         id: z.number(),
+        // Status / annotation (Round 18+)
         isMatured: z.boolean().optional(),
         notes: z.string().optional(),
+        // Full edit (Round 22) — any of these may be supplied.
+        securityType: z.enum(["tbill_91", "tbill_182", "tbill_364", "ifb", "fxd"]).optional(),
+        faceValue: z.number().min(50000).optional(),
+        issueDate: z.string().optional(),
+        maturityDate: z.string().optional(),
+        couponRate: z.number().min(0).max(50).optional(),
+        isTaxExempt: z.boolean().optional(),
       }))
       .mutation(async ({ ctx, input }) => {
-        await updateSecurity(input.id, {
-          isMatured: input.isMatured,
-          notes: input.notes,
-        });
-        return { success: true };
+        // Verify ownership: the security must belong to a portfolio owned by the
+        // requesting user. (The register row is the single source of truth, so
+        // we guard it directly rather than trusting a client-supplied portfolioId.)
+        const existing = await getSecurityById(input.id);
+        if (!existing) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Security not found." });
+        }
+        await requirePortfolio(existing.portfolioId, ctx.user.id);
+
+        // Build the partial update for the register row.
+        const secUpdate: Record<string, unknown> = {};
+        if (input.isMatured !== undefined) secUpdate.isMatured = input.isMatured;
+        if (input.notes !== undefined) secUpdate.notes = input.notes;
+        if (input.securityType !== undefined) secUpdate.securityType = input.securityType;
+        if (input.faceValue !== undefined) secUpdate.faceValue = String(input.faceValue);
+        if (input.issueDate !== undefined) secUpdate.issueDate = new Date(input.issueDate + "T12:00:00Z");
+        if (input.maturityDate !== undefined) secUpdate.maturityDate = new Date(input.maturityDate + "T12:00:00Z");
+        if (input.couponRate !== undefined) secUpdate.couponRate = String(input.couponRate);
+        if (input.isTaxExempt !== undefined) secUpdate.isTaxExempt = input.isTaxExempt;
+        await updateSecurity(input.id, secUpdate as Partial<typeof existing>);
+
+        // Keep the linked deposit row in sync so the live actuals + accrual
+        // ledger never drift from the (now-edited) register entry.
+        const linkedDeposit = await getDepositBySecurityId(input.id);
+        if (linkedDeposit) {
+          const depUpdate: Record<string, unknown> = {};
+          if (input.faceValue !== undefined) depUpdate.amount = String(input.faceValue);
+          if (input.issueDate !== undefined) depUpdate.depositDate = new Date(input.issueDate + "T12:00:00Z");
+          // The deposit bucket follows the register security type so the engine
+          // places the lot in the right pocket.
+          if (input.securityType !== undefined) {
+            depUpdate.bucket =
+              input.securityType === "ifb" ? "ifb"
+              : input.securityType === "fxd" ? "fxd"
+              : "tbill";
+          }
+          if (Object.keys(depUpdate).length > 0) {
+            await updateDepositEntry(linkedDeposit.id, existing.portfolioId, depUpdate as never);
+          }
+        }
+        return { success: true, linkedDepositSynced: !!linkedDeposit };
       }),
 
     delete: protectedProcedure

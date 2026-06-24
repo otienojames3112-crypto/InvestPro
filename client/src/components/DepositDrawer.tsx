@@ -115,6 +115,10 @@ export function DepositDrawer({ open, onClose }: DepositDrawerProps) {
     onError: (err) => toast.error(err.message),
   });
 
+  // Inline bank-holding creation: lets the user open a brand-new bank call/fixed
+  // deposit straight from the deposit drawer (no need to visit another page first).
+  const createBankHolding = trpc.bankHoldings.add.useMutation();
+
   const deleteMutation = trpc.deposits.delete.useMutation({
     onSuccess: () => {
       utils.deposits.list.invalidate();
@@ -169,6 +173,18 @@ export function DepositDrawer({ open, onClose }: DepositDrawerProps) {
         payload: { institutionType: "bank_instrument", bankHoldingId: h.id },
       });
     }
+    // "Open a brand-new bank deposit" — always available so a bank instrument can
+    // be funded directly from here even when the portfolio has none yet.
+    list.push({
+      value: "bank:new",
+      label: "+ New bank deposit",
+      sublabel: "Open a call or fixed deposit at a bank",
+      group: "Bank instruments",
+      icon: <PlusCircle className="w-4 h-4" />,
+      color: "text-sky-400",
+      taxNote: "15% WHT on interest (final tax)",
+      payload: { institutionType: "bank_instrument" },
+    });
     // Government securities buckets
     (["tbill", "ifb", "fxd"] as const).forEach((b) => {
       const m = GOV_META[b];
@@ -194,18 +210,74 @@ export function DepositDrawer({ open, onClose }: DepositDrawerProps) {
     depositDate: new Date().toISOString().slice(0, 10),
     notes: "",
   });
+  // Fields shown only when opening a brand-new bank deposit inline.
+  const [newBank, setNewBank] = useState({
+    bankName: "",
+    instrumentType: "fixed_deposit" as "fixed_deposit" | "call_deposit",
+    interestRate: "",
+    tenorMonths: "12",
+  });
 
   const selectedDest = destinations.find((d) => d.value === form.destination);
+  const isNewBank = form.destination === "bank:new";
 
   function resetForm() {
     setForm({ destination: "", amount: "", depositDate: new Date().toISOString().slice(0, 10), notes: "" });
+    setNewBank({ bankName: "", instrumentType: "fixed_deposit", interestRate: "", tenorMonths: "12" });
   }
 
-  function handleSubmit() {
+  async function handleSubmit() {
     const amount = parseFloat(form.amount);
     if (!amount || amount <= 0) { toast.error("Please enter a valid amount"); return; }
     if (!portfolioId) return;
     if (!selectedDest) { toast.error("Please choose where the money went"); return; }
+
+    // Opening a brand-new bank deposit: create the holding first, then record the
+    // deposit into the newly created holding so actuals stay in one place.
+    if (isNewBank) {
+      const bankName = newBank.bankName.trim();
+      if (!bankName) { toast.error("Enter the bank name"); return; }
+      const rate = parseFloat(newBank.interestRate);
+      if (isNaN(rate) || rate < 0) { toast.error("Enter a valid interest rate"); return; }
+      const isFixed = newBank.instrumentType === "fixed_deposit";
+      const tenor = isFixed ? Math.max(1, parseInt(newBank.tenorMonths || "12", 10)) : undefined;
+      try {
+        const start = new Date(form.depositDate + "T12:00:00.000Z");
+        let maturity: string | undefined;
+        if (isFixed && tenor) {
+          const m = new Date(start);
+          m.setMonth(m.getMonth() + tenor);
+          maturity = m.toISOString().slice(0, 10);
+        }
+        const res = await createBankHolding.mutateAsync({
+          portfolioId,
+          bankName,
+          label: `${bankName} ${isFixed ? `${tenor}-month fixed deposit` : "call deposit"}`,
+          instrumentType: newBank.instrumentType,
+          principal: 0, // principal is added by the deposit below to avoid double counting
+          interestRate: rate,
+          rateAsOfDate: form.depositDate,
+          startDate: form.depositDate,
+          tenorMonths: tenor,
+          maturityDate: maturity,
+          payoutFrequency: isFixed ? "maturity" : "on_call",
+        });
+        if (!res?.id) { toast.error("Could not open the bank deposit"); return; }
+        await utils.bankHoldings.list.invalidate();
+        addMutation.mutate({
+          portfolioId,
+          amount,
+          depositDate: form.depositDate,
+          notes: form.notes || undefined,
+          institutionType: "bank_instrument",
+          bankHoldingId: res.id,
+        });
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : "Could not open the bank deposit");
+      }
+      return;
+    }
+
     addMutation.mutate({
       portfolioId,
       amount,
@@ -368,7 +440,7 @@ export function DepositDrawer({ open, onClose }: DepositDrawerProps) {
                   <p className="text-xs text-muted-foreground">{selectedDest.sublabel} · {selectedDest.taxNote}</p>
                 ) : (
                   <p className="text-xs text-muted-foreground">
-                    Don't see your bank deposit or extra MMF? Add it first on the relevant page, then it appears here.
+                    Choose where the money landed. To open a new bank call/fixed deposit, pick “+ New bank deposit”. Extra MMF funds are added on the MMF Funds page.
                   </p>
                 )}
                 {selectedDest?.payload.bucket === "fxd" && (
@@ -384,6 +456,70 @@ export function DepositDrawer({ open, onClose }: DepositDrawerProps) {
                   </div>
                 )}
               </div>
+
+              {/* Inline new-bank-deposit details */}
+              {isNewBank && (
+                <div className="space-y-3 rounded-lg border border-sky-500/20 bg-sky-500/5 p-3">
+                  <div className="flex items-center gap-2">
+                    <Building2 className="w-3.5 h-3.5 text-sky-300" />
+                    <p className="text-xs font-semibold text-sky-300">New bank deposit details</p>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs text-muted-foreground">Bank name</Label>
+                    <Input
+                      placeholder="e.g. Equity Bank"
+                      value={newBank.bankName}
+                      onChange={(e) => setNewBank((b) => ({ ...b, bankName: e.target.value }))}
+                      className="bg-white/5 border-white/10 h-9 text-sm"
+                    />
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="space-y-1.5">
+                      <Label className="text-xs text-muted-foreground">Type</Label>
+                      <Select
+                        value={newBank.instrumentType}
+                        onValueChange={(v) => setNewBank((b) => ({ ...b, instrumentType: v as "fixed_deposit" | "call_deposit" }))}
+                      >
+                        <SelectTrigger className="bg-white/5 border-white/10 h-9 text-sm">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent className="bg-[#0d1117] border-white/10">
+                          <SelectItem value="fixed_deposit">Fixed deposit</SelectItem>
+                          <SelectItem value="call_deposit">Call deposit</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs text-muted-foreground">Rate (% p.a.)</Label>
+                      <Input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        placeholder="e.g. 10.5"
+                        value={newBank.interestRate}
+                        onChange={(e) => setNewBank((b) => ({ ...b, interestRate: e.target.value }))}
+                        className="bg-white/5 border-white/10 font-mono h-9 text-sm"
+                      />
+                    </div>
+                  </div>
+                  {newBank.instrumentType === "fixed_deposit" && (
+                    <div className="space-y-1.5">
+                      <Label className="text-xs text-muted-foreground">Tenor (months)</Label>
+                      <Input
+                        type="number"
+                        min="1"
+                        step="1"
+                        placeholder="e.g. 12"
+                        value={newBank.tenorMonths}
+                        onChange={(e) => setNewBank((b) => ({ ...b, tenorMonths: e.target.value }))}
+                        className="bg-white/5 border-white/10 font-mono h-9 text-sm"
+                      />
+                      <p className="text-xs text-muted-foreground">Maturity is set automatically from the deposit date. Early withdrawal usually forfeits interest.</p>
+                    </div>
+                  )}
+                  <p className="text-xs text-muted-foreground">Bank rates are indicative and usually negotiable. You can edit this deposit later on the Other Assets page.</p>
+                </div>
+              )}
 
               {/* Amount */}
               <div className="space-y-1.5">
@@ -423,10 +559,10 @@ export function DepositDrawer({ open, onClose }: DepositDrawerProps) {
 
               <Button
                 onClick={handleSubmit}
-                disabled={addMutation.isPending}
+                disabled={addMutation.isPending || createBankHolding.isPending}
                 className="w-full bg-primary hover:bg-primary/90 text-primary-foreground font-semibold"
               >
-                {addMutation.isPending ? "Saving…" : "Record Deposit"}
+                {addMutation.isPending || createBankHolding.isPending ? "Saving…" : isNewBank ? "Open Deposit & Record" : "Record Deposit"}
               </Button>
             </div>
           )}

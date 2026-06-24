@@ -7,6 +7,8 @@ import {
   getScheduledContribution,
   netYield,
   monthlyRate,
+  rankInstrumentsByNetYield,
+  joinWithAnd,
   checkMilestones,
   YEAR_MILESTONES,
   SCENARIO_STEPUPS,
@@ -547,5 +549,81 @@ describe("runProjection with rate schedule (time-locked rates)", () => {
     expect(result).toHaveLength(120);
     // Final total should be positive
     expect(result[119].totalEnd).toBeGreaterThan(0);
+  });
+});
+
+// ─── Round 28: yield-maximizing allocator & plain-language ledger ──────────────
+describe("rankInstrumentsByNetYield (Round 28)", () => {
+  const rates = {
+    tbill91Rate: 8.82,
+    tbill182Rate: 8.78,
+    tbill364Rate: 8.97,
+    ifbCouponRate: 12.5,
+    fxdCouponRate: 12.35,
+    withholdingTax: 15,
+  };
+
+  it("ranks tax-exempt IFB above taxed FXD and T-bills when long bonds fit", () => {
+    const ranked = rankInstrumentsByNetYield(rates, { maxTbillTenor: 12, allowLongBonds: true });
+    expect(ranked[0].bucket).toBe("ifb");
+    // IFB net == gross (tax-exempt)
+    expect(ranked[0].netPct).toBeCloseTo(12.5, 5);
+    // every entry's netPct is sorted descending
+    for (let i = 1; i < ranked.length; i++) {
+      expect(ranked[i - 1].netPct).toBeGreaterThanOrEqual(ranked[i].netPct);
+    }
+  });
+
+  it("excludes long bonds when allowLongBonds is false (near the horizon)", () => {
+    const ranked = rankInstrumentsByNetYield(rates, { maxTbillTenor: 6, allowLongBonds: false });
+    expect(ranked.every((r) => r.bucket === "tbill")).toBe(true);
+  });
+
+  it("returns nothing investable when no tenor fits and no bonds allowed", () => {
+    const ranked = rankInstrumentsByNetYield(rates, { maxTbillTenor: 0, allowLongBonds: false });
+    expect(ranked.length).toBe(0);
+  });
+
+  it("FXD net-of-tax yield is below its gross coupon (WHT applied)", () => {
+    const ranked = rankInstrumentsByNetYield(rates, { maxTbillTenor: 12, allowLongBonds: true });
+    const fxd = ranked.find((r) => r.bucket === "fxd")!;
+    expect(fxd.netPct).toBeLessThan(fxd.grossPct);
+    expect(fxd.netPct).toBeCloseTo(12.35 * 0.85, 4);
+  });
+});
+
+describe("joinWithAnd (Round 28)", () => {
+  it("formats lists in plain English", () => {
+    expect(joinWithAnd([])).toBe("");
+    expect(joinWithAnd(["a"]))   .toBe("a");
+    expect(joinWithAnd(["a", "b"])).toBe("a and b");
+    expect(joinWithAnd(["a", "b", "c"])).toBe("a, b and c");
+  });
+});
+
+describe("plain-language ledger main action (Round 28)", () => {
+  it("describes sweeps as a move from the MMF into a named instrument with a maturity month, with no raw jargon", () => {
+    const results = runProjection(
+      { ...DEFAULT_SETTINGS, startingContribution: 120000, stepUpAmount: 0, horizonMonths: 120, startDate: "2026-07-01" },
+      [], [], [], [], [], [], null,
+    );
+    const sweepMonth = results.find((r) => r.mmfToDhow > 0);
+    expect(sweepMonth).toBeTruthy();
+    expect(sweepMonth!.mainAction).toContain("Move KES");
+    expect(sweepMonth!.mainAction).toContain("from the MMF into");
+    expect(sweepMonth!.mainAction).toMatch(/maturing [A-Z][a-z]{2} \d{4}/);
+    // No leftover internal jargon in the plain-language label.
+    expect(sweepMonth!.mainAction).not.toContain("DhowCSD");
+    expect(sweepMonth!.mainAction).not.toMatch(/sweep KES/);
+  });
+
+  it("a no-sweep month reads as adding the saving to the MMF", () => {
+    const results = runProjection(
+      { ...DEFAULT_SETTINGS, startingContribution: 1000, stepUpAmount: 0, horizonMonths: 120, startDate: "2026-07-01" },
+      [], [], [], [], [], [], null,
+    );
+    const quiet = results.find((r) => r.mmfToDhow === 0 && r.cbkCashIn === 0);
+    expect(quiet).toBeTruthy();
+    expect(quiet!.mainAction.toLowerCase()).toContain("mmf");
   });
 });

@@ -439,3 +439,14 @@
 - [x] R27.14 Expand Banking reference: Ordinary Savings, Target/Goal Savings, Tiered/High-Yield Savings with 2026 data; editable + source/as-of.
 - [x] R27.15 Reconciliation completeness: include accrued interest, withdrawals, bank-instrument balances+interest, matured cash; sum-of-parts = projection/dashboard/accrual/net-worth; update test.
 - [x] R27.test/checkpoint/deliver: tsc clean; tests pass; regression in band; reconciliation green; checkpoint; deliver.
+
+## Round 28 — Bank-instrument integration & yield-maximizing sweep (pasted_content_15.txt)
+
+- [x] R28.1 Record Deposit: add "Bank instruments" group to destination dropdown; deposit into existing bankInstrumentHolding (add principal) or create new holding inline; flow into actuals, net worth, accrual, tax, liquidity calendar; reconciliation sum-of-parts includes bank instruments (stays green).
+- [x] R28.2 Projection allocation includes bank instruments: call deposits as MMF-like liquid, fixed/goal as T-bill-like lock-ins; respect maturity<=horizon and full liquidity at goal.
+- [x] R28.3 Yield-maximizing sweep: for each deployable amount pick highest net-of-tax yield across MMF + gov securities (91/182/364 T-bill, IFB, FXD) + bank instruments for allowed tenor (maturity<=remaining months); WHT per instrument (IFB exempt); net of fees; keep safety floor in MMF; issuer-concentration cap; document rule + per-sweep "why" note. 12-month plan should prefer longest instrument maturing by m12 when higher net yield.
+- [x] R28.4 Ledger Main Action plain-language: name instrument + tenor/maturity, source and destination ("Move KES 50,000 from MMF into a 182-day T-bill maturing May 2027"); no unexplained jargon.
+- [x] R28.5 Sync bank instruments across Dashboard bucket cards, growth chart bands, ledger columns, net worth, Current Rate Assumptions; reconciliation balances.
+- [x] R28.6 Verify/correct 2026 bank data with sources; record source URL + as-of date per row; indicative/negotiable; editable.
+- [x] R28.7 Expand Getting Started glossary with plain-language definitions (EAR, WHT, gross/net yield, day-count, daily compounding, MMF, call/fixed/savings deposits, T-bill, IFB, FXD, coupon, maturity, tenor, sweep, safety floor, liquidity, phases, step-up, reconciliation, blended yield, tax drag, net worth).
+- [x] R28.test/checkpoint/deliver: deposit into call+fixed deposit appears everywhere & recon green; sweep allocates across families with full liquidity at m12; ledger plain-language; dashboard reflects bank instruments; tsc clean; tests pass; checkpoint; deliver.

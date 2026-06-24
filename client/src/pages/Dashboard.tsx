@@ -263,8 +263,16 @@ export default function Dashboard() {
       tbill: r.tbillEnd,
       ifb: r.ifbEnd,
       fxd: r.fxdEnd,
+      bank: r.bankEnd ?? 0,
     }));
   }, [projection]);
+
+  // Whether this portfolio holds any bank instrument (call/fixed deposit). Bank
+  // deposits are user-recorded actuals, so the band/card only appear when present.
+  const usesBankInstruments = useMemo(
+    () => !!projection?.some((r) => (r.bankEnd ?? 0) > 0),
+    [projection]
+  );
 
   // Whether this plan ever holds government securities (T-bills / IFB / FXD).
   // Short-horizon or MMF-only plans never do, so we avoid claiming "CBK securities".
@@ -503,9 +511,9 @@ export default function Dashboard() {
         <div>
           <p className="text-xs text-muted-foreground mb-3 flex items-center gap-1.5">
             <Info className="w-3 h-3" />
-            These are the <strong className="text-foreground">projected balances in each bucket at Month {horizonMonths}</strong> — how your money is spread across the four investment instruments at the end of the {horizonYearsLabel}-year plan. These figures are driven by your contribution schedule and interest rates, not your goal amount. To see how different step-up amounts affect your outcome, visit the <Link href="/scenarios"><span className="text-primary hover:underline cursor-pointer">Scenarios</span></Link> page.
+            These are the <strong className="text-foreground">projected balances in each bucket at Month {horizonMonths}</strong> — how your money is spread across your investment instruments at the end of the {horizonYearsLabel}-year plan. These figures are driven by your contribution schedule and interest rates, not your goal amount. To see how different step-up amounts affect your outcome, visit the <Link href="/scenarios"><span className="text-primary hover:underline cursor-pointer">Scenarios</span></Link> page.
           </p>
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className={`grid grid-cols-2 gap-4 ${usesBankInstruments ? "lg:grid-cols-5" : "lg:grid-cols-4"}`}>
             {projLoading ? (
               Array.from({ length: 4 }).map((_, i) => (
                 <Card key={i}><CardContent className="p-5"><Skeleton className="h-20 w-full" /></CardContent></Card>
@@ -516,6 +524,7 @@ export default function Dashboard() {
                 { title: "T-Bills", key: "tbillEnd" as const, subtitle: "CBK Treasury Bills", icon: TrendingUp, accent: false, tooltip: `Your total invested in CBK Treasury Bills at Year ${horizonYearsLabel}. T-bills are short-term (91–364 days), very safe government instruments. You earn a discount return (net ~7.5% p.a. after 15% WHT deducted at source).` },
                 { title: "IFB Holdings", key: "ifbEnd" as const, subtitle: "Tax-exempt bonds", icon: Shield, accent: false, tooltip: `Your total invested in Infrastructure Finance Bonds at Year ${horizonYearsLabel}. IFBs pay a semi-annual coupon (e.g. 12.5% p.a.) and are 100% tax-exempt — you keep every shilling of interest earned.` },
                 { title: "FXD Bonds", key: "fxdEnd" as const, subtitle: "Fixed coupon bonds", icon: Landmark, accent: false, tooltip: `Your total invested in Fixed Coupon Bonds at Year ${horizonYearsLabel}. FXDs pay a semi-annual coupon (e.g. 12.35% gross, ~10.5% net after 15% WHT). They provide predictable income but the WHT is deducted before you receive the coupon.` },
+                ...(usesBankInstruments ? [{ title: "Bank Deposits", key: "bankEnd" as const, subtitle: "Call / fixed deposits", icon: Landmark, accent: false, tooltip: `Your recorded bank call and fixed deposits, projected forward at their own rates (net of WHT) at Year ${horizonYearsLabel}. Call deposits are liquid like the MMF; fixed deposits lock for a tenor and forfeit interest if broken early.` }] : []),
               ].map(({ title, key, subtitle, icon, accent, tooltip }) => {
                 const bucketValue = lastData?.[key] ?? 0;
                 const pctOfTarget = targetAmount > 0 ? ((bucketValue / targetAmount) * 100).toFixed(1) : "0.0";
@@ -657,6 +666,9 @@ export default function Dashboard() {
                   <Area type="monotone" dataKey="tbill" name="T-Bills" stackId="1" stroke="oklch(0.70 0.12 160)" fill="oklch(0.70 0.12 160 / 0.1)" strokeWidth={1.5} />
                   <Area type="monotone" dataKey="ifb" name="IFB" stackId="1" stroke="oklch(0.78 0.14 85)" fill="url(#totalGrad)" strokeWidth={2} />
                   <Area type="monotone" dataKey="fxd" name="FXD" stackId="1" stroke="oklch(0.65 0.15 280)" fill="oklch(0.65 0.15 280 / 0.1)" strokeWidth={1.5} />
+                  {usesBankInstruments && (
+                    <Area type="monotone" dataKey="bank" name="Bank deposits" stackId="1" stroke="oklch(0.72 0.13 50)" fill="oklch(0.72 0.13 50 / 0.12)" strokeWidth={1.5} />
+                  )}
                 </AreaChart>
               </ResponsiveContainer>
             )}

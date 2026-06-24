@@ -1981,7 +1981,7 @@ export const appRouter = router({
       }))
       .mutation(async ({ ctx, input }) => {
         await requirePortfolio(input.portfolioId, ctx.user.id);
-        await addBankInstrumentHolding({
+        const created = await addBankInstrumentHolding({
           portfolioId: input.portfolioId,
           bankName: input.bankName,
           label: input.label,
@@ -2008,7 +2008,7 @@ export const appRouter = router({
           changedByName: ctx.user.name ?? null,
           summary: `Added ${input.instrumentType.replace("_", " ")} at ${input.bankName} (KES ${input.principal.toLocaleString()})`,
         });
-        return { success: true };
+        return { success: true, id: created?.id ?? null };
       }),
     update: protectedProcedure
       .input(z.object({

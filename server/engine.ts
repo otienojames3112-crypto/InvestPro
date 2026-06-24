@@ -527,6 +527,91 @@ export function liquidityGuardForMonth(
   return { allowed: maxTbillTenor > 0, maxTbillTenor, allowLongBonds };
 }
 
+/**
+ * NET-OF-TAX YIELD RANKING (Round 28).
+ *
+ * For a given month's rates and the tenors the liquidity guard currently permits,
+ * compute the effective NET annual yield of each auto-investable CBK family and
+ * return them ranked highest-first. This is the basis of the yield-maximizing
+ * sweep: within what end-state liquidity allows, deploy toward the family that
+ * keeps the most money after tax.
+ *   - T-bill: discount taxed at WHT; we score the LONGEST permitted tenor (its
+ *             364/182/91-day rate) since longer bills generally yield more and the
+ *             guard already caps tenor so nothing matures past the goal.
+ *   - IFB:    coupon is TAX-EXEMPT, so its gross rate is its net rate — usually the
+ *             top of the table. Only available when long bonds still fit (allowLongBonds).
+ *   - FXD:    coupon taxed at WHT. Only available when long bonds still fit.
+ * Returns an array of { bucket, grossPct, netPct, tenorMonths, label } sorted by netPct desc.
+ */
+export interface RankedInstrument {
+  bucket: "tbill" | "ifb" | "fxd";
+  grossPct: number;
+  netPct: number;
+  tenorMonths: number;
+  label: string;
+  taxNote: string;
+}
+
+export function rankInstrumentsByNetYield(
+  rates: Pick<EngineSettings, "tbill91Rate" | "tbill182Rate" | "tbill364Rate" | "ifbCouponRate" | "fxdCouponRate" | "withholdingTax">,
+  opts: { maxTbillTenor: 0 | 3 | 6 | 12; allowLongBonds: boolean; longBondTenorMonths?: number },
+): RankedInstrument[] {
+  const out: RankedInstrument[] = [];
+  const wht = rates.withholdingTax;
+  // T-bill at the longest permitted tenor.
+  if (opts.maxTbillTenor > 0) {
+    const t = opts.maxTbillTenor;
+    const gross = tbillRateForTenor(t, rates);
+    out.push({
+      bucket: "tbill",
+      grossPct: gross,
+      netPct: netYield(gross, wht),
+      tenorMonths: t,
+      label: tenorLabel("tbill", t),
+      taxNote: `${wht}% WHT on discount`,
+    });
+  }
+  if (opts.allowLongBonds) {
+    const bondTenor = opts.longBondTenorMonths ?? 24;
+    // IFB — tax exempt: net == gross.
+    out.push({
+      bucket: "ifb",
+      grossPct: rates.ifbCouponRate,
+      netPct: rates.ifbCouponRate,
+      tenorMonths: bondTenor,
+      label: tenorLabel("ifb", bondTenor),
+      taxNote: "tax-exempt",
+    });
+    // FXD — coupon taxed.
+    out.push({
+      bucket: "fxd",
+      grossPct: rates.fxdCouponRate,
+      netPct: netYield(rates.fxdCouponRate, wht),
+      tenorMonths: bondTenor,
+      label: tenorLabel("fxd", bondTenor),
+      taxNote: `${wht}% WHT on coupon`,
+    });
+  }
+  return out.sort((a, b) => b.netPct - a.netPct);
+}
+
+/** Join a list into plain English: [a] -> "a"; [a,b] -> "a and b"; [a,b,c] -> "a, b and c". */
+export function joinWithAnd(parts: string[]): string {
+  if (parts.length === 0) return "";
+  if (parts.length === 1) return parts[0];
+  return parts.slice(0, -1).join(", ") + " and " + parts[parts.length - 1];
+}
+
+/** Capitalise the first character of a string. */
+export function capitalise(s: string): string {
+  return s.length === 0 ? s : s[0].toUpperCase() + s.slice(1);
+}
+
+/** Lower-case the first character of a string (for mid-sentence joins). */
+export function lowerFirst(s: string): string {
+  return s.length === 0 ? s : s[0].toLowerCase() + s.slice(1);
+}
+
 /** Human-readable tenor label for a swept lot, e.g. "364-day T-bill". */
 export function tenorLabel(bucket: "tbill" | "ifb" | "fxd", tenorMonths: number): string {
   if (bucket === "tbill") {
@@ -822,8 +907,6 @@ export function runProjection(
 
       if (age === lot.tenorMonths) {
         cbkCashIn += lot.faceValue;
-        cbkActions.push(`${tenorLabel(lot.bucket, lot.tenorMonths)} maturity KES ${Math.round(lot.faceValue).toLocaleString()}`);
-
         if (lot.bucket === "tbill") {
           const tenorYears = lot.tenorMonths / 12;
           // Use the rate matching the lot's tenor (91/182/364-day), not always 364.
@@ -831,7 +914,13 @@ export function runProjection(
           const netInterest = grossInterest * (1 - wht);
           whtThisMonth += grossInterest * wht;
           cbkCashIn += netInterest;
-          cbkActions.push(`net discount KES ${Math.round(netInterest).toLocaleString()}`);
+          cbkActions.push(
+            `a ${tenorLabel(lot.bucket, lot.tenorMonths)} matures, returning KES ${Math.round(lot.faceValue + netInterest).toLocaleString()} to the MMF (KES ${Math.round(netInterest).toLocaleString()} net interest after ${rates.withholdingTax}% tax)`
+          );
+        } else {
+          cbkActions.push(
+            `a ${tenorLabel(lot.bucket, lot.tenorMonths)} matures, returning KES ${Math.round(lot.faceValue).toLocaleString()} to the MMF`
+          );
         }
         continue;
       }
@@ -840,12 +929,12 @@ export function runProjection(
         const grossCoupon = (lot.couponRate / 100 / 2) * lot.faceValue;
         if (lot.isTaxExempt) {
           cbkCashIn += grossCoupon;
-          cbkActions.push(`IFB coupon KES ${Math.round(grossCoupon).toLocaleString()} (tax-exempt)`);
+          cbkActions.push(`an IFB pays a KES ${Math.round(grossCoupon).toLocaleString()} coupon into the MMF (tax-exempt)`);
         } else {
           const netCoupon = grossCoupon * (1 - wht);
           whtThisMonth += grossCoupon * wht;
           cbkCashIn += netCoupon;
-          cbkActions.push(`FXD coupon KES ${Math.round(netCoupon).toLocaleString()} (net of ${rates.withholdingTax}% WHT)`);
+          cbkActions.push(`an FXD bond pays a KES ${Math.round(netCoupon).toLocaleString()} coupon into the MMF (after ${rates.withholdingTax}% tax)`);
         }
       }
 
@@ -930,16 +1019,38 @@ export function runProjection(
           gap.tbill += Math.max(0, want.ifb - held.ifb) + Math.max(0, want.fxd - held.fxd);
         }
 
-        // Convert gaps to whole 50k lots, capped by the lots we can afford.
+        // ── YIELD-MAXIMIZING ORDER (Round 28) ──────────────────────────────
+        // Fill the phase gaps in order of NET-OF-TAX YIELD (highest first) for the
+        // instruments the liquidity guard currently permits, instead of a fixed
+        // ifb→fxd→tbill order. IFB (tax-exempt) usually ranks top, but if FXD's
+        // after-tax coupon or a long T-bill out-yields it for this month's rates,
+        // money flows there first. A per-family CONCENTRATION CAP keeps any single
+        // family from absorbing the whole surplus in one month.
+        const ranked = rankInstrumentsByNetYield(rates, {
+          maxTbillTenor: tbillTenorThisMonth,
+          allowLongBonds: !noNewLongBonds,
+          longBondTenorMonths: 24,
+        });
+        // Concentration cap: at most this share of the whole portfolio in one family.
+        const FAMILY_CONCENTRATION_CAP = 0.6;
+        const capKES = (mmf + held.tbill + held.ifb + held.fxd) * FAMILY_CONCENTRATION_CAP;
         let remaining = maxLots;
-        const order: Array<"ifb" | "fxd" | "tbill"> = ["ifb", "fxd", "tbill"];
-        for (const b of order) {
+        // Order the three families by their net-yield rank for this month.
+        const order = ranked.map((r) => r.bucket).filter((b) => gap[b] > 0);
+        // Ensure tbill is always a fallback target even if it wasn't ranked above 0 gap.
+        for (const b of [...order, "tbill" as const]) {
           if (remaining <= 0) break;
-          const lotsForB = Math.min(remaining, Math.floor(gap[b] / SWEEP_LOT_SIZE));
-          sweepBuy[b] += lotsForB;
-          remaining -= lotsForB;
+          if (sweepBuy[b] > 0 && order.includes(b)) continue; // already filled in ranked pass
+          const headroomKES = Math.max(0, capKES - (held[b] + sweepBuy[b] * SWEEP_LOT_SIZE));
+          const wantLots = Math.floor(Math.min(gap[b], headroomKES) / SWEEP_LOT_SIZE);
+          const lotsForB = Math.min(remaining, wantLots);
+          if (lotsForB > 0) {
+            sweepBuy[b] += lotsForB;
+            remaining -= lotsForB;
+          }
         }
-        // Any leftover affordable lots (rounding) go to T-bills for liquidity.
+        // Any leftover affordable lots (rounding / capped families) go to T-bills
+        // for liquidity — they are the most liquid CBK family and always permitted.
         if (remaining > 0) {
           sweepBuy.tbill += remaining;
           remaining = 0;
@@ -1007,21 +1118,39 @@ export function runProjection(
     // Tenor used by T-bills bought THIS month (for the label) — the guard caps it.
     const sweptTbillTenor = Math.min(tenorFor("tbill", phase, isShortHorizon), tbillTenorThisMonth || 3);
     let mainAction = "";
+    // ── PLAIN-LANGUAGE MAIN ACTION (Round 28) ──────────────────────────────
+    // Describe each buy as a move FROM the MMF INTO a named instrument, with its
+    // tenor and the calendar month it matures — e.g.
+    // "Move KES 50,000 from the MMF into a 182-day T-bill maturing May 2027".
+    const monthName = (offsetFromThis: number): string => {
+      const d = new Date(startDate);
+      d.setMonth(d.getMonth() + (m - 1) + offsetFromThis);
+      return d.toLocaleDateString("en-GB", { month: "short", year: "numeric" });
+    };
     const buyParts: string[] = [];
-    if (sweepBuy.ifb > 0) buyParts.push(`${sweepBuy.ifb}× ${tenorLabel("ifb", tenorFor("ifb", phase, isShortHorizon))}`);
-    if (sweepBuy.fxd > 0) buyParts.push(`${sweepBuy.fxd}× ${tenorLabel("fxd", tenorFor("fxd", phase, isShortHorizon))}`);
-    if (sweepBuy.tbill > 0) buyParts.push(`${sweepBuy.tbill}× ${tenorLabel("tbill", sweptTbillTenor)}`);
+    if (sweepBuy.ifb > 0) {
+      const t = tenorFor("ifb", phase, isShortHorizon);
+      buyParts.push(`${sweepBuy.ifb === 1 ? "a" : sweepBuy.ifb + "×"} ${tenorLabel("ifb", t)} (tax-exempt) maturing ${monthName(t)}`);
+    }
+    if (sweepBuy.fxd > 0) {
+      const t = tenorFor("fxd", phase, isShortHorizon);
+      buyParts.push(`${sweepBuy.fxd === 1 ? "a" : sweepBuy.fxd + "×"} ${tenorLabel("fxd", t)} maturing ${monthName(t)}`);
+    }
+    if (sweepBuy.tbill > 0) {
+      buyParts.push(`${sweepBuy.tbill === 1 ? "a" : sweepBuy.tbill + "×"} ${tenorLabel("tbill", sweptTbillTenor)} maturing ${monthName(sweptTbillTenor)}`);
+    }
     const sweepDesc = mmfToDhow > 0
-      ? `sweep KES ${Math.round(mmfToDhow).toLocaleString()} → ${buyParts.join(", ")}`
+      ? `Move KES ${Math.round(mmfToDhow).toLocaleString()} from the MMF into ${joinWithAnd(buyParts)}`
       : "";
+    // Maturities/coupons already arrive as plain phrases in cbkActions.
     if (cbkActions.length > 0 && sweepDesc) {
-      mainAction = `${cbkActions.join("; ")}; ${sweepDesc}`;
+      mainAction = `${capitalise(cbkActions.join("; "))}, then ${lowerFirst(sweepDesc)}`;
     } else if (cbkActions.length > 0) {
-      mainAction = `${cbkActions.join("; ")}; deposit to MMF`;
+      mainAction = `${capitalise(cbkActions.join("; "))}; cash stays in the MMF this month`;
     } else if (sweepDesc) {
-      mainAction = `Deposit to MMF; ${sweepDesc}`;
+      mainAction = sweepDesc;
     } else {
-      mainAction = "Deposit to MMF; no DhowCSD sweep this month";
+      mainAction = "Add this month's saving to the MMF; nothing swept into securities this month";
     }
 
     const total = mmf + tbillEnd + ifbEnd + fxdEnd + secondaryMmfEnd + bankEnd;

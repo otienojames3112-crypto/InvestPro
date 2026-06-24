@@ -90,6 +90,7 @@ import {
 } from "./engine";
 import { COOKIE_NAME } from "../shared/const";
 import { reconcile, reconcileMmf } from "../shared/reconciliation";
+import { buildAllocation, blendedYield } from "../shared/actuals";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -642,13 +643,66 @@ export const appRouter = router({
         ? lastActual.totalEnd - (lastActual.mmfEnd - primaryMmfBalance)
         : sumParts;
 
-      // Round 30: the Portfolio Review allocation and the Tax Summary blended-yield
-      // base are now reconciled sources. Both pages define net worth as the same
-      // sum-of-parts (primary MMF + secondary MMFs + bank deposits + CBK securities),
-      // so we recompute that figure here on the identical principal basis used for
-      // the reference. If a page ever drops a pocket again, its source turns red.
-      const portfolioReviewNetWorth = sumParts;
-      const taxSummaryBase = sumParts;
+      // Round 32: Portfolio Review and Tax Summary sources are now computed by
+      // calling the SAME shared functions the pages render with (`buildAllocation`
+      // and `blendedYield`), fed from the raw DB rows — NOT by re-stating the
+      // reference. If a page's shared math drifts (e.g. a double-count creeps back
+      // into buildAllocation, or a pocket is dropped), its source diverges from the
+      // principal-basis reference and the row turns red. This makes the cross-check
+      // real rather than a tautology.
+      const depositRowsForAlloc = await getDepositEntries(input.portfolioId);
+      const otherHoldingRows = await getOtherHoldings(input.portfolioId);
+      const allocation = buildAllocation({
+        deposits: depositRowsForAlloc.map((d) => ({
+          amount: parseFloat(String(d.amount ?? "0")) || 0,
+          bucket: d.bucket,
+          institutionType: d.institutionType,
+          mmfFundId: d.mmfFundId,
+        })),
+        securities: securities.map((s) => ({
+          securityType: s.securityType,
+          faceValue: parseFloat(String(s.faceValue ?? "0")) || 0,
+          isMatured: s.isMatured,
+        })),
+        secondaryMmfs: secondaries.map((s) => ({
+          mmfFundId: s.id,
+          currentBalance: parseFloat(String(s.currentBalance ?? "0")) || 0,
+          ear: parseFloat(String(s.ear ?? "0")) || 0,
+        })),
+        bankHoldings: bank.map((b) => ({
+          principal: parseFloat(String(b.principal ?? "0")) || 0,
+          interestRate: parseFloat(String(b.interestRate ?? "0")) || 0,
+          isActive: b.isActive,
+          // Reconcile on the PRINCIPAL basis (matches the reference): ignore accrued
+          // currentValue here so an un-elapsed deposit reconciles to its principal.
+          currentValue: 0,
+        })),
+        otherHoldings: otherHoldingRows.map((h) => ({
+          assetClass: h.assetClass,
+          currentValue: parseFloat(String(h.currentValue ?? "0")) || 0,
+        })),
+      });
+      // Other assets are not part of the principal-basis reference, so subtract
+      // them to compare the same pockets the reference covers.
+      const otherTotal = Object.values(allocation.other).reduce((a, b) => a + b, 0);
+      const portfolioReviewNetWorth = allocation.netWorth - otherTotal;
+
+      const taxBlended = blendedYield({
+        primaryMmf: allocation.primaryMmf,
+        primaryMmfRate: settings.mmfYield,
+        secondaryMmfs: secondaries.map((s) => ({
+          balance: parseFloat(String(s.currentBalance ?? "0")) || 0,
+          rate: parseFloat(String(s.ear ?? "0")) || 0,
+        })),
+        bankHoldings: bankHoldingPrincipals.map((v) => ({ value: v, rate: 0 })),
+        securities: [
+          { value: allocation.tbill, rate: settings.tbill364Rate, taxExempt: false },
+          { value: allocation.ifb, rate: settings.ifbCouponRate, taxExempt: true },
+          { value: allocation.fxd, rate: settings.fxdCouponRate, taxExempt: false },
+        ],
+        whtRate: settings.withholdingTax,
+      });
+      const taxSummaryBase = taxBlended.base;
 
       const inputs = {
         primaryMmfBalance,

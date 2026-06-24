@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import { AppShell } from "@/components/AppShell";
 import { usePortfolio } from "@/contexts/PortfolioContext";
 import { useSelectedFund } from "@/hooks/useSelectedFund";
-import { bankHoldingValue } from "@shared/actuals";
+import { bankHoldingValue, blendedYield } from "@shared/actuals";
 import { trpc } from "@/lib/trpc";
 import {
   Card,
@@ -108,8 +108,6 @@ export default function TaxSummary() {
   // Authoritative: when a fund is selected the engine uses its EAR; otherwise the
   // manual saved mmfYield is the fallback (matches dbToEngine on the server).
   const mmfYield = fund.hasFund ? fund.fundEar : (settings?.mmfYield ?? fund.fundEar);
-  // Total balance + gross income across ALL tracked MMF accounts (primary + secondary).
-  const secondaryMmfBalance = secondaryMmfs.reduce((s, m) => s + m.currentBalance, 0);
   const tbillRate = settings?.tbill364Rate ?? 8.97;
   const ifbRate = settings?.ifbCouponRate ?? 12.5;
   const fxdRate = settings?.fxdCouponRate ?? 12.35;
@@ -235,48 +233,35 @@ export default function TaxSummary() {
     return result;
   }, [buckets, mmfYield, tbillRate, ifbRate, fxdRate, whtRate, fund.fundLabel, holdings, secondaryMmfs, bankHoldings]);
 
-  // Gross annual MMF income across all accounts (for blended yield weighting).
-  const secondaryMmfGross = secondaryMmfs.reduce((s, m) => s + m.currentBalance * (m.ear / 100), 0);
-
-  // Bank-instrument balances and gross interest (Round 30: bank deposits are part
-  // of the blended-yield base so this page equals the Dashboard net worth).
-  const bankBalance = (bankHoldings ?? [])
-    .filter((b) => b.isActive)
-    .reduce((s, b) => s + bankHoldingValue({ principal: Number(b.principal ?? 0), interestRate: Number(b.interestRate ?? 0), isActive: b.isActive, currentValue: Number(b.currentValue ?? 0) }), 0);
-  const bankGross = (bankHoldings ?? [])
-    .filter((b) => b.isActive)
-    .reduce((s, b) => {
-      const val = bankHoldingValue({ principal: Number(b.principal ?? 0), interestRate: Number(b.interestRate ?? 0), isActive: b.isActive, currentValue: Number(b.currentValue ?? 0) });
-      return s + val * (Number(b.interestRate ?? 0) / 100);
-    }, 0);
-
   const totalGross = lines.reduce((s, l) => s + l.basis, 0);
   const totalTax = lines.reduce((s, l) => s + l.tax, 0);
   const totalNet = lines.reduce((s, l) => s + l.net, 0);
   const effectiveTaxRate = totalGross > 0 ? (totalTax / totalGross) * 100 : 0;
 
-  const fixedIncomeTotal =
-    buckets.mmf + secondaryMmfBalance + bankBalance + buckets.tbill + buckets.ifb + buckets.fxd;
-  const grossYieldBlended =
-    fixedIncomeTotal > 0
-      ? ((buckets.mmf * mmfYield +
-          secondaryMmfGross * 100 +
-          bankGross * 100 +
-          buckets.tbill * tbillRate +
-          buckets.ifb * ifbRate +
-          buckets.fxd * fxdRate) /
-          fixedIncomeTotal)
-      : 0;
-  const netYieldBlended =
-    fixedIncomeTotal > 0
-      ? (lines
-          .filter((l) =>
-            ["interest", "discount", "coupon"].some((k) => l.source.toLowerCase().includes(k))
-          )
-          .reduce((s, l) => s + l.net, 0) /
-          fixedIncomeTotal) *
-        100
-      : 0;
+  // Round 32: blended yield via the ONE shared helper. Net yield is computed on
+  // the SAME base as gross (each component's gross minus WHT, IFB exempt), so a
+  // bank-deposit line can no longer be dropped from the numerator while staying
+  // in the denominator (the cause of the prior impossible ~3.56% net yield).
+  const blended = blendedYield({
+    primaryMmf: buckets.mmf,
+    primaryMmfRate: mmfYield,
+    secondaryMmfs: secondaryMmfs.map((m) => ({ balance: m.currentBalance, rate: m.ear })),
+    bankHoldings: (bankHoldings ?? [])
+      .filter((b) => b.isActive)
+      .map((b) => ({
+        value: bankHoldingValue({ principal: Number(b.principal ?? 0), interestRate: Number(b.interestRate ?? 0), isActive: b.isActive, currentValue: Number(b.currentValue ?? 0) }),
+        rate: Number(b.interestRate ?? 0),
+      })),
+    securities: [
+      { value: buckets.tbill, rate: tbillRate, taxExempt: false },
+      { value: buckets.ifb, rate: ifbRate, taxExempt: true },
+      { value: buckets.fxd, rate: fxdRate, taxExempt: false },
+    ],
+    whtRate,
+  });
+  const fixedIncomeTotal = blended.base;
+  const grossYieldBlended = blended.grossYield;
+  const netYieldBlended = blended.netYield;
 
   return (
     <AppShell>

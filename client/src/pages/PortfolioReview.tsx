@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import { AppShell } from "@/components/AppShell";
 import { usePortfolio } from "@/contexts/PortfolioContext";
 import { useSelectedFund } from "@/hooks/useSelectedFund";
-import { bankHoldingValue } from "@shared/actuals";
+import { bankHoldingValue, buildAllocation, blendedYield } from "@shared/actuals";
 import { bankInstrumentLabel } from "@shared/const";
 import { trpc } from "@/lib/trpc";
 import {
@@ -99,73 +99,30 @@ export default function PortfolioReview() {
     { portfolioId: portfolioId!, limit: 25 },
     { enabled: !!portfolioId }
   );
-
-  // ─── Net worth allocation ───────────────────────────────────────────────
-  // MMF bucket = primary-MMF deposit rows only. Bank- and secondary-MMF
-  // deposits are represented by their own balances (secondaryTotal / holdings),
-  // and government securities are valued from the REGISTER (source of truth),
-  // so those deposit rows are excluded here to avoid double-counting.
-  const buckets = useMemo(() => {
-    const acc = { mmf: 0, tbill: 0, ifb: 0, fxd: 0 };
-    (deposits ?? []).forEach((d) => {
-      const inst = (d as { institutionType?: string | null }).institutionType;
-      if (inst === "government_security" || inst === "bank_instrument") return;
-      if (d.bucket === "mmf") acc.mmf += Number(d.amount);
-    });
-    (securities ?? []).forEach((s) => {
-      if (s.isMatured) return;
-      const face = Number(s.faceValue);
-      if (s.securityType.startsWith("tbill")) acc.tbill += face;
-      else if (s.securityType === "ifb") acc.ifb += face;
-      else acc.fxd += face;
-    });
-    return acc;
-  }, [deposits, securities]);
-
-  const secondaryTotal = useMemo(
-    () =>
-      (secondary ?? []).reduce(
-        (s: number, m: { currentBalance: number }) => s + Number(m.currentBalance ?? 0),
-        0
-      ),
-    [secondary]
+  const { data: pSettings } = trpc.settings.get.useQuery(
+    { portfolioId: portfolioId! },
+    { enabled: !!portfolioId }
   );
 
-  // Bank-instrument holdings (call/fixed/savings/goal/tiered) at their accrued
-  // value (currentValue, else principal). Round 30: these MUST be part of net
-  // worth so this page equals the Dashboard / Reconciliation figure.
-  const bankTotal = useMemo(
+  // ─── Net worth allocation (Round 32: single shared path) ────────────────
+  // `buildAllocation` is the ONE net-worth builder shared with Reconciliation.
+  // It excludes secondary-MMF and bank/government deposit ROWS from the
+  // primary-MMF bucket, fixing the prior double-count of secondary deposits.
+  const alloc = useMemo(
     () =>
-      (bankHoldings ?? [])
-        .filter((b) => b.isActive)
-        .reduce(
-          (s: number, b) => s + bankHoldingValue({ principal: Number(b.principal ?? 0), interestRate: Number(b.interestRate ?? 0), isActive: b.isActive, currentValue: Number(b.currentValue ?? 0) }),
-          0
-        ),
-    [bankHoldings]
+      buildAllocation({
+        deposits: (deposits ?? []) as never,
+        securities: (securities ?? []) as never,
+        secondaryMmfs: (secondary ?? []) as never,
+        bankHoldings: (bankHoldings ?? []) as never,
+        otherHoldings: (holdings ?? []) as never,
+        assetLabels: ASSET_LABELS,
+      }),
+    [deposits, securities, secondary, bankHoldings, holdings]
   );
-
-  const allocation = useMemo(() => {
-    const items: { label: string; value: number }[] = [];
-    // Government + MMF block (primary MMF, secondary MMFs, all CBK securities).
-    const govAndMmf =
-      buckets.mmf + buckets.tbill + buckets.ifb + buckets.fxd + secondaryTotal;
-    if (govAndMmf > 0)
-      items.push({ label: "MMF + CBK Securities", value: govAndMmf });
-    // Bank deposits are a distinct asset class (bank credit risk vs sovereign).
-    if (bankTotal > 0)
-      items.push({ label: "Bank Deposits", value: bankTotal });
-    const byClass: Record<string, number> = {};
-    (holdings ?? []).forEach((h) => {
-      byClass[h.assetClass] = (byClass[h.assetClass] ?? 0) + h.currentValue;
-    });
-    Object.entries(byClass).forEach(([k, v]) =>
-      items.push({ label: ASSET_LABELS[k] ?? k, value: v })
-    );
-    return items.sort((a, b) => b.value - a.value);
-  }, [buckets, holdings, secondaryTotal, bankTotal]);
-
-  const netWorth = allocation.reduce((s, a) => s + a.value, 0);
+  const buckets = { mmf: alloc.primaryMmf, tbill: alloc.tbill, ifb: alloc.ifb, fxd: alloc.fxd };
+  const allocation = alloc.items;
+  const netWorth = alloc.netWorth;
 
   // ─── Benchmark comparison ───────────────────────────────────────────────
   const bench = useMemo(() => {
@@ -181,38 +138,35 @@ export default function PortfolioReview() {
   // primary MMF, secondary MMFs, bank instruments and CBK securities. This is
   // the actual portfolio yield, not just the primary fund's quoted rate.
   const blended = useMemo(() => {
-    const parts: { bal: number; rate: number }[] = [];
-    const primaryMmfBal = buckets.mmf;
-    if (primaryMmfBal > 0) parts.push({ bal: primaryMmfBal, rate: fund.fundEar });
-    (secondary ?? []).forEach((s) => {
-      const bal = Number(s.currentBalance ?? 0);
-      if (bal > 0) parts.push({ bal, rate: Number(s.ear ?? 0) });
+    const result = blendedYield({
+      primaryMmf: buckets.mmf,
+      primaryMmfRate: fund.fundEar,
+      secondaryMmfs: (secondary ?? []).map((s) => ({ balance: Number(s.currentBalance ?? 0), rate: Number(s.ear ?? 0) })),
+      bankHoldings: (bankHoldings ?? [])
+        .filter((b) => b.isActive)
+        .map((b) => ({ value: bankHoldingValue({ principal: Number(b.principal ?? 0), interestRate: Number(b.interestRate ?? 0), isActive: b.isActive, currentValue: Number(b.currentValue ?? 0) }), rate: Number(b.interestRate ?? 0) })),
+      securities: (securities ?? [])
+        .filter((s) => !s.isMatured && Number(s.faceValue ?? 0) > 0)
+        .map((s) => {
+          let rate: number;
+          if (s.securityType === "ifb") rate = bench["ifb_coupon"]?.value ?? 12.5;
+          else if (s.securityType === "fxd") rate = bench["fxd_coupon"]?.value ?? 12.35;
+          else rate = bench["tbill_91"]?.value ?? 8.82;
+          return { value: Number(s.faceValue ?? 0), rate, taxExempt: s.securityType === "ifb" };
+        }),
+      whtRate: pSettings?.withholdingTax ?? 15,
     });
-    (bankHoldings ?? []).forEach((b) => {
-      if (!b.isActive) return;
-      const bal = Number(b.principal ?? 0);
-      if (bal > 0) parts.push({ bal, rate: Number(b.interestRate ?? 0) });
-    });
-    (securities ?? []).forEach((s) => {
-      if (s.isMatured) return;
-      const bal = Number(s.faceValue ?? 0);
-      if (bal <= 0) return;
-      // Approximate each security's gross yield from its type.
-      let rate = 0;
-      if (s.securityType === "ifb") rate = bench["ifb_coupon"]?.value ?? 12.5;
-      else if (s.securityType === "fxd") rate = bench["fxd_coupon"]?.value ?? 12.35;
-      else rate = bench["tbill_91"]?.value ?? 8.82;
-      parts.push({ bal, rate });
-    });
-    const totalBal = parts.reduce((s, p) => s + p.bal, 0);
-    if (totalBal <= 0) return { yield: fund.fundEar, totalBal: 0, parts };
-    const weighted = parts.reduce((s, p) => s + p.bal * p.rate, 0) / totalBal;
-    return { yield: weighted, totalBal, parts };
-  }, [buckets.mmf, secondary, bankHoldings, securities, fund.fundEar, bench]);
+    const partCount =
+      (buckets.mmf > 0 ? 1 : 0) +
+      (secondary ?? []).filter((s) => Number(s.currentBalance ?? 0) > 0).length +
+      (bankHoldings ?? []).filter((b) => b.isActive && Number(b.principal ?? 0) > 0).length +
+      (securities ?? []).filter((s) => !s.isMatured && Number(s.faceValue ?? 0) > 0).length;
+    return { yield: result.base > 0 ? result.grossYield : fund.fundEar, netYield: result.netYield, totalBal: result.base, partCount };
+  }, [buckets.mmf, secondary, bankHoldings, securities, fund.fundEar, bench, pSettings?.withholdingTax]);
 
   const yourYield = blended.yield;
   const benchRows = [
-    { key: "your", label: blended.parts.length > 1 ? "Your Portfolio (blended)" : `Your Fund (${fund.fundLabel})`, value: yourYield, highlight: true },
+    { key: "your", label: blended.partCount > 1 ? "Your Portfolio (blended)" : `Your Fund (${fund.fundLabel})`, value: yourYield, highlight: true },
     bench["mmf_market_avg"] && { key: "mmf_market_avg", ...bench["mmf_market_avg"], highlight: false },
     bench["mmf_leaders_avg"] && { key: "mmf_leaders_avg", ...bench["mmf_leaders_avg"], highlight: false },
     bench["deposit_rate_avg"] && { key: "deposit_rate_avg", ...bench["deposit_rate_avg"], highlight: false },

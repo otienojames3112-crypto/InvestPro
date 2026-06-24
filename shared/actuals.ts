@@ -341,3 +341,227 @@ export function earlyBreakWhatIf(input: EarlyBreakWhatIfInput): EarlyBreakWhatIf
   const netIfBrokenNow = Math.round((principal + retainedInterest) * 100) / 100;
   return { accruedInterest, penaltyAmount, retainedInterest, netIfBrokenNow };
 }
+
+
+/**
+ * ROUND 32 — ONE SHARED VALUATION PATH
+ * ------------------------------------------------------------------------
+ * The Dashboard, Portfolio Review, Tax Summary and Reconciliation pages must
+ * all derive net worth and blended yield from the SAME code. Previously each
+ * page hand-rolled its own bucket math, which let Portfolio Review double-count
+ * secondary-MMF deposits (a secondary-fund deposit row is `bucket:"mmf"` AND
+ * `institutionType:"mmf_fund"`, so it leaked into the primary-MMF bucket while
+ * ALSO being added via the secondary balance) and let Tax Summary compute an
+ * impossible net yield. These helpers are the single source of truth; both the
+ * pages and the reconciliation cross-check call them with the same raw inputs.
+ */
+
+/** Raw deposit row as returned by `trpc.deposits.list`. */
+export interface RawDepositRow {
+  amount: number | string;
+  bucket: string; // "mmf" | "tbill" | "ifb" | "fxd"
+  institutionType?: string | null;
+  mmfFundId?: number | null;
+}
+
+/** Raw security row as returned by `trpc.securities.list`. */
+export interface RawSecurityRow {
+  securityType: string;
+  faceValue: number | string;
+  isMatured?: boolean | null;
+}
+
+/** Raw secondary-MMF row as returned by `trpc.secondaryMmfs.list`. */
+export interface RawSecondaryMmf {
+  mmfFundId?: number | null;
+  currentBalance: number | string;
+  ear: number | string;
+}
+
+/** Raw bank-holding row as returned by `trpc.bankHoldings.list`. */
+export interface RawBankHolding {
+  principal: number | string;
+  interestRate?: number | string | null;
+  isActive?: boolean | null;
+  currentValue?: number | string | null;
+}
+
+/** Raw other-asset row as returned by `trpc.otherHoldings.list`. */
+export interface RawOtherHolding {
+  assetClass: string;
+  currentValue: number | string;
+}
+
+/**
+ * True when a deposit row represents a SECONDARY-MMF contribution rather than
+ * the primary fund. Such rows are `institutionType:"mmf_fund"` with a non-null
+ * `mmfFundId` that appears in the secondary-fund id set. Their balance is
+ * already represented by the secondary-MMF `currentBalance`, so counting the
+ * deposit row again is the classic double-count.
+ */
+function isSecondaryMmfDeposit(
+  d: RawDepositRow,
+  secondaryFundIds: Set<number>,
+): boolean {
+  return (
+    d.institutionType === "mmf_fund" &&
+    d.mmfFundId != null &&
+    secondaryFundIds.has(d.mmfFundId)
+  );
+}
+
+export interface AllocationInput {
+  deposits: RawDepositRow[];
+  securities: RawSecurityRow[];
+  secondaryMmfs: RawSecondaryMmf[];
+  bankHoldings: RawBankHolding[];
+  otherHoldings: RawOtherHolding[];
+  /** Human labels for other-asset classes (e.g. { equity: "Equities" }). */
+  assetLabels?: Record<string, string>;
+}
+
+export interface AllocationItem {
+  label: string;
+  value: number;
+}
+
+export interface AllocationResult {
+  /** Primary-MMF deposit balance (secondary-fund rows excluded). */
+  primaryMmf: number;
+  /** Sum of secondary-MMF current balances. */
+  secondaryMmf: number;
+  /** Un-matured CBK securities, split by type. */
+  tbill: number;
+  ifb: number;
+  fxd: number;
+  /** Active bank deposits at accrued value. */
+  bank: number;
+  /** Other tracked assets by class. */
+  other: Record<string, number>;
+  /** Sorted allocation rows for the donut/bar. */
+  items: AllocationItem[];
+  /** Total net worth = sum of every part. */
+  netWorth: number;
+}
+
+/**
+ * THE single net-worth + allocation builder. Used by Portfolio Review (render)
+ * and Reconciliation (cross-check). Excludes secondary-MMF and bank/government
+ * deposit ROWS from the primary-MMF bucket so nothing is counted twice.
+ */
+export function buildAllocation(input: AllocationInput): AllocationResult {
+  const num = (x: unknown) => Number(x) || 0;
+  const secondaryFundIds = new Set<number>(
+    input.secondaryMmfs
+      .map((s) => s.mmfFundId)
+      .filter((id): id is number => typeof id === "number"),
+  );
+
+  let primaryMmf = 0;
+  for (const d of input.deposits) {
+    if (d.institutionType === "government_security" || d.institutionType === "bank_instrument") continue;
+    if (isSecondaryMmfDeposit(d, secondaryFundIds)) continue; // avoid double count
+    if (d.bucket === "mmf") primaryMmf += num(d.amount);
+  }
+
+  let tbill = 0, ifb = 0, fxd = 0;
+  for (const s of input.securities) {
+    if (s.isMatured) continue;
+    const face = num(s.faceValue);
+    if (String(s.securityType).startsWith("tbill")) tbill += face;
+    else if (s.securityType === "ifb") ifb += face;
+    else fxd += face;
+  }
+
+  const secondaryMmf = input.secondaryMmfs.reduce((a, s) => a + num(s.currentBalance), 0);
+
+  const bank = input.bankHoldings
+    .filter((b) => b.isActive !== false)
+    .reduce(
+      (a, b) =>
+        a +
+        bankHoldingValue({
+          principal: num(b.principal),
+          interestRate: num(b.interestRate),
+          isActive: b.isActive !== false,
+          currentValue: num(b.currentValue),
+        }),
+      0,
+    );
+
+  const other: Record<string, number> = {};
+  for (const h of input.otherHoldings) {
+    other[h.assetClass] = (other[h.assetClass] ?? 0) + num(h.currentValue);
+  }
+
+  const labels = input.assetLabels ?? {};
+  const items: AllocationItem[] = [];
+  const govAndMmf = primaryMmf + secondaryMmf + tbill + ifb + fxd;
+  if (govAndMmf > 0) items.push({ label: "MMF + CBK Securities", value: govAndMmf });
+  if (bank > 0) items.push({ label: "Bank Deposits", value: bank });
+  for (const [k, v] of Object.entries(other)) {
+    if (v > 0) items.push({ label: labels[k] ?? k, value: v });
+  }
+  items.sort((a, b) => b.value - a.value);
+
+  const netWorth = govAndMmf + bank + Object.values(other).reduce((a, b) => a + b, 0);
+  return { primaryMmf, secondaryMmf, tbill, ifb, fxd, bank, other, items, netWorth };
+}
+
+export interface BlendedYieldInput {
+  /** Primary-MMF balance and its EAR (%). */
+  primaryMmf: number;
+  primaryMmfRate: number;
+  /** Each secondary MMF: balance + EAR (%). */
+  secondaryMmfs: { balance: number; rate: number }[];
+  /** Each active bank deposit: value + rate (%). */
+  bankHoldings: { value: number; rate: number }[];
+  /** Each un-matured security: value + gross rate (%) + tax-exempt flag. */
+  securities: { value: number; rate: number; taxExempt: boolean }[];
+  /** WHT % applied to taxable interest (e.g. 15). */
+  whtRate: number;
+}
+
+export interface BlendedYieldResult {
+  /** Total interest-bearing balance. */
+  base: number;
+  /** Balance-weighted gross yield (%). */
+  grossYield: number;
+  /** Net-of-WHT yield (%): gross minus tax on the taxable portion only. */
+  netYield: number;
+  /** Yield lost to WHT (pp). */
+  taxDrag: number;
+}
+
+/**
+ * THE single blended-yield function. Net yield is computed on the SAME base as
+ * gross: net = (sum of net annual income) / base, where each component's net is
+ * gross income minus WHT (zero WHT for tax-exempt IFB coupons). This removes the
+ * old fragile keyword filter that dropped bank-deposit income from the numerator
+ * while keeping its balance in the denominator (the cause of the impossible
+ * 3.56% net yield). Pure and unit-testable.
+ */
+export function blendedYield(input: BlendedYieldInput): BlendedYieldResult {
+  const wht = Math.max(0, Number(input.whtRate) || 0) / 100;
+  type Part = { bal: number; rate: number; taxExempt: boolean };
+  const parts: Part[] = [];
+  if (input.primaryMmf > 0) parts.push({ bal: input.primaryMmf, rate: input.primaryMmfRate, taxExempt: false });
+  for (const s of input.secondaryMmfs) if (s.balance > 0) parts.push({ bal: s.balance, rate: s.rate, taxExempt: false });
+  for (const b of input.bankHoldings) if (b.value > 0) parts.push({ bal: b.value, rate: b.rate, taxExempt: false });
+  for (const s of input.securities) if (s.value > 0) parts.push({ bal: s.value, rate: s.rate, taxExempt: s.taxExempt });
+
+  const base = parts.reduce((a, p) => a + p.bal, 0);
+  if (base <= 0) return { base: 0, grossYield: 0, netYield: 0, taxDrag: 0 };
+
+  let grossIncome = 0;
+  let netIncome = 0;
+  for (const p of parts) {
+    const gross = p.bal * (p.rate / 100);
+    const net = p.taxExempt ? gross : gross * (1 - wht);
+    grossIncome += gross;
+    netIncome += net;
+  }
+  const grossYield = (grossIncome / base) * 100;
+  const netYield = (netIncome / base) * 100;
+  return { base, grossYield, netYield, taxDrag: grossYield - netYield };
+}

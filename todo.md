@@ -479,3 +479,12 @@
 - [x] R31.3 Dashboard per-issuer concentration warning banner when any single bank/issuer exceeds the 25% cap (ISSUER_CONCENTRATION_CAP); lists offending issuer(s) and their share
 - [x] R31.4 Tests (rollover vs redeploy at maturity, early-break math, concentration detection) + tsc + full suite + checkpoint
 - [x] R31.5 Generate full source code bundle as a single Markdown file and deliver
+
+## Round 32 — One shared valuation path (audit fixes)
+
+- [x] R32.1 Fix Portfolio Review double-count: skip secondary-MMF deposits in the MMF bucket (or call shared sum-of-parts directly) → net worth = 143,500
+- [x] R32.2 Reconciliation must READ the pages' actual functions, not recompute sumParts (no tautology); add deliberately-broken-page test that turns the row red
+- [x] R32.3 Fix Tax Summary blended net yield: numerator/denominator cover the same instruments → net ≈ 9.4%, drag ≈ 1.6%
+- [x] R32.4 Verify/fix Nabo gross/yr per-source row vs displayed gross rate
+- [x] R32.5 Structural: one exported net-worth function + one exported blended-yield function used by Dashboard, Portfolio Review, Tax Summary, Reconciliation
+- [x] R32.accept Integration test: all four pages render identical net worth + identical blended net yield

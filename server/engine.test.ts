@@ -627,3 +627,35 @@ describe("plain-language ledger main action (Round 28)", () => {
     expect(quiet!.mainAction.toLowerCase()).toContain("mmf");
   });
 });
+
+describe("sweep rationale for the ledger tooltip (Round 29)", () => {
+  it("a swept month exposes a net-yield-ranked rationale with exactly one chosen-or-top family and a summary", () => {
+    const results = runProjection(
+      { ...DEFAULT_SETTINGS, startingContribution: 120000, stepUpAmount: 0, horizonMonths: 120, startDate: "2026-07-01" },
+      [], [], [], [], [], [], null,
+    );
+    const sweepMonth = results.find((r) => r.mmfToDhow > 0 && r.sweepRationale);
+    expect(sweepMonth).toBeTruthy();
+    const rat = sweepMonth!.sweepRationale!;
+    expect(rat.amount).toBeGreaterThan(0);
+    expect(rat.candidates.length).toBeGreaterThan(0);
+    // Ranks are 1-based, contiguous, and ordered by descending net yield.
+    rat.candidates.forEach((c, i) => expect(c.rank).toBe(i + 1));
+    for (let i = 1; i < rat.candidates.length; i++) {
+      expect(rat.candidates[i - 1].netPct).toBeGreaterThanOrEqual(rat.candidates[i].netPct);
+    }
+    // At least one family was actually chosen, and the summary mentions net yield.
+    expect(rat.candidates.some((c) => c.chosen)).toBe(true);
+    expect(rat.summary.toLowerCase()).toContain("net");
+  });
+
+  it("a month with no sweep has a null rationale", () => {
+    const results = runProjection(
+      { ...DEFAULT_SETTINGS, startingContribution: 1000, stepUpAmount: 0, horizonMonths: 120, startDate: "2026-07-01" },
+      [], [], [], [], [], [], null,
+    );
+    const quiet = results.find((r) => r.mmfToDhow === 0);
+    expect(quiet).toBeTruthy();
+    expect(quiet!.sweepRationale).toBeNull();
+  });
+});

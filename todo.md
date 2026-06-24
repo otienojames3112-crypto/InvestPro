@@ -450,3 +450,10 @@
 - [x] R28.6 Verify/correct 2026 bank data with sources; record source URL + as-of date per row; indicative/negotiable; editable.
 - [x] R28.7 Expand Getting Started glossary with plain-language definitions (EAR, WHT, gross/net yield, day-count, daily compounding, MMF, call/fixed/savings deposits, T-bill, IFB, FXD, coupon, maturity, tenor, sweep, safety floor, liquidity, phases, step-up, reconciliation, blended yield, tax drag, net worth).
 - [x] R28.test/checkpoint/deliver: deposit into call+fixed deposit appears everywhere & recon green; sweep allocates across families with full liquidity at m12; ledger plain-language; dashboard reflects bank instruments; tsc clean; tests pass; checkpoint; deliver.
+
+## Round 29 — Liquidity Calendar bank maturities + ledger sweep tooltip + full-code export
+
+- [x] R29.1 Liquidity Calendar: include bank instruments (fixed deposits, call deposits, other) alongside CBK maturities; fixed deposits show their maturity/free-up date, call deposits shown as liquid/on-notice; sourced from bank holdings; keep CBK rows.
+- [x] R29.2 Ledger row "why this instrument" tooltip: surface the net-yield rank that drove each sweep allocation (instrument, tenor, net-of-tax yield, rank vs alternatives).
+- [x] R29.3 tsc clean; tests pass; checkpoint.
+- [ ] R29.4 Regenerate full source code into a single Markdown file and deliver.

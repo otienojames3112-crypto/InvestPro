@@ -7,7 +7,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
-import { BookOpen, RefreshCw, Search } from "lucide-react";
+import { BookOpen, RefreshCw, Search, Info } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useState, useMemo } from "react";
 import { toast } from "sonner";
 
@@ -163,8 +164,52 @@ export default function Ledger() {
                               <span className="text-primary font-medium">{formatKES(r.mmfToDhow)}</span>
                             ) : "–"}
                           </td>
-                          <td className="px-4 py-2.5 text-muted-foreground max-w-xs truncate" title={r.mainAction}>
-                            {r.mainAction}
+                          <td className="px-4 py-2.5 text-muted-foreground max-w-xs">
+                            <div className="flex items-start gap-1.5">
+                              <span className="truncate" title={r.mainAction}>{r.mainAction}</span>
+                              {r.sweepRationale && (
+                                <TooltipProvider delayDuration={150}>
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <button
+                                        type="button"
+                                        className="mt-0.5 shrink-0 text-muted-foreground/70 hover:text-primary transition-colors"
+                                        aria-label="Why this instrument was chosen"
+                                      >
+                                        <Info className="w-3.5 h-3.5" />
+                                      </button>
+                                    </TooltipTrigger>
+                                    <TooltipContent side="top" align="start" className="max-w-sm text-xs space-y-2 p-3">
+                                      <p className="font-semibold text-foreground">
+                                        Why this instrument? — KES {Math.round(r.sweepRationale.amount).toLocaleString()} swept
+                                      </p>
+                                      <p className="leading-relaxed text-muted-foreground">{r.sweepRationale.summary}</p>
+                                      <div className="pt-1">
+                                        <p className="font-medium text-foreground mb-1">Net-of-tax yield ranking</p>
+                                        <div className="space-y-0.5">
+                                          {r.sweepRationale.candidates.map((c) => (
+                                            <div
+                                              key={c.bucket}
+                                              className={`flex items-center justify-between gap-3 ${c.chosen ? "text-foreground font-medium" : "text-muted-foreground"}`}
+                                            >
+                                              <span className="flex items-center gap-1.5">
+                                                <span className="tabular-nums opacity-60">#{c.rank}</span>
+                                                {c.label}
+                                                {c.chosen && <span className="text-emerald-500">✓</span>}
+                                              </span>
+                                              <span className="tabular-nums">
+                                                {c.netPct.toFixed(2)}% net
+                                                <span className="opacity-50"> ({c.taxNote})</span>
+                                              </span>
+                                            </div>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    </TooltipContent>
+                                  </Tooltip>
+                                </TooltipProvider>
+                              )}
+                            </div>
                           </td>
                           <td className="px-4 py-2.5 text-right kes-amount text-foreground font-medium">
                             {formatKES(r.mmfEnd)}

@@ -209,7 +209,16 @@ export default function PortfolioReview() {
   // Every upcoming maturity that turns into available cash: CBK securities
   // (T-bill/IFB/FXD) AND bank fixed deposits with a maturity date.
   const upcoming = useMemo(() => {
-    const fromSecurities = (securities ?? [])
+    type LiquidityEvent = {
+      id: string;
+      label: string;
+      kind: string;
+      value: number;
+      maturityDate: string | Date | null;
+      days: number;
+      liquid: boolean; // true = already liquid / on-notice (no fixed maturity)
+    };
+    const fromSecurities: LiquidityEvent[] = (securities ?? [])
       .filter((s) => !s.isMatured && s.maturityDate)
       .map((s) => ({
         id: `sec-${s.id}`,
@@ -218,9 +227,12 @@ export default function PortfolioReview() {
         value: Number(s.faceValue),
         maturityDate: s.maturityDate as string | Date,
         days: daysUntil(s.maturityDate),
+        liquid: false,
       }));
-    const fromBank = (bankHoldings ?? [])
-      .filter((b) => b.isActive && b.instrumentType === "fixed_deposit" && b.maturityDate)
+    const activeBank = (bankHoldings ?? []).filter((b) => b.isActive);
+    // Fixed deposits lock until their maturity date — that is the free-up date.
+    const fromFixedDeposits: LiquidityEvent[] = activeBank
+      .filter((b) => b.instrumentType === "fixed_deposit" && b.maturityDate)
       .map((b) => ({
         id: `bank-${b.id}`,
         label: `${b.label || b.bankName} (FD)`,
@@ -228,11 +240,27 @@ export default function PortfolioReview() {
         value: Number(b.currentValue ?? b.principal ?? 0),
         maturityDate: b.maturityDate as string | Date,
         days: daysUntil(b.maturityDate as string | Date),
+        liquid: false,
       }));
-    return [...fromSecurities, ...fromBank]
+    // Call deposits (and any open-ended bank instrument) are accessible on short
+    // notice — they have no fixed maturity, so they are listed as already liquid.
+    const fromCallDeposits: LiquidityEvent[] = activeBank
+      .filter((b) => b.instrumentType !== "fixed_deposit" || !b.maturityDate)
+      .map((b) => ({
+        id: `bank-${b.id}`,
+        label: `${b.label || b.bankName}${b.instrumentType === "call_deposit" ? " (call)" : ""}`,
+        kind: b.instrumentType === "call_deposit" ? "Call deposit" : "Bank deposit",
+        value: Number(b.currentValue ?? b.principal ?? 0),
+        maturityDate: null,
+        days: 0,
+        liquid: true,
+      }))
+      .filter((b) => b.value > 0);
+    const dated = [...fromSecurities, ...fromFixedDeposits]
       .filter((s) => s.days >= 0)
-      .sort((a, b) => a.days - b.days)
-      .slice(0, 20);
+      .sort((a, b) => a.days - b.days);
+    // Liquid bank deposits first (available now), then dated maturities by soonest.
+    return [...fromCallDeposits, ...dated].slice(0, 30);
   }, [securities, bankHoldings]);
 
   return (
@@ -377,16 +405,17 @@ export default function PortfolioReview() {
               <CalendarClock className="w-4 h-4 text-primary" /> Liquidity Calendar
             </CardTitle>
             <CardDescription>
-              Upcoming CBK security maturities — cash becoming available for
-              reinvestment or withdrawal. (MMF balances are liquid within 1–3
-              days and are not listed here.)
+              When your cash frees up — CBK security maturities and bank fixed
+              deposits show their free-up date, while call deposits are accessible
+              on short notice. (MMF balances are liquid within 1–3 days and are
+              not listed here.)
             </CardDescription>
           </CardHeader>
           <CardContent>
             {upcoming.length === 0 ? (
               <p className="text-sm text-muted-foreground py-4 text-center">
-                No upcoming maturities. Add CBK securities to see your liquidity
-                schedule.
+                No upcoming maturities. Add CBK securities or bank deposits to see
+                your liquidity schedule.
               </p>
             ) : (
               <div className="rounded-md border overflow-x-auto">
@@ -413,15 +442,23 @@ export default function PortfolioReview() {
                           {kes(s.value)}
                         </TableCell>
                         <TableCell>
-                          {new Date(s.maturityDate).toLocaleDateString("en-KE")}
+                          {s.liquid || !s.maturityDate
+                            ? "On call / short notice"
+                            : new Date(s.maturityDate).toLocaleDateString("en-KE")}
                         </TableCell>
                         <TableCell className="text-right">
-                          <Badge
-                            variant={s.days <= 30 ? "default" : "secondary"}
-                            className="text-[10px]"
-                          >
-                            {s.days} {s.days === 1 ? "day" : "days"}
-                          </Badge>
+                          {s.liquid ? (
+                            <Badge variant="default" className="text-[10px] bg-emerald-600 hover:bg-emerald-600">
+                              Liquid
+                            </Badge>
+                          ) : (
+                            <Badge
+                              variant={s.days <= 30 ? "default" : "secondary"}
+                              className="text-[10px]"
+                            >
+                              {s.days} {s.days === 1 ? "day" : "days"}
+                            </Badge>
+                          )}
                         </TableCell>
                       </TableRow>
                     ))}

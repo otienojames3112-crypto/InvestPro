@@ -209,6 +209,33 @@ export interface MonthResult {
   isActual: boolean;
   /** True when the short-horizon strategy is active (MMF + T-bills only). */
   isShortHorizon: boolean;
+  /**
+   * Why each instrument was chosen this month — the net-of-tax yield ranking the
+   * allocator evaluated, plus which families actually received the sweep. Null on
+   * months with no sweep. Drives the Ledger "why this instrument" tooltip.
+   */
+  sweepRationale: SweepRationale | null;
+}
+
+export interface SweepRationaleCandidate {
+  bucket: "tbill" | "ifb" | "fxd";
+  label: string;
+  grossPct: number;
+  netPct: number;
+  taxNote: string;
+  /** 1-based rank by net-of-tax yield (1 = highest). */
+  rank: number;
+  /** True if this family actually received part of the sweep this month. */
+  chosen: boolean;
+}
+
+export interface SweepRationale {
+  /** Total amount swept out of the MMF this month (KES). */
+  amount: number;
+  /** Net-yield-ranked candidates the allocator compared. */
+  candidates: SweepRationaleCandidate[];
+  /** Plain-language one-liner summarising the decision. */
+  summary: string;
 }
 
 export interface YearMilestone {
@@ -948,6 +975,9 @@ export function runProjection(
     let sweepTarget: "tbill" | "ifb" | "fxd" | null = null;
     // Per-bucket lot counts bought this month (for the ledger "main action" label).
     const sweepBuy = { tbill: 0, ifb: 0, fxd: 0 };
+    // Net-yield ranking the allocator compared this month (for the ledger tooltip).
+    let sweepRationale: SweepRationale | null = null;
+    let rankedThisMonth: RankedInstrument[] = [];
 
     // ── END-STATE LIQUIDITY GUARD (Fix #1) ──
     // Decide what this month is allowed to buy so nothing matures after the
@@ -1031,6 +1061,7 @@ export function runProjection(
           allowLongBonds: !noNewLongBonds,
           longBondTenorMonths: 24,
         });
+        rankedThisMonth = ranked;
         // Concentration cap: at most this share of the whole portfolio in one family.
         const FAMILY_CONCENTRATION_CAP = 0.6;
         const capKES = (mmf + held.tbill + held.ifb + held.fxd) * FAMILY_CONCENTRATION_CAP;
@@ -1090,6 +1121,48 @@ export function runProjection(
             }
           }
           sweepCount++;
+
+          // SWEEP RATIONALE (Round 29): persist the net-yield ranking the
+          // allocator compared so the ledger can explain WHY each instrument was
+          // chosen this month.
+          const chosenBuckets = new Set(
+            (["tbill", "ifb", "fxd"] as const).filter((b) => sweepBuy[b] > 0),
+          );
+          const candidates: SweepRationaleCandidate[] = rankedThisMonth.map((r, i) => ({
+            bucket: r.bucket,
+            label: r.label,
+            grossPct: Math.round(r.grossPct * 100) / 100,
+            netPct: Math.round(r.netPct * 100) / 100,
+            taxNote: r.taxNote,
+            rank: i + 1,
+            chosen: chosenBuckets.has(r.bucket),
+          }));
+          const top = candidates.find((c) => c.chosen) ?? candidates[0];
+          const familyName = (b: "tbill" | "ifb" | "fxd") =>
+            b === "tbill" ? "T-bill" : b === "ifb" ? "IFB" : "FXD";
+          let summary: string;
+          if (top) {
+            const beat = candidates.filter((c) => c.rank > top.rank);
+            const beatTxt =
+              beat.length > 0
+                ? ` It out-yields ${joinWithAnd(
+                    beat.map((c) => familyName(c.bucket) + " (" + c.netPct.toFixed(2) + "% net)"),
+                  )} after tax.`
+                : "";
+            summary =
+              "Chosen for the highest net-of-tax yield among instruments allowed to mature by your goal date: " +
+              familyName(top.bucket) + " at " + top.netPct.toFixed(2) + "% net (" +
+              top.grossPct.toFixed(2) + "% gross, " + top.taxNote + ")." + beatTxt +
+              " The MMF safety floor is kept liquid and no single family exceeds 60% of the portfolio.";
+          } else {
+            summary =
+              "Surplus above the MMF safety floor was swept into the highest net-of-tax instrument allowed to mature by your goal date.";
+          }
+          sweepRationale = {
+            amount: Math.round(mmfToDhow * 100) / 100,
+            candidates,
+            summary,
+          };
         }
       }
     }
@@ -1173,6 +1246,7 @@ export function runProjection(
       whtThisMonth: Math.round(whtThisMonth * 100) / 100,
       isActual: isActualMonth,
       isShortHorizon,
+      sweepRationale,
     });
   }
 

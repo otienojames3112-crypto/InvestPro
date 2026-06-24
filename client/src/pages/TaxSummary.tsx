@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { AppShell } from "@/components/AppShell";
 import { usePortfolio } from "@/contexts/PortfolioContext";
 import { useSelectedFund } from "@/hooks/useSelectedFund";
+import { bankHoldingValue } from "@shared/actuals";
 import { trpc } from "@/lib/trpc";
 import {
   Card,
@@ -237,17 +238,30 @@ export default function TaxSummary() {
   // Gross annual MMF income across all accounts (for blended yield weighting).
   const secondaryMmfGross = secondaryMmfs.reduce((s, m) => s + m.currentBalance * (m.ear / 100), 0);
 
+  // Bank-instrument balances and gross interest (Round 30: bank deposits are part
+  // of the blended-yield base so this page equals the Dashboard net worth).
+  const bankBalance = (bankHoldings ?? [])
+    .filter((b) => b.isActive)
+    .reduce((s, b) => s + bankHoldingValue({ principal: Number(b.principal ?? 0), interestRate: Number(b.interestRate ?? 0), isActive: b.isActive, currentValue: Number(b.currentValue ?? 0) }), 0);
+  const bankGross = (bankHoldings ?? [])
+    .filter((b) => b.isActive)
+    .reduce((s, b) => {
+      const val = bankHoldingValue({ principal: Number(b.principal ?? 0), interestRate: Number(b.interestRate ?? 0), isActive: b.isActive, currentValue: Number(b.currentValue ?? 0) });
+      return s + val * (Number(b.interestRate ?? 0) / 100);
+    }, 0);
+
   const totalGross = lines.reduce((s, l) => s + l.basis, 0);
   const totalTax = lines.reduce((s, l) => s + l.tax, 0);
   const totalNet = lines.reduce((s, l) => s + l.net, 0);
   const effectiveTaxRate = totalGross > 0 ? (totalTax / totalGross) * 100 : 0;
 
   const fixedIncomeTotal =
-    buckets.mmf + secondaryMmfBalance + buckets.tbill + buckets.ifb + buckets.fxd;
+    buckets.mmf + secondaryMmfBalance + bankBalance + buckets.tbill + buckets.ifb + buckets.fxd;
   const grossYieldBlended =
     fixedIncomeTotal > 0
       ? ((buckets.mmf * mmfYield +
           secondaryMmfGross * 100 +
+          bankGross * 100 +
           buckets.tbill * tbillRate +
           buckets.ifb * ifbRate +
           buckets.fxd * fxdRate) /

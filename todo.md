@@ -456,4 +456,18 @@
 - [x] R29.1 Liquidity Calendar: include bank instruments (fixed deposits, call deposits, other) alongside CBK maturities; fixed deposits show their maturity/free-up date, call deposits shown as liquid/on-notice; sourced from bank holdings; keep CBK rows.
 - [x] R29.2 Ledger row "why this instrument" tooltip: surface the net-yield rank that drove each sweep allocation (instrument, tenor, net-of-tax yield, rank vs alternatives).
 - [x] R29.3 tsc clean; tests pass; checkpoint.
-- [ ] R29.4 Regenerate full source code into a single Markdown file and deliver.
+- [x] R29.4 Regenerate full source code into a single Markdown file and deliver.
+
+## Round 30 — Net-worth bug fix, full-portfolio projection, yield-max allocator, all bank types
+
+- [x] R30.1a Portfolio Review net-worth allocation includes ALL held instruments (all MMFs, all bank instruments, all CBK securities, other assets) = Dashboard total
+- [x] R30.1b Tax Summary blended-yield base includes ALL held instruments
+- [x] R30.1c Reconciliation adds Portfolio Review net worth + Tax Summary base as reconciled sources (drift flagged red)
+- [x] R30.2 Engine projects EVERY holding forward toward goal (each MMF accrues daily; bank fixed/goal accrues+matures; call/savings accrues+liquid; CBK accrues to maturity); all count toward projected total & goal progress
+- [x] R30.3 Model maturity + redeployment, disclosed in ledger plain-language (return principal+interest to MMF on maturity date; redeploy per yield-max+liquidity rules; show matured→became→where)
+- [x] R30.4 Same treatment (new mid-plan holdings flow through the same accrual/maturity/redeployment/reconciliation path as existing ones) when a new MMF/instrument added mid-plan (cards, net-worth bar, projection from start month, ledger, accrual, tax, liquidity calendar, reconciliation green)
+- [x] R30.5 Yield-max allocator: eligibility (maturity ≤ horizon), net-of-tax ranking, sovereign preference threshold (~1.0%, editable), issuer concentration cap (~25%, govt exempt), liquidity floor; documented + per-sweep why
+- [x] R30.6 Record Deposit: add Ordinary/Regular Savings, Target/Goal Savings, Tiered/High-Yield Savings (plus existing fixed/call); each accrues, flows into actuals/net worth/accrual/tax/liquidity/reconciliation; goal/target early-break penalty
+- [x] R30.7 Liquidity Calendar valuation fix: read holding actual principal/current value (not 0); list every term instrument with correct value + maturity date
+- [x] R30.8 Expand glossary: call deposit (refine), ordinary/regular savings, target/goal savings, tiered/high-yield savings, early-break penalty, issuer concentration/diversification, sovereign vs bank credit risk, redeployment/rollover at maturity
+- [x] R30.accept Acceptance scenario test + tsc + full suite + checkpoint + deliver

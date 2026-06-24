@@ -45,6 +45,14 @@ export interface ReconInputs {
 
   // 5. Net worth as displayed on the dashboard "Live Net Worth" card
   dashboardNetWorth: number;
+
+  // 6. Net worth as displayed on the Portfolio Review page (sum of allocation rows).
+  //    Round 30: every page that shows a portfolio total is a reconciled source,
+  //    so a page that silently omits a pocket (the bank-deposit bug) is flagged red.
+  portfolioReviewNetWorth?: number;
+
+  // 7. Fixed-income + bank base the Tax Summary blends yield across.
+  taxSummaryBase?: number;
 }
 
 function round2(n: number): number {
@@ -91,6 +99,27 @@ export function reconcile(inputs: ReconInputs): ReconResult {
       detail: "Headline net-worth figure",
     },
   ];
+
+  // Round 30: include the Portfolio Review and Tax Summary page totals as their
+  // own reconciled sources. They are derived from the same sum-of-parts helper,
+  // so they reconcile green; if either page ever omits a pocket again, its row
+  // turns red here instead of giving false assurance.
+  if (typeof inputs.portfolioReviewNetWorth === "number") {
+    sources.push({
+      key: "portfolioReview",
+      label: "Portfolio Review net-worth allocation",
+      value: round2(inputs.portfolioReviewNetWorth),
+      detail: "Sum of the allocation rows (MMF + CBK + bank deposits + other assets)",
+    });
+  }
+  if (typeof inputs.taxSummaryBase === "number") {
+    sources.push({
+      key: "taxSummary",
+      label: "Tax Summary blended-yield base",
+      value: round2(inputs.taxSummaryBase),
+      detail: "Fixed-income + bank base the Tax Summary blends yield across",
+    });
+  }
 
   // Compare everything to the "sum of parts" reference.
   const reference = round2(sumParts);

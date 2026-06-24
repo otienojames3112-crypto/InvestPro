@@ -3,6 +3,7 @@ import { usePortfolio } from "@/contexts/PortfolioContext";
 import { useSelectedFund } from "@/hooks/useSelectedFund";
 import { trpc } from "@/lib/trpc";
 import { formatKES } from "@/lib/format";
+import { BANK_INSTRUMENT_TYPES, isTermBankInstrument, bankInstrumentLabel, type BankInstrumentType } from "@shared/const";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -164,7 +165,7 @@ export function DepositDrawer({ open, onClose }: DepositDrawerProps) {
     for (const h of bankHoldings) {
       list.push({
         value: `bank:${h.id}`,
-        label: h.label || `${h.bankName} ${h.instrumentType === "fixed_deposit" ? "Fixed Deposit" : "Call Deposit"}`,
+        label: h.label || `${h.bankName} ${bankInstrumentLabel(h.instrumentType)}`,
         sublabel: `${h.bankName} · ${h.interestRate.toFixed(2)}% p.a.`,
         group: "Bank instruments",
         icon: <Building2 className="w-4 h-4" />,
@@ -213,7 +214,7 @@ export function DepositDrawer({ open, onClose }: DepositDrawerProps) {
   // Fields shown only when opening a brand-new bank deposit inline.
   const [newBank, setNewBank] = useState({
     bankName: "",
-    instrumentType: "fixed_deposit" as "fixed_deposit" | "call_deposit",
+    instrumentType: "fixed_deposit" as BankInstrumentType,
     interestRate: "",
     tenorMonths: "12",
   });
@@ -223,7 +224,7 @@ export function DepositDrawer({ open, onClose }: DepositDrawerProps) {
 
   function resetForm() {
     setForm({ destination: "", amount: "", depositDate: new Date().toISOString().slice(0, 10), notes: "" });
-    setNewBank({ bankName: "", instrumentType: "fixed_deposit", interestRate: "", tenorMonths: "12" });
+    setNewBank({ bankName: "", instrumentType: "fixed_deposit" as BankInstrumentType, interestRate: "", tenorMonths: "12" });
   }
 
   async function handleSubmit() {
@@ -239,12 +240,12 @@ export function DepositDrawer({ open, onClose }: DepositDrawerProps) {
       if (!bankName) { toast.error("Enter the bank name"); return; }
       const rate = parseFloat(newBank.interestRate);
       if (isNaN(rate) || rate < 0) { toast.error("Enter a valid interest rate"); return; }
-      const isFixed = newBank.instrumentType === "fixed_deposit";
-      const tenor = isFixed ? Math.max(1, parseInt(newBank.tenorMonths || "12", 10)) : undefined;
+      const isTerm = isTermBankInstrument(newBank.instrumentType);
+      const tenor = isTerm ? Math.max(1, parseInt(newBank.tenorMonths || "12", 10)) : undefined;
       try {
         const start = new Date(form.depositDate + "T12:00:00.000Z");
         let maturity: string | undefined;
-        if (isFixed && tenor) {
+        if (isTerm && tenor) {
           const m = new Date(start);
           m.setMonth(m.getMonth() + tenor);
           maturity = m.toISOString().slice(0, 10);
@@ -252,7 +253,7 @@ export function DepositDrawer({ open, onClose }: DepositDrawerProps) {
         const res = await createBankHolding.mutateAsync({
           portfolioId,
           bankName,
-          label: `${bankName} ${isFixed ? `${tenor}-month fixed deposit` : "call deposit"}`,
+          label: `${bankName} ${isTerm ? `${tenor}-month ${bankInstrumentLabel(newBank.instrumentType).toLowerCase()}` : bankInstrumentLabel(newBank.instrumentType).toLowerCase()}`,
           instrumentType: newBank.instrumentType,
           principal: 0, // principal is added by the deposit below to avoid double counting
           interestRate: rate,
@@ -260,7 +261,7 @@ export function DepositDrawer({ open, onClose }: DepositDrawerProps) {
           startDate: form.depositDate,
           tenorMonths: tenor,
           maturityDate: maturity,
-          payoutFrequency: isFixed ? "maturity" : "on_call",
+          payoutFrequency: isTerm ? "maturity" : "on_call",
         });
         if (!res?.id) { toast.error("Could not open the bank deposit"); return; }
         await utils.bankHoldings.list.invalidate();
@@ -478,14 +479,15 @@ export function DepositDrawer({ open, onClose }: DepositDrawerProps) {
                       <Label className="text-xs text-muted-foreground">Type</Label>
                       <Select
                         value={newBank.instrumentType}
-                        onValueChange={(v) => setNewBank((b) => ({ ...b, instrumentType: v as "fixed_deposit" | "call_deposit" }))}
+                        onValueChange={(v) => setNewBank((b) => ({ ...b, instrumentType: v as BankInstrumentType }))}
                       >
                         <SelectTrigger className="bg-white/5 border-white/10 h-9 text-sm">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent className="bg-[#0d1117] border-white/10">
-                          <SelectItem value="fixed_deposit">Fixed deposit</SelectItem>
-                          <SelectItem value="call_deposit">Call deposit</SelectItem>
+                          {BANK_INSTRUMENT_TYPES.map((t) => (
+                            <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>
+                          ))}
                         </SelectContent>
                       </Select>
                     </div>
@@ -502,7 +504,7 @@ export function DepositDrawer({ open, onClose }: DepositDrawerProps) {
                       />
                     </div>
                   </div>
-                  {newBank.instrumentType === "fixed_deposit" && (
+                  {isTermBankInstrument(newBank.instrumentType) && (
                     <div className="space-y-1.5">
                       <Label className="text-xs text-muted-foreground">Tenor (months)</Label>
                       <Input

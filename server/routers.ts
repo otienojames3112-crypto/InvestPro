@@ -219,12 +219,19 @@ function mapActualBankHoldings(
   rows: Awaited<ReturnType<typeof getBankInstrumentHoldings>>
 ): ActualBankHolding[] {
   return rows.map((b) => ({
+    label: (b as { label?: string | null }).label ?? null,
+    bankName: (b as { bankName?: string | null }).bankName ?? null,
     principal: parseFloat(String(b.principal ?? "0")) || 0,
     interestRate: parseFloat(String(b.interestRate ?? "0")) || 0,
     whtRate: b.whtRate != null ? parseFloat(String(b.whtRate)) : null,
     dayCountBasis: (b as { dayCountBasis?: number | null }).dayCountBasis ?? 365,
     startDate: normaliseDate((b as { startDate?: Date | string | null }).startDate),
     isActive: !!b.isActive,
+    // Round 30: term/maturity metadata drives forward maturity + redeployment.
+    instrumentType: (b as { instrumentType?: ActualBankHolding["instrumentType"] }).instrumentType ?? null,
+    tenorMonths: (b as { tenorMonths?: number | null }).tenorMonths ?? null,
+    maturityDate: normaliseDate((b as { maturityDate?: Date | string | null }).maturityDate),
+    payoutFrequency: (b as { payoutFrequency?: ActualBankHolding["payoutFrequency"] }).payoutFrequency ?? null,
   }));
 }
 
@@ -628,6 +635,14 @@ export const appRouter = router({
         ? lastActual.totalEnd - (lastActual.mmfEnd - primaryMmfBalance)
         : sumParts;
 
+      // Round 30: the Portfolio Review allocation and the Tax Summary blended-yield
+      // base are now reconciled sources. Both pages define net worth as the same
+      // sum-of-parts (primary MMF + secondary MMFs + bank deposits + CBK securities),
+      // so we recompute that figure here on the identical principal basis used for
+      // the reference. If a page ever drops a pocket again, its source turns red.
+      const portfolioReviewNetWorth = sumParts;
+      const taxSummaryBase = sumParts;
+
       const inputs = {
         primaryMmfBalance,
         secondaryMmfBalances,
@@ -638,6 +653,8 @@ export const appRouter = router({
         dashboardActualsTotal,
         accrualLedgerMmfTotal: primaryMmfBalance + secondaryMmfBalances.reduce((a, b) => a + b, 0),
         dashboardNetWorth: dashboardActualsTotal,
+        portfolioReviewNetWorth,
+        taxSummaryBase,
       };
 
       return {
@@ -1955,6 +1972,7 @@ export const appRouter = router({
           maturityDate: r.maturityDate ? normaliseDate(r.maturityDate) : null,
           payoutFrequency: r.payoutFrequency,
           currentValue: Number(r.currentValue),
+          earlyBreakPenaltyPct: Number((r as { earlyBreakPenaltyPct?: string | number }).earlyBreakPenaltyPct ?? 0),
           notes: r.notes ?? null,
           isActive: r.isActive,
           createdAt: r.createdAt,
@@ -1966,7 +1984,7 @@ export const appRouter = router({
         portfolioId: z.number().int().positive(),
         bankName: z.string().min(1).max(200),
         label: z.string().max(200).optional(),
-        instrumentType: z.enum(["call_deposit", "fixed_deposit"]),
+        instrumentType: z.enum(["call_deposit", "fixed_deposit", "ordinary_savings", "target_savings", "tiered_savings"]),
         principal: z.number().min(0).default(0),
         interestRate: z.number().min(0).max(100).default(0),
         rateAsOfDate: z.string().optional(),
@@ -1977,6 +1995,7 @@ export const appRouter = router({
         tenorMonths: z.number().int().min(0).optional(),
         maturityDate: z.string().optional(),
         payoutFrequency: z.enum(["maturity", "monthly", "quarterly", "on_call"]).default("maturity"),
+        earlyBreakPenaltyPct: z.number().min(0).max(100).default(0),
         notes: z.string().max(1000).optional(),
       }))
       .mutation(async ({ ctx, input }) => {
@@ -1996,6 +2015,7 @@ export const appRouter = router({
           tenorMonths: input.tenorMonths ?? null,
           maturityDate: input.maturityDate ? new Date(`${input.maturityDate}T12:00:00.000Z`) : null,
           payoutFrequency: input.payoutFrequency,
+          earlyBreakPenaltyPct: String(input.earlyBreakPenaltyPct),
           currentValue: String(input.principal),
         });
         await addAuditLog({
@@ -2016,7 +2036,7 @@ export const appRouter = router({
         portfolioId: z.number().int().positive(),
         bankName: z.string().min(1).max(200).optional(),
         label: z.string().max(200).optional(),
-        instrumentType: z.enum(["call_deposit", "fixed_deposit"]).optional(),
+        instrumentType: z.enum(["call_deposit", "fixed_deposit", "ordinary_savings", "target_savings", "tiered_savings"]).optional(),
         principal: z.number().min(0).optional(),
         interestRate: z.number().min(0).max(100).optional(),
         rateAsOfDate: z.string().optional(),
@@ -2027,6 +2047,7 @@ export const appRouter = router({
         tenorMonths: z.number().int().min(0).optional(),
         maturityDate: z.string().optional(),
         payoutFrequency: z.enum(["maturity", "monthly", "quarterly", "on_call"]).optional(),
+        earlyBreakPenaltyPct: z.number().min(0).max(100).optional(),
         notes: z.string().max(1000).optional(),
         isActive: z.boolean().optional(),
       }))
@@ -2047,6 +2068,7 @@ export const appRouter = router({
           ...(rest.tenorMonths !== undefined && { tenorMonths: rest.tenorMonths }),
           ...(rest.maturityDate !== undefined && { maturityDate: new Date(`${rest.maturityDate}T12:00:00.000Z`) }),
           ...(rest.payoutFrequency !== undefined && { payoutFrequency: rest.payoutFrequency }),
+          ...(rest.earlyBreakPenaltyPct !== undefined && { earlyBreakPenaltyPct: String(rest.earlyBreakPenaltyPct) }),
           ...(rest.notes !== undefined && { notes: rest.notes }),
           ...(rest.isActive !== undefined && { isActive: rest.isActive }),
         });
@@ -2498,6 +2520,47 @@ export const appRouter = router({
         maturityDate: bankMaturity,
         payoutFrequency: "maturity",
         currentValue: "200000",
+      });
+
+      // A TARGET/GOAL savings term deposit that MATURES within the elapsed window
+      // (opened month 1, 4-month tenor → matures around month 5) so the Month
+      // Ledger demonstrates a real maturity + redeployment of principal+interest.
+      const goalStart = new Date(Date.UTC(startBase.getUTCFullYear(), startBase.getUTCMonth() + 1, 10, 12, 0, 0));
+      const goalMaturity = new Date(Date.UTC(startBase.getUTCFullYear(), startBase.getUTCMonth() + 5, 10, 12, 0, 0));
+      await addBankInstrumentHolding({
+        portfolioId: p.id,
+        bankName: "KCB",
+        label: "Goal savings (matured)",
+        instrumentType: "target_savings",
+        principal: "80000",
+        interestRate: "9.0000",
+        rateAsOfDate: goalStart,
+        isNegotiable: false,
+        dayCountBasis: 365,
+        whtRate: "15.0000",
+        startDate: goalStart,
+        tenorMonths: 4,
+        maturityDate: goalMaturity,
+        payoutFrequency: "maturity",
+        earlyBreakPenaltyPct: "25.00",
+        currentValue: "80000",
+      });
+
+      // A LIQUID tiered / high-yield savings account (accrues in place, no lock).
+      await addBankInstrumentHolding({
+        portfolioId: p.id,
+        bankName: "NCBA",
+        label: "Tiered savings",
+        instrumentType: "tiered_savings",
+        principal: "45000",
+        interestRate: "8.0000",
+        rateAsOfDate: bankStart,
+        isNegotiable: false,
+        dayCountBasis: 365,
+        whtRate: "15.0000",
+        startDate: bankStart,
+        payoutFrequency: "on_call",
+        currentValue: "45000",
       });
 
       return { success: true, portfolioId: p.id };

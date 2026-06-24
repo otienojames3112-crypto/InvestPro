@@ -518,8 +518,14 @@ export const bankInstrumentHoldings = mysqlTable("bank_instrument_holdings", {
   bankName: varchar("bankName", { length: 200 }).notNull(),
   /** Optional user label, e.g. "Equity 3-month FD" */
   label: varchar("label", { length: 200 }),
-  /** Instrument type */
-  instrumentType: mysqlEnum("instrumentType", ["call_deposit", "fixed_deposit"]).notNull(),
+  /** Instrument type (Round 30: all five bank-deposit kinds). */
+  instrumentType: mysqlEnum("instrumentType", [
+    "call_deposit",
+    "fixed_deposit",
+    "ordinary_savings",
+    "target_savings",
+    "tiered_savings",
+  ]).notNull(),
   /** Principal placed (KES) */
   principal: decimal("principal", { precision: 14, scale: 2 }).notNull().default("0.00"),
   /** Annual interest rate (% p.a.) — manually editable */
@@ -542,6 +548,12 @@ export const bankInstrumentHoldings = mysqlTable("bank_instrument_holdings", {
   payoutFrequency: mysqlEnum("payoutFrequency", ["maturity", "monthly", "quarterly", "on_call"]).notNull().default("maturity"),
   /** Current accrued value (KES) — updated manually or computed */
   currentValue: decimal("currentValue", { precision: 14, scale: 2 }).notNull().default("0.00"),
+  /**
+   * Early-break penalty (% of interest forfeited) if a TERM deposit
+   * (fixed/target-savings) is withdrawn before maturity. 0 = no penalty.
+   * Modelled by the withdrawal flow when breaking a term deposit early.
+   */
+  earlyBreakPenaltyPct: decimal("earlyBreakPenaltyPct", { precision: 6, scale: 4 }).notNull().default("0.0000"),
   notes: text("notes"),
   isActive: boolean("isActive").notNull().default(true),
   createdAt: timestamp("createdAt").defaultNow().notNull(),

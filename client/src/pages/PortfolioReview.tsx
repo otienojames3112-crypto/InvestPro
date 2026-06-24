@@ -2,6 +2,8 @@ import { useMemo } from "react";
 import { AppShell } from "@/components/AppShell";
 import { usePortfolio } from "@/contexts/PortfolioContext";
 import { useSelectedFund } from "@/hooks/useSelectedFund";
+import { bankHoldingValue } from "@shared/actuals";
+import { bankInstrumentLabel } from "@shared/const";
 import { trpc } from "@/lib/trpc";
 import {
   Card,
@@ -129,12 +131,30 @@ export default function PortfolioReview() {
     [secondary]
   );
 
+  // Bank-instrument holdings (call/fixed/savings/goal/tiered) at their accrued
+  // value (currentValue, else principal). Round 30: these MUST be part of net
+  // worth so this page equals the Dashboard / Reconciliation figure.
+  const bankTotal = useMemo(
+    () =>
+      (bankHoldings ?? [])
+        .filter((b) => b.isActive)
+        .reduce(
+          (s: number, b) => s + bankHoldingValue({ principal: Number(b.principal ?? 0), interestRate: Number(b.interestRate ?? 0), isActive: b.isActive, currentValue: Number(b.currentValue ?? 0) }),
+          0
+        ),
+    [bankHoldings]
+  );
+
   const allocation = useMemo(() => {
     const items: { label: string; value: number }[] = [];
-    const fixedIncome =
+    // Government + MMF block (primary MMF, secondary MMFs, all CBK securities).
+    const govAndMmf =
       buckets.mmf + buckets.tbill + buckets.ifb + buckets.fxd + secondaryTotal;
-    if (fixedIncome > 0)
-      items.push({ label: "Fixed Income (MMF + CBK)", value: fixedIncome });
+    if (govAndMmf > 0)
+      items.push({ label: "MMF + CBK Securities", value: govAndMmf });
+    // Bank deposits are a distinct asset class (bank credit risk vs sovereign).
+    if (bankTotal > 0)
+      items.push({ label: "Bank Deposits", value: bankTotal });
     const byClass: Record<string, number> = {};
     (holdings ?? []).forEach((h) => {
       byClass[h.assetClass] = (byClass[h.assetClass] ?? 0) + h.currentValue;
@@ -143,7 +163,7 @@ export default function PortfolioReview() {
       items.push({ label: ASSET_LABELS[k] ?? k, value: v })
     );
     return items.sort((a, b) => b.value - a.value);
-  }, [buckets, holdings, secondaryTotal]);
+  }, [buckets, holdings, secondaryTotal, bankTotal]);
 
   const netWorth = allocation.reduce((s, a) => s + a.value, 0);
 
@@ -230,27 +250,39 @@ export default function PortfolioReview() {
         liquid: false,
       }));
     const activeBank = (bankHoldings ?? []).filter((b) => b.isActive);
-    // Fixed deposits lock until their maturity date — that is the free-up date.
+    // Round 30 fix: value EVERY bank instrument from its accrued value (max of
+    // currentValue and principal). currentValue defaults to 0 in the DB, so the
+    // old `currentValue ?? principal` showed KES 0 because 0 is not nullish.
+    const bankVal = (b: { principal?: unknown; interestRate?: unknown; isActive?: boolean; currentValue?: unknown }) =>
+      bankHoldingValue({
+        principal: Number(b.principal ?? 0),
+        interestRate: Number(b.interestRate ?? 0),
+        isActive: b.isActive,
+        currentValue: Number(b.currentValue ?? 0),
+      });
+    // TERM deposits (fixed + target/goal savings) lock until their maturity date —
+    // that is the free-up date listed on the calendar.
+    const isTermKind = (t: string) => t === "fixed_deposit" || t === "target_savings";
     const fromFixedDeposits: LiquidityEvent[] = activeBank
-      .filter((b) => b.instrumentType === "fixed_deposit" && b.maturityDate)
+      .filter((b) => isTermKind(b.instrumentType) && b.maturityDate)
       .map((b) => ({
         id: `bank-${b.id}`,
-        label: `${b.label || b.bankName} (FD)`,
-        kind: "Fixed deposit",
-        value: Number(b.currentValue ?? b.principal ?? 0),
+        label: `${b.label || b.bankName} (${b.instrumentType === "target_savings" ? "goal" : "FD"})`,
+        kind: b.instrumentType === "target_savings" ? "Goal/target savings" : "Fixed deposit",
+        value: bankVal(b),
         maturityDate: b.maturityDate as string | Date,
         days: daysUntil(b.maturityDate as string | Date),
         liquid: false,
       }));
-    // Call deposits (and any open-ended bank instrument) are accessible on short
-    // notice — they have no fixed maturity, so they are listed as already liquid.
+    // Liquid deposits (call / ordinary / tiered savings, or any term deposit
+    // without a maturity date) are accessible on short notice — listed as liquid.
     const fromCallDeposits: LiquidityEvent[] = activeBank
-      .filter((b) => b.instrumentType !== "fixed_deposit" || !b.maturityDate)
+      .filter((b) => !isTermKind(b.instrumentType) || !b.maturityDate)
       .map((b) => ({
         id: `bank-${b.id}`,
-        label: `${b.label || b.bankName}${b.instrumentType === "call_deposit" ? " (call)" : ""}`,
-        kind: b.instrumentType === "call_deposit" ? "Call deposit" : "Bank deposit",
-        value: Number(b.currentValue ?? b.principal ?? 0),
+        label: `${b.label || b.bankName}`,
+        kind: bankInstrumentLabel(b.instrumentType),
+        value: bankVal(b),
         maturityDate: null,
         days: 0,
         liquid: true,

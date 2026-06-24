@@ -163,6 +163,10 @@ export interface ActualDeposit {
  * primary MMF, so identical money grows identically regardless of pocket.
  */
 export interface ActualBankHolding {
+  /** Optional display label, used in plain-language ledger maturity narration. */
+  label?: string | null;
+  /** Bank name, used as a fallback label in the ledger. */
+  bankName?: string | null;
   principal: number;
   /** Gross annual interest rate % (WHT applied internally). */
   interestRate: number;
@@ -173,6 +177,24 @@ export interface ActualBankHolding {
   /** ISO date the holding started accruing (YYYY-MM-DD). */
   startDate?: string | null;
   isActive?: boolean;
+  /**
+   * Bank instrument kind. Determines whether the holding is TERM (matures and
+   * pays out — fixed_deposit, target_savings) or LIQUID (accrues in place, no
+   * maturity lock — call_deposit, ordinary_savings, tiered_savings).
+   */
+  instrumentType?:
+    | "call_deposit"
+    | "fixed_deposit"
+    | "ordinary_savings"
+    | "target_savings"
+    | "tiered_savings"
+    | null;
+  /** Tenor in months for term deposits (fixed/goal). null/0 for liquid deposits. */
+  tenorMonths?: number | null;
+  /** ISO maturity date (term deposits). When present it drives the maturity month. */
+  maturityDate?: string | null;
+  /** Payout cadence. "maturity" = principal+interest returns at maturity. */
+  payoutFrequency?: "maturity" | "monthly" | "quarterly" | "on_call" | null;
 }
 
 /** Actual security from the database (for actuals-seeded projection). */
@@ -579,6 +601,52 @@ export interface RankedInstrument {
   taxNote: string;
 }
 
+/**
+ * SOVEREIGN-PREFERENCE THRESHOLD (Round 30, EDITABLE).
+ *
+ * Government-backed instruments (T-bills, IFBs, FXD bonds) carry sovereign credit
+ * backing that bank deposits do not. When a bank deposit's net-of-tax yield
+ * advantage over the best government instrument is smaller than this threshold
+ * (percentage points), the allocator PREFERS the government instrument anyway.
+ * Set to 1.0pp by the plan brief; expose/raise/lower to taste.
+ */
+export const SOVEREIGN_PREFERENCE_THRESHOLD_PCT = 1.0;
+
+/**
+ * PER-ISSUER (BANK) CONCENTRATION CAP (Round 30, EDITABLE).
+ *
+ * For credit-risk diversification, no single bank/issuer may exceed this share of
+ * the whole portfolio. Government securities are sovereign and EXEMPT from this
+ * cap (they have their own 60% family cap for liquidity balance). 25% per the brief.
+ */
+export const ISSUER_CONCENTRATION_CAP = 0.25;
+
+/**
+ * Apply the sovereign-preference tie-break to a net-yield-ranked candidate list.
+ * Bank candidates (bucket "bank") are demoted below a government candidate when
+ * their net-yield advantage is within SOVEREIGN_PREFERENCE_THRESHOLD_PCT. Pure
+ * government-only lists are returned unchanged. Exported for direct unit testing.
+ */
+export function applySovereignPreference<T extends { bucket: string; netPct: number }>(
+  ranked: T[],
+  thresholdPct: number = SOVEREIGN_PREFERENCE_THRESHOLD_PCT,
+): T[] {
+  const isGov = (b: string) => b === "tbill" || b === "ifb" || b === "fxd";
+  const bestGovNet = Math.max(
+    -Infinity,
+    ...ranked.filter((r) => isGov(r.bucket)).map((r) => r.netPct),
+  );
+  if (!Number.isFinite(bestGovNet)) return ranked;
+  // Stable re-sort: a bank candidate only beating gov by < threshold sorts after gov.
+  return [...ranked].sort((a, b) => {
+    const aBankClose = a.bucket === "bank" && a.netPct - bestGovNet < thresholdPct;
+    const bBankClose = b.bucket === "bank" && b.netPct - bestGovNet < thresholdPct;
+    if (aBankClose && !bBankClose) return 1;
+    if (!aBankClose && bBankClose) return -1;
+    return b.netPct - a.netPct;
+  });
+}
+
 export function rankInstrumentsByNetYield(
   rates: Pick<EngineSettings, "tbill91Rate" | "tbill182Rate" | "tbill364Rate" | "ifbCouponRate" | "fxdCouponRate" | "withholdingTax">,
   opts: { maxTbillTenor: 0 | 3 | 6 | 12; allowLongBonds: boolean; longBondTenorMonths?: number },
@@ -741,19 +809,45 @@ export function runProjection(
     whtRate: s.whtRate,
   }));
 
-  // ── Bank instrument holdings (live actuals) ──
-  // Each accrues simple interest on its principal during elapsed months on the
-  // same monthly footing as the primary MMF (own rate, WHT, day-count).
+  // ── Bank instrument holdings (live actuals → goal-directed capital) ──
+  // Round 30: every bank holding is projected forward toward the goal, not parked
+  // as a side balance. LIQUID kinds (call/ordinary/tiered savings) accrue in place
+  // and stay withdrawable. TERM kinds (fixed_deposit, target/goal savings) accrue
+  // to their maturity month, then return principal + final net interest to the MMF
+  // where the yield-max allocator re-deploys the cash (see maturity handling in
+  // the monthly loop). Each accrues monthly net interest on its own rate/WHT.
+  const LIQUID_BANK_KINDS = new Set(["call_deposit", "ordinary_savings", "tiered_savings"]);
   const bankState = bankHoldings
     .filter((b) => b.isActive !== false)
-    .map((b) => ({
-      balance: b.principal || 0,
-      principal: b.principal || 0,
-      interestRate: b.interestRate || 0,
-      whtRate: b.whtRate ?? null,
-      // Month offset (1-based) at which the holding begins accruing.
-      startMonth: monthOffsetFromStart(b.startDate, startDate) ?? 1,
-    }));
+    .map((b) => {
+      const kind = b.instrumentType ?? "call_deposit";
+      const isLiquid = LIQUID_BANK_KINDS.has(kind);
+      // Term deposits mature on their maturity date (preferred) or start+tenor.
+      let maturityMonth: number | null = null;
+      if (!isLiquid) {
+        const fromDate = monthOffsetFromStart(b.maturityDate, startDate);
+        if (fromDate != null) maturityMonth = fromDate;
+        else if (b.tenorMonths && b.tenorMonths > 0) {
+          const start = monthOffsetFromStart(b.startDate, startDate) ?? 1;
+          maturityMonth = start + Math.round(b.tenorMonths);
+        }
+      }
+      return {
+        label: b.label ?? b.bankName ?? null,
+        kind,
+        isLiquid,
+        balance: b.principal || 0,
+        principal: b.principal || 0,
+        interestRate: b.interestRate || 0,
+        whtRate: b.whtRate ?? null,
+        // Month offset (1-based) at which the holding begins accruing.
+        startMonth: monthOffsetFromStart(b.startDate, startDate) ?? 1,
+        // Forward month at which a term deposit matures (null = never matures).
+        maturityMonth,
+        // Set true once a term deposit has matured and paid out into the MMF.
+        matured: false,
+      };
+    });
 
   // ── Per-month placement of actual primary-MMF deposits ──
   // Deposits attributed to the PRIMARY plan (primary MMF fund, or legacy bucket
@@ -900,23 +994,51 @@ export function runProjection(
       secondaryMmfEnd += sec.balance;
     }
 
-    // ── Bank instrument holdings ──
-    // Same unified rule: principal is held flat through elapsed months (so the
-    // "today" total equals the recorded principal), then accrues simple monthly
-    // interest on its own rate/WHT/day-count going forward. Bank deposits do not
-    // compound into the MMF; they grow in place as a separate pocket.
+    // ── Bank instrument holdings (goal-directed capital) ──
+    // Unified rule: principal is held flat through elapsed (actual) months (so the
+    // "today" total equals recorded principal), then accrues simple monthly
+    // interest on its own rate/WHT/day-count going forward.
+    //   - LIQUID kinds (call/ordinary/tiered savings): accrue in place, never
+    //     mature, stay withdrawable — they remain in the bank pocket (bankEnd).
+    //   - TERM kinds (fixed_deposit, target/goal savings): accrue until their
+    //     maturity month, then return PRINCIPAL + accrued net interest to the MMF
+    //     and are re-deployed by the yield-max sweep below. This is what makes a
+    //     maturing bank deposit goal-directed capital rather than a side balance.
     let bankEnd = 0;
+    let bankMaturedCashIn = 0;
+    const bankMaturityActions: string[] = [];
     for (const b of bankState) {
+      if (b.matured) continue;
       if (b.balance === 0) continue;
+      const bWhtPct = b.whtRate ?? rates.withholdingTax;
+      const bWht = bWhtPct / 100;
+
+      // Accrue this month's net interest on the forward path.
       if (!isActualMonth && m >= b.startMonth) {
-        const bWhtPct = b.whtRate ?? rates.withholdingTax;
-        const bWht = bWhtPct / 100;
-        // Monthly simple interest = principal × annualRate × (1/12), net of WHT.
         const grossInterest = b.balance * (b.interestRate / 100) / 12;
         const netInterest = grossInterest * (1 - bWht);
         whtThisMonth += grossInterest * bWht;
         b.balance += netInterest;
       }
+
+      // Term-deposit maturity: in the forward maturity month, pay out into the MMF.
+      if (!isActualMonth && !b.isLiquid && b.maturityMonth != null && m >= b.maturityMonth) {
+        const payout = b.balance;
+        const interestPortion = Math.max(0, payout - b.principal);
+        bankMaturedCashIn += payout;
+        b.matured = true;
+        b.balance = 0;
+        const niceKind =
+          b.kind === "fixed_deposit" ? "fixed deposit"
+          : b.kind === "target_savings" ? "goal/target savings"
+          : "bank deposit";
+        const who = b.label ? `${b.label} ${niceKind}` : `a ${niceKind}`;
+        bankMaturityActions.push(
+          `${who} matured, returning KES ${Math.round(payout).toLocaleString()} to the MMF (KES ${Math.round(b.principal).toLocaleString()} principal + KES ${Math.round(interestPortion).toLocaleString()} net interest)`
+        );
+        continue; // do not add to bankEnd; the cash is now in the MMF
+      }
+
       bankEnd += b.balance;
     }
 
@@ -969,7 +1091,10 @@ export function runProjection(
     }
 
     lots = survivingLots;
+    // Matured term-deposit cash joins maturing-security cash in the MMF, where the
+    // yield-max sweep below re-deploys it toward the goal (Round 30, R30.3).
     mmf += cbkCashIn;
+    mmf += bankMaturedCashIn;
 
     let mmfToDhow = 0;
     let sweepTarget: "tbill" | "ifb" | "fxd" | null = null;
@@ -1215,16 +1340,24 @@ export function runProjection(
     const sweepDesc = mmfToDhow > 0
       ? `Move KES ${Math.round(mmfToDhow).toLocaleString()} from the MMF into ${joinWithAnd(buyParts)}`
       : "";
-    // Maturities/coupons already arrive as plain phrases in cbkActions.
-    if (cbkActions.length > 0 && sweepDesc) {
-      mainAction = `${capitalise(cbkActions.join("; "))}, then ${lowerFirst(sweepDesc)}`;
-    } else if (cbkActions.length > 0) {
-      mainAction = `${capitalise(cbkActions.join("; "))}; cash stays in the MMF this month`;
+    // Maturities/coupons already arrive as plain phrases. Round 30: bank term
+    // deposits maturing this month are narrated alongside CBK maturities so the
+    // investor sees, month by month, exactly what matured and where it went.
+    const maturityActions = [...cbkActions, ...bankMaturityActions];
+    // Did any cash mature into the MMF this month (CBK or bank term deposit)?
+    const maturedCashThisMonth = cbkCashIn + bankMaturedCashIn > 0;
+    if (maturityActions.length > 0 && sweepDesc) {
+      mainAction = `${capitalise(maturityActions.join("; "))}, then ${lowerFirst(sweepDesc)}`;
+    } else if (maturityActions.length > 0) {
+      // Cash matured but nothing was re-deployed — say so explicitly and why.
+      mainAction = `${capitalise(maturityActions.join("; "))}; kept in the MMF (no instrument matures before your goal date)`;
     } else if (sweepDesc) {
       mainAction = sweepDesc;
     } else {
       mainAction = "Add this month's saving to the MMF; nothing swept into securities this month";
     }
+    // Silence unused-variable lints when no maturity occurred.
+    void maturedCashThisMonth;
 
     const total = mmf + tbillEnd + ifbEnd + fxdEnd + secondaryMmfEnd + bankEnd;
 

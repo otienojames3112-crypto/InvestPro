@@ -4,6 +4,7 @@ import { useDepositDrawer } from "@/contexts/DepositDrawerContext";
 import { useMemo, useState } from "react";
 import { trpc } from "@/lib/trpc";
 import { formatKES } from "@/lib/format";
+import { BANK_INSTRUMENT_TYPES, isTermBankInstrument, bankInstrumentLabel, type BankInstrumentType } from "@shared/const";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -69,12 +70,14 @@ const EMPTY_BANK = {
   id: null as number | null,
   bankName: "",
   label: "",
-  instrumentType: "call_deposit" as "call_deposit" | "fixed_deposit",
+  instrumentType: "call_deposit" as BankInstrumentType,
   principal: "",
   interestRate: "",
   rateAsOfDate: new Date().toISOString().slice(0, 10),
   isNegotiable: true,
   tenorMonths: "",
+  maturityDate: "",
+  earlyBreakPenaltyPct: "",
   notes: "",
 };
 
@@ -143,12 +146,14 @@ export default function Deposits() {
       id: h.id,
       bankName: h.bankName,
       label: h.label ?? "",
-      instrumentType: h.instrumentType as "call_deposit" | "fixed_deposit",
+      instrumentType: h.instrumentType as BankInstrumentType,
       principal: String(h.principal),
       interestRate: String(h.interestRate),
       rateAsOfDate: h.rateAsOfDate ? new Date(h.rateAsOfDate).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10),
       isNegotiable: h.isNegotiable,
       tenorMonths: h.tenorMonths != null ? String(h.tenorMonths) : "",
+      maturityDate: h.maturityDate ? new Date(h.maturityDate).toISOString().slice(0, 10) : "",
+      earlyBreakPenaltyPct: (h as { earlyBreakPenaltyPct?: number }).earlyBreakPenaltyPct != null ? String((h as { earlyBreakPenaltyPct?: number }).earlyBreakPenaltyPct) : "",
       notes: h.notes ?? "",
     });
     setBankDialogOpen(true);
@@ -159,6 +164,7 @@ export default function Deposits() {
     if (!bankForm.bankName.trim()) { toast.error("Bank name is required"); return; }
     const principal = parseFloat(bankForm.principal) || 0;
     const interestRate = parseFloat(bankForm.interestRate) || 0;
+    const isTerm = isTermBankInstrument(bankForm.instrumentType);
     const common = {
       portfolioId,
       bankName: bankForm.bankName.trim(),
@@ -167,7 +173,10 @@ export default function Deposits() {
       interestRate,
       rateAsOfDate: bankForm.rateAsOfDate || undefined,
       isNegotiable: bankForm.isNegotiable,
-      tenorMonths: bankForm.tenorMonths ? parseInt(bankForm.tenorMonths) : undefined,
+      tenorMonths: isTerm && bankForm.tenorMonths ? parseInt(bankForm.tenorMonths) : undefined,
+      maturityDate: isTerm && bankForm.maturityDate ? bankForm.maturityDate : undefined,
+      payoutFrequency: isTerm ? ("maturity" as const) : ("on_call" as const),
+      earlyBreakPenaltyPct: isTerm && bankForm.earlyBreakPenaltyPct ? parseFloat(bankForm.earlyBreakPenaltyPct) : undefined,
       notes: bankForm.notes.trim() || undefined,
     };
     if (bankForm.id) {
@@ -343,7 +352,7 @@ export default function Deposits() {
                   </TableCell>
                   <TableCell>
                     <Badge className="bg-sky-500/15 text-sky-300 border-sky-500/30 text-xs">
-                      {h.instrumentType === "fixed_deposit" ? "Fixed Deposit" : "Call Deposit"}
+                      {bankInstrumentLabel(h.instrumentType)}
                     </Badge>
                   </TableCell>
                   <TableCell className="text-right font-mono font-semibold text-foreground">{formatKES(h.principal)}</TableCell>
@@ -455,11 +464,12 @@ export default function Deposits() {
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label className="text-xs text-muted-foreground">Type</Label>
-                <Select value={bankForm.instrumentType} onValueChange={(v) => setBankForm((f) => ({ ...f, instrumentType: v as "call_deposit" | "fixed_deposit" }))}>
+                <Select value={bankForm.instrumentType} onValueChange={(v) => setBankForm((f) => ({ ...f, instrumentType: v as BankInstrumentType }))}>
                   <SelectTrigger className="bg-white/5 border-white/10 h-9 text-sm"><SelectValue /></SelectTrigger>
                   <SelectContent className="bg-[#0f1117] border-white/10">
-                    <SelectItem value="call_deposit">Call Deposit</SelectItem>
-                    <SelectItem value="fixed_deposit">Fixed Deposit</SelectItem>
+                    {BANK_INSTRUMENT_TYPES.map((t) => (
+                      <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>
@@ -478,11 +488,23 @@ export default function Deposits() {
                 <Input type="date" value={bankForm.rateAsOfDate} onChange={(e) => setBankForm((f) => ({ ...f, rateAsOfDate: e.target.value }))} className="bg-white/5 border-white/10 h-9 text-sm" />
               </div>
             </div>
-            {bankForm.instrumentType === "fixed_deposit" && (
-              <div className="space-y-1.5">
-                <Label className="text-xs text-muted-foreground">Tenor (months, optional)</Label>
-                <Input type="number" min="0" value={bankForm.tenorMonths} onChange={(e) => setBankForm((f) => ({ ...f, tenorMonths: e.target.value }))} placeholder="e.g. 12" className="bg-white/5 border-white/10 font-mono h-9 text-sm" />
-              </div>
+            {isTermBankInstrument(bankForm.instrumentType) && (
+              <>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs text-muted-foreground">Tenor (months)</Label>
+                    <Input type="number" min="0" value={bankForm.tenorMonths} onChange={(e) => setBankForm((f) => ({ ...f, tenorMonths: e.target.value }))} placeholder="e.g. 6" className="bg-white/5 border-white/10 font-mono h-9 text-sm" />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs text-muted-foreground">Maturity date</Label>
+                    <Input type="date" value={bankForm.maturityDate} onChange={(e) => setBankForm((f) => ({ ...f, maturityDate: e.target.value }))} className="bg-white/5 border-white/10 h-9 text-sm" />
+                  </div>
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs text-muted-foreground">Early-break penalty (% of interest forfeited if withdrawn early)</Label>
+                  <Input type="number" min="0" max="100" step="0.5" value={bankForm.earlyBreakPenaltyPct} onChange={(e) => setBankForm((f) => ({ ...f, earlyBreakPenaltyPct: e.target.value }))} placeholder="e.g. 25" className="bg-white/5 border-white/10 font-mono h-9 text-sm" />
+                </div>
+              </>
             )}
             <div className="flex items-center justify-between rounded-lg bg-white/5 border border-white/10 px-3 py-2.5">
               <div>

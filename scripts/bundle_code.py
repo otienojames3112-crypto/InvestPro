@@ -107,8 +107,8 @@ def main():
     sections = section_files()
     lines = []
     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M %Z")
-    lines.append("# KES 5M Investment Tracker — Full Source Code (Round 27)\n")
-    lines.append(f"*Generated {now}. Checkpoint version 41acb0b1.*\n")
+    lines.append("# KES 5M Investment Tracker — Full Source Code (Round 29)\n")
+    lines.append(f"*Generated {now}. Checkpoint version b4b879d9.*\n")
     lines.append(
         "This bundle contains every application source file. Framework plumbing "
         "(`server/_core`), shadcn/ui primitives (`client/src/components/ui/*`), and "

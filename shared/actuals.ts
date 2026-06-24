@@ -45,7 +45,21 @@ export type BankHoldingActual = {
   interestRate: number;
   whtRate?: number | null;
   isActive?: boolean;
+  /** Accrued current value if tracked; falls back to principal when absent. */
+  currentValue?: number | null;
 };
+
+/**
+ * The value a single bank holding contributes to net worth: its accrued
+ * `currentValue` when present and positive, otherwise its `principal`.
+ * Inactive holdings contribute nothing.
+ */
+export function bankHoldingValue(b: BankHoldingActual): number {
+  if (b.isActive === false) return 0;
+  const cv = Number(b.currentValue ?? 0);
+  if (cv > 0) return cv;
+  return Number(b.principal ?? 0);
+}
 
 export type ActualsRates = {
   withholdingTax: number; // percent, e.g. 15
@@ -233,4 +247,47 @@ export function computeActualsTotals(
     },
     taxLiability,
   };
+}
+
+/**
+ * CANONICAL SUM-OF-PARTS NET WORTH (Round 30).
+ *
+ * Every page that displays a portfolio total MUST derive net worth from this one
+ * function so no page can silently omit a pocket (the Round-30 bug was Portfolio
+ * Review and Tax Summary excluding bank-instrument holdings, showing KES 46,000
+ * while the Dashboard correctly showed KES 143,500).
+ *
+ * Net worth = primary-MMF principal + every secondary-MMF balance + every active
+ * bank-instrument value (accrued currentValue, else principal) + every un-matured
+ * CBK security face value + every other-asset current value.
+ *
+ * This is intentionally pure and framework-free so it is shared verbatim between
+ * the Dashboard, Portfolio Review, Tax Summary and the Reconciliation page.
+ */
+export interface NetWorthParts {
+  primaryMmf: number;
+  secondaryMmf: number[]; // each secondary MMF balance
+  bank: number[]; // each active bank-instrument value (currentValue || principal)
+  securities: number[]; // each un-matured CBK security face value
+  other: number[]; // each other-asset current value
+}
+
+export interface NetWorthBreakdown {
+  primaryMmf: number;
+  secondaryMmf: number;
+  bank: number;
+  securities: number;
+  other: number;
+  total: number;
+}
+
+export function sumOfPartsNetWorth(parts: NetWorthParts): NetWorthBreakdown {
+  const sum = (xs: number[]) => xs.reduce((a, b) => a + (Number(b) || 0), 0);
+  const primaryMmf = Number(parts.primaryMmf) || 0;
+  const secondaryMmf = sum(parts.secondaryMmf);
+  const bank = sum(parts.bank);
+  const securities = sum(parts.securities);
+  const other = sum(parts.other);
+  const total = primaryMmf + secondaryMmf + bank + securities + other;
+  return { primaryMmf, secondaryMmf, bank, securities, other, total };
 }

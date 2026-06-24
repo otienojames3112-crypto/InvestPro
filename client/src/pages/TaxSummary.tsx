@@ -64,6 +64,21 @@ export default function TaxSummary() {
     { portfolioId: portfolioId! },
     { enabled: !!portfolioId }
   );
+  const { data: bankHoldings = [] } = trpc.bankHoldings.list.useQuery(
+    { portfolioId: portfolioId! },
+    { enabled: !!portfolioId }
+  );
+  const { data: projection } = trpc.projection.run.useQuery(
+    { portfolioId: portfolioId! },
+    { enabled: !!portfolioId }
+  );
+
+  // Full-period projected WHT across the entire horizon (engine per-month tax).
+  const projectedTotalTax = useMemo(
+    () => (projection ?? []).reduce((s, m) => s + Number(m.whtThisMonth ?? 0), 0),
+    [projection]
+  );
+  const projectionMonths = projection?.length ?? 0;
 
   // Bucket balances.
   // MMF bucket = primary-MMF deposit rows only (gov-security, bank, and
@@ -177,6 +192,25 @@ export default function TaxSummary() {
       });
     }
 
+    // Bank-instrument interest (call/fixed deposits) — 15% WHT, final.
+    (bankHoldings ?? [])
+      .filter((b) => b.isActive && Number(b.principal ?? 0) > 0)
+      .forEach((b) => {
+        const rate = Number(b.interestRate ?? 0);
+        if (rate <= 0) return;
+        const basis = Number(b.principal) * (rate / 100);
+        const tax = basis * (whtRate / 100);
+        result.push({
+          source: `${b.label || b.bankName} ${b.instrumentType === "fixed_deposit" ? "(fixed deposit)" : "(call deposit)"}`,
+          basis,
+          rate: whtRate,
+          tax,
+          net: basis - tax,
+          exempt: false,
+          note: "Bank-deposit interest: 15% WHT (final tax), same as MMF interest.",
+        });
+      });
+
     // Equity dividends — 5% WHT, final (estimate using assumedReturnBase as dividend yield proxy if present)
     (holdings ?? [])
       .filter((h) => h.assetClass === "equity")
@@ -198,7 +232,7 @@ export default function TaxSummary() {
       });
 
     return result;
-  }, [buckets, mmfYield, tbillRate, ifbRate, fxdRate, whtRate, fund.fundLabel, holdings, secondaryMmfs]);
+  }, [buckets, mmfYield, tbillRate, ifbRate, fxdRate, whtRate, fund.fundLabel, holdings, secondaryMmfs, bankHoldings]);
 
   // Gross annual MMF income across all accounts (for blended yield weighting).
   const secondaryMmfGross = secondaryMmfs.reduce((s, m) => s + m.currentBalance * (m.ear / 100), 0);
@@ -407,6 +441,51 @@ export default function TaxSummary() {
             </p>
           </CardContent>
         </Card>
+
+        {/* Full-period projected tax */}
+        {projectionMonths > 0 && (
+          <Card className="border-amber-500/25">
+            <CardHeader>
+              <CardTitle className="text-base">Projected Tax Over the Full Plan</CardTitle>
+              <CardDescription>
+                Total withholding tax the projection engine expects you to pay across the entire
+                {" "}{projectionMonths}-month horizon — computed month by month as balances grow, on MMF
+                (primary + secondary), bank deposits, T-bills and FXD coupons (IFB coupons are exempt).
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="rounded-lg bg-muted/30 p-4">
+                  <p className="text-xs text-muted-foreground">Full-period projected WHT</p>
+                  <p className="text-2xl font-bold text-red-500">−{kes(projectedTotalTax)}</p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Sum of monthly WHT over {projectionMonths} months.
+                  </p>
+                </div>
+                <div className="rounded-lg bg-muted/30 p-4">
+                  <p className="text-xs text-muted-foreground">Avg WHT / month</p>
+                  <p className="text-2xl font-bold">
+                    {kes(projectionMonths > 0 ? projectedTotalTax / projectionMonths : 0)}
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-1">Deducted at source as it accrues.</p>
+                </div>
+                <div className="rounded-lg bg-muted/30 p-4">
+                  <p className="text-xs text-muted-foreground">Annualised snapshot (above)</p>
+                  <p className="text-2xl font-bold">−{kes(totalTax)}</p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Current balances only — grows as the plan builds.
+                  </p>
+                </div>
+              </div>
+              <p className="text-xs text-muted-foreground mt-4 flex items-start gap-2">
+                <Info className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                The annualised snapshot taxes only what you hold today; the full-period figure tracks tax
+                on the growing balance across every month of the plan, so it is the more complete picture
+                of the tax you will actually pay on the journey to your goal.
+              </p>
+            </CardContent>
+          </Card>
+        )}
 
         {/* Disclaimer */}
         <Card>

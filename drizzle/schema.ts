@@ -211,6 +211,47 @@ export type DepositEntry = typeof depositEntries.$inferSelect;
 export type InsertDepositEntry = typeof depositEntries.$inferInsert;
 
 /**
+ * Withdrawal entries — real money taken OUT of an account, per portfolio.
+ *
+ * A withdrawal is the money-out counterpart to deposit_entries. It reduces the
+ * source account's balance, flows through the actuals aggregation (net worth,
+ * dashboard totals, reconciliation), and — for a fixed deposit broken early —
+ * records any forfeited interest so the tax/net-worth picture stays honest.
+ *
+ * The source is identified the same way deposits name their destination:
+ * - mmf_fund: pulled from an MMF account (mmfFundId set; primary or secondary)
+ * - bank_instrument: pulled from a bank holding (bankHoldingId set)
+ * - government_security: matured/redeemed cash from a CBK lot (securityId set)
+ */
+export const withdrawalEntries = mysqlTable("withdrawal_entries", {
+  id: int("id").autoincrement().primaryKey(),
+  portfolioId: int("portfolioId").notNull(),
+  /** Where the money came from. Mirrors deposit_entries.institutionType. */
+  sourceType: mysqlEnum("sourceType", ["mmf_fund", "bank_instrument", "government_security"]).notNull().default("mmf_fund"),
+  /** FK to mmf_funds.id when sourceType = mmf_fund (null = primary fund). */
+  mmfFundId: int("mmfFundId"),
+  /** FK to bank_instrument_holdings.id when sourceType = bank_instrument. */
+  bankHoldingId: int("bankHoldingId"),
+  /** FK to securities.id when sourceType = government_security. */
+  securityId: int("securityId"),
+  /** Gross amount withdrawn (KES, positive number). */
+  amount: decimal("amount", { precision: 14, scale: 2 }).notNull(),
+  /** Interest forfeited by an early fixed-deposit break (KES). 0 otherwise. */
+  forfeitedInterest: decimal("forfeitedInterest", { precision: 14, scale: 2 }).notNull().default("0.00"),
+  /** True when this was an early break of a fixed deposit before maturity. */
+  isEarlyWithdrawal: boolean("isEarlyWithdrawal").notNull().default(false),
+  withdrawalDate: date("withdrawalDate").notNull(),
+  /** Optional reason / destination note. */
+  reason: text("reason"),
+  notes: text("notes"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type WithdrawalEntry = typeof withdrawalEntries.$inferSelect;
+export type InsertWithdrawalEntry = typeof withdrawalEntries.$inferInsert;
+
+/**
  * Rate history — per-portfolio rate snapshots for time-locked projection.
  */
 export const rateHistory = mysqlTable("rate_history", {
@@ -436,7 +477,7 @@ export const bankInstruments = mysqlTable("bank_instruments", {
   /** Bank name, e.g. "Equity Bank" */
   bankName: varchar("bankName", { length: 200 }).notNull(),
   /** Instrument type */
-  instrumentType: mysqlEnum("instrumentType", ["call_deposit", "fixed_deposit"]).notNull(),
+  instrumentType: mysqlEnum("instrumentType", ["call_deposit", "fixed_deposit", "ordinary_savings", "target_savings", "tiered_savings"]).notNull(),
   /** Minimum amount (KES) */
   minAmount: decimal("minAmount", { precision: 14, scale: 2 }).notNull().default("0.00"),
   /** Typical tenor, e.g. "1–12 months" */

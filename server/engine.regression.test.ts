@@ -58,18 +58,35 @@ describe("Engine regression — allocation-targeted sweep (Round 26)", () => {
     expect(portfolio).toBeLessThanOrEqual(5_200_000);
   });
 
-  it("month-120 value is within ±2% of the locked reference (≈ KES 5,010,535)", () => {
+  it("month-120 value is within ±2% of the locked reference (≈ KES 4,971,114)", () => {
+    // Round 27 (end-state liquidity): the final ~3 months no longer buy bills, so
+    // the surplus that previously compounded in T-bills now sits in MMF. This
+    // trims the locked reference slightly from 5,010,535 to ≈ 4,971,114 and the
+    // whole portfolio is CASH at month 120 (tbillEnd = 0).
     const result = runProjection(BASELINE_SETTINGS);
     const portfolio = result[119].totalEnd;
-    const EXPECTED = 5_010_535;
+    const EXPECTED = 4_971_114;
     const TOLERANCE = 0.02;
     expect(portfolio).toBeGreaterThan(EXPECTED * (1 - TOLERANCE));
     expect(portfolio).toBeLessThan(EXPECTED * (1 + TOLERANCE));
   });
 
-  it("KES 3,000 step-up reaches the KES 5M target under the corrected engine", () => {
+  it("is fully liquid at month 120 (no securities mature after the horizon)", () => {
     const result = runProjection(BASELINE_SETTINGS);
-    expect(result[119].totalEnd).toBeGreaterThanOrEqual(5_000_000);
+    const last = result[119];
+    expect(last.tbillEnd).toBe(0);
+    expect(last.ifbEnd).toBe(0);
+    expect(last.fxdEnd).toBe(0);
+    // Everything is in MMF (liquid) at the goal date.
+    expect(last.mmfEnd + last.secondaryMmfEnd).toBeCloseTo(last.totalEnd, 0);
+  });
+
+  it("baseline KES 3,000 step-up lands just under 5M but inside the acceptance band", () => {
+    // Honest restatement: with end-state liquidity the baseline now lands at
+    // ≈ KES 4.97M — just short of the 5M target but well within the 4.5–5.2M band.
+    const result = runProjection(BASELINE_SETTINGS);
+    expect(result[119].totalEnd).toBeGreaterThanOrEqual(4_500_000);
+    expect(result[119].totalEnd).toBeLessThanOrEqual(5_200_000);
   });
 
   it("KES 2,000 step-up does NOT reach the KES 5M target", () => {

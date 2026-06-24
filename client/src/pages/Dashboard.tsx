@@ -144,6 +144,10 @@ export default function Dashboard() {
     { enabled: !!portfolioId }
   );
   const secondaryMmfTotal = secondaryMmfs.reduce((sum, s) => sum + s.currentBalance, 0);
+  const { data: bankHoldings = [] } = trpc.bankHoldings.list.useQuery(
+    { portfolioId: portfolioId! },
+    { enabled: !!portfolioId }
+  );
   const updatePortfolioMutation = trpc.portfolios.update.useMutation({
     onSuccess: () => {
       toast.success("Target updated — projection recalculated");
@@ -236,6 +240,19 @@ export default function Dashboard() {
   const progressPct = targetAmount > 0 ? Math.min((projectedFinalValue / targetAmount) * 100, 100) : 0;
   const surplusOrShortfall = projectedFinalValue - targetAmount;
   const willHitTarget = projectedFinalValue >= targetAmount;
+
+  // ── End-state liquidity at the goal date (Fix #1 UI) ──
+  // Liquid = cash-equivalent at the horizon: primary MMF + secondary MMFs +
+  // bank balances (call deposits are liquid). Locked = CBK securities still
+  // held at the final month (these only exist if a tenor fits before the goal).
+  const liquidAtGoal =
+    (lastData?.mmfEnd ?? 0) + (lastData?.secondaryMmfEnd ?? 0) + (lastData?.bankEnd ?? 0);
+  const lockedAtGoal =
+    (lastData?.tbillEnd ?? 0) + (lastData?.ifbEnd ?? 0) + (lastData?.fxdEnd ?? 0);
+  const liquidPctAtGoal =
+    projectedFinalValue > 0 ? (liquidAtGoal / projectedFinalValue) * 100 : 100;
+  // "Fully liquid" if <0.5% is locked in securities maturing past the goal.
+  const landsFullyLiquid = lockedAtGoal < projectedFinalValue * 0.005;
 
   const chartData = useMemo(() => {
     if (!projection) return [];
@@ -414,6 +431,21 @@ export default function Dashboard() {
                     </span>
                   )}
                 </p>
+                {!projLoading && projectedFinalValue > 0 && (
+                  <p className="text-xs mt-1">
+                    {landsFullyLiquid ? (
+                      <span className="text-emerald-400 inline-flex items-center gap-1">
+                        <CheckCircle2 className="w-3 h-3" /> Lands fully liquid at goal —
+                        {" "}{liquidPctAtGoal.toFixed(0)}% in cash/MMF, withdrawable on the goal date
+                      </span>
+                    ) : (
+                      <span className="text-amber-400 inline-flex items-center gap-1">
+                        <AlertTriangle className="w-3 h-3" /> {liquidPctAtGoal.toFixed(0)}% liquid at goal —
+                        {" "}{formatKES(lockedAtGoal)} still in securities at Month {horizonMonths}
+                      </span>
+                    )}
+                  </p>
+                )}
               </div>
             </div>
 
@@ -865,7 +897,7 @@ export default function Dashboard() {
                 </span>
               </div>
             ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                 <div className="rounded-xl bg-emerald-500/10 border border-emerald-500/20 p-4 space-y-1">
                   <p className="text-xs font-medium uppercase tracking-widest text-emerald-400">Total Contributed</p>
                   <p className="text-2xl font-serif font-bold text-foreground kes-amount">
@@ -914,6 +946,24 @@ export default function Dashboard() {
                   <p className="text-xs text-emerald-400 mt-1">
                     IFB bonds: fully tax-exempt
                   </p>
+                </div>
+
+                <div className="rounded-xl bg-sky-500/10 border border-sky-500/20 p-4 space-y-1">
+                  <div className="flex items-center gap-1.5">
+                    <TrendingUp className="w-3.5 h-3.5 text-sky-400" />
+                    <p className="text-xs font-medium uppercase tracking-widest text-sky-400">Est. Interest Earned</p>
+                  </div>
+                  <p className="text-2xl font-serif font-bold text-sky-200 kes-amount">
+                    {formatKES(actualsSummary?.estInterestEarned ?? 0)}
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-2">
+                    Net of WHT, accrued from each deposit&rsquo;s date to today at the current fund yield (geometric daily compounding).
+                  </p>
+                  <Link href="/mmf-accrual">
+                    <span className="text-xs text-sky-400 hover:underline cursor-pointer mt-1 inline-flex items-center gap-1">
+                      Day-by-day ledger <ArrowRight className="w-3 h-3" />
+                    </span>
+                  </Link>
                 </div>
               </div>
             )}
@@ -1032,6 +1082,35 @@ export default function Dashboard() {
                   </div>
                 ))}
               </div>
+
+              {/* Rates for the specific instruments this portfolio actually holds */}
+              {(secondaryMmfs.length > 0 || bankHoldings.some((b) => b.isActive)) && (
+                <div className="mt-4 pt-4 border-t border-border">
+                  <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground mb-2">
+                    Your held instruments
+                  </p>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+                    {secondaryMmfs.map((s) => (
+                      <div key={`smmf-${s.id}`} className="bg-muted/50 rounded-lg p-3 text-center">
+                        <p className="text-xs text-muted-foreground mb-1 truncate" title={s.fundName}>{s.fundName}</p>
+                        <p className="text-sm font-bold text-emerald-400">{formatPct(s.ear)}</p>
+                        <p className="text-xs text-muted-foreground/70 mt-0.5">net ~{formatPct(s.ear * 0.85)}</p>
+                      </div>
+                    ))}
+                    {bankHoldings.filter((b) => b.isActive).map((b) => (
+                      <div key={`bank-${b.id}`} className="bg-muted/50 rounded-lg p-3 text-center">
+                        <p className="text-xs text-muted-foreground mb-1 truncate" title={`${b.bankName} ${b.instrumentType}`}>
+                          {b.label || b.bankName}
+                        </p>
+                        <p className="text-sm font-bold text-sky-400">{formatPct(b.interestRate)}</p>
+                        <p className="text-xs text-muted-foreground/70 mt-0.5">
+                          {b.instrumentType === "fixed_deposit" ? "fixed deposit" : "call deposit"}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </CardContent>
           </Card>
         )}

@@ -89,6 +89,10 @@ export default function PortfolioReview() {
     { portfolioId: portfolioId! },
     { enabled: !!portfolioId }
   );
+  const { data: bankHoldings } = trpc.bankHoldings.list.useQuery(
+    { portfolioId: portfolioId! },
+    { enabled: !!portfolioId }
+  );
   const { data: audit } = trpc.audit.list.useQuery(
     { portfolioId: portfolioId!, limit: 25 },
     { enabled: !!portfolioId }
@@ -152,9 +156,43 @@ export default function PortfolioReview() {
     return map;
   }, [benchmarks]);
 
-  const yourYield = fund.fundEar;
+  // ─── Blended portfolio yield ────────────────────────────────────────────
+  // Balance-weighted gross yield across every tracked interest-bearing asset:
+  // primary MMF, secondary MMFs, bank instruments and CBK securities. This is
+  // the actual portfolio yield, not just the primary fund's quoted rate.
+  const blended = useMemo(() => {
+    const parts: { bal: number; rate: number }[] = [];
+    const primaryMmfBal = buckets.mmf;
+    if (primaryMmfBal > 0) parts.push({ bal: primaryMmfBal, rate: fund.fundEar });
+    (secondary ?? []).forEach((s) => {
+      const bal = Number(s.currentBalance ?? 0);
+      if (bal > 0) parts.push({ bal, rate: Number(s.ear ?? 0) });
+    });
+    (bankHoldings ?? []).forEach((b) => {
+      if (!b.isActive) return;
+      const bal = Number(b.principal ?? 0);
+      if (bal > 0) parts.push({ bal, rate: Number(b.interestRate ?? 0) });
+    });
+    (securities ?? []).forEach((s) => {
+      if (s.isMatured) return;
+      const bal = Number(s.faceValue ?? 0);
+      if (bal <= 0) return;
+      // Approximate each security's gross yield from its type.
+      let rate = 0;
+      if (s.securityType === "ifb") rate = bench["ifb_coupon"]?.value ?? 12.5;
+      else if (s.securityType === "fxd") rate = bench["fxd_coupon"]?.value ?? 12.35;
+      else rate = bench["tbill_91"]?.value ?? 8.82;
+      parts.push({ bal, rate });
+    });
+    const totalBal = parts.reduce((s, p) => s + p.bal, 0);
+    if (totalBal <= 0) return { yield: fund.fundEar, totalBal: 0, parts };
+    const weighted = parts.reduce((s, p) => s + p.bal * p.rate, 0) / totalBal;
+    return { yield: weighted, totalBal, parts };
+  }, [buckets.mmf, secondary, bankHoldings, securities, fund.fundEar, bench]);
+
+  const yourYield = blended.yield;
   const benchRows = [
-    { key: "your", label: `Your Fund (${fund.fundLabel})`, value: yourYield, highlight: true },
+    { key: "your", label: blended.parts.length > 1 ? "Your Portfolio (blended)" : `Your Fund (${fund.fundLabel})`, value: yourYield, highlight: true },
     bench["mmf_market_avg"] && { key: "mmf_market_avg", ...bench["mmf_market_avg"], highlight: false },
     bench["mmf_leaders_avg"] && { key: "mmf_leaders_avg", ...bench["mmf_leaders_avg"], highlight: false },
     bench["deposit_rate_avg"] && { key: "deposit_rate_avg", ...bench["deposit_rate_avg"], highlight: false },
@@ -168,17 +206,34 @@ export default function PortfolioReview() {
   const realYield = yourYield - inflation;
 
   // ─── Liquidity calendar ─────────────────────────────────────────────────
+  // Every upcoming maturity that turns into available cash: CBK securities
+  // (T-bill/IFB/FXD) AND bank fixed deposits with a maturity date.
   const upcoming = useMemo(() => {
-    return (securities ?? [])
-      .filter((s) => !s.isMatured)
+    const fromSecurities = (securities ?? [])
+      .filter((s) => !s.isMatured && s.maturityDate)
       .map((s) => ({
-        ...s,
+        id: `sec-${s.id}`,
+        label: s.securityType.replace("_", "-").toUpperCase(),
+        kind: "CBK security",
+        value: Number(s.faceValue),
+        maturityDate: s.maturityDate as string | Date,
         days: daysUntil(s.maturityDate),
-      }))
+      }));
+    const fromBank = (bankHoldings ?? [])
+      .filter((b) => b.isActive && b.instrumentType === "fixed_deposit" && b.maturityDate)
+      .map((b) => ({
+        id: `bank-${b.id}`,
+        label: `${b.label || b.bankName} (FD)`,
+        kind: "Fixed deposit",
+        value: Number(b.currentValue ?? b.principal ?? 0),
+        maturityDate: b.maturityDate as string | Date,
+        days: daysUntil(b.maturityDate as string | Date),
+      }));
+    return [...fromSecurities, ...fromBank]
       .filter((s) => s.days >= 0)
       .sort((a, b) => a.days - b.days)
-      .slice(0, 12);
-  }, [securities]);
+      .slice(0, 20);
+  }, [securities, bankHoldings]);
 
   return (
     <AppShell>
@@ -338,8 +393,9 @@ export default function PortfolioReview() {
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>Security</TableHead>
-                      <TableHead className="text-right">Face Value</TableHead>
+                      <TableHead>Instrument</TableHead>
+                      <TableHead>Type</TableHead>
+                      <TableHead className="text-right">Value</TableHead>
                       <TableHead>Matures</TableHead>
                       <TableHead className="text-right">In</TableHead>
                     </TableRow>
@@ -347,11 +403,14 @@ export default function PortfolioReview() {
                   <TableBody>
                     {upcoming.map((s) => (
                       <TableRow key={s.id}>
-                        <TableCell className="font-medium uppercase">
-                          {s.securityType.replace("_", "-")}
+                        <TableCell className="font-medium">
+                          {s.label}
+                        </TableCell>
+                        <TableCell className="text-muted-foreground text-xs">
+                          {s.kind}
                         </TableCell>
                         <TableCell className="text-right tabular-nums">
-                          {kes(Number(s.faceValue))}
+                          {kes(s.value)}
                         </TableCell>
                         <TableCell>
                           {new Date(s.maturityDate).toLocaleDateString("en-KE")}

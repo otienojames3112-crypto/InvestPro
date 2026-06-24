@@ -260,7 +260,9 @@ describe("Tax enforcement", () => {
   it("T-bill interest is net of 15% WHT — no-WHT T-bill balance is higher", () => {
     const noTax = runProjection({ ...DEFAULT_SETTINGS, withholdingTax: 0 });
     const withTax = runProjection(DEFAULT_SETTINGS);
-    expect(noTax[119].tbillEnd).toBeGreaterThan(withTax[119].tbillEnd);
+    // End-state liquidity (Round 27) means month 120 holds zero T-bills (all in
+    // MMF), so compare a mid-horizon month where bills are still held in both runs.
+    expect(noTax[90].tbillEnd).toBeGreaterThan(withTax[90].tbillEnd);
   });
 
   it("FXD net coupon at 12.35% gross is approximately 10.5% net", () => {
@@ -278,12 +280,19 @@ describe("runScenarios", () => {
     expect(scenarios).toHaveLength(9);
   });
 
-  it("KES 3,000 step-up reaches the KES 5M target (allocation-targeted sweep)", () => {
-    // Round 26: the corrected sweep deploys surplus toward the phase mix and the
-    // baseline KES 3,000 step-up now lands at ≈ KES 5,010,535 — just clearing 5M.
+  it("KES 3,000 step-up lands just under 5M with end-state liquidity (≈ 4.97M)", () => {
+    // Round 27: end-state liquidity parks the final-tail surplus in MMF instead of
+    // compounding it in bills, so the baseline now lands at ≈ KES 4.97M — just
+    // short of 5M but inside the 4.5–5.2M acceptance band.
     const s3000 = scenarios.find(s => s.stepUp === 3000)!;
-    expect(s3000.hitsTarget).toBe(true);
-    expect(s3000.projectedEndingValue).toBeGreaterThanOrEqual(5000000);
+    expect(s3000.projectedEndingValue).toBeGreaterThanOrEqual(4_500_000);
+    expect(s3000.projectedEndingValue).toBeLessThanOrEqual(5_200_000);
+  });
+
+  it("a higher KES 4,000 step-up clears the KES 5M target", () => {
+    const s4000 = scenarios.find(s => s.stepUp === 4000)!;
+    expect(s4000.hitsTarget).toBe(true);
+    expect(s4000.projectedEndingValue).toBeGreaterThanOrEqual(5_000_000);
   });
 
   it("KES 2,000 step-up does NOT hit the KES 5M target", () => {

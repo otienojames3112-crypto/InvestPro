@@ -22,6 +22,7 @@ import MmfStrategy from "./pages/MmfStrategy";
 import BankInstruments from "./pages/BankInstruments";
 import PortfolioReview from "./pages/PortfolioReview";
 import Reconciliation from "./pages/Reconciliation";
+import Withdrawals from "./pages/Withdrawals";
 
 function Router() {
   return (
@@ -34,6 +35,7 @@ function Router() {
       <Route path="/settings" component={Settings} />
       <Route path="/getting-started" component={GettingStarted} />
       <Route path="/deposits" component={Deposits} />
+      <Route path="/withdrawals" component={Withdrawals} />
       <Route path="/mmf-funds" component={MmfFunds} />
       <Route path="/mmf-accrual" component={MmfAccrual} />
       <Route path="/mmf-strategy" component={MmfStrategy} />

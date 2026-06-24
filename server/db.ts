@@ -9,6 +9,7 @@ import {
   securities,
   contributionOverrides,
   depositEntries,
+  withdrawalEntries,
   rateHistory,
   accountStatus,
   type InsertPortfolio,
@@ -18,6 +19,7 @@ import {
   type InsertSecurity,
   type InsertContributionOverride,
   type InsertDepositEntry,
+  type InsertWithdrawalEntry,
   type InsertRateHistory,
   type InsertAccountStatus,
   portfolioSecondaryMmfs,
@@ -25,7 +27,7 @@ import {
   type InsertBankInstrumentHolding,
 } from "../drizzle/schema";
 import { ENV } from "./_core/env";
-import { computeActualsTotals } from "../shared/actuals";
+import { computeActualsTotals, estInterestToDate } from "../shared/actuals";
 
 let _db: ReturnType<typeof drizzle> | null = null;
 
@@ -426,6 +428,49 @@ export async function deleteDepositEntry(id: number, portfolioId: number) {
   }
 }
 
+// ─── Withdrawals (money OUT) ─────────────────────────────────────────────────
+
+export async function getWithdrawalEntries(portfolioId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select()
+    .from(withdrawalEntries)
+    .where(eq(withdrawalEntries.portfolioId, portfolioId))
+    .orderBy(desc(withdrawalEntries.withdrawalDate));
+}
+
+export async function addWithdrawalEntry(data: InsertWithdrawalEntry) {
+  const db = await getDb();
+  if (!db) return null;
+  await db.insert(withdrawalEntries).values(data);
+  const [row] = await db
+    .select()
+    .from(withdrawalEntries)
+    .where(eq(withdrawalEntries.portfolioId, data.portfolioId))
+    .orderBy(desc(withdrawalEntries.createdAt))
+    .limit(1);
+  return row ?? null;
+}
+
+export async function deleteWithdrawalEntry(id: number, portfolioId: number) {
+  const db = await getDb();
+  if (!db) return;
+  await db
+    .delete(withdrawalEntries)
+    .where(and(eq(withdrawalEntries.id, id), eq(withdrawalEntries.portfolioId, portfolioId)));
+}
+
+/** Net withdrawn amount per source bucket (positive = money out). */
+export async function getWithdrawalsForActuals(portfolioId: number) {
+  const rows = await getWithdrawalEntries(portfolioId);
+  return rows.map((w) => ({
+    sourceType: w.sourceType as "mmf_fund" | "bank_instrument" | "government_security",
+    mmfFundId: (w as { mmfFundId?: number | null }).mmfFundId ?? null,
+    amount: parseFloat(String(w.amount ?? "0")) || 0,
+  }));
+}
+
 export async function getActualsSummary(
   portfolioId: number,
   targetAmount: number,
@@ -445,6 +490,7 @@ export async function getActualsSummary(
   const secondaries = await getSecondaryMmfs(portfolioId);
   const bankHoldings = await getBankInstrumentHoldings(portfolioId);
   const securityRows = await getSecurities(portfolioId);
+  const withdrawals = await getWithdrawalsForActuals(portfolioId);
 
   // Delegate the (double-counting-safe) aggregation to the pure, unit-tested helper.
   const agg = computeActualsTotals(
@@ -474,10 +520,48 @@ export async function getActualsSummary(
       isTaxExempt: !!s.isTaxExempt,
       isMatured: !!s.isMatured,
     })),
+    withdrawals,
   );
 
   const annualFxdCouponIncome = agg.byBucket.fxd * (fxdCouponRate / 100);
   const remainingToTarget = Math.max(0, targetAmount - agg.totalContributed);
+
+  // ── Estimated NET interest earned to date ───────────────────────────────────
+  // Accrue each primary-MMF deposit from its deposit date to today at the fund
+  // EAR (geometric daily compounding, after WHT). Secondary MMFs and bank
+  // holdings accrue from their own start dates where available. This is a
+  // display estimate; the accrual ledger holds the authoritative day-by-day run.
+  const todayISO = new Date().toISOString().slice(0, 10);
+  const secondaryFundIdSet = new Set(
+    secondaries.map((s) => s.mmfFundId).filter((id): id is number => typeof id === "number"),
+  );
+  let estInterestEarned = 0;
+  for (const row of rows) {
+    const instType = (row as { institutionType?: string | null }).institutionType ?? null;
+    const fundId = (row as { mmfFundId?: number | null }).mmfFundId ?? null;
+    // Only primary-MMF deposits accrue here; secondary/bank/gov are handled below.
+    if (instType === "bank_instrument" || instType === "government_security") continue;
+    if (instType === "mmf_fund" && fundId != null && secondaryFundIdSet.has(fundId)) continue;
+    const amt = parseFloat(row.amount) || 0;
+    const dateISO = String((row as { depositDate?: unknown }).depositDate ?? todayISO).slice(0, 10);
+    estInterestEarned += estInterestToDate(amt, mmfYield, withholdingTax, dateISO, todayISO);
+  }
+  for (const s of secondaries) {
+    const bal = parseFloat(String(s.currentBalance ?? "0")) || 0;
+    const ear = parseFloat(String(s.ear ?? "0")) || 0;
+    const wht = parseFloat(String(s.whtRate ?? "15")) || 15;
+    const startISO = String((s as { startDate?: unknown; createdAt?: unknown }).startDate ?? (s as { createdAt?: unknown }).createdAt ?? todayISO).slice(0, 10);
+    estInterestEarned += estInterestToDate(bal, ear, wht, startISO, todayISO);
+  }
+  for (const b of bankHoldings) {
+    if (!b.isActive) continue;
+    const principal = parseFloat(String(b.principal ?? "0")) || 0;
+    const rate = parseFloat(String(b.interestRate ?? "0")) || 0;
+    const wht = parseFloat(String(b.whtRate ?? "15")) || 15;
+    const startISO = String((b as { startDate?: unknown; createdAt?: unknown }).startDate ?? (b as { createdAt?: unknown }).createdAt ?? todayISO).slice(0, 10);
+    estInterestEarned += estInterestToDate(principal, rate, wht, startISO, todayISO);
+  }
+  estInterestEarned = Math.round(estInterestEarned * 100) / 100;
 
   return {
     totalContributed: agg.totalContributed,
@@ -493,6 +577,9 @@ export async function getActualsSummary(
     secondaryCount: secondaries.length,
     bankHoldingCount: bankHoldings.filter((b) => b.isActive).length,
     entryCount: rows.length,
+    withdrawalCount: withdrawals.length,
+    totalWithdrawn: withdrawals.reduce((s, w) => s + w.amount, 0),
+    estInterestEarned,
   };
 }
 

@@ -49,10 +49,17 @@ import {
 import { toast } from "sonner";
 import { Landmark, Plus, Pencil, Trash2, Info, Percent } from "lucide-react";
 
+type BankInstrumentType =
+  | "call_deposit"
+  | "fixed_deposit"
+  | "ordinary_savings"
+  | "target_savings"
+  | "tiered_savings";
+
 interface BankRow {
   id: number;
   bankName: string;
-  instrumentType: "call_deposit" | "fixed_deposit";
+  instrumentType: BankInstrumentType;
   minAmount: number;
   typicalTenor: string | null;
   indicativeRate: number | null;
@@ -75,7 +82,7 @@ function kes(n: number): string {
 const EMPTY = {
   id: 0,
   bankName: "",
-  instrumentType: "fixed_deposit" as "call_deposit" | "fixed_deposit",
+  instrumentType: "fixed_deposit" as BankInstrumentType,
   minAmount: "0",
   typicalTenor: "",
   indicativeRate: "",
@@ -123,6 +130,18 @@ export default function BankInstruments() {
   );
   const fixedRows = useMemo(
     () => (rows ?? []).filter((r) => r.instrumentType === "fixed_deposit"),
+    [rows]
+  );
+  const ordinarySavingsRows = useMemo(
+    () => (rows ?? []).filter((r) => r.instrumentType === "ordinary_savings"),
+    [rows]
+  );
+  const targetSavingsRows = useMemo(
+    () => (rows ?? []).filter((r) => r.instrumentType === "target_savings"),
+    [rows]
+  );
+  const tieredSavingsRows = useMemo(
+    () => (rows ?? []).filter((r) => r.instrumentType === "tiered_savings"),
     [rows]
   );
 
@@ -260,7 +279,7 @@ export default function BankInstruments() {
             </div>
             <p className="text-muted-foreground text-sm max-w-3xl">
               Call and fixed deposit products from major Kenyan banks — a
-              reference for the cash/deposit alternatives to money market funds.
+              reference for the cash/deposit and savings alternatives to money market funds.
               Posted rates are indicative and almost always{" "}
               <strong>negotiable</strong> for larger balances; treat them as a
               starting point for your own rate conversation with the bank.
@@ -299,6 +318,45 @@ export default function BankInstruments() {
                 </CardDescription>
               </CardHeader>
               <CardContent>{renderTable(callRows)}</CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base flex items-center gap-2">
+                  <Percent className="w-4 h-4 text-primary" /> Ordinary / Regular Savings
+                </CardTitle>
+                <CardDescription>
+                  Instant or near-instant access savings accounts. Lower,
+                  variable rates; some limit withdrawals to keep interest.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>{renderTable(ordinarySavingsRows)}</CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base flex items-center gap-2">
+                  <Percent className="w-4 h-4 text-primary" /> Target / Goal Savings
+                </CardTitle>
+                <CardDescription>
+                  Locked for a chosen period to enforce discipline. Often higher
+                  than ordinary savings; early break usually carries a penalty.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>{renderTable(targetSavingsRows)}</CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base flex items-center gap-2">
+                  <Percent className="w-4 h-4 text-primary" /> Tiered / High-Yield Savings
+                </CardTitle>
+                <CardDescription>
+                  Rate rises with the balance band; the strongest savings rates
+                  but usually need a larger minimum to reach the top tier.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>{renderTable(tieredSavingsRows)}</CardContent>
             </Card>
           </>
         )}
@@ -342,7 +400,7 @@ export default function BankInstruments() {
                   onValueChange={(v) =>
                     setForm((f) => ({
                       ...f,
-                      instrumentType: v as "call_deposit" | "fixed_deposit",
+                      instrumentType: v as BankInstrumentType,
                     }))
                   }
                 >
@@ -352,6 +410,9 @@ export default function BankInstruments() {
                   <SelectContent>
                     <SelectItem value="fixed_deposit">Fixed Deposit</SelectItem>
                     <SelectItem value="call_deposit">Call Deposit</SelectItem>
+                    <SelectItem value="ordinary_savings">Ordinary / Regular Savings</SelectItem>
+                    <SelectItem value="target_savings">Target / Goal Savings</SelectItem>
+                    <SelectItem value="tiered_savings">Tiered / High-Yield Savings</SelectItem>
                   </SelectContent>
                 </Select>
               </div>

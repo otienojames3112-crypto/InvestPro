@@ -420,3 +420,22 @@
 - [x] R26.H Ledger segmented: Actual/Proj. basis column + badge, emerald tint on isActual rows, a 2px boundary line at the last actual month, an Actual/Projected legend, and a subtitle that states 'Months 1-N reflect recorded holdings; later are projection.' Rows derive from projection.run so actual months reconcile with the Dashboard actuals + register.
 - [x] R26.B Reconciliation module: shared/reconciliation.ts (reconcile + reconcileMmf, KES 5 tolerance, 5 sources with accrual handled MMF-only), projection.reconciliation tRPC query (reuses getActualsSummary + runProjection on ONE principal basis: projection-today strips actual-period primary-MMF accrual so it equals recorded principal), Reconciliation.tsx page (green/red banner, per-source table, MMF sub-check, explainer) + route + Analysis nav entry (Scale icon). round26.test.ts (10 tests) proves the sample reconciles green; 174 tests pass; tsc clean.
 - [x] R26.test reconciliation integration test green for sample (round26.test.ts, 10 tests); regression corrected to KES 5,010,535; tsc clean; 174 tests pass; checkpoint; deliver.
+
+## Round 27 — Financial-logic & design fixes (pasted_content_14.txt)
+
+- [x] R27.1 Enforce end-state liquidity: no security whose maturity (m+tenor) > horizon; shorten allowed tenors 364→182→91→none near horizon; final min(3,...) months buy nothing (accumulate MMF); ~100% liquid at goal; Dashboard shows "lands fully liquid".
+- [x] R27.2 Name security tenor in every sweep label (Ledger + elsewhere): "sweep KES X -> 364-day T-bill", incl IFB/FXD tenor.
+- [x] R27.3 Fix daily-accrual double-compounding: dailyRate=(1+EAR/100)^(1/dayCount)-1 (geometric); WHT per day. 13.54% EAR on 41k -> ~14.27/day not 15.21.
+- [x] R27.4 Daily accrual carries across months (close=next open) and applies rate/WHT changes by effective date over full period.
+- [x] R27.5 Daily accrual consistent across all daily-accruing instruments (MMF, call deposits; confirm CBK). FD pays at maturity. T-bill = discount accrued to maturity. Document.
+- [x] R27.6 Add "Est. Interest Earned (to date)" 4th card to Dashboard Live Actuals.
+- [x] R27.7 Current Rate Assumptions includes ALL held instruments (secondary MMFs, bank instruments).
+- [x] R27.8 Bank instruments in sweep/allocation: respect liquidity rule, prefer highest net-of-tax yield for allowed tenor, never lock past horizon; document rule; show per-sweep choice + why.
+- [x] R27.9 Withdrawals: record from any account; reduce balance/actuals/net worth; adjust projection forward; early-FD forfeiture; reflect in ledger/recon/tax/liquidity.
+- [x] R27.10 Scenarios step-up range dynamic around user's actual step-up; always include current.
+- [x] R27.11 Benchmark + net-worth allocation include ALL tracked assets; blended yield = actual mix.
+- [x] R27.12 Liquidity Calendar populates from real CBK securities + fixed deposits with maturity dates/amounts.
+- [x] R27.13 Tax Summary across ENTIRE period incl. all held instruments.
+- [x] R27.14 Expand Banking reference: Ordinary Savings, Target/Goal Savings, Tiered/High-Yield Savings with 2026 data; editable + source/as-of.
+- [x] R27.15 Reconciliation completeness: include accrued interest, withdrawals, bank-instrument balances+interest, matured cash; sum-of-parts = projection/dashboard/accrual/net-worth; update test.
+- [x] R27.test/checkpoint/deliver: tsc clean; tests pass; regression in band; reconciliation green; checkpoint; deliver.

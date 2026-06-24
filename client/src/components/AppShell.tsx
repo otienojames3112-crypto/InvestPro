@@ -19,6 +19,7 @@ import {
   Settings,
   TrendingUp,
   ArrowDownCircle,
+  ArrowUpCircle,
   MapPin,
   PiggyBank,
   Briefcase,
@@ -164,6 +165,7 @@ const navGroups = [
       { href: "/securities", label: "CBK Securities", icon: Landmark },
       { href: "/mmf-funds", label: "MMF Funds", icon: PiggyBank },
       { href: "/other-assets", label: "Other Assets", icon: Briefcase },
+      { href: "/withdrawals", label: "Withdrawals", icon: ArrowUpCircle },
     ],
   },
   {

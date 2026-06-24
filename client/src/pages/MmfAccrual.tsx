@@ -37,7 +37,7 @@ import {
   Receipt,
   Layers,
 } from "lucide-react";
-import { simulateAccrual, type DayRow } from "@shared/accrual";
+import { simulateAccrual, oneDayInterest, geometricDailyRate, type DayRow } from "@shared/accrual";
 
 /** Format a number as KES currency. */
 function kes(n: number, dp = 2): string {
@@ -215,12 +215,13 @@ export default function MmfAccrual() {
     : effectivePrincipal;
   const finalBalance = rows.length ? rows[rows.length - 1].closingBalance : startingTotal;
 
-  // "If you withdrew today" — one full day across the active scope.
+  // "If you withdrew today" — one full day across the active scope, using the
+  // GEOMETRIC daily rate (consistent with the ledger table above).
   const oneDayGross = isBlended
-    ? perAccountRows.reduce((s, pa) => s + pa.startBal * (pa.account.ear / 100 / pa.account.dayCount), 0)
-    : effectivePrincipal * ((selectedAccount?.ear ?? 0) / 100 / (selectedAccount?.dayCount ?? 365));
+    ? perAccountRows.reduce((s, pa) => s + pa.startBal * geometricDailyRate(pa.account.ear, pa.account.dayCount), 0)
+    : oneDayInterest(effectivePrincipal, selectedAccount?.ear ?? 0, selectedAccount?.dayCount ?? 365, selectedAccount?.whtRate ?? 15).gross;
   const oneDayWht = isBlended
-    ? perAccountRows.reduce((s, pa) => s + pa.startBal * (pa.account.ear / 100 / pa.account.dayCount) * (pa.account.whtRate / 100), 0)
+    ? perAccountRows.reduce((s, pa) => s + pa.startBal * geometricDailyRate(pa.account.ear, pa.account.dayCount) * (pa.account.whtRate / 100), 0)
     : oneDayGross * ((selectedAccount?.whtRate ?? 15) / 100);
   const oneDayNet = oneDayGross - oneDayWht;
 

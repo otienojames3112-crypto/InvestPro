@@ -54,12 +54,71 @@ export type ActualsRates = {
   fxdCouponRate: number; // percent gross
 };
 
+/** A recorded withdrawal (money OUT). Mirrors the deposit source taxonomy. */
+export type WithdrawalRow = {
+  sourceType: "mmf_fund" | "bank_instrument" | "government_security";
+  /** null = primary MMF; a secondary fund id otherwise. */
+  mmfFundId?: number | null;
+  amount: number;
+};
+
+/** Net withdrawals by source bucket, classifying primary vs secondary MMF. */
+function sumWithdrawals(
+  withdrawals: WithdrawalRow[],
+  secondaryFundIds: Set<number>,
+) {
+  let primaryMmf = 0;
+  let secondaryMmf = 0;
+  let bank = 0;
+  let gov = 0;
+  for (const w of withdrawals) {
+    const amt = Math.max(0, w.amount);
+    if (w.sourceType === "bank_instrument") bank += amt;
+    else if (w.sourceType === "government_security") gov += amt;
+    else if (w.sourceType === "mmf_fund" && w.mmfFundId != null && secondaryFundIds.has(w.mmfFundId)) {
+      secondaryMmf += amt;
+    } else {
+      primaryMmf += amt;
+    }
+  }
+  return { primaryMmf, secondaryMmf, bank, gov };
+}
+
+/**
+ * Estimate the NET interest (after WHT) earned on a single MMF principal between
+ * `fromISO` and `toISO`, using the same geometric daily-compounding model as the
+ * accrual ledger. Returns 0 for non-positive principal or zero/negative elapsed
+ * days. This is an estimate for display only — the authoritative day-by-day
+ * figures live in the accrual ledger.
+ */
+export function estInterestToDate(
+  principal: number,
+  annualEar: number,
+  whtRate: number,
+  fromISO: string,
+  toISO: string,
+  dayCount = 365,
+): number {
+  if (!(principal > 0) || !(annualEar > 0)) return 0;
+  const from = new Date(`${String(fromISO).slice(0, 10)}T12:00:00.000Z`).getTime();
+  const to = new Date(`${String(toISO).slice(0, 10)}T12:00:00.000Z`).getTime();
+  if (!Number.isFinite(from) || !Number.isFinite(to)) return 0;
+  const days = Math.floor((to - from) / 86_400_000);
+  if (days <= 0) return 0;
+  const dailyRate = Math.pow(1 + annualEar / 100, 1 / dayCount) - 1;
+  const grossFactor = Math.pow(1 + dailyRate, days);
+  const gross = principal * (grossFactor - 1);
+  const net = gross * (1 - (whtRate || 0) / 100);
+  return Math.max(0, Math.round(net * 100) / 100);
+}
+
 export function computeActualsTotals(
   deposits: DepositRow[],
   secondaries: SecondaryMmfActual[],
   bankHoldings: BankHoldingActual[],
   rates: ActualsRates,
   securities: SecurityActual[] = [],
+  withdrawals: WithdrawalRow[] = [],
 ) {
   const secondaryFundIds = new Set(
     secondaries.map((s) => s.mmfFundId).filter((id): id is number => typeof id === "number"),
@@ -129,19 +188,40 @@ export function computeActualsTotals(
     bankTax += whtOn(b.principal * (b.interestRate / 100), bWht);
   }
 
-  const mmfTax = whtOn(depositsContributed * (rates.mmfYield / 100), rates.withholdingTax || WHT_RATES.mmfInterest);
+  // ── Apply recorded withdrawals (money OUT), netted by source bucket ──────────
+  // Each bucket is floored at 0 so an over-withdrawal can never produce a
+  // negative balance in the aggregation (the router validates available funds).
+  const wd = sumWithdrawals(withdrawals, secondaryFundIds);
+  const netPrimaryMmf = Math.max(0, depositsContributed - wd.primaryMmf);
+  const netSecondaryMmf = Math.max(0, secondaryMmfBalance - wd.secondaryMmf);
+  const netBank = Math.max(0, bankBalance - wd.bank);
+  const netSecurities = Math.max(0, securitiesValue - wd.gov);
+
+  // Recompute primary-MMF bucket and tax on the post-withdrawal base.
+  byBucket.mmf = netPrimaryMmf;
+
+  const mmfTax = whtOn(netPrimaryMmf * (rates.mmfYield / 100), rates.withholdingTax || WHT_RATES.mmfInterest);
   const ifbTax = 0; // IFB coupons are tax-exempt in Kenya
 
+  // Tax bases for secondary/bank scale down proportionally to the remaining balance.
+  const secScale = secondaryMmfBalance > 0 ? netSecondaryMmf / secondaryMmfBalance : 0;
+  const bankScale = bankBalance > 0 ? netBank / bankBalance : 0;
+  secondaryMmfTax = secondaryMmfTax * secScale;
+  bankTax = bankTax * bankScale;
+
   const totalContributed =
-    depositsContributed + securitiesValue + secondaryMmfBalance + bankBalance;
+    netPrimaryMmf + netSecurities + netSecondaryMmf + netBank;
   const taxLiability = mmfTax + tbillTax + ifbTax + fxdTax + secondaryMmfTax + bankTax;
 
   return {
     totalContributed,
-    depositsContributed,
-    securitiesValue,
-    secondaryMmfBalance,
-    bankBalance,
+    depositsContributed: netPrimaryMmf,
+    securitiesValue: netSecurities,
+    secondaryMmfBalance: netSecondaryMmf,
+    bankBalance: netBank,
+    /** Gross figures before withdrawals, for audit/debug. */
+    grossDepositsContributed: depositsContributed,
+    withdrawalsByBucket: wd,
     byBucket,
     taxBreakdown: {
       mmf: Math.round(mmfTax * 100) / 100,

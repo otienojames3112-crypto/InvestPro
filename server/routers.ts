@@ -27,6 +27,9 @@ import {
   addDepositEntry,
   updateDepositEntry,
   deleteDepositEntry,
+  getWithdrawalEntries,
+  addWithdrawalEntry,
+  deleteWithdrawalEntry,
   addRateHistorySnapshot,
   getRateHistory,
   getAccountStatuses,
@@ -69,6 +72,7 @@ import {
 import {
   runProjection,
   runScenarios,
+  deriveStepUps,
   checkMilestones,
   getScheduledContribution,
   generateMilestones,
@@ -179,6 +183,35 @@ function mapActualDeposits(rows: Awaited<ReturnType<typeof getDepositEntries>>):
     mmfFundId: (d as { mmfFundId?: number | null }).mmfFundId ?? null,
     bankHoldingId: (d as { bankHoldingId?: number | null }).bankHoldingId ?? null,
   }));
+}
+
+/**
+ * Map primary-MMF withdrawals into NEGATIVE primary-MMF deposit rows so the
+ * engine's actual-seeding loop reduces the seeded "today" MMF balance on the
+ * withdrawal date (mirrors how positive deposits raise it). Only primary-fund
+ * withdrawals are modelled here — bank / secondary / government-security
+ * withdrawals are already reflected by their decremented principal / balance /
+ * matured-flag in their own tables.
+ */
+function mapPrimaryMmfWithdrawalsAsDeposits(
+  rows: Awaited<ReturnType<typeof getWithdrawalEntries>>,
+  primaryFundId: number | null,
+): ActualDeposit[] {
+  return rows
+    .filter((w) => {
+      if (w.sourceType !== "mmf_fund") return false;
+      const fid = (w as { mmfFundId?: number | null }).mmfFundId ?? null;
+      // Primary fund: either no fund id recorded, or it matches the portfolio's primary.
+      return fid == null || primaryFundId == null || fid === primaryFundId;
+    })
+    .map((w) => ({
+      bucket: "mmf" as const,
+      amount: -(parseFloat(String(w.amount ?? "0")) || 0),
+      depositDate: normaliseDate(w.withdrawalDate),
+      institutionType: "mmf_fund" as ActualDeposit["institutionType"],
+      mmfFundId: (w as { mmfFundId?: number | null }).mmfFundId ?? null,
+      bankHoldingId: null,
+    }));
 }
 
 /** Map DB bank instrument holdings into engine actuals inputs. */
@@ -474,7 +507,11 @@ export const appRouter = router({
       const rateHistoryRows = await getRateHistory(input.portfolioId);
       const rh = mapRateHistory(rateHistoryRows);
       const depositRows = await getDepositEntries(input.portfolioId);
-      const actualDeposits = mapActualDeposits(depositRows);
+      const withdrawalRows = await getWithdrawalEntries(input.portfolioId);
+      const actualDeposits = [
+        ...mapActualDeposits(depositRows),
+        ...mapPrimaryMmfWithdrawalsAsDeposits(withdrawalRows, p.mmfFundId ?? null),
+      ];
       const securityRows = await getSecurities(input.portfolioId);
       const actualSecurities = mapActualSecurities(securityRows);
       const secondaryMmfs = mapSecondaryMmfs(await getSecondaryMmfs(input.portfolioId));
@@ -498,7 +535,9 @@ export const appRouter = router({
       const rateHistoryRows = await getRateHistory(input.portfolioId);
       const rh = mapRateHistory(rateHistoryRows);
       const secondaryMmfs = mapSecondaryMmfs(await getSecondaryMmfs(input.portfolioId));
-      return runScenarios(settings, SCENARIO_STEPUPS, rh, secondaryMmfs);
+      const currentStepUp = Number(p?.stepUpAmount ?? 0);
+      const stepUps = deriveStepUps(currentStepUp);
+      return runScenarios(settings, stepUps, rh, secondaryMmfs);
     }),
 
     milestones: protectedProcedure.input(portfolioIdInput).query(async ({ ctx, input }) => {
@@ -560,7 +599,13 @@ export const appRouter = router({
         settings,
         mappedOverrides,
         rh,
-        mapActualDeposits(await getDepositEntries(input.portfolioId)),
+        [
+          ...mapActualDeposits(await getDepositEntries(input.portfolioId)),
+          ...mapPrimaryMmfWithdrawalsAsDeposits(
+            await getWithdrawalEntries(input.portfolioId),
+            p.mmfFundId ?? null,
+          ),
+        ],
         mapActualSecurities(securities),
         mapSecondaryMmfs(secondaries),
         mapActualBankHoldings(bank),
@@ -1226,6 +1271,9 @@ export const appRouter = router({
           secondaryCount: 0,
           bankHoldingCount: 0,
           entryCount: 0,
+          withdrawalCount: 0,
+          totalWithdrawn: 0,
+          estInterestEarned: 0,
         };
       }
       return {
@@ -1241,8 +1289,145 @@ export const appRouter = router({
         secondaryCount: summary.secondaryCount,
         bankHoldingCount: summary.bankHoldingCount,
         entryCount: summary.entryCount,
+        withdrawalCount: summary.withdrawalCount,
+        totalWithdrawn: round2(summary.totalWithdrawn),
+        estInterestEarned: round2(summary.estInterestEarned ?? 0),
       };
     }),
+  }),
+
+  // ─── Withdrawals (money OUT) ───────────────────────────────────────────────
+  withdrawals: router({
+    list: protectedProcedure.input(portfolioIdInput).query(async ({ ctx, input }) => {
+      await requirePortfolio(input.portfolioId, ctx.user.id);
+      return getWithdrawalEntries(input.portfolioId);
+    }),
+
+    add: protectedProcedure
+      .input(z.object({
+        portfolioId: z.number().int().positive(),
+        sourceType: z.enum(["mmf_fund", "bank_instrument", "government_security"]),
+        mmfFundId: z.number().int().positive().optional(),
+        bankHoldingId: z.number().int().positive().optional(),
+        securityId: z.number().int().positive().optional(),
+        amount: z.number().positive(),
+        withdrawalDate: z.string(),
+        reason: z.string().optional(),
+        notes: z.string().optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const p = await requirePortfolio(input.portfolioId, ctx.user.id);
+        const [rates, fundEar] = await Promise.all([getRateSettings(input.portfolioId), getSelectedFundEar(p)]);
+        const settings = dbToEngine(rates, p, fundEar);
+
+        // Validate that the source has enough available to cover the withdrawal.
+        const summary = await getActualsSummary(
+          input.portfolioId,
+          settings.targetAmount,
+          settings.withholdingTax,
+          settings.fxdCouponRate,
+          settings.mmfYield,
+          settings.tbill364Rate,
+        );
+        let available = 0;
+        if (input.sourceType === "bank_instrument") available = summary?.bankBalance ?? 0;
+        else if (input.sourceType === "government_security") available = summary?.securitiesValue ?? 0;
+        else if (input.mmfFundId && p.mmfFundId !== input.mmfFundId) available = summary?.secondaryMmfBalance ?? 0;
+        else available = summary?.depositsContributed ?? 0;
+        if (input.amount > available + 0.005) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `Withdrawal of KES ${input.amount.toLocaleString()} exceeds the available balance of KES ${available.toLocaleString(undefined, { maximumFractionDigits: 2 })} in this source.`,
+          });
+        }
+
+        // Early fixed-deposit break? Detect and compute forfeited interest.
+        let isEarlyWithdrawal = false;
+        let forfeitedInterest = 0;
+        if (input.sourceType === "bank_instrument" && input.bankHoldingId) {
+          const holdings = await getBankInstrumentHoldings(input.portfolioId);
+          const h = holdings.find((x) => x.id === input.bankHoldingId);
+          if (h && h.instrumentType === "fixed_deposit" && h.maturityDate) {
+            const maturity = new Date(h.maturityDate);
+            const wDate = new Date(input.withdrawalDate + "T12:00:00Z");
+            if (wDate < maturity) {
+              isEarlyWithdrawal = true;
+              // Forfeit interest accrued to date on the withdrawn portion: a fixed
+              // deposit broken early typically loses ALL accrued interest on that money.
+              const start = h.startDate ? new Date(h.startDate) : new Date(h.createdAt);
+              const days = Math.max(0, (wDate.getTime() - start.getTime()) / 86_400_000);
+              const rate = parseFloat(String(h.interestRate ?? "0")) / 100;
+              const dayCount = h.dayCountBasis || 365;
+              forfeitedInterest = Math.round(input.amount * rate * (days / dayCount) * 100) / 100;
+            }
+          }
+          // Reduce the holding principal to keep actuals in sync.
+          if (h) {
+            const newPrincipal = Math.max(0, (parseFloat(String(h.principal)) || 0) - input.amount);
+            await updateBankInstrumentHolding(input.bankHoldingId, input.portfolioId, {
+              principal: String(newPrincipal),
+            });
+          }
+        }
+
+        // Reduce a secondary-MMF balance when applicable.
+        if (input.sourceType === "mmf_fund" && input.mmfFundId && p.mmfFundId !== input.mmfFundId) {
+          const secs = await getSecondaryMmfs(input.portfolioId);
+          const sec = secs.find((s) => s.mmfFundId === input.mmfFundId);
+          if (sec) {
+            const newBal = Math.max(0, (parseFloat(String(sec.currentBalance)) || 0) - input.amount);
+            await updateSecondaryMmf(sec.id, input.portfolioId, { currentBalance: String(newBal) });
+          }
+        }
+
+        // Mark a redeemed government security as matured when fully withdrawn.
+        if (input.sourceType === "government_security" && input.securityId) {
+          await updateSecurity(input.securityId, { isMatured: true });
+        }
+
+        const entry = await addWithdrawalEntry({
+          portfolioId: input.portfolioId,
+          sourceType: input.sourceType,
+          mmfFundId: input.mmfFundId ?? null,
+          bankHoldingId: input.bankHoldingId ?? null,
+          securityId: input.securityId ?? null,
+          amount: String(input.amount),
+          forfeitedInterest: String(forfeitedInterest),
+          isEarlyWithdrawal,
+          withdrawalDate: new Date(input.withdrawalDate),
+          reason: input.reason,
+          notes: input.notes,
+        });
+
+        await addAuditLog({
+          portfolioId: input.portfolioId,
+          entity: "withdrawal",
+          action: "create",
+          field: input.sourceType,
+          newValue: String(input.amount),
+          changedByOpenId: ctx.user.openId,
+          changedByName: ctx.user.name ?? null,
+          summary: `Recorded ${input.sourceType.replace("_", " ")} withdrawal of KES ${input.amount.toLocaleString()} on ${input.withdrawalDate}${isEarlyWithdrawal ? ` (early FD break — forfeited KES ${forfeitedInterest.toLocaleString()})` : ""}`,
+        });
+        return { success: true, entry, isEarlyWithdrawal, forfeitedInterest };
+      }),
+
+    delete: protectedProcedure
+      .input(z.object({ portfolioId: z.number().int().positive(), id: z.number() }))
+      .mutation(async ({ ctx, input }) => {
+        await requirePortfolio(input.portfolioId, ctx.user.id);
+        await deleteWithdrawalEntry(input.id, input.portfolioId);
+        await addAuditLog({
+          portfolioId: input.portfolioId,
+          entity: "withdrawal",
+          entityId: input.id,
+          action: "delete",
+          changedByOpenId: ctx.user.openId,
+          changedByName: ctx.user.name ?? null,
+          summary: `Deleted withdrawal entry #${input.id}`,
+        });
+        return { success: true };
+      }),
   }),
 
   // ─── Contribution Overrides ───────────────────────────────────────────────────
@@ -1998,7 +2183,7 @@ export const appRouter = router({
     add: protectedProcedure
       .input(z.object({
         bankName: z.string().min(1).max(200),
-        instrumentType: z.enum(["call_deposit", "fixed_deposit"]),
+        instrumentType: z.enum(["call_deposit", "fixed_deposit", "ordinary_savings", "target_savings", "tiered_savings"]),
         minAmount: z.number().min(0).default(0),
         typicalTenor: z.string().max(100).optional(),
         indicativeRate: z.number().min(0).max(100).optional(),
@@ -2025,7 +2210,7 @@ export const appRouter = router({
       .input(z.object({
         id: z.number().int().positive(),
         bankName: z.string().min(1).max(200).optional(),
-        instrumentType: z.enum(["call_deposit", "fixed_deposit"]).optional(),
+        instrumentType: z.enum(["call_deposit", "fixed_deposit", "ordinary_savings", "target_savings", "tiered_savings"]).optional(),
         minAmount: z.number().min(0).optional(),
         typicalTenor: z.string().max(100).optional(),
         indicativeRate: z.number().min(0).max(100).nullable().optional(),

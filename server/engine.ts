@@ -253,6 +253,38 @@ export interface SolverResult {
 
 export const SCENARIO_STEPUPS = [0, 500, 1000, 1500, 2000, 2500, 3000, 4000, 5000];
 
+/**
+ * Build a dynamic step-up ladder that is relevant to THIS portfolio rather than a
+ * fixed 0–5,000 spread. The ladder always:
+ *   - starts at 0 (the "no step-up" baseline),
+ *   - includes the user's current step-up exactly (so their plan is on the chart),
+ *   - spreads sensibly around and beyond the current value so larger plans
+ *     (e.g. +79,000) are covered, not capped at 5,000.
+ * For small/zero current step-ups it falls back to the classic small-grid feel.
+ * Returns a sorted, de-duplicated, non-negative integer ladder of ~9 points.
+ */
+export function deriveStepUps(currentStepUp: number): number[] {
+  const cur = Math.max(0, Math.round(currentStepUp || 0));
+  // For a small current step-up, keep the familiar fine-grained low-end grid
+  // but still guarantee the current value is present.
+  if (cur <= 5000) {
+    const base = [0, 500, 1000, 1500, 2000, 2500, 3000, 4000, 5000];
+    const set = new Set<number>([...base, cur]);
+    return Array.from(set).filter((n) => n >= 0).sort((a, b) => a - b);
+  }
+  // For larger step-ups, build a spread centered on the current value:
+  // 0, then a ladder from ~0.4x to ~1.6x of current in even steps, including cur.
+  const lo = Math.round(cur * 0.4);
+  const hi = Math.round(cur * 1.6);
+  const points = new Set<number>([0, cur]);
+  const steps = 7; // interior points
+  for (let i = 0; i <= steps; i++) {
+    const v = Math.round(lo + ((hi - lo) * i) / steps);
+    points.add(Math.max(0, v));
+  }
+  return Array.from(points).sort((a, b) => a - b);
+}
+
 /** Maximum starting contribution the solver will try before declaring infeasible. */
 const SOLVER_MAX_CONTRIBUTION = 1_000_000;
 
@@ -446,6 +478,74 @@ function tenorFor(
   if (isShortHorizon || phase === "final-liquidity") return 3;
   if (phase === "de-risking") return 6;
   return 12;
+}
+
+/**
+ * Number of whole months before the horizon in which NO new securities may be
+ * bought — surplus must accumulate in MMF instead. The investor needs CASH at
+ * the goal date, so even a 91-day (3-month) bill bought this close would mature
+ * after the deadline. Defined as min(3, ceil(horizon/4)) so very short plans
+ * still get a sensible no-buy tail without freezing the whole horizon.
+ */
+export function noBuyTailMonths(horizonMonths: number): number {
+  return Math.min(3, Math.max(1, Math.ceil(horizonMonths / 4)));
+}
+
+/**
+ * END-STATE LIQUIDITY RULE (the core principle of a goal-dated plan).
+ *
+ * Decide whether a sweep is allowed in month `m`, and if so the LONGEST T-bill
+ * tenor (months) whose maturity still lands on or before the horizon. We never
+ * buy an instrument that matures after the goal date — at the deadline the
+ * investor needs cash, not paper maturing later.
+ *
+ * Returns:
+ *   - allowed=false when m is inside the no-buy tail, OR no tenor fits.
+ *   - maxTbillTenor: the longest of {12,6,3} months that satisfies
+ *                    m + tenor <= horizon (progressively shortens near the end:
+ *                    364 → 182 → 91 → none).
+ *   - allowLongBonds: true only when a 24-month bond would still mature by the
+ *                     horizon (i.e. m + 24 <= horizon). Otherwise IFB/FXD are
+ *                     disallowed and their intended share folds into T-bills.
+ */
+export function liquidityGuardForMonth(
+  m: number,
+  horizonMonths: number,
+): { allowed: boolean; maxTbillTenor: 0 | 3 | 6 | 12; allowLongBonds: boolean } {
+  const tail = noBuyTailMonths(horizonMonths);
+  // Final stretch: stop sweeping entirely, accumulate in MMF.
+  if (m > horizonMonths - tail) {
+    return { allowed: false, maxTbillTenor: 0, allowLongBonds: false };
+  }
+  const monthsLeft = horizonMonths - m; // months remaining after this month
+  let maxTbillTenor: 0 | 3 | 6 | 12 = 0;
+  if (monthsLeft >= 12) maxTbillTenor = 12;
+  else if (monthsLeft >= 6) maxTbillTenor = 6;
+  else if (monthsLeft >= 3) maxTbillTenor = 3;
+  else maxTbillTenor = 0;
+  const allowLongBonds = monthsLeft >= 24;
+  return { allowed: maxTbillTenor > 0, maxTbillTenor, allowLongBonds };
+}
+
+/** Human-readable tenor label for a swept lot, e.g. "364-day T-bill". */
+export function tenorLabel(bucket: "tbill" | "ifb" | "fxd", tenorMonths: number): string {
+  if (bucket === "tbill") {
+    if (tenorMonths <= 3) return "91-day T-bill";
+    if (tenorMonths <= 6) return "182-day T-bill";
+    return "364-day T-bill";
+  }
+  if (bucket === "ifb") return `${tenorMonths}-month IFB`;
+  return `${tenorMonths}-month FXD`;
+}
+
+/** The gross T-bill rate that matches a lot's tenor (91/182/364-day). */
+export function tbillRateForTenor(
+  tenorMonths: number,
+  rates: Pick<EngineSettings, "tbill91Rate" | "tbill182Rate" | "tbill364Rate">,
+): number {
+  if (tenorMonths <= 3) return rates.tbill91Rate;
+  if (tenorMonths <= 6) return rates.tbill182Rate;
+  return rates.tbill364Rate;
 }
 
 /**
@@ -722,15 +822,16 @@ export function runProjection(
 
       if (age === lot.tenorMonths) {
         cbkCashIn += lot.faceValue;
-        cbkActions.push(`${lot.bucket.toUpperCase()} maturity KES ${Math.round(lot.faceValue).toLocaleString()}`);
+        cbkActions.push(`${tenorLabel(lot.bucket, lot.tenorMonths)} maturity KES ${Math.round(lot.faceValue).toLocaleString()}`);
 
         if (lot.bucket === "tbill") {
           const tenorYears = lot.tenorMonths / 12;
-          const grossInterest = lot.faceValue * (rates.tbill364Rate / 100) * tenorYears;
+          // Use the rate matching the lot's tenor (91/182/364-day), not always 364.
+          const grossInterest = lot.faceValue * (tbillRateForTenor(lot.tenorMonths, rates) / 100) * tenorYears;
           const netInterest = grossInterest * (1 - wht);
           whtThisMonth += grossInterest * wht;
           cbkCashIn += netInterest;
-          cbkActions.push(`T-bill net discount KES ${Math.round(netInterest).toLocaleString()}`);
+          cbkActions.push(`net discount KES ${Math.round(netInterest).toLocaleString()}`);
         }
         continue;
       }
@@ -759,10 +860,40 @@ export function runProjection(
     // Per-bucket lot counts bought this month (for the ledger "main action" label).
     const sweepBuy = { tbill: 0, ifb: 0, fxd: 0 };
 
-    // No new long bonds in final-liquidity phase
-    const noNewLongBonds = m > deRiskingEnd;
+    // ── END-STATE LIQUIDITY GUARD (Fix #1) ──
+    // Decide what this month is allowed to buy so nothing matures after the
+    // horizon. `tbillTenorThisMonth` is the longest tenor that still matures by
+    // the goal date; `allowLongBonds` is false unless a 24-month bond fits.
+    const guard = liquidityGuardForMonth(m, horizonMonths);
+    // No new long bonds either in the final-liquidity phase (legacy rule) OR
+    // whenever a 24-month bond would mature past the horizon (new rule).
+    const noNewLongBonds = m > deRiskingEnd || !guard.allowLongBonds;
+    const tbillTenorThisMonth = guard.maxTbillTenor;
 
-    if (!isActualMonth) {
+    if (!isActualMonth && guard.allowed) {
+      // ── SWEEP / ALLOCATION DECISION RULE (Fix #8) ──────────────────────────
+      // The goal-driven sweep deploys surplus MMF cash according to three rules,
+      // in priority order:
+      //   (a) END-STATE LIQUIDITY (Fix #1): never buy an instrument that matures
+      //       after the horizon. The liquidity guard caps the T-bill tenor and
+      //       disables long bonds (IFB/FXD) as the goal date approaches, and stops
+      //       sweeping entirely in the final stretch so the plan lands ~100% liquid.
+      //   (b) HIGHEST NET-OF-TAX YIELD for the allowed tenor: within what the guard
+      //       permits, the phase allocation tilts toward the higher net-yield CBK
+      //       instruments (IFB tax-exempt, then FXD, then T-bills for liquidity).
+      //   (c) NEVER LOCK PAST THE HORIZON: enforced by (a).
+      //
+      // BANK INSTRUMENTS (call/fixed deposits): these are modelled as user-tracked
+      // ACTUALS rather than auto-bought by the projection. Their rates are
+      // negotiated per bank/relationship (the reference data is explicitly
+      // "indicative" and "negotiable"), so the deterministic engine does not invent
+      // a negotiated rate to sweep into. Any bank deposit the user RECORDS accrues
+      // on its own rate/WHT (see bankState above), counts toward the portfolio
+      // total and the liquidity calendar, and — being mostly call deposits — is as
+      // liquid as MMF. Call deposits therefore need no horizon guard; a recorded
+      // fixed deposit maturing past the horizon is surfaced to the user (and an
+      // early withdrawal forfeits interest via the withdrawals flow).
+      //
       // Allocation-targeted sweep: deploy surplus TOWARD the phase's non-MMF bucket
       // mix instead of dumping the entire surplus into a single bucket. Each month
       // we size the desired KES in each non-MMF bucket from the phase weights, then
@@ -828,12 +959,19 @@ export function runProjection(
 
           for (const b of ["tbill", "ifb", "fxd"] as const) {
             for (let i = 0; i < sweepBuy[b]; i++) {
+              // T-bill tenor is capped by the liquidity guard so the lot always
+              // matures on or before the horizon. Long bonds keep their phase
+              // tenor (only reached when allowLongBonds was true).
+              const lotTenor =
+                b === "tbill"
+                  ? Math.min(tenorFor(b, phase, isShortHorizon), tbillTenorThisMonth || 3)
+                  : tenorFor(b, phase, isShortHorizon);
               lots.push({
                 id: `sim-${m}-${lotIdCounter++}`,
                 bucket: b,
                 faceValue: SWEEP_LOT_SIZE,
                 issueMonth: m,
-                tenorMonths: tenorFor(b, phase, isShortHorizon),
+                tenorMonths: lotTenor,
                 couponRate:
                   b === "ifb" ? rates.ifbCouponRate : b === "fxd" ? rates.fxdCouponRate : 0,
                 isTaxExempt: b === "ifb",
@@ -852,7 +990,7 @@ export function runProjection(
       if (lot.bucket === "tbill") {
         const age = m - lot.issueMonth;
         const tenorYears = lot.tenorMonths / 12;
-        const grossDiscount = lot.faceValue * (rates.tbill364Rate / 100) * tenorYears;
+        const grossDiscount = lot.faceValue * (tbillRateForTenor(lot.tenorMonths, rates) / 100) * tenorYears;
         const netDiscount = grossDiscount * (1 - wht);
         // During elapsed (actual) months hold the lot flat at face value so the
         // "today" snapshot reconciles with recorded principal; accrue the discount
@@ -866,11 +1004,13 @@ export function runProjection(
       }
     }
 
+    // Tenor used by T-bills bought THIS month (for the label) — the guard caps it.
+    const sweptTbillTenor = Math.min(tenorFor("tbill", phase, isShortHorizon), tbillTenorThisMonth || 3);
     let mainAction = "";
     const buyParts: string[] = [];
-    if (sweepBuy.ifb > 0) buyParts.push(`${sweepBuy.ifb}×IFB`);
-    if (sweepBuy.fxd > 0) buyParts.push(`${sweepBuy.fxd}×FXD`);
-    if (sweepBuy.tbill > 0) buyParts.push(`${sweepBuy.tbill}×T-bill`);
+    if (sweepBuy.ifb > 0) buyParts.push(`${sweepBuy.ifb}× ${tenorLabel("ifb", tenorFor("ifb", phase, isShortHorizon))}`);
+    if (sweepBuy.fxd > 0) buyParts.push(`${sweepBuy.fxd}× ${tenorLabel("fxd", tenorFor("fxd", phase, isShortHorizon))}`);
+    if (sweepBuy.tbill > 0) buyParts.push(`${sweepBuy.tbill}× ${tenorLabel("tbill", sweptTbillTenor)}`);
     const sweepDesc = mmfToDhow > 0
       ? `sweep KES ${Math.round(mmfToDhow).toLocaleString()} → ${buyParts.join(", ")}`
       : "";

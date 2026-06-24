@@ -262,6 +262,7 @@ export function DepositDrawer({ open, onClose }: DepositDrawerProps) {
           tenorMonths: tenor,
           maturityDate: maturity,
           payoutFrequency: isTerm ? "maturity" : "on_call",
+          maturityAction: isTerm ? ("redeploy" as const) : undefined,
         });
         if (!res?.id) { toast.error("Could not open the bank deposit"); return; }
         await utils.bankHoldings.list.invalidate();

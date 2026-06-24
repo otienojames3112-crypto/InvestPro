@@ -471,3 +471,11 @@
 - [x] R30.7 Liquidity Calendar valuation fix: read holding actual principal/current value (not 0); list every term instrument with correct value + maturity date
 - [x] R30.8 Expand glossary: call deposit (refine), ordinary/regular savings, target/goal savings, tiered/high-yield savings, early-break penalty, issuer concentration/diversification, sovereign vs bank credit risk, redeployment/rollover at maturity
 - [x] R30.accept Acceptance scenario test + tsc + full suite + checkpoint + deliver
+
+## Round 31 — Early-break what-if, maturity-action toggle, issuer-concentration banner
+
+- [x] R31.1 Early-break "what-if": compute net penalty if a term deposit is broken before maturity; surface on the holding card (accrued interest forfeited + early-break penalty on principal → net amount available now vs at maturity)
+- [x] R31.2 Per-term-deposit maturity action toggle: "auto-rollover" (re-open same tenor at same rate) vs "redeploy" (return to MMF for yield-max allocator). Stored per holding; engine honours it at maturity; ledger narrates the chosen action
+- [x] R31.3 Dashboard per-issuer concentration warning banner when any single bank/issuer exceeds the 25% cap (ISSUER_CONCENTRATION_CAP); lists offending issuer(s) and their share
+- [x] R31.4 Tests (rollover vs redeploy at maturity, early-break math, concentration detection) + tsc + full suite + checkpoint
+- [x] R31.5 Generate full source code bundle as a single Markdown file and deliver

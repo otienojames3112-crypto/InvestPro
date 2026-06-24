@@ -195,6 +195,14 @@ export interface ActualBankHolding {
   maturityDate?: string | null;
   /** Payout cadence. "maturity" = principal+interest returns at maturity. */
   payoutFrequency?: "maturity" | "monthly" | "quarterly" | "on_call" | null;
+  /**
+   * Round 31 — what the engine does with a TERM deposit at maturity:
+   *   "redeploy" (default) → cash returns to the MMF for the yield-max allocator.
+   *   "rollover"           → auto-renew the same tenor at the same rate.
+   */
+  maturityAction?: "redeploy" | "rollover" | null;
+  /** Early-break penalty (% of accrued interest forfeited) if broken before maturity. */
+  earlyBreakPenaltyPct?: number | null;
 }
 
 /** Actual security from the database (for actuals-seeded projection). */
@@ -622,6 +630,91 @@ export const SOVEREIGN_PREFERENCE_THRESHOLD_PCT = 1.0;
 export const ISSUER_CONCENTRATION_CAP = 0.25;
 
 /**
+ * EARLY-BREAK "WHAT-IF" (Round 31).
+ *
+ * Computes what an investor nets if they break a TERM deposit (fixed/goal
+ * savings) TODAY instead of holding it to maturity. Breaking early forfeits a
+ * share of the interest accrued so far (the bank's early-break penalty) on top
+ * of giving up all future interest. Pure function — exported for the holding
+ * card and for unit testing.
+ *
+ * @param principal        Original principal placed (KES).
+ * @param accruedInterest  Net interest accrued to date (KES, after WHT).
+ * @param valueAtMaturity  Projected net value if held to maturity (KES).
+ * @param penaltyPct        Early-break penalty as a % of accrued interest forfeited.
+ */
+export interface EarlyBreakWhatIf {
+  /** Cash available now if broken early (principal + retained interest). */
+  netIfBrokenNow: number;
+  /** Interest forfeited by breaking early (penalty + any future interest given up). */
+  interestForfeited: number;
+  /** The penalty amount charged on accrued interest. */
+  penaltyAmount: number;
+  /** What you keep instead by holding to maturity. */
+  valueAtMaturity: number;
+  /** Cost of breaking early vs holding (valueAtMaturity - netIfBrokenNow). */
+  costOfBreaking: number;
+}
+
+export function earlyBreakWhatIf(
+  principal: number,
+  accruedInterest: number,
+  valueAtMaturity: number,
+  penaltyPct: number,
+): EarlyBreakWhatIf {
+  const safePrincipal = Math.max(0, principal);
+  const safeAccrued = Math.max(0, accruedInterest);
+  const penaltyFrac = Math.min(1, Math.max(0, penaltyPct / 100));
+  const penaltyAmount = safeAccrued * penaltyFrac;
+  const retainedInterest = safeAccrued - penaltyAmount;
+  const netIfBrokenNow = safePrincipal + retainedInterest;
+  const matValue = Math.max(netIfBrokenNow, valueAtMaturity);
+  return {
+    netIfBrokenNow: Math.round(netIfBrokenNow * 100) / 100,
+    interestForfeited: Math.round((matValue - netIfBrokenNow) * 100) / 100,
+    penaltyAmount: Math.round(penaltyAmount * 100) / 100,
+    valueAtMaturity: Math.round(matValue * 100) / 100,
+    costOfBreaking: Math.round((matValue - netIfBrokenNow) * 100) / 100,
+  };
+}
+
+/**
+ * PER-ISSUER CONCENTRATION DETECTION (Round 31).
+ *
+ * Given each issuer's current value and the whole-portfolio net worth, return the
+ * issuers whose share exceeds ISSUER_CONCENTRATION_CAP (default 25%). Government
+ * securities are sovereign and excluded by the caller. Pure + unit-testable.
+ */
+export interface IssuerConcentration {
+  issuer: string;
+  value: number;
+  share: number; // 0..1
+}
+
+export function detectIssuerConcentration(
+  issuerValues: { issuer: string; value: number }[],
+  netWorth: number,
+  cap: number = ISSUER_CONCENTRATION_CAP,
+): IssuerConcentration[] {
+  if (netWorth <= 0) return [];
+  // Aggregate by issuer name (case-insensitive) so multiple deposits at the same
+  // bank are summed before testing the cap.
+  const byIssuer = new Map<string, { issuer: string; value: number }>();
+  for (const iv of issuerValues) {
+    const key = iv.issuer.trim().toLowerCase();
+    const prev = byIssuer.get(key);
+    if (prev) prev.value += iv.value;
+    else byIssuer.set(key, { issuer: iv.issuer.trim(), value: iv.value });
+  }
+  const out: IssuerConcentration[] = [];
+  for (const { issuer, value } of Array.from(byIssuer.values())) {
+    const share = value / netWorth;
+    if (share > cap) out.push({ issuer, value, share });
+  }
+  return out.sort((a, b) => b.share - a.share);
+}
+
+/**
  * Apply the sovereign-preference tie-break to a net-yield-ranked candidate list.
  * Bank candidates (bucket "bank") are demoted below a government candidate when
  * their net-yield advantage is within SOVEREIGN_PREFERENCE_THRESHOLD_PCT. Pure
@@ -844,7 +937,14 @@ export function runProjection(
         startMonth: monthOffsetFromStart(b.startDate, startDate) ?? 1,
         // Forward month at which a term deposit matures (null = never matures).
         maturityMonth,
-        // Set true once a term deposit has matured and paid out into the MMF.
+        // Tenor in months — needed to schedule the NEXT maturity when rolling over.
+        tenorMonths: b.tenorMonths && b.tenorMonths > 0 ? Math.round(b.tenorMonths) : null,
+        // Round 31: what to do with principal+interest at maturity.
+        //   "redeploy" → cash to MMF, re-deployed by the yield-max sweep.
+        //   "rollover" → auto-renew same tenor at same rate, staying in the bank.
+        maturityAction: (b.maturityAction ?? "redeploy") as "redeploy" | "rollover",
+        // Set true once a term deposit has matured and paid out into the MMF
+        // (only used for the "redeploy" path; rollovers keep accruing).
         matured: false,
       };
     });
@@ -1021,18 +1121,34 @@ export function runProjection(
         b.balance += netInterest;
       }
 
-      // Term-deposit maturity: in the forward maturity month, pay out into the MMF.
+      // Term-deposit maturity: in the forward maturity month, either roll over
+      // (auto-renew, staying in the bank) or redeploy (return to the MMF).
       if (!isActualMonth && !b.isLiquid && b.maturityMonth != null && m >= b.maturityMonth) {
         const payout = b.balance;
         const interestPortion = Math.max(0, payout - b.principal);
-        bankMaturedCashIn += payout;
-        b.matured = true;
-        b.balance = 0;
         const niceKind =
           b.kind === "fixed_deposit" ? "fixed deposit"
           : b.kind === "target_savings" ? "goal/target savings"
           : "bank deposit";
         const who = b.label ? `${b.label} ${niceKind}` : `a ${niceKind}`;
+
+        if (b.maturityAction === "rollover" && b.tenorMonths && b.tenorMonths > 0) {
+          // Auto-renew: principal+interest becomes the new principal for a fresh
+          // term at the same rate. The deposit keeps accruing in the bank and the
+          // next maturity is scheduled one tenor later.
+          b.principal = payout;
+          b.maturityMonth = b.maturityMonth + b.tenorMonths;
+          bankMaturityActions.push(
+            `${who} matured and auto-rolled over KES ${Math.round(payout).toLocaleString()} into a fresh ${b.tenorMonths}-month term at ${b.interestRate}% (principal + KES ${Math.round(interestPortion).toLocaleString()} net interest reinvested)`
+          );
+          bankEnd += b.balance; // stays in the bank pocket
+          continue;
+        }
+
+        // Default: redeploy to the MMF for the yield-max allocator.
+        bankMaturedCashIn += payout;
+        b.matured = true;
+        b.balance = 0;
         bankMaturityActions.push(
           `${who} matured, returning KES ${Math.round(payout).toLocaleString()} to the MMF (KES ${Math.round(b.principal).toLocaleString()} principal + KES ${Math.round(interestPortion).toLocaleString()} net interest)`
         );

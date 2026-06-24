@@ -148,6 +148,10 @@ export default function Dashboard() {
     { portfolioId: portfolioId! },
     { enabled: !!portfolioId }
   );
+  const { data: concentration } = trpc.bankHoldings.concentration.useQuery(
+    { portfolioId: portfolioId! },
+    { enabled: !!portfolioId }
+  );
   const updatePortfolioMutation = trpc.portfolios.update.useMutation({
     onSuccess: () => {
       toast.success("Target updated — projection recalculated");
@@ -369,6 +373,29 @@ export default function Dashboard() {
             {getPhaseName(currentPhase)} Phase
           </Badge>
         </div>
+
+        {/* ── Per-issuer concentration warning (Round 31) ──────────────── */}
+        {concentration && concentration.breaches.length > 0 && (
+          <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 flex gap-3">
+            <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+            <div className="text-xs text-amber-200/90 leading-relaxed space-y-1">
+              <p>
+                <strong className="text-amber-100">Concentration warning —</strong>{" "}
+                {concentration.breaches.length === 1 ? "one issuer holds" : `${concentration.breaches.length} issuers each hold`}{" "}
+                more than {(concentration.cap * 100).toFixed(0)}% of your net worth. Kenyan deposit insurance (KDIC) only covers
+                up to KES 500,000 per bank, so spreading large balances across institutions reduces single-bank risk.
+              </p>
+              <ul className="space-y-0.5">
+                {concentration.breaches.map((b) => (
+                  <li key={b.issuer}>
+                    <span className="text-amber-100 font-medium">{b.issuer}</span>: {formatKES(b.value)}{" "}
+                    (<span className="font-mono">{(b.share * 100).toFixed(1)}%</span> of {formatKES(concentration.netWorth)} net worth)
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        )}
 
         {/* ── What the engine projection means ───────────────────────────── */}
         <div className="rounded-xl border border-primary/20 bg-primary/5 p-4 flex gap-3">

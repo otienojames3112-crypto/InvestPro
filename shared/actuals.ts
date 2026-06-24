@@ -291,3 +291,53 @@ export function sumOfPartsNetWorth(parts: NetWorthParts): NetWorthBreakdown {
   const total = primaryMmf + secondaryMmf + bank + securities + other;
   return { primaryMmf, secondaryMmf, bank, securities, other, total };
 }
+
+
+/**
+ * EARLY-BREAK "WHAT-IF" (Round 31) — shared, framework-free, used by the
+ * holding card and unit tests.
+ *
+ * Breaking a TERM deposit (fixed / goal savings) before maturity forfeits a
+ * share of the interest accrued so far — the bank's early-break penalty,
+ * expressed as a % of accrued interest. This helper estimates:
+ *   - accruedInterest:  net interest earned from `startISO` to today, and
+ *   - netIfBrokenNow:   principal + interest retained after the penalty.
+ *
+ * It deliberately mirrors `estInterestToDate` so the accrued figure matches the
+ * Dashboard's estimated-interest line. Pure: no React/DOM/Date-locale deps.
+ */
+export interface EarlyBreakWhatIfInput {
+  principal: number;
+  interestRate: number; // % p.a. gross
+  whtRate?: number | null; // % WHT on interest, default 15
+  startISO: string; // placement date (YYYY-MM-DD)
+  earlyBreakPenaltyPct: number; // % of accrued interest forfeited
+  asOfISO?: string; // defaults to today
+  dayCount?: number; // 365 or 360
+}
+
+export interface EarlyBreakWhatIfResult {
+  accruedInterest: number; // net interest earned to date (after WHT)
+  penaltyAmount: number; // interest forfeited by breaking now
+  retainedInterest: number; // interest you keep if you break now
+  netIfBrokenNow: number; // principal + retained interest
+}
+
+export function earlyBreakWhatIf(input: EarlyBreakWhatIfInput): EarlyBreakWhatIfResult {
+  const principal = Math.max(0, Number(input.principal) || 0);
+  const wht = input.whtRate == null ? 15 : Number(input.whtRate);
+  const asOf = (input.asOfISO ?? new Date().toISOString().slice(0, 10)).slice(0, 10);
+  const accruedInterest = estInterestToDate(
+    principal,
+    Number(input.interestRate) || 0,
+    wht,
+    input.startISO,
+    asOf,
+    input.dayCount ?? 365,
+  );
+  const penaltyFrac = Math.min(1, Math.max(0, (Number(input.earlyBreakPenaltyPct) || 0) / 100));
+  const penaltyAmount = Math.round(accruedInterest * penaltyFrac * 100) / 100;
+  const retainedInterest = Math.round((accruedInterest - penaltyAmount) * 100) / 100;
+  const netIfBrokenNow = Math.round((principal + retainedInterest) * 100) / 100;
+  return { accruedInterest, penaltyAmount, retainedInterest, netIfBrokenNow };
+}

@@ -80,6 +80,8 @@ import {
   deriveSafetyFloor,
   SWEEP_LOT_SIZE,
   SCENARIO_STEPUPS,
+  detectIssuerConcentration,
+  ISSUER_CONCENTRATION_CAP,
   type EngineSettings,
   type ActualDeposit,
   type ActualSecurity,
@@ -232,6 +234,11 @@ function mapActualBankHoldings(
     tenorMonths: (b as { tenorMonths?: number | null }).tenorMonths ?? null,
     maturityDate: normaliseDate((b as { maturityDate?: Date | string | null }).maturityDate),
     payoutFrequency: (b as { payoutFrequency?: ActualBankHolding["payoutFrequency"] }).payoutFrequency ?? null,
+    // Round 31: maturity behaviour (rollover vs redeploy) + early-break penalty.
+    maturityAction: (b as { maturityAction?: ActualBankHolding["maturityAction"] }).maturityAction ?? "redeploy",
+    earlyBreakPenaltyPct: (b as { earlyBreakPenaltyPct?: string | number | null }).earlyBreakPenaltyPct != null
+      ? parseFloat(String((b as { earlyBreakPenaltyPct?: string | number | null }).earlyBreakPenaltyPct))
+      : null,
   }));
 }
 
@@ -1973,11 +1980,54 @@ export const appRouter = router({
           payoutFrequency: r.payoutFrequency,
           currentValue: Number(r.currentValue),
           earlyBreakPenaltyPct: Number((r as { earlyBreakPenaltyPct?: string | number }).earlyBreakPenaltyPct ?? 0),
+          maturityAction: (r as { maturityAction?: "redeploy" | "rollover" }).maturityAction ?? "redeploy",
           notes: r.notes ?? null,
           isActive: r.isActive,
           createdAt: r.createdAt,
           updatedAt: r.updatedAt,
         }));
+      }),
+    /**
+     * Round 31: per-issuer concentration check for the Dashboard banner. Returns
+     * any bank/issuer whose active-deposit value exceeds ISSUER_CONCENTRATION_CAP
+     * (25%) of total net worth. Government securities are sovereign and excluded.
+     * Server-authoritative: net worth comes from getActualsSummary so the banner
+     * cannot drift from the Dashboard total.
+     */
+    concentration: protectedProcedure
+      .input(z.object({ portfolioId: z.number().int().positive() }))
+      .query(async ({ ctx, input }) => {
+        const p = await requirePortfolio(input.portfolioId, ctx.user.id);
+        const rates = await getRateSettings(input.portfolioId);
+        const fundEar = await getSelectedFundEar(p);
+        const settings = dbToEngine(rates, p, fundEar);
+        const summary = await getActualsSummary(
+          input.portfolioId,
+          settings.targetAmount,
+          settings.withholdingTax,
+          settings.fxdCouponRate,
+          settings.mmfYield,
+          settings.tbill364Rate,
+        );
+        const netWorth = summary ? summary.totalContributed : 0;
+        const rows = await getBankInstrumentHoldings(input.portfolioId);
+        const issuerValues = rows
+          .filter((r) => r.isActive)
+          .map((r) => ({
+            issuer: r.bankName,
+            // Use the larger of current value vs principal (mirrors net-worth basis).
+            value: Math.max(Number(r.currentValue) || 0, Number(r.principal) || 0),
+          }));
+        const breaches = detectIssuerConcentration(issuerValues, netWorth);
+        return {
+          cap: ISSUER_CONCENTRATION_CAP,
+          netWorth: Math.round(netWorth * 100) / 100,
+          breaches: breaches.map((b) => ({
+            issuer: b.issuer,
+            value: Math.round(b.value * 100) / 100,
+            share: Math.round(b.share * 10000) / 10000,
+          })),
+        };
       }),
     add: protectedProcedure
       .input(z.object({
@@ -1996,6 +2046,7 @@ export const appRouter = router({
         maturityDate: z.string().optional(),
         payoutFrequency: z.enum(["maturity", "monthly", "quarterly", "on_call"]).default("maturity"),
         earlyBreakPenaltyPct: z.number().min(0).max(100).default(0),
+        maturityAction: z.enum(["redeploy", "rollover"]).default("redeploy"),
         notes: z.string().max(1000).optional(),
       }))
       .mutation(async ({ ctx, input }) => {
@@ -2016,6 +2067,7 @@ export const appRouter = router({
           maturityDate: input.maturityDate ? new Date(`${input.maturityDate}T12:00:00.000Z`) : null,
           payoutFrequency: input.payoutFrequency,
           earlyBreakPenaltyPct: String(input.earlyBreakPenaltyPct),
+          maturityAction: input.maturityAction,
           currentValue: String(input.principal),
         });
         await addAuditLog({
@@ -2048,6 +2100,7 @@ export const appRouter = router({
         maturityDate: z.string().optional(),
         payoutFrequency: z.enum(["maturity", "monthly", "quarterly", "on_call"]).optional(),
         earlyBreakPenaltyPct: z.number().min(0).max(100).optional(),
+        maturityAction: z.enum(["redeploy", "rollover"]).optional(),
         notes: z.string().max(1000).optional(),
         isActive: z.boolean().optional(),
       }))
@@ -2069,6 +2122,7 @@ export const appRouter = router({
           ...(rest.maturityDate !== undefined && { maturityDate: new Date(`${rest.maturityDate}T12:00:00.000Z`) }),
           ...(rest.payoutFrequency !== undefined && { payoutFrequency: rest.payoutFrequency }),
           ...(rest.earlyBreakPenaltyPct !== undefined && { earlyBreakPenaltyPct: String(rest.earlyBreakPenaltyPct) }),
+          ...(rest.maturityAction !== undefined && { maturityAction: rest.maturityAction }),
           ...(rest.notes !== undefined && { notes: rest.notes }),
           ...(rest.isActive !== undefined && { isActive: rest.isActive }),
         });

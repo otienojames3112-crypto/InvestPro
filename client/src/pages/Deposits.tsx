@@ -4,6 +4,7 @@ import { useDepositDrawer } from "@/contexts/DepositDrawerContext";
 import { useMemo, useState } from "react";
 import { trpc } from "@/lib/trpc";
 import { formatKES } from "@/lib/format";
+import { earlyBreakWhatIf } from "@shared/actuals";
 import { BANK_INSTRUMENT_TYPES, isTermBankInstrument, bankInstrumentLabel, type BankInstrumentType } from "@shared/const";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -78,6 +79,7 @@ const EMPTY_BANK = {
   tenorMonths: "",
   maturityDate: "",
   earlyBreakPenaltyPct: "",
+  maturityAction: "redeploy" as "redeploy" | "rollover",
   notes: "",
 };
 
@@ -154,6 +156,7 @@ export default function Deposits() {
       tenorMonths: h.tenorMonths != null ? String(h.tenorMonths) : "",
       maturityDate: h.maturityDate ? new Date(h.maturityDate).toISOString().slice(0, 10) : "",
       earlyBreakPenaltyPct: (h as { earlyBreakPenaltyPct?: number }).earlyBreakPenaltyPct != null ? String((h as { earlyBreakPenaltyPct?: number }).earlyBreakPenaltyPct) : "",
+      maturityAction: ((h as { maturityAction?: "redeploy" | "rollover" }).maturityAction ?? "redeploy"),
       notes: h.notes ?? "",
     });
     setBankDialogOpen(true);
@@ -177,6 +180,7 @@ export default function Deposits() {
       maturityDate: isTerm && bankForm.maturityDate ? bankForm.maturityDate : undefined,
       payoutFrequency: isTerm ? ("maturity" as const) : ("on_call" as const),
       earlyBreakPenaltyPct: isTerm && bankForm.earlyBreakPenaltyPct ? parseFloat(bankForm.earlyBreakPenaltyPct) : undefined,
+      maturityAction: isTerm ? bankForm.maturityAction : undefined,
       notes: bankForm.notes.trim() || undefined,
     };
     if (bankForm.id) {
@@ -315,7 +319,7 @@ export default function Deposits() {
         <div className="px-5 py-4 border-b border-white/10 flex items-center gap-2">
           <Building2 className="w-4 h-4 text-sky-300" />
           <h2 className="text-sm font-semibold text-foreground">Bank Instruments</h2>
-          <span className="text-xs text-muted-foreground">— call & fixed deposits ({formatKES(bankTotal)})</span>
+          <span className="text-xs text-muted-foreground">— call, fixed, goal, ordinary & tiered savings ({formatKES(bankTotal)})</span>
           <Button
             size="sm"
             variant="outline"
@@ -329,7 +333,7 @@ export default function Deposits() {
           <div className="p-8 text-center space-y-2">
             <Building2 className="w-8 h-8 text-muted-foreground mx-auto opacity-30" />
             <p className="text-muted-foreground text-sm">No bank instruments tracked.</p>
-            <p className="text-muted-foreground text-xs">Add a call or fixed deposit to record money held at a commercial bank.</p>
+            <p className="text-muted-foreground text-xs">Add a call, fixed, goal/target, ordinary or tiered savings deposit to record money held at a commercial bank.</p>
           </div>
         ) : (
           <Table>
@@ -340,11 +344,26 @@ export default function Deposits() {
                 <TableHead className="text-muted-foreground text-xs text-right">Principal</TableHead>
                 <TableHead className="text-muted-foreground text-xs text-right">Rate</TableHead>
                 <TableHead className="text-muted-foreground text-xs">Rate as-of</TableHead>
+                <TableHead className="text-muted-foreground text-xs">Maturity / action</TableHead>
                 <TableHead className="text-muted-foreground text-xs w-20"></TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {bankHoldings.map((h) => (
+              {bankHoldings.map((h) => {
+                const isTerm = isTermBankInstrument(h.instrumentType);
+                const penaltyPct = Number((h as { earlyBreakPenaltyPct?: number }).earlyBreakPenaltyPct ?? 0);
+                const startISO = h.startDate ? new Date(h.startDate).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10);
+                const whatIf = isTerm && penaltyPct > 0
+                  ? earlyBreakWhatIf({
+                      principal: Number(h.principal) || 0,
+                      interestRate: Number(h.interestRate) || 0,
+                      whtRate: Number(h.whtRate ?? 15),
+                      startISO,
+                      earlyBreakPenaltyPct: penaltyPct,
+                    })
+                  : null;
+                const action = (h as { maturityAction?: "redeploy" | "rollover" }).maturityAction ?? "redeploy";
+                return (
                 <TableRow key={h.id} className="border-white/10 hover:bg-white/5">
                   <TableCell className="text-sm text-foreground">
                     <div className="font-medium">{h.label || h.bankName}</div>
@@ -360,6 +379,26 @@ export default function Deposits() {
                   <TableCell className="text-xs text-muted-foreground">
                     {h.rateAsOfDate ? new Date(h.rateAsOfDate).toLocaleDateString("en-KE", { day: "numeric", month: "short", year: "numeric" }) : "—"}
                   </TableCell>
+                  <TableCell className="text-xs">
+                    {isTerm ? (
+                      <div className="space-y-0.5">
+                        <div className="text-foreground">
+                          {h.maturityDate ? new Date(h.maturityDate).toLocaleDateString("en-KE", { day: "numeric", month: "short", year: "numeric" }) : "No maturity set"}
+                        </div>
+                        <Badge variant="outline" className={action === "rollover" ? "text-[10px] border-amber-500/40 text-amber-300" : "text-[10px] border-emerald-500/40 text-emerald-300"}>
+                          {action === "rollover" ? "Auto-rollover" : "Redeploy to best yield"}
+                        </Badge>
+                        {whatIf ? (
+                          <div className="text-[10px] text-muted-foreground leading-tight pt-0.5">
+                            Break now → keep {formatKES(whatIf.netIfBrokenNow)}
+                            <span className="text-red-400"> (−{formatKES(whatIf.penaltyAmount)} penalty)</span>
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : (
+                      <span className="text-muted-foreground">On call · fully liquid</span>
+                    )}
+                  </TableCell>
                   <TableCell>
                     <div className="flex items-center gap-1">
                       <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-foreground" onClick={() => openBankEdit(h)}>
@@ -371,7 +410,8 @@ export default function Deposits() {
                     </div>
                   </TableCell>
                 </TableRow>
-              ))}
+                );
+              })}
             </TableBody>
           </Table>
         )}
@@ -503,6 +543,19 @@ export default function Deposits() {
                 <div className="space-y-1.5">
                   <Label className="text-xs text-muted-foreground">Early-break penalty (% of interest forfeited if withdrawn early)</Label>
                   <Input type="number" min="0" max="100" step="0.5" value={bankForm.earlyBreakPenaltyPct} onChange={(e) => setBankForm((f) => ({ ...f, earlyBreakPenaltyPct: e.target.value }))} placeholder="e.g. 25" className="bg-white/5 border-white/10 font-mono h-9 text-sm" />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs text-muted-foreground">At maturity</Label>
+                  <Select value={bankForm.maturityAction} onValueChange={(v) => setBankForm((f) => ({ ...f, maturityAction: v as "redeploy" | "rollover" }))}>
+                    <SelectTrigger className="bg-white/5 border-white/10 h-9 text-sm"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="redeploy">Redeploy to best yield (return to MMF, let the engine reinvest)</SelectItem>
+                      <SelectItem value="rollover">Auto-rollover (renew the same deposit at the same rate)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-[10px] text-muted-foreground leading-tight">
+                    Controls how the projection handles this deposit when it matures: send principal + interest back to the money-market fund for the yield-max allocator to reinvest, or renew it in place.
+                  </p>
                 </div>
               </>
             )}

@@ -554,6 +554,16 @@ export const bankInstrumentHoldings = mysqlTable("bank_instrument_holdings", {
    * Modelled by the withdrawal flow when breaking a term deposit early.
    */
   earlyBreakPenaltyPct: decimal("earlyBreakPenaltyPct", { precision: 6, scale: 4 }).notNull().default("0.0000"),
+  /**
+   * Round 31: what the engine does with a TERM deposit's principal+interest at
+   * maturity.
+   *   - "redeploy"  (default): cash returns to the MMF and the yield-max
+   *     allocator re-deploys it per the sweep rules.
+   *   - "rollover": the deposit auto-renews for the same tenor at the same rate
+   *     (principal+interest rolled into a fresh term), staying in the bank.
+   * Ignored for LIQUID kinds (call/ordinary/tiered savings), which never mature.
+   */
+  maturityAction: mysqlEnum("maturityAction", ["redeploy", "rollover"]).notNull().default("redeploy"),
   notes: text("notes"),
   isActive: boolean("isActive").notNull().default(true),
   createdAt: timestamp("createdAt").defaultNow().notNull(),

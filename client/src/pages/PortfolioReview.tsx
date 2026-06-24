@@ -117,8 +117,9 @@ export default function PortfolioReview() {
         bankHoldings: (bankHoldings ?? []) as never,
         otherHoldings: (holdings ?? []) as never,
         assetLabels: ASSET_LABELS,
+        primaryFundId: fund.fundId,
       }),
-    [deposits, securities, secondary, bankHoldings, holdings]
+    [deposits, securities, secondary, bankHoldings, holdings, fund.fundId]
   );
   const buckets = { mmf: alloc.primaryMmf, tbill: alloc.tbill, ifb: alloc.ifb, fxd: alloc.fxd };
   const allocation = alloc.items;

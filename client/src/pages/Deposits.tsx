@@ -57,6 +57,7 @@ import {
   Building2,
   PiggyBank,
   Pencil,
+  Zap,
 } from "lucide-react";
 
 type Bucket = "mmf" | "tbill" | "ifb" | "fxd";
@@ -142,6 +143,47 @@ export default function Deposits() {
   const [bankDialogOpen, setBankDialogOpen] = useState(false);
   const [bankForm, setBankForm] = useState(EMPTY_BANK);
   const [deleteBankId, setDeleteBankId] = useState<number | null>(null);
+
+  // ─── Per-deposit "Break now" (Round 33) ─────────────────────────────────
+  // Realize a term deposit's early-break what-if as an ACTUAL withdrawal: the
+  // full accrued value (principal + retained interest) is withdrawn today, the
+  // forfeited-interest penalty is recorded, and the emptied holding is closed.
+  const [breakHolding, setBreakHolding] = useState<
+    | { id: number; label: string; principal: number; netNow: number; penalty: number; accrued: number }
+    | null
+  >(null);
+  const breakNow = trpc.withdrawals.add.useMutation({
+    onSuccess: (res) => {
+      utils.bankHoldings.list.invalidate();
+      utils.deposits.summary.invalidate();
+      utils.deposits.list.invalidate();
+      utils.withdrawals.list.invalidate();
+      const forfeited = Number((res as { forfeitedInterest?: number }).forfeitedInterest ?? 0);
+      toast.success(
+        forfeited > 0
+          ? `Deposit broken early — KES ${forfeited.toLocaleString(undefined, { maximumFractionDigits: 0 })} interest forfeited`
+          : "Deposit broken and recorded as a withdrawal",
+      );
+      setBreakHolding(null);
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  function confirmBreakNow() {
+    if (!portfolioId || !breakHolding) return;
+    breakNow.mutate({
+      portfolioId,
+      sourceType: "bank_instrument",
+      bankHoldingId: breakHolding.id,
+      // Withdraw the full PRINCIPAL so the deposit empties and the holding closes.
+      // (The penalty is applied to interest, which is tracked separately — the
+      // principal is what was actually placed and is what frees up as cash.)
+      amount: breakHolding.principal,
+      withdrawalDate: new Date().toISOString().slice(0, 10),
+      reason: "Early break",
+      notes: `Broke term deposit early via Break now (kept KES ${breakHolding.netNow.toLocaleString(undefined, { maximumFractionDigits: 0 })}, forfeited KES ${breakHolding.penalty.toLocaleString(undefined, { maximumFractionDigits: 0 })} penalty)`,
+    });
+  }
 
   function openBankEdit(h: (typeof bankHoldings)[number]) {
     setBankForm({
@@ -401,6 +443,27 @@ export default function Deposits() {
                   </TableCell>
                   <TableCell>
                     <div className="flex items-center gap-1">
+                      {/* Break now: only for active term deposits before maturity. */}
+                      {h.isActive && isTerm && h.maturityDate && new Date(h.maturityDate) > new Date() ? (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7 text-amber-300 hover:text-amber-200 hover:bg-amber-500/10"
+                          title="Break now — record an early withdrawal"
+                          onClick={() =>
+                            setBreakHolding({
+                              id: h.id,
+                              label: h.label || h.bankName,
+                              principal: Number(h.principal) || 0,
+                              netNow: whatIf ? whatIf.netIfBrokenNow : Number(h.principal) || 0,
+                              penalty: whatIf ? whatIf.penaltyAmount : 0,
+                              accrued: whatIf ? whatIf.accruedInterest : 0,
+                            })
+                          }
+                        >
+                          <Zap className="w-3.5 h-3.5" />
+                        </Button>
+                      ) : null}
                       <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-foreground" onClick={() => openBankEdit(h)}>
                         <Pencil className="w-3.5 h-3.5" />
                       </Button>
@@ -608,6 +671,46 @@ export default function Deposits() {
           <AlertDialogFooter>
             <AlertDialogCancel className="border-white/10">Cancel</AlertDialogCancel>
             <AlertDialogAction onClick={() => deleteBankId !== null && portfolioId && deleteBank.mutate({ id: deleteBankId, portfolioId })} className="bg-red-600 hover:bg-red-700 text-white">Remove</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Break now confirmation (Round 33) */}
+      <AlertDialog open={breakHolding !== null} onOpenChange={(o) => !o && setBreakHolding(null)}>
+        <AlertDialogContent className="bg-[#0d1117] border-white/10 text-foreground">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <Zap className="w-4 h-4 text-amber-300" /> Break “{breakHolding?.label}” now?
+            </AlertDialogTitle>
+            <AlertDialogDescription className="text-muted-foreground">
+              This records an actual early withdrawal today and closes the deposit. It cannot auto-reverse — you would re-add the instrument to undo it.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          {breakHolding ? (
+            <div className="rounded-lg border border-white/10 bg-white/5 p-3 text-sm space-y-1.5">
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Principal freed up</span>
+                <span className="font-mono font-semibold">{formatKES(breakHolding.principal)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Interest accrued so far</span>
+                <span className="font-mono">{formatKES(breakHolding.accrued)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Early-break penalty</span>
+                <span className="font-mono text-red-400">−{formatKES(breakHolding.penalty)}</span>
+              </div>
+              <div className="flex justify-between border-t border-white/10 pt-1.5">
+                <span className="text-foreground">Net interest kept</span>
+                <span className="font-mono font-semibold text-emerald-300">{formatKES(Math.max(0, breakHolding.accrued - breakHolding.penalty))}</span>
+              </div>
+            </div>
+          ) : null}
+          <AlertDialogFooter>
+            <AlertDialogCancel className="border-white/10">Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmBreakNow} disabled={breakNow.isPending} className="bg-amber-600 hover:bg-amber-700 text-white">
+              {breakNow.isPending ? "Breaking…" : "Break now"}
+            </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

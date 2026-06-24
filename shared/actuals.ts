@@ -394,20 +394,28 @@ export interface RawOtherHolding {
 
 /**
  * True when a deposit row represents a SECONDARY-MMF contribution rather than
- * the primary fund. Such rows are `institutionType:"mmf_fund"` with a non-null
- * `mmfFundId` that appears in the secondary-fund id set. Their balance is
- * already represented by the secondary-MMF `currentBalance`, so counting the
- * deposit row again is the classic double-count.
+ * the primary fund. A deposit into ANY MMF fund that is not the portfolio's
+ * primary fund is, by definition, a secondary contribution — its balance is
+ * already represented by that secondary fund's `currentBalance`, so counting
+ * the deposit row again is the classic double-count.
+ *
+ * Detection is deliberately robust against caller mistakes (Round 33): a row is
+ * treated as secondary when EITHER its fund id is in the explicit secondary-fund
+ * set OR (when a `primaryFundId` is known) its fund id differs from the primary.
+ * Relying on the secondary-set alone is fragile — if a caller passes the wrong
+ * id (e.g. the secondary ROW id instead of its FUND id) the set never matches
+ * and the deposit leaks back into the primary bucket. The primary-fund check is
+ * the reliable fallback.
  */
 function isSecondaryMmfDeposit(
   d: RawDepositRow,
   secondaryFundIds: Set<number>,
+  primaryFundId?: number | null,
 ): boolean {
-  return (
-    d.institutionType === "mmf_fund" &&
-    d.mmfFundId != null &&
-    secondaryFundIds.has(d.mmfFundId)
-  );
+  if (d.institutionType !== "mmf_fund" || d.mmfFundId == null) return false;
+  if (secondaryFundIds.has(d.mmfFundId)) return true;
+  if (primaryFundId != null && d.mmfFundId !== primaryFundId) return true;
+  return false;
 }
 
 export interface AllocationInput {
@@ -418,6 +426,13 @@ export interface AllocationInput {
   otherHoldings: RawOtherHolding[];
   /** Human labels for other-asset classes (e.g. { equity: "Equities" }). */
   assetLabels?: Record<string, string>;
+  /**
+   * The portfolio's PRIMARY fund id, if known. When provided, any `mmf_fund`
+   * deposit whose fund id differs from this is treated as a secondary
+   * contribution and excluded from the primary-MMF bucket — a robust guard
+   * against the secondary-fund set being mis-populated by the caller.
+   */
+  primaryFundId?: number | null;
 }
 
 export interface AllocationItem {
@@ -460,7 +475,7 @@ export function buildAllocation(input: AllocationInput): AllocationResult {
   let primaryMmf = 0;
   for (const d of input.deposits) {
     if (d.institutionType === "government_security" || d.institutionType === "bank_instrument") continue;
-    if (isSecondaryMmfDeposit(d, secondaryFundIds)) continue; // avoid double count
+    if (isSecondaryMmfDeposit(d, secondaryFundIds, input.primaryFundId)) continue; // avoid double count
     if (d.bucket === "mmf") primaryMmf += num(d.amount);
   }
 

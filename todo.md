@@ -488,3 +488,12 @@
 - [x] R32.4 Verify/fix Nabo gross/yr per-source row vs displayed gross rate
 - [x] R32.5 Structural: one exported net-worth function + one exported blended-yield function used by Dashboard, Portfolio Review, Tax Summary, Reconciliation
 - [x] R32.accept Integration test: all four pages render identical net worth + identical blended net yield
+
+## Round 33 — Live mismatch fix + two features + source ZIP
+
+- [x] R33.1 BUG: In sample/test data, Portfolio Review + Tax Summary still show 146,000 (+2,500) vs 143,500 reference. Trace why these two sources diverge from buildAllocation/blendedYield in the SAMPLE dataset specifically (the unit test passes but the live sample seed reproduces it)
+- [x] R33.2 Fix the double-count in the actual page render path (not just the shared helper) so all six reconciliation rows = 143,500 on the seeded sample portfolio
+- [x] R33.3 Add a regression test that seeds the exact sample dataset and asserts portfolioReviewNetWorth === taxSummaryBase === sumParts === 143,500
+- [x] R33.4 Per-deposit "Break now" action button on each term-deposit holding card → records the early-break what-if as an actual withdrawal entry
+- [x] R33.5 Dashboard 90-day maturity-timeline strip: next 90 days of CBK maturities + bank fixed-deposit free-up dates
+- [x] R33.6 Run full suite, checkpoint, regenerate source bundle, deliver source ZIP/bundle + checkpoint

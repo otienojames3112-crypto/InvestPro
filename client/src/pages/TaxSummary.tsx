@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import { AppShell } from "@/components/AppShell";
 import { usePortfolio } from "@/contexts/PortfolioContext";
 import { useSelectedFund } from "@/hooks/useSelectedFund";
-import { bankHoldingValue, blendedYield } from "@shared/actuals";
+import { bankHoldingValue, blendedYield, buildAllocation } from "@shared/actuals";
 import { trpc } from "@/lib/trpc";
 import {
   Card,
@@ -87,22 +87,23 @@ export default function TaxSummary() {
   // excluded here to avoid double-counting). T-bill / IFB / FXD buckets come
   // from the SECURITIES REGISTER — the single source of truth — using unmatured
   // face values, so this page reconciles with the Dashboard's Live Net Worth.
+  // Round 33: derive bucket balances from the SAME shared `buildAllocation`
+  // helper the Portfolio Review and Reconciliation pages use. Passing
+  // `primaryFundId` guarantees a secondary-MMF deposit (an `mmf_fund` row into a
+  // non-primary fund) is excluded from the primary-MMF bucket, fixing the
+  // page-level +KES 2,500 double-count. The prior inline reducer only skipped
+  // gov-security/bank rows and silently leaked secondary deposits into `mmf`.
   const buckets = useMemo(() => {
-    const acc = { mmf: 0, tbill: 0, ifb: 0, fxd: 0 };
-    (deposits ?? []).forEach((d) => {
-      const inst = (d as { institutionType?: string | null }).institutionType;
-      if (inst === "government_security" || inst === "bank_instrument") return;
-      if (d.bucket === "mmf") acc.mmf += Number(d.amount);
+    const a = buildAllocation({
+      deposits: (deposits ?? []) as never,
+      securities: (securities ?? []) as never,
+      secondaryMmfs: (secondaryMmfs ?? []) as never,
+      bankHoldings: (bankHoldings ?? []) as never,
+      otherHoldings: (holdings ?? []) as never,
+      primaryFundId: fund.fundId,
     });
-    (securities ?? []).forEach((s) => {
-      if (s.isMatured) return;
-      const face = Number(s.faceValue);
-      if (s.securityType.startsWith("tbill")) acc.tbill += face;
-      else if (s.securityType === "ifb") acc.ifb += face;
-      else acc.fxd += face;
-    });
-    return acc;
-  }, [deposits, securities]);
+    return { mmf: a.primaryMmf, tbill: a.tbill, ifb: a.ifb, fxd: a.fxd };
+  }, [deposits, securities, secondaryMmfs, bankHoldings, holdings, fund.fundId]);
 
   const whtRate = settings?.withholdingTax ?? 15;
   // Authoritative: when a fund is selected the engine uses its EAR; otherwise the

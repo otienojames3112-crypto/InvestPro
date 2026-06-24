@@ -50,6 +50,7 @@ import { Link } from "wouter";
 import { useDepositDrawer } from "@/contexts/DepositDrawerContext";
 import { useSelectedFund } from "@/hooks/useSelectedFund";
 import { CreatePortfolioDialog } from "@/components/PortfolioSelector";
+import { MaturityTimeline } from "@/components/MaturityTimeline";
 import { Plus, Compass } from "lucide-react";
 import { useMemo, useState, useEffect, useRef } from "react";
 import { toast } from "sonner";
@@ -149,6 +150,10 @@ export default function Dashboard() {
     { enabled: !!portfolioId }
   );
   const { data: concentration } = trpc.bankHoldings.concentration.useQuery(
+    { portfolioId: portfolioId! },
+    { enabled: !!portfolioId }
+  );
+  const { data: securities = [] } = trpc.securities.list.useQuery(
     { portfolioId: portfolioId! },
     { enabled: !!portfolioId }
   );
@@ -1153,6 +1158,12 @@ export default function Dashboard() {
             </CardContent>
           </Card>
         )}
+
+        {/* ── 90-day maturity / liquidity strip (Round 33) ───────────────── */}
+        <MaturityTimeline
+          securities={securities as never}
+          bankHoldings={bankHoldings as never}
+        />
 
       </div>
 

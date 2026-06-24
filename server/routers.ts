@@ -665,7 +665,12 @@ export const appRouter = router({
           isMatured: s.isMatured,
         })),
         secondaryMmfs: secondaries.map((s) => ({
-          mmfFundId: s.id,
+          // Round 33 fix: use the secondary's FUND id (mmfFundId), NOT the row
+          // primary key (s.id). Passing s.id meant the secondary-fund set never
+          // matched the deposit's mmfFundId, so a secondary-MMF deposit leaked
+          // into the primary bucket AND was counted again via the balance
+          // (the +KES 2,500 double-count seen on the live Reconciliation page).
+          mmfFundId: s.mmfFundId ?? null,
           currentBalance: parseFloat(String(s.currentBalance ?? "0")) || 0,
           ear: parseFloat(String(s.ear ?? "0")) || 0,
         })),
@@ -681,6 +686,8 @@ export const appRouter = router({
           assetClass: h.assetClass,
           currentValue: parseFloat(String(h.currentValue ?? "0")) || 0,
         })),
+        // Robust guard: any mmf_fund deposit into a non-primary fund is secondary.
+        primaryFundId: p.mmfFundId ?? null,
       });
       // Other assets are not part of the principal-basis reference, so subtract
       // them to compare the same pockets the reference covers.
@@ -1425,7 +1432,10 @@ export const appRouter = router({
         if (input.sourceType === "bank_instrument" && input.bankHoldingId) {
           const holdings = await getBankInstrumentHoldings(input.portfolioId);
           const h = holdings.find((x) => x.id === input.bankHoldingId);
-          if (h && h.instrumentType === "fixed_deposit" && h.maturityDate) {
+          // A TERM deposit (fixed deposit OR target/goal savings) broken before
+          // its maturity date is an early withdrawal that forfeits accrued interest.
+          const isTermDeposit = h && (h.instrumentType === "fixed_deposit" || h.instrumentType === "target_savings");
+          if (h && isTermDeposit && h.maturityDate) {
             const maturity = new Date(h.maturityDate);
             const wDate = new Date(input.withdrawalDate + "T12:00:00Z");
             if (wDate < maturity) {
@@ -1439,11 +1449,14 @@ export const appRouter = router({
               forfeitedInterest = Math.round(input.amount * rate * (days / dayCount) * 100) / 100;
             }
           }
-          // Reduce the holding principal to keep actuals in sync.
+          // Reduce the holding principal to keep actuals in sync. When the
+          // withdrawal empties the deposit (full break), deactivate the holding
+          // so it drops out of net worth, the liquidity calendar and yield blend.
           if (h) {
             const newPrincipal = Math.max(0, (parseFloat(String(h.principal)) || 0) - input.amount);
             await updateBankInstrumentHolding(input.bankHoldingId, input.portfolioId, {
               principal: String(newPrincipal),
+              ...(newPrincipal <= 0.005 ? { isActive: false } : {}),
             });
           }
         }

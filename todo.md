@@ -518,3 +518,10 @@
 - [x] R36.1 Add "Download CSV" button to the Month-by-Month Ledger header
 - [x] R36.2 Export the full projection (all months, not just current page/search) with all 15 columns incl. Bank In + Bank
 - [x] R36.3 Raw numeric values (no KES formatting) + UTF-8 BOM so Excel opens cleanly; filename ledger-{portfolio}-{date}.csv
+
+## Round 37 — Ledger totals, export-scope toggle, per-page exports
+- [x] R37.1 Ledger column-totals footer row (Save + Bank In + CBK In flows; ending balances from last month) and TOTAL line in CSV
+- [x] R37.2 Export-scope toggle on Ledger CSV (full projection vs filtered/searched rows)
+- [x] R37.3 Portfolio Review CSV export (allocation + benchmarks + liquidity calendar) alongside existing Print/PDF
+- [x] R37.4 Tax Summary CSV export (tax lines + totals + yield reconciliation) and new Print/Save as PDF
+- [x] R37.5 Shared shared/csv.ts util (toCsv/downloadCsv/escapeCsvCell/slugify) + 5 unit tests; full suite 256 pass

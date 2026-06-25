@@ -20,7 +20,9 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Receipt, Percent, ShieldCheck, TrendingDown, Info } from "lucide-react";
+import { Receipt, Percent, ShieldCheck, TrendingDown, Info, Download, Printer } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { toCsv, downloadCsv, slugify } from "@shared/csv";
 
 function kes(n: number, dp = 0): string {
   return n.toLocaleString("en-KE", {
@@ -42,7 +44,7 @@ interface TaxLine {
 }
 
 export default function TaxSummary() {
-  const { portfolioId } = usePortfolio();
+  const { portfolioId, portfolio } = usePortfolio();
   const fund = useSelectedFund();
 
   const { data: deposits } = trpc.deposits.list.useQuery(
@@ -264,26 +266,61 @@ export default function TaxSummary() {
   const grossYieldBlended = blended.grossYield;
   const netYieldBlended = blended.netYield;
 
+  // CSV export: the per-source tax lines plus the totals + yield reconciliation,
+  // as raw numbers for spreadsheets.
+  const handleExportCsv = () => {
+    const headers = ["Income Source", "Gross/yr (KES)", "WHT Rate %", "Tax (KES)", "Net/yr (KES)", "Exempt", "Note"];
+    const rows: (string | number)[][] = lines.map((l) => [
+      l.source,
+      Math.round(l.basis),
+      l.exempt ? 0 : Number(l.rate.toFixed(0)),
+      Math.round(l.tax),
+      Math.round(l.net),
+      l.exempt ? "Yes" : "No",
+      l.note,
+    ]);
+    rows.push(["TOTAL", Math.round(totalGross), "", Math.round(totalTax), Math.round(totalNet), "", `Effective tax rate ${effectiveTaxRate.toFixed(1)}%`]);
+    rows.push([]);
+    rows.push(["YIELD RECONCILIATION", "", "", "", "", "", ""]);
+    rows.push(["Fixed-income base (KES)", Math.round(fixedIncomeTotal), "", "", "", "", ""]);
+    rows.push(["Gross blended yield %", Number(grossYieldBlended.toFixed(2)), "", "", "", "", ""]);
+    rows.push(["Net blended yield %", Number(netYieldBlended.toFixed(2)), "", "", "", "", ""]);
+    rows.push(["Projected total WHT over horizon (KES)", Math.round(projectedTotalTax), "", "", "", "", `${projectionMonths} months`]);
+    const csv = toCsv(headers, rows);
+    const stamp = new Date().toISOString().split("T")[0];
+    downloadCsv(csv, `tax-summary-${slugify(portfolio?.name)}-${stamp}.csv`);
+  };
+
   return (
     <AppShell>
       <div className="space-y-6">
         {/* Header */}
-        <div className="flex flex-col gap-2">
-          <div className="flex items-center gap-2">
-            <Receipt className="w-5 h-5 text-primary" />
-            <h1
-              className="text-2xl font-bold"
-              style={{ fontFamily: "'Playfair Display', serif" }}
-            >
-              Tax Summary &amp; Yield Reconciliation
-            </h1>
+        <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-3">
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center gap-2">
+              <Receipt className="w-5 h-5 text-primary" />
+              <h1
+                className="text-2xl font-bold"
+                style={{ fontFamily: "'Playfair Display', serif" }}
+              >
+                Tax Summary &amp; Yield Reconciliation
+              </h1>
+            </div>
+            <p className="text-muted-foreground text-sm max-w-3xl">
+              An annualised, whole-portfolio view of the withholding tax (WHT)
+              applied to each income source at current balances and rates, and a
+              reconciliation of your <strong>gross</strong> quoted yield against
+              the <strong>net-of-tax</strong> return you actually keep.
+            </p>
           </div>
-          <p className="text-muted-foreground text-sm max-w-3xl">
-            An annualised, whole-portfolio view of the withholding tax (WHT)
-            applied to each income source at current balances and rates, and a
-            reconciliation of your <strong>gross</strong> quoted yield against
-            the <strong>net-of-tax</strong> return you actually keep.
-          </p>
+          <div className="flex items-center gap-2 shrink-0 print:hidden">
+            <Button variant="outline" className="bg-background" onClick={handleExportCsv}>
+              <Download className="w-4 h-4 mr-2" /> Download CSV
+            </Button>
+            <Button variant="outline" className="bg-background" onClick={() => window.print()}>
+              <Printer className="w-4 h-4 mr-2" /> Print / Save as PDF
+            </Button>
+          </div>
         </div>
 
         {/* Summary cards */}

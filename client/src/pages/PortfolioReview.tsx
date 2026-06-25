@@ -31,7 +31,9 @@ import {
   History,
   Target,
   Gauge,
+  Download,
 } from "lucide-react";
+import { toCsv, downloadCsv, slugify } from "@shared/csv";
 
 function kes(n: number, dp = 0): string {
   return n.toLocaleString("en-KE", {
@@ -250,6 +252,47 @@ export default function PortfolioReview() {
     return [...fromCallDeposits, ...dated].slice(0, 30);
   }, [securities, bankHoldings]);
 
+  // CSV export: net-worth allocation, benchmark comparison and the liquidity
+  // calendar, written as labelled sections in one file. Raw numbers so it opens
+  // cleanly in spreadsheets.
+  const handleExportCsv = () => {
+    const sections: (string | number)[][] = [];
+    sections.push(["Portfolio Review", portfolio?.name ?? ""]);
+    sections.push(["Generated", new Date().toISOString()]);
+    sections.push(["Net worth", Math.round(netWorth)]);
+    sections.push([]);
+    sections.push(["NET-WORTH ALLOCATION"]);
+    sections.push(["Bucket", "Value (KES)", "Share %"]);
+    allocation.forEach((a) =>
+      sections.push([
+        a.label,
+        Math.round(a.value),
+        netWorth > 0 ? Number(((a.value / netWorth) * 100).toFixed(2)) : 0,
+      ])
+    );
+    sections.push([]);
+    sections.push(["BENCHMARK COMPARISON"]);
+    sections.push(["Metric", "Yield/Rate %"]);
+    benchRows.forEach((b) => sections.push([b.label, Number(b.value.toFixed(2))]));
+    sections.push(["Real yield (after inflation) %", Number(realYield.toFixed(2))]);
+    sections.push([]);
+    sections.push(["LIQUIDITY CALENDAR"]);
+    sections.push(["Instrument", "Kind", "Value (KES)", "Maturity", "Days to free-up", "Status"]);
+    upcoming.forEach((u) =>
+      sections.push([
+        u.label,
+        u.kind,
+        Math.round(u.value),
+        u.maturityDate ? new Date(u.maturityDate).toISOString().split("T")[0] : "",
+        u.liquid ? "" : u.days,
+        u.liquid ? "Liquid / on-notice" : "Locked until maturity",
+      ])
+    );
+    const csv = toCsv(sections[0], sections.slice(1));
+    const stamp = new Date().toISOString().split("T")[0];
+    downloadCsv(csv, `portfolio-review-${slugify(portfolio?.name)}-${stamp}.csv`);
+  };
+
   return (
     <AppShell>
       <div className="space-y-6 print:space-y-4">
@@ -272,13 +315,22 @@ export default function PortfolioReview() {
               upcoming liquidity events, and a full change history.
             </p>
           </div>
-          <Button
-            variant="outline"
-            className="shrink-0 print:hidden bg-background"
-            onClick={() => window.print()}
-          >
-            <Printer className="w-4 h-4 mr-2" /> Print / Save as PDF
-          </Button>
+          <div className="flex items-center gap-2 shrink-0 print:hidden">
+            <Button
+              variant="outline"
+              className="bg-background"
+              onClick={handleExportCsv}
+            >
+              <Download className="w-4 h-4 mr-2" /> Download CSV
+            </Button>
+            <Button
+              variant="outline"
+              className="bg-background"
+              onClick={() => window.print()}
+            >
+              <Printer className="w-4 h-4 mr-2" /> Print / Save as PDF
+            </Button>
+          </div>
         </div>
 
         {/* Net worth */}

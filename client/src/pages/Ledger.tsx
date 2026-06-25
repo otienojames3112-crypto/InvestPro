@@ -7,10 +7,19 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
-import { BookOpen, RefreshCw, Search, Info, Download } from "lucide-react";
+import { BookOpen, RefreshCw, Search, Info, Download, ChevronDown } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { useState, useMemo } from "react";
 import { toast } from "sonner";
+import { toCsv, downloadCsv, slugify } from "@shared/csv";
 
 export default function Ledger() {
   const { portfolioId, portfolio } = usePortfolio();
@@ -24,74 +33,11 @@ export default function Ledger() {
   });
   const handleSync = () => { if (portfolioId) syncMutation.mutate({ portfolioId }); };
 
-  // CSV export of the full ledger (every month, all columns including the Bank
-  // In + Bank columns). Raw numeric values are exported (no "KES"/thousands
-  // formatting) so the file opens cleanly in spreadsheets.
-  const handleExportCsv = () => {
-    if (!projection || projection.length === 0) {
-      toast.error("Nothing to export yet");
-      return;
-    }
-    const headers = [
-      "Month",
-      "Basis",
-      "Date",
-      "Save",
-      "CBK In",
-      "Bank In",
-      "MMF->Securities",
-      "Main Action",
-      "MMF End",
-      "T-Bill",
-      "IFB",
-      "FXD",
-      "Bank",
-      "Total",
-      "Phase",
-    ];
-    const escape = (v: string | number) => {
-      const s = String(v ?? "");
-      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-    };
-    const rows = projection.map((r) => [
-      r.monthNumber,
-      r.isActual ? "Actual" : "Projected",
-      getMonthLabel(startDate, r.monthNumber),
-      r.contribution,
-      r.cbkCashIn,
-      r.bankCashIn,
-      r.mmfToDhow,
-      r.mainAction ?? "",
-      r.mmfEnd,
-      r.tbillEnd,
-      r.ifbEnd,
-      r.fxdEnd,
-      r.bankEnd,
-      r.totalEnd,
-      getPhaseName(r.phase),
-    ]);
-    const csv = [headers, ...rows].map((line) => line.map(escape).join(",")).join("\n");
-    // Prepend a UTF-8 BOM so Excel reads it as UTF-8.
-    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    const safeName = (portfolio?.name ? String(portfolio.name) : "portfolio")
-      .replace(/[^a-z0-9]+/gi, "-")
-      .replace(/^-+|-+$/g, "")
-      .toLowerCase();
-    const stamp = new Date().toISOString().split("T")[0];
-    a.href = url;
-    a.download = `ledger-${safeName}-${stamp}.csv`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-    toast.success(`Exported ${projection.length} months to CSV`);
-  };
-
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
   const pageSize = 24;
+
+  const startDate = portfolio?.startDate ? String(portfolio.startDate).split("T")[0] : "2026-07-01";
 
   const filtered = useMemo(() => {
     if (!projection) return [];
@@ -108,7 +54,78 @@ export default function Ledger() {
   const totalPages = Math.ceil(filtered.length / pageSize);
   const paged = filtered.slice((page - 1) * pageSize, page * pageSize);
 
-  const startDate = portfolio?.startDate ? String(portfolio.startDate).split("T")[0] : "2026-07-01";
+  // Column totals over the CURRENTLY FILTERED set (so they track the search box).
+  // Save and the two cash-in columns are flows, so they sum across months. The
+  // balance columns (MMF/T-Bill/.../Total) are point-in-time, so the meaningful
+  // "total" is the balance at the LAST month in view, not a sum of every month.
+  const totals = useMemo(() => {
+    const sum = (sel: (r: (typeof filtered)[number]) => number) =>
+      filtered.reduce((s, r) => s + (sel(r) || 0), 0);
+    const last = filtered.length > 0 ? filtered[filtered.length - 1] : undefined;
+    return {
+      contribution: sum((r) => r.contribution),
+      cbkCashIn: sum((r) => r.cbkCashIn),
+      bankCashIn: sum((r) => r.bankCashIn),
+      mmfToDhow: sum((r) => r.mmfToDhow),
+      endMmf: last?.mmfEnd ?? 0,
+      endTbill: last?.tbillEnd ?? 0,
+      endIfb: last?.ifbEnd ?? 0,
+      endFxd: last?.fxdEnd ?? 0,
+      endBank: last?.bankEnd ?? 0,
+      endTotal: last?.totalEnd ?? 0,
+      lastMonth: last?.monthNumber ?? 0,
+    };
+  }, [filtered]);
+
+  // CSV export. `scope` chooses the full projection or just the filtered rows.
+  // Raw numeric values (no "KES"/thousands formatting) so it opens cleanly in
+  // spreadsheets, and a trailing TOTAL line mirrors the on-screen footer.
+  const handleExportCsv = (scope: "full" | "filtered") => {
+    const rowsSrc = scope === "filtered" ? filtered : projection ?? [];
+    if (rowsSrc.length === 0) {
+      toast.error("Nothing to export yet");
+      return;
+    }
+    const headers = [
+      "Month", "Basis", "Date", "Save", "CBK In", "Bank In", "MMF->Securities",
+      "Main Action", "MMF End", "T-Bill", "IFB", "FXD", "Bank", "Total", "Phase",
+    ];
+    const rows = rowsSrc.map((r) => [
+      r.monthNumber,
+      r.isActual ? "Actual" : "Projected",
+      getMonthLabel(startDate, r.monthNumber),
+      r.contribution,
+      r.cbkCashIn,
+      r.bankCashIn,
+      r.mmfToDhow,
+      r.mainAction ?? "",
+      r.mmfEnd,
+      r.tbillEnd,
+      r.ifbEnd,
+      r.fxdEnd,
+      r.bankEnd,
+      r.totalEnd,
+      getPhaseName(r.phase),
+    ]);
+    const last = rowsSrc[rowsSrc.length - 1];
+    const flowSum = (sel: (r: (typeof rowsSrc)[number]) => number) =>
+      rowsSrc.reduce((s, r) => s + (sel(r) || 0), 0);
+    const totalRow = [
+      "TOTAL", "", `${rowsSrc.length} months`,
+      flowSum((r) => r.contribution),
+      flowSum((r) => r.cbkCashIn),
+      flowSum((r) => r.bankCashIn),
+      flowSum((r) => r.mmfToDhow),
+      `Ending balances at month ${last.monthNumber}`,
+      last.mmfEnd, last.tbillEnd, last.ifbEnd, last.fxdEnd, last.bankEnd, last.totalEnd,
+      "",
+    ];
+    const csv = toCsv(headers, [...rows, totalRow]);
+    const stamp = new Date().toISOString().split("T")[0];
+    const suffix = scope === "filtered" ? "-filtered" : "";
+    downloadCsv(csv, `ledger-${slugify(portfolio?.name)}${suffix}-${stamp}.csv`);
+    toast.success(`Exported ${rowsSrc.length} months to CSV`);
+  };
 
   // Where do recorded actuals end and the forward projection begin? The engine
   // tags every month it seeded from real holdings with isActual=true.
@@ -132,16 +149,35 @@ export default function Ledger() {
             </p>
           </div>
           <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleExportCsv}
-              disabled={!projection || projection.length === 0}
-              className="gap-2"
-            >
-              <Download className="w-3.5 h-3.5" />
-              Download CSV
-            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={!projection || projection.length === 0}
+                  className="gap-2"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  Download CSV
+                  <ChevronDown className="w-3.5 h-3.5" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-56">
+                <DropdownMenuLabel>Export scope</DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={() => handleExportCsv("full")}>
+                  Full projection ({projection?.length ?? 0} months)
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => handleExportCsv("filtered")}
+                  disabled={!search || filtered.length === 0}
+                >
+                  {search
+                    ? `Filtered view (${filtered.length} months)`
+                    : "Filtered view (no filter active)"}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
             <Button
               variant="outline"
               size="sm"
@@ -324,6 +360,29 @@ export default function Ledger() {
                         </tr>
                       ))}
                 </tbody>
+                {!isLoading && filtered.length > 0 && (
+                  <tfoot>
+                    <tr className="border-t-2 border-border bg-muted/40 font-semibold text-foreground">
+                      <td className="px-4 py-3" colSpan={3}>
+                        Totals ({filtered.length} mo{search ? ", filtered" : ""})
+                      </td>
+                      <td className="px-4 py-3 text-right kes-amount">{formatKES(totals.contribution)}</td>
+                      <td className="px-4 py-3 text-right kes-amount">{totals.cbkCashIn > 0 ? formatKES(totals.cbkCashIn) : "–"}</td>
+                      <td className="px-4 py-3 text-right kes-amount">{totals.bankCashIn > 0 ? formatKES(totals.bankCashIn) : "–"}</td>
+                      <td className="px-4 py-3 text-right kes-amount">{totals.mmfToDhow > 0 ? formatKES(totals.mmfToDhow) : "–"}</td>
+                      <td className="px-4 py-3 text-left text-xs text-muted-foreground font-normal">
+                        Ending balances · month {totals.lastMonth}
+                      </td>
+                      <td className="px-4 py-3 text-right kes-amount">{formatKES(totals.endMmf)}</td>
+                      <td className="px-4 py-3 text-right kes-amount">{totals.endTbill > 0 ? formatKES(totals.endTbill) : "–"}</td>
+                      <td className="px-4 py-3 text-right kes-amount">{totals.endIfb > 0 ? formatKES(totals.endIfb) : "–"}</td>
+                      <td className="px-4 py-3 text-right kes-amount">{totals.endFxd > 0 ? formatKES(totals.endFxd) : "–"}</td>
+                      <td className="px-4 py-3 text-right kes-amount">{totals.endBank > 0 ? formatKES(totals.endBank) : "–"}</td>
+                      <td className="px-4 py-3 text-right kes-amount font-bold">{formatKES(totals.endTotal)}</td>
+                      <td className="px-4 py-3" />
+                    </tr>
+                  </tfoot>
+                )}
               </table>
             </div>
             {/* Pagination */}

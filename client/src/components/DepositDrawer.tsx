@@ -269,6 +269,13 @@ export function DepositDrawer({ open, onClose }: DepositDrawerProps) {
     // switching instrument kind doesn't clobber the FXD/IFB tenor choice.
     zeroTenorYears: DEFAULT_ZERO_COUPON_TENOR_YEARS as number,
     floatingTenorYears: DEFAULT_FLOATING_TENOR_YEARS as number,
+    // Round 47: floating-rate margin (% over benchmark) + reset cadence, and an
+    // optional zero-coupon maturity-date override for non-standard tenors.
+    // floatingMargin/resetMonths are strings so the inputs can be cleared; the
+    // maturity override is "" when the derived date should be used.
+    floatingMargin: "",
+    floatingResetMonths: 6 as number,
+    zeroMaturityOverride: "",
   });
 
   const selectedDest = destinations.find((d) => d.value === form.destination);
@@ -304,9 +311,24 @@ export function DepositDrawer({ open, onClose }: DepositDrawerProps) {
             : undefined;
   // Year-tenor is meaningful for every kind except T-bills (which use day count).
   const govTenorYearsArg = isGovTbill ? null : govBondTenorYears;
-  const govMaturity = govSecurityType
+  // Round 47: a zero-coupon may carry an explicit maturity override; when present
+  // (and valid) it wins over the derived date.
+  const govDerivedMaturity = govSecurityType
     ? computeMaturityDate(govSecurityType, form.depositDate, govTenorYearsArg)
     : "";
+  const govMaturity =
+    isGovZero && govDetail.zeroMaturityOverride
+      ? govDetail.zeroMaturityOverride
+      : govDerivedMaturity;
+  // Round 47: floating-rate effective coupon = benchmark (91-day T-bill proxy)
+  // + a fixed margin. The benchmark comes from rate settings; the margin is
+  // user-entered. We send the resolved coupon plus the margin/reset cadence so
+  // the auto-created register row is complete.
+  const floatingBenchmark =
+    rateSettings == null ? 0 : Number(rateSettings.tbill91Rate) || 0;
+  const floatingMarginNum = parseFloat(govDetail.floatingMargin);
+  const floatingMarginValid = Number.isFinite(floatingMarginNum) && floatingMarginNum >= 0;
+  const floatingEffectiveCoupon = floatingBenchmark + (floatingMarginValid ? floatingMarginNum : 0);
   const govWht = govSecurityType
     ? whtRateForSecurity(govSecurityType, govTenorYearsArg)
     : 0;
@@ -348,6 +370,9 @@ export function DepositDrawer({ open, onClose }: DepositDrawerProps) {
       bondTenorYears: DEFAULT_FXD_TENOR_YEARS,
       zeroTenorYears: DEFAULT_ZERO_COUPON_TENOR_YEARS,
       floatingTenorYears: DEFAULT_FLOATING_TENOR_YEARS,
+      floatingMargin: "",
+      floatingResetMonths: 6,
+      zeroMaturityOverride: "",
     });
   }
 
@@ -431,6 +456,19 @@ export function DepositDrawer({ open, onClose }: DepositDrawerProps) {
       // gets the right maturity + WHT (covers tbill/ifb/fxd/zero/floating).
       ...(govSecurityType ? { govSecurityType } : {}),
       ...(sendBondTenor != null ? { bondTenorYears: sendBondTenor } : {}),
+      // Round 47 — floating-rate note: send the resolved effective coupon
+      // (benchmark + margin), the margin, and the reset cadence.
+      ...(isGovFloating
+        ? {
+            couponRate: Math.round(floatingEffectiveCoupon * 100) / 100,
+            marginRate: floatingMarginValid ? floatingMarginNum : 0,
+            resetMonths: govDetail.floatingResetMonths,
+          }
+        : {}),
+      // Round 47 — zero-coupon maturity override for non-standard tenors.
+      ...(isGovZero && govDetail.zeroMaturityOverride
+        ? { maturityDate: govDetail.zeroMaturityOverride }
+        : {}),
     });
   }
 
@@ -651,6 +689,24 @@ export function DepositDrawer({ open, onClose }: DepositDrawerProps) {
                         </Select>
                       </div>
                     )}
+                    {isGovZero && (
+                      <div className="space-y-1.5">
+                        <Label className="text-xs text-muted-foreground">
+                          Maturity date <span className="text-muted-foreground/60">(optional override)</span>
+                        </Label>
+                        <Input
+                          type="date"
+                          value={govDetail.zeroMaturityOverride}
+                          min={form.depositDate}
+                          onChange={(e) => setGovDetail((g) => ({ ...g, zeroMaturityOverride: e.target.value }))}
+                          className="bg-white/5 border-white/10 h-9 text-sm"
+                        />
+                        <p className="text-[11px] text-muted-foreground/70">
+                          Leave blank to use the {govDetail.zeroTenorYears}-year tenor above. Set a date for an
+                          off-cycle or partially-elapsed zero-coupon bond.
+                        </p>
+                      </div>
+                    )}
                     {isGovFloating && (
                       <div className="space-y-1.5">
                         <Label className="text-xs text-muted-foreground">Floating-rate tenor (years)</Label>
@@ -665,6 +721,51 @@ export function DepositDrawer({ open, onClose }: DepositDrawerProps) {
                             ))}
                           </SelectContent>
                         </Select>
+                      </div>
+                    )}
+                    {isGovFloating && (
+                      <div className="grid grid-cols-2 gap-2">
+                        <div className="space-y-1.5">
+                          <Label className="text-xs text-muted-foreground">Benchmark (% p.a.)</Label>
+                          <div className="h-9 px-3 flex items-center rounded-md bg-white/5 border border-white/10 text-sm text-muted-foreground">
+                            {floatingBenchmark > 0 ? `${floatingBenchmark.toFixed(2)}% · 91-day T-bill` : "—"}
+                          </div>
+                        </div>
+                        <div className="space-y-1.5">
+                          <Label className="text-xs text-muted-foreground">Margin (% over benchmark)</Label>
+                          <Input
+                            type="number"
+                            inputMode="decimal"
+                            step="0.05"
+                            min="0"
+                            placeholder="e.g. 1.00"
+                            value={govDetail.floatingMargin}
+                            onChange={(e) => setGovDetail((g) => ({ ...g, floatingMargin: e.target.value }))}
+                            className="bg-white/5 border-white/10 h-9 text-sm"
+                          />
+                        </div>
+                      </div>
+                    )}
+                    {isGovFloating && (
+                      <div className="space-y-1.5">
+                        <Label className="text-xs text-muted-foreground">Coupon resets every</Label>
+                        <Select
+                          value={String(govDetail.floatingResetMonths)}
+                          onValueChange={(v) => setGovDetail((g) => ({ ...g, floatingResetMonths: parseInt(v, 10) }))}
+                        >
+                          <SelectTrigger className="bg-white/5 border-white/10 h-9 text-sm"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            {[3, 6, 12].map((m) => (
+                              <SelectItem key={m} value={String(m)}>{m} months</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <div className="flex items-center justify-between text-xs pt-0.5">
+                          <span className="text-muted-foreground">Effective coupon now</span>
+                          <span className="font-semibold text-emerald-300">
+                            {floatingBenchmark > 0 ? `${floatingEffectiveCoupon.toFixed(2)}%` : "—"}
+                          </span>
+                        </div>
                       </div>
                     )}
                     <div className="flex items-center justify-between text-xs">
@@ -726,9 +827,9 @@ export function DepositDrawer({ open, onClose }: DepositDrawerProps) {
                     {isGovFloating && (
                       <p className="text-[11px] text-muted-foreground/80 border-t border-white/10 pt-1.5">
                         A <span className="text-foreground">floating-rate</span> note pays a coupon that resets each
-                        period against a benchmark (e.g. the 91-day T-bill) plus a fixed margin. Enter the amount
-                        invested above; projections use the portfolio's floating-rate assumption, and 15% WHT applies
-                        to each coupon. Fine-tune the benchmark + margin on the <span className="text-foreground">Securities register</span>.
+                        period against a benchmark (the 91-day T-bill) plus the fixed margin you set above. The
+                        effective coupon is benchmark + margin; 15% WHT applies to each coupon. You can still
+                        adjust these later on the <span className="text-foreground">Securities register</span>.
                       </p>
                     )}
                   </div>

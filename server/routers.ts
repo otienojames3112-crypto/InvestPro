@@ -1577,6 +1577,14 @@ export const appRouter = router({
         govSecurityType: z.enum(["tbill_91", "tbill_182", "tbill_364", "ifb", "fxd", "zero_coupon", "floating_rate"]).optional(),
         bondTenorYears: z.number().min(0.1).max(30).optional(),
         couponRate: z.number().min(0).max(50).optional(),
+        // Round 47 — floating-rate notes can capture their benchmark + margin and
+        // reset cadence directly from the deposit drawer (previously register-only).
+        marginRate: z.number().min(0).max(20).optional(),
+        resetMonths: z.number().int().min(1).max(24).optional(),
+        // Round 47 — explicit maturity-date override for non-standard tenors
+        // (e.g. an off-cycle zero-coupon). When omitted, maturity is derived from
+        // type + issue + tenor as before.
+        maturityDate: z.string().optional(),
         amount: z.number().positive(),
         depositDate: z.string(),
         notes: z.string().optional(),
@@ -1624,10 +1632,17 @@ export const appRouter = router({
           const isTbill = securityType.startsWith("tbill");
           const tenorYears = isTbill ? null : (input.bondTenorYears ?? null);
           const issue = new Date(input.depositDate + "T12:00:00Z");
-          // Maturity is derived deterministically from type + issue + tenor.
-          const maturityStr = computeMaturityDate(securityType, input.depositDate, tenorYears);
+          // Maturity: honour an explicit override (Round 47) for non-standard
+          // tenors; otherwise derive deterministically from type + issue + tenor.
+          const maturityStr =
+            input.maturityDate && !isTbill
+              ? input.maturityDate
+              : computeMaturityDate(securityType, input.depositDate, tenorYears);
           const maturity = new Date(maturityStr + "T12:00:00Z");
-          // Rate: caller override, else the type's default from Rate Settings.
+          const isFloatingDep = securityType === "floating_rate";
+          // Rate: caller override, else the type's default from Rate Settings. For
+          // a floating-rate note the effective coupon is benchmark + margin; the
+          // caller passes the resolved couponRate, and we also persist the margin.
           let couponRate =
             input.couponRate ?? defaultRateForSecurity(securityType, rates);
           // Round 45 — mirror the Securities Register discount mechanics so a
@@ -1670,6 +1685,10 @@ export const appRouter = router({
                 : null,
             discountRate: discountRateDep != null ? String(discountRateDep) : null,
             couponRate: String(couponRate),
+            // Round 47 — persist the floating-rate margin + reset cadence captured
+            // in the deposit drawer so the register row is complete on creation.
+            marginRate: isFloatingDep && input.marginRate != null ? String(input.marginRate) : null,
+            resetMonths: isFloatingDep ? (input.resetMonths ?? null) : null,
             isTaxExempt: securityType === "ifb",
             notes: `Auto-created from deposit on ${input.depositDate}`,
           });

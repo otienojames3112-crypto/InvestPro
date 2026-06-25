@@ -1093,6 +1093,77 @@ export default function Dashboard() {
                 </div>
               );
             })()}
+
+            {/* ── Round 47: holdings split by precise instrument type ──────── */}
+            {(() => {
+              // Active (non-matured) register holdings grouped by precise type,
+              // computed directly from the securities list so zero-coupon and
+              // floating-rate paper show separately from T-bills / IFB / FXD.
+              const rows = (securities as { securityType?: string; faceValue?: unknown; isMatured?: boolean }[]) ?? [];
+              const groups: Record<string, number> = {};
+              for (const s of rows) {
+                if (s?.isMatured) continue;
+                const face = parseFloat(String(s?.faceValue ?? "0")) || 0;
+                if (face <= 0) continue;
+                const t = String(s?.securityType ?? "");
+                const key = t.startsWith("tbill")
+                  ? "tbill"
+                  : t === "zero_coupon"
+                    ? "zero_coupon"
+                    : t === "floating_rate"
+                      ? "floating_rate"
+                      : t === "ifb"
+                        ? "ifb"
+                        : t === "fxd"
+                          ? "fxd"
+                          : "other";
+                groups[key] = (groups[key] ?? 0) + face;
+              }
+              const META: Record<string, { label: string; color: string }> = {
+                tbill: { label: "T-Bills", color: "#60a5fa" },
+                zero_coupon: { label: "Zero-Coupon Bonds", color: "#2dd4bf" },
+                ifb: { label: "IFB Bonds", color: "#a78bfa" },
+                fxd: { label: "FXD Bonds", color: "#fb923c" },
+                floating_rate: { label: "Floating-Rate Notes", color: "#f472b6" },
+                other: { label: "Other securities", color: "#94a3b8" },
+              };
+              const order = ["tbill", "zero_coupon", "ifb", "fxd", "floating_rate", "other"];
+              const segs = order
+                .filter((k) => (groups[k] ?? 0) > 0)
+                .map((k) => ({ key: k, label: META[k].label, color: META[k].color, amt: groups[k] }));
+              const totalFace = segs.reduce((sum, s) => sum + s.amt, 0);
+              // Only worth showing once the user holds at least two instrument
+              // kinds, or any of the newer (zero/floating) types.
+              const hasExotic = (groups.zero_coupon ?? 0) > 0 || (groups.floating_rate ?? 0) > 0;
+              if (totalFace <= 0 || (segs.length < 2 && !hasExotic)) return null;
+              return (
+                <div className="mt-4 rounded-xl border border-white/10 bg-white/[0.02] p-4 space-y-3">
+                  <div>
+                    <p className="text-xs font-medium uppercase tracking-widest text-muted-foreground">Holdings by Instrument</p>
+                    <p className="text-2xl font-serif font-bold text-foreground kes-amount">{formatKES(totalFace)}</p>
+                    <p className="text-xs text-muted-foreground">Face value of your active CBK securities, split by precise instrument type.</p>
+                  </div>
+                  <div className="w-full h-2.5 rounded-full overflow-hidden flex bg-white/5">
+                    {segs.map((s) => (
+                      <div key={s.key} style={{ width: `${(s.amt / totalFace) * 100}%`, backgroundColor: s.color }} title={`${s.label}: ${formatKES(s.amt)}`} />
+                    ))}
+                  </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-1.5">
+                    {segs.map((s) => (
+                      <div key={s.key} className="flex items-center gap-2 text-xs">
+                        <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ backgroundColor: s.color }} />
+                        <span className="text-muted-foreground truncate">{s.label}</span>
+                        <span className="ml-auto font-semibold text-foreground kes-amount shrink-0">{formatKESCompact(s.amt)}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="text-[11px] text-muted-foreground/70">
+                    Zero-coupon and floating-rate paper are shown on their own here, even though they sit inside the
+                    T-Bill / FXD buckets elsewhere for tax and reconciliation purposes.
+                  </p>
+                </div>
+              );
+            })()}
           </CardContent>
         </Card>
 

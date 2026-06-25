@@ -604,3 +604,11 @@
 - [x] R46.2 Reuse the existing discount-price preview for zero_coupon (discount instrument); show the right preview/fields for floating_rate (par/coupon instrument).
 - [x] R46.3 Server: deposit creation auto-creates the correct security (faceValue/purchasePrice/discount for zero_coupon; par + floating coupon for floating_rate), consistent with the CBK Securities Register.
 - [x] R46.4 Tests for both new types via the deposit path; full suite green, tsc clean, UI verified, checkpoint, deliver.
+
+## Round 47 (floating benchmark+margin, zero maturity override, dashboard breakdown)
+
+- [x] R47.1 Deposit drawer: capture floating-rate benchmark + margin directly (sent to server, stored on the auto-created register security).
+- [x] R47.2 Deposit drawer: add a maturity-date override for non-standard zero-coupon tenors (overrides the tenor-derived maturity).
+- [x] R47.3 Server deposits.add: accept marginRate + maturityDate override and persist them on the auto-created security.
+- [x] R47.4 Dashboard: add a per-instrument breakdown card so zero-coupon and floating-rate holdings show separately from T-bills/FXD.
+- [x] R47.5 Tests for new fields + breakdown; full suite green, tsc clean, UI verified, checkpoint, deliver.

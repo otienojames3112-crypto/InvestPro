@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { AppShell } from "@/components/AppShell";
 import { trpc } from "@/lib/trpc";
 import { usePortfolio } from "@/contexts/PortfolioContext";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -464,7 +465,8 @@ export default function OtherAssets() {
   })).filter((c) => c.total > 0);
 
   return (
-    <div className="p-6 space-y-6 max-w-4xl">
+    <AppShell>
+    <div className="p-6 lg:p-8 space-y-6 max-w-4xl">
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Other Assets</h1>
@@ -596,5 +598,6 @@ export default function OtherAssets() {
         </DialogContent>
       </Dialog>
     </div>
+    </AppShell>
   );
 }

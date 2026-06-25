@@ -23,6 +23,7 @@ import {
 import { Receipt, Percent, ShieldCheck, TrendingDown, Info, Download, Printer } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { toCsv, downloadCsv, slugify } from "@shared/csv";
+import { GlossaryTerm } from "@/components/GlossaryTerm";
 
 function kes(n: number, dp = 0): string {
   return n.toLocaleString("en-KE", {
@@ -250,10 +251,11 @@ export default function TaxSummary() {
               </h1>
             </div>
             <p className="text-muted-foreground text-sm max-w-3xl">
-              An annualised, whole-portfolio view of the withholding tax (WHT)
+              An annualised, whole-portfolio view of the{" "}
+              <GlossaryTerm id="wht">withholding tax (WHT)</GlossaryTerm>{" "}
               applied to each income source at current balances and rates, and a
-              reconciliation of your <strong>gross</strong> quoted yield against
-              the <strong>net-of-tax</strong> return you actually keep.
+              reconciliation of your <GlossaryTerm id="gross-yield"><strong>gross</strong> quoted yield</GlossaryTerm> against
+              the <GlossaryTerm id="net-yield"><strong>net-of-tax</strong> return</GlossaryTerm> you actually keep.
             </p>
           </div>
           <div className="flex items-center gap-2 shrink-0 print:hidden">
@@ -381,7 +383,7 @@ export default function TaxSummary() {
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div className="rounded-lg bg-muted/30 p-4">
                 <p className="text-xs text-muted-foreground">
-                  Blended Gross Yield
+                  <GlossaryTerm id="blended-yield">Blended</GlossaryTerm>{" "}<GlossaryTerm id="gross-yield">Gross Yield</GlossaryTerm>
                 </p>
                 <p className="text-2xl font-bold">
                   {grossYieldBlended.toFixed(2)}%
@@ -392,7 +394,7 @@ export default function TaxSummary() {
               </div>
               <div className="rounded-lg bg-muted/30 p-4">
                 <p className="text-xs text-muted-foreground">
-                  Tax Drag
+                  <GlossaryTerm id="tax-drag">Tax Drag</GlossaryTerm>
                 </p>
                 <p className="text-2xl font-bold text-red-500">
                   −{(grossYieldBlended - netYieldBlended).toFixed(2)}%
@@ -403,7 +405,7 @@ export default function TaxSummary() {
               </div>
               <div className="rounded-lg bg-primary/10 p-4">
                 <p className="text-xs text-muted-foreground">
-                  Blended Net Yield
+                  <GlossaryTerm id="blended-yield">Blended</GlossaryTerm>{" "}<GlossaryTerm id="net-yield">Net Yield</GlossaryTerm>
                 </p>
                 <p className="text-2xl font-bold text-primary">
                   {netYieldBlended.toFixed(2)}%

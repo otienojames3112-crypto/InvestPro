@@ -47,6 +47,7 @@ import {
   Clock,
 } from "lucide-react";
 import { Link } from "wouter";
+import { GlossaryTerm } from "@/components/GlossaryTerm";
 import { useDepositDrawer } from "@/contexts/DepositDrawerContext";
 import { useSelectedFund } from "@/hooks/useSelectedFund";
 import { CreatePortfolioDialog } from "@/components/PortfolioSelector";
@@ -374,9 +375,22 @@ export default function Dashboard() {
               {horizonYearsLabel}-year journey to {formatKES(targetAmount)} · {strategyDescriptor}
             </p>
           </div>
-          <Badge variant="outline" className={`text-xs px-3 py-1 border ${getPhaseColorClass(currentPhase)}`}>
-            {getPhaseName(currentPhase)} Phase
-          </Badge>
+          <div className="flex items-center gap-3 shrink-0">
+            <Button
+              onClick={openDrawer}
+              size="lg"
+              className="font-semibold shadow-lg shadow-primary/20 bg-primary text-primary-foreground hover:bg-primary/90 active:scale-[0.97] transition-transform"
+            >
+              <ArrowDownCircle className="w-4 h-4 mr-2" />
+              Record a Deposit
+              <span className="ml-2 inline-flex items-center rounded-full bg-primary-foreground/20 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide">
+                Live
+              </span>
+            </Button>
+            <Badge variant="outline" className={`text-xs px-3 py-1 border ${getPhaseColorClass(currentPhase)}`}>
+              {getPhaseName(currentPhase)} Phase
+            </Badge>
+          </div>
         </div>
 
         {/* ── Per-issuer concentration warning (Round 31) ──────────────── */}
@@ -993,10 +1007,11 @@ export default function Dashboard() {
                     {formatKES(actualsSummary?.taxLiability ?? 0)}
                   </p>
                   <p className="text-xs text-muted-foreground mt-2">
-                    15% WHT on MMF, T-Bill &amp; FXD income. Deducted at source — you never pay this separately.
+                    15% <GlossaryTerm id="wht">WHT</GlossaryTerm> on MMF, T-Bill &amp; FXD income, plus the correct{" "}
+                    <GlossaryTerm id="tiered-wht">tiered WHT</GlossaryTerm> on Treasury bonds. Deducted at source — you never pay this separately.
                   </p>
                   <p className="text-xs text-emerald-400 mt-1">
-                    IFB bonds: fully tax-exempt
+                    <GlossaryTerm id="ifb">IFB</GlossaryTerm> bonds: fully tax-exempt
                   </p>
                 </div>
 
@@ -1009,7 +1024,12 @@ export default function Dashboard() {
                     {formatKES(actualsSummary?.estInterestEarned ?? 0)}
                   </p>
                   <p className="text-xs text-muted-foreground mt-2">
-                    Net of WHT, accrued from each deposit&rsquo;s date to today at the current fund yield (geometric daily compounding).
+                    <GlossaryTerm id="net-yield">Net of WHT</GlossaryTerm>,{" "}
+                    <GlossaryTerm id="accrued-interest">accrued</GlossaryTerm> to today across your MMF (primary + secondary), bank deposits and government securities (T-bill / IFB / FXD coupons). MMF &amp; bank use{" "}
+                    <GlossaryTerm id="daily-compounding">geometric daily compounding</GlossaryTerm>; gov paper uses pro-rata coupon.
+                  </p>
+                  <p className="text-[11px] text-muted-foreground/70 mt-1">
+                    Other assets appreciate in value (shown in Net Worth) and are not counted as interest.
                   </p>
                   <Link href="/mmf-accrual">
                     <span className="text-xs text-sky-400 hover:underline cursor-pointer mt-1 inline-flex items-center gap-1">

@@ -27,7 +27,7 @@ import {
   type InsertBankInstrumentHolding,
 } from "../drizzle/schema";
 import { ENV } from "./_core/env";
-import { computeActualsTotals, estInterestToDate } from "../shared/actuals";
+import { computeActualsTotals, estInterestToDate, govAccruedInterestTotal } from "../shared/actuals";
 
 let _db: ReturnType<typeof drizzle> | null = null;
 
@@ -564,6 +564,24 @@ export async function getActualsSummary(
     const startISO = String((b as { startDate?: unknown; createdAt?: unknown }).startDate ?? (b as { createdAt?: unknown }).createdAt ?? todayISO).slice(0, 10);
     estInterestEarned += estInterestToDate(principal, rate, wht, startISO, todayISO);
   }
+  // Government securities (T-bill / IFB / FXD): pro-rata coupon accrued from issue
+  // date to today (capped at maturity), net of tiered WHT. This makes the
+  // Dashboard estimate cover ALL income-earning assets and tie to Daily Accrual.
+  estInterestEarned += govAccruedInterestTotal(
+    securityRows.map((s) => ({
+      securityType: String(s.securityType) as "tbill_91" | "tbill_182" | "tbill_364" | "ifb" | "fxd",
+      faceValue: parseFloat(String(s.faceValue ?? "0")) || 0,
+      couponRate: parseFloat(String(s.couponRate ?? "0")) || 0,
+      issueDate: (s as { issueDate?: unknown }).issueDate as string | Date | null | undefined,
+      maturityDate: (s as { maturityDate?: unknown }).maturityDate as string | Date | null | undefined,
+      isMatured: !!s.isMatured,
+      isTaxExempt: !!s.isTaxExempt,
+      tenorYears: (s as { tenorYears?: string | null }).tenorYears != null
+        ? parseFloat(String((s as { tenorYears?: string | null }).tenorYears))
+        : null,
+    })),
+    todayISO,
+  );
   estInterestEarned = Math.round(estInterestEarned * 100) / 100;
 
   return {

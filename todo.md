@@ -552,4 +552,12 @@
 - [x] R40.6 Reconciliation: add accrued-interest + WHT checks for (a) gov securities and (b) bank instruments across daily-accrual/Tax Summary/engine; red-testable
 - [x] R40.7 Dashboard Est. Annual Tax + Est. Interest Earned read from shared Tax Summary + Daily Accrual engines; cross-page assertion Dashboard==Accrual==TaxSummary
 - [x] R40.8 Glossary additions (rediscounting/secondary sale, coupon class/tenor, FXD vs IFB, tiered WHT, accrued interest, indicative vs negotiated rate, maturity redeployment)
-- [ ] R40.9 Full suite green, UI verified, checkpoint, deliver
+- [x] R40.9 Full suite green, UI verified, checkpoint, deliver
+
+## Round 41 (UI + reconciliation + bank accrual breakdown)
+- [x] R41.1 Make "Live Deposit Tracker" button prominent/obvious on the Dashboard
+- [x] R41.2 Add interactive hover tooltips for the new glossary terms across Dashboard + Tax Summary pages
+- [x] R41.3 Make MMF Funds, Other Assets, and Withdrawals open as side panels (deep-link) like Dashboard/Month Ledger/Contributions
+- [x] R41.4 Verify Est. Interest Earned formula estimates interest across ALL assets (MMF, gov securities, bank instruments, other assets); same for Est. Annual Tax; reconcile both with Daily Accrual + Tax Summary (red-testable)
+- [x] R41.5 Add Accrual Inputs breakdown (7/30/90-day etc.) for Bank Instruments and each individual bank instrument, mirroring the MMF side of the Daily Income & Accrual Ledger
+- [ ] R41.6 Full suite green, tsc clean, UI verified, checkpoint, generate full source ZIP, deliver

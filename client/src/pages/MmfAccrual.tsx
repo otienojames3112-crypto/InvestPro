@@ -694,6 +694,8 @@ export default function MmfAccrual() {
             emptyHint="No live government securities in this portfolio. Add T-Bills, IFB, or FXD on the CBK Securities page."
             baseLabel="Face value"
             scheduleNote="Government paper accretes on a STRAIGHT LINE — each day earns an identical slice (no intra-period compounding). T-bill discount accretes to par; coupons accrue evenly."
+            horizon={horizon}
+            setHorizon={setHorizon}
           />
         )}
 
@@ -707,6 +709,10 @@ export default function MmfAccrual() {
             emptyHint="No active bank instruments in this portfolio. Add fixed/call/target deposits on the Record Deposits → Bank page."
             baseLabel="Principal"
             scheduleNote="Bank deposits pay SIMPLE daily interest on a constant principal (no intra-period compounding in this tracker)."
+            horizon={horizon}
+            setHorizon={setHorizon}
+            groupByBank
+            groupLabel="Per-bank"
           />
         )}
       </div>
@@ -724,6 +730,10 @@ function IncomeBreakdownSection({
   emptyHint,
   baseLabel,
   scheduleNote,
+  horizon,
+  setHorizon,
+  groupByBank = false,
+  groupLabel = "Per-bank",
 }: {
   title: string;
   blurb: string;
@@ -733,8 +743,39 @@ function IncomeBreakdownSection({
   emptyHint: string;
   baseLabel: string;
   scheduleNote: string;
+  horizon: string;
+  setHorizon: (v: string) => void;
+  groupByBank?: boolean;
+  groupLabel?: string;
 }) {
   const empty = summary.rows.length === 0;
+
+  // R41.5: group holdings by their issuer/bank for a per-bank subtotal table.
+  const groups = (() => {
+    if (!groupByBank) return [] as { name: string; gross: number; wht: number; net: number; grossAnnual: number; count: number }[];
+    const map = new Map<string, { name: string; gross: number; wht: number; net: number; grossAnnual: number; count: number }>();
+    for (const r of summary.rows) {
+      // The row label is the bank name (or custom label); group on the kind-agnostic issuer.
+      const key = r.label;
+      const g = map.get(key) ?? { name: key, gross: 0, wht: 0, net: 0, grossAnnual: 0, count: 0 };
+      g.gross += r.grossHorizon;
+      g.wht += r.whtHorizon;
+      g.net += r.netHorizon;
+      g.grossAnnual += r.grossAnnual;
+      g.count += 1;
+      map.set(key, g);
+    }
+    return Array.from(map.values()).sort((a, b) => b.net - a.net);
+  })();
+
+  const HORIZONS: { value: string; label: string }[] = [
+    { value: "7", label: "7 days" },
+    { value: "30", label: "30 days" },
+    { value: "90", label: "90 days" },
+    { value: "180", label: "180 days" },
+    { value: "365", label: "365 days" },
+  ];
+
   return (
     <div className="space-y-6">
       <Card>
@@ -742,6 +783,49 @@ function IncomeBreakdownSection({
           <CardTitle className="text-base">{title}</CardTitle>
           <CardDescription>{blurb}</CardDescription>
         </CardHeader>
+      </Card>
+
+      {/* R41.5: Accrual Inputs — horizon selector mirroring the MMF tab so the
+          7/30/90/180/365-day interest breakdown is available here too. */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Accrual Inputs</CardTitle>
+          <CardDescription>
+            Choose a projection horizon to see interest accrued over 7, 30, 90, 180 or 365 days. Figures use each holding&rsquo;s own {baseLabel.toLowerCase()}, rate and WHT &mdash; deterministic, no forecasts.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="space-y-1.5">
+            <Label htmlFor="breakdown-horizon">Days to Project</Label>
+            <Select value={horizon} onValueChange={setHorizon}>
+              <SelectTrigger id="breakdown-horizon">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="7">7 days (1 week)</SelectItem>
+                <SelectItem value="30">30 days (1 month)</SelectItem>
+                <SelectItem value="90">90 days (1 quarter)</SelectItem>
+                <SelectItem value="180">180 days (6 months)</SelectItem>
+                <SelectItem value="365">365 days (1 year)</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1.5">
+            <Label>Quick pick</Label>
+            <div className="flex flex-wrap gap-1.5">
+              {HORIZONS.map((h) => (
+                <button
+                  key={h.value}
+                  type="button"
+                  onClick={() => setHorizon(h.value)}
+                  className={`px-2.5 py-1 rounded-md text-xs border transition-colors ${horizon === h.value ? "bg-primary text-primary-foreground border-primary" : "bg-background border-input hover:bg-muted"}`}
+                >
+                  {h.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </CardContent>
       </Card>
 
       {empty ? (
@@ -756,6 +840,43 @@ function IncomeBreakdownSection({
             <Card><CardContent className="py-4"><div className="flex items-center gap-2 text-muted-foreground text-xs mb-1"><TrendingUp className="w-3.5 h-3.5" /> Net ({days}d)</div><p className="text-xl font-bold text-primary">{kes(summary.netHorizon)}</p></CardContent></Card>
             <Card><CardContent className="py-4"><div className="flex items-center gap-2 text-muted-foreground text-xs mb-1"><Percent className="w-3.5 h-3.5" /> Net / yr</div><p className="text-xl font-bold">{kes(summary.netAnnual)}</p></CardContent></Card>
           </div>
+
+          {groupByBank && groups.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">{groupLabel} subtotal ({days}-day horizon)</CardTitle>
+                <CardDescription>Interest grouped by bank across all that bank&rsquo;s instruments over the chosen horizon.</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="rounded-md border overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Bank</TableHead>
+                        <TableHead className="text-right">Instruments</TableHead>
+                        <TableHead className="text-right">Gross ({days}d)</TableHead>
+                        <TableHead className="text-right">WHT</TableHead>
+                        <TableHead className="text-right">Net ({days}d)</TableHead>
+                        <TableHead className="text-right">Gross / yr</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {groups.map((g) => (
+                        <TableRow key={g.name}>
+                          <TableCell className="font-medium">{g.name}</TableCell>
+                          <TableCell className="text-right tabular-nums">{g.count}</TableCell>
+                          <TableCell className="text-right tabular-nums">{kes(g.gross)}</TableCell>
+                          <TableCell className="text-right tabular-nums text-red-500">{g.wht > 0 ? `−${kes(g.wht)}` : "—"}</TableCell>
+                          <TableCell className="text-right tabular-nums text-primary">{kes(g.net)}</TableCell>
+                          <TableCell className="text-right tabular-nums">{kes(g.grossAnnual)}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              </CardContent>
+            </Card>
+          )}
 
           <Card>
             <CardHeader>

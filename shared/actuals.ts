@@ -767,3 +767,92 @@ export function estimateAnnualTaxLines(input: AnnualTaxInput): AnnualTaxResult {
   const totalNet = r2(lines.reduce((s, l) => s + l.net, 0));
   return { lines, taxLiability, totalGross, totalNet };
 }
+
+
+// ─── R41.4: Government-securities accrued interest to date ─────────────────────
+// The Dashboard's "Est. Interest Earned" must cover EVERY income-earning asset,
+// including government securities (T-bill / IFB / FXD). Government paper accrues a
+// pro-rata coupon (faceValue × couponRate × daysHeld/365), net of the correct
+// tiered WHT (IFB exempt; T-bills 15%; FXD 15% under 10y, 10% at/over 10y). This
+// mirrors `buildSecurityIncome` in shared/incomeBreakdown.ts so the Dashboard ties
+// out to the Daily Accrual government schedule rather than inventing a new model.
+
+export interface GovSecurityAccrualInput {
+  securityType: "tbill_91" | "tbill_182" | "tbill_364" | "ifb" | "fxd";
+  faceValue: number;
+  couponRate: number; // % p.a.
+  issueDate?: string | Date | null;
+  maturityDate?: string | Date | null;
+  isMatured?: boolean;
+  isTaxExempt?: boolean;
+  tenorYears?: number | null;
+}
+
+/** Tiered WHT % for a government security (IFB exempt, T-bills 15%, FXD tenor-tiered). */
+export function govWhtPct(
+  securityType: GovSecurityAccrualInput["securityType"],
+  tenorYears?: number | null,
+  isTaxExempt?: boolean,
+): number {
+  if (isTaxExempt || securityType === "ifb") return 0;
+  if (securityType.startsWith("tbill")) return 15;
+  // FXD — tenor-tiered: 10% for tenor >= 10y, else 15%.
+  const y = typeof tenorYears === "number" && tenorYears > 0 ? tenorYears : 10;
+  return y >= 10 ? 10 : 15;
+}
+
+function isoDay(d: string | Date | null | undefined): string | null {
+  if (!d) return null;
+  const s = d instanceof Date ? d.toISOString() : String(d);
+  return s.slice(0, 10);
+}
+
+/**
+ * Net accrued coupon interest on a single government security from its issue date
+ * to today (capped at maturity). Pro-rata simple coupon, net of tiered WHT.
+ */
+export function govAccruedInterestToDate(
+  sec: GovSecurityAccrualInput,
+  todayISO: string,
+  dayCount = 365,
+): number {
+  if (sec.isMatured) {
+    // Matured securities have already paid out; their coupon income is realised
+    // up to maturity. Accrue the full held window issue→maturity.
+  }
+  const face = Math.max(0, sec.faceValue || 0);
+  const rate = Math.max(0, sec.couponRate || 0);
+  if (!(face > 0) || !(rate > 0)) return 0;
+
+  const issue = isoDay(sec.issueDate) ?? todayISO;
+  const maturity = isoDay(sec.maturityDate);
+  // End date = min(today, maturity) so we never accrue past maturity.
+  let endISO = todayISO;
+  if (maturity && maturity < todayISO) endISO = maturity;
+
+  const from = new Date(`${issue}T12:00:00.000Z`).getTime();
+  const to = new Date(`${endISO}T12:00:00.000Z`).getTime();
+  if (!Number.isFinite(from) || !Number.isFinite(to)) return 0;
+  const days = Math.floor((to - from) / 86_400_000);
+  if (days <= 0) return 0;
+
+  const grossAnnual = face * (rate / 100);
+  const gross = (grossAnnual * days) / dayCount;
+  const wht = govWhtPct(sec.securityType, sec.tenorYears, sec.isTaxExempt);
+  const net = gross * (1 - wht / 100);
+  return Math.max(0, Math.round(net * 100) / 100);
+}
+
+/**
+ * Sum of net accrued government-securities interest to date across a portfolio.
+ * Used by getActualsSummary so the Dashboard estimate includes gov paper.
+ */
+export function govAccruedInterestTotal(
+  securities: GovSecurityAccrualInput[],
+  todayISO: string,
+  dayCount = 365,
+): number {
+  let total = 0;
+  for (const s of securities) total += govAccruedInterestToDate(s, todayISO, dayCount);
+  return Math.round(total * 100) / 100;
+}

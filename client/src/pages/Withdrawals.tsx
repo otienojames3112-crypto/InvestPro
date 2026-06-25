@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { AppShell } from "@/components/AppShell";
 import { usePortfolio } from "@/contexts/PortfolioContext";
 import { useSelectedFund } from "@/hooks/useSelectedFund";
 import { trpc } from "@/lib/trpc";
@@ -274,7 +275,8 @@ export default function Withdrawals() {
   const netWorth = summary?.totalContributed ?? 0;
 
   return (
-    <div className="container max-w-5xl py-8 space-y-6">
+    <AppShell>
+    <div className="p-6 lg:p-8 max-w-5xl space-y-6">
       <div>
         <h1 className="text-2xl font-bold text-foreground" style={{ fontFamily: "'Playfair Display', serif" }}>
           Withdrawals
@@ -508,5 +510,6 @@ export default function Withdrawals() {
         </AlertDialogContent>
       </AlertDialog>
     </div>
+    </AppShell>
   );
 }

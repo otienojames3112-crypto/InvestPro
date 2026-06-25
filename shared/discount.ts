@@ -131,3 +131,79 @@ export function discountPriceForSecurity(args: {
   }
   return tbillPrice(args.faceValue, args.ratePct, args.tenorDays ?? 0);
 }
+
+/**
+ * Round 48: CURRENT (mark-to-model) value of a single security as of `today`.
+ *
+ * This is the single source of truth for the Dashboard "Current Value" toggle on
+ * the Holdings-by-Instrument card. It deliberately mirrors how the projection
+ * engine treats each instrument so the two never drift:
+ *
+ *   - DISCOUNT instruments (T-bills, zero-coupon bonds): straight-line ACCRETION
+ *     from purchasePrice toward faceValue, using elapsed/tenor between issue and
+ *     maturity. Never above face. (See `accretedValue`.) If we have no
+ *     purchasePrice on the lot we treat it as par and return face.
+ *
+ *   - COUPON bonds (FXD / IFB / floating-rate): bought at par and redeemed at
+ *     par, so the clean price stays at face. We add the PRO-RATA accrued coupon
+ *     since issue (couponRate% × face × elapsedDays/365) as the "dirty" value —
+ *     this is the cash you'd be owed if you sold today. This is an approximation
+ *     (no last-coupon reset, no benchmark re-fixing for floaters) but is
+ *     deterministic and ties out with the day-by-day accrual page.
+ *
+ *   - MATURED lots: always worth their face value.
+ *
+ * All inputs are plain numbers / ISO-ish date strings (Drizzle `date` columns
+ * arrive as `YYYY-MM-DD` strings or `Date`s); everything is framework-free.
+ */
+export interface CurrentValueSecurity {
+  securityType: string;
+  faceValue: number;
+  purchasePrice?: number | null;
+  couponRate?: number | null;
+  issueDate: string | Date;
+  maturityDate: string | Date;
+  isMatured?: boolean | null;
+}
+
+/** Discount instrument types that accrete price → face. */
+function isDiscountType(t: string): boolean {
+  return t.startsWith("tbill") || t === "zero_coupon";
+}
+
+function toTime(d: string | Date): number {
+  return d instanceof Date ? d.getTime() : new Date(d).getTime();
+}
+
+export function currentSecurityValue(s: CurrentValueSecurity, today: Date = new Date()): number {
+  const face = Number(s.faceValue) || 0;
+  if (face <= 0) return 0;
+
+  // Matured lots redeem at face.
+  if (s.isMatured) return face;
+
+  const issue = toTime(s.issueDate);
+  const maturity = toTime(s.maturityDate);
+  const now = today.getTime();
+
+  // Past maturity (even if not flagged matured yet) → face.
+  if (Number.isFinite(maturity) && now >= maturity) return face;
+
+  // Fraction of the lot's life elapsed, clamped to [0, 1].
+  const span = maturity - issue;
+  const fraction = span > 0 ? (now - issue) / span : 0;
+  const f = Math.min(1, Math.max(0, fraction));
+
+  if (isDiscountType(s.securityType)) {
+    const price = Number(s.purchasePrice);
+    // No stored price → treat as par (face) so we never under/over-state.
+    if (!Number.isFinite(price) || price <= 0) return face;
+    return accretedValue(face, price, f);
+  }
+
+  // Coupon bonds (fxd / ifb / floating_rate): par + pro-rata accrued coupon.
+  const couponPct = Number(s.couponRate) || 0;
+  const elapsedDays = span > 0 ? (f * span) / (1000 * 60 * 60 * 24) : 0;
+  const accruedCoupon = face * (couponPct / 100) * (elapsedDays / 365);
+  return face + Math.max(0, accruedCoupon);
+}

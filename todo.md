@@ -612,3 +612,9 @@
 - [x] R47.3 Server deposits.add: accept marginRate + maturityDate override and persist them on the auto-created security.
 - [x] R47.4 Dashboard: add a per-instrument breakdown card so zero-coupon and floating-rate holdings show separately from T-bills/FXD.
 - [x] R47.5 Tests for new fields + breakdown; full suite green, tsc clean, UI verified, checkpoint, deliver.
+
+## Round 48 (holdings value toggle + maturity calendar)
+
+- [x] R48.1 Holdings-by-Instrument card: toggle between Face value and Current (market/accreted) value, computed from a shared current-value helper.
+- [x] R48.2 Add a Maturity Calendar widget on the Dashboard listing upcoming (non-matured) security maturities in date order with days-to-maturity + face.
+- [x] R48.3 Tests for current-value helper + maturity ordering; full suite green (414), tsc clean, UI verified, checkpoint, deliver.

@@ -45,6 +45,7 @@ import {
   Pencil,
   Info,
   Clock,
+  CalendarClock,
 } from "lucide-react";
 import { Link } from "wouter";
 import { GlossaryTerm } from "@/components/GlossaryTerm";
@@ -56,6 +57,7 @@ import { Plus, Compass, ArrowUpRight } from "lucide-react";
 import { useMemo, useState, useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { rateStaleness } from "@/lib/rateStaleness";
+import { currentSecurityValue } from "@shared/discount";
 import { cn } from "@/lib/utils";
 
 function StatCard({
@@ -233,6 +235,11 @@ export default function Dashboard() {
   // query param so a refresh doesn't re-trigger it.
   const reconcileRef = useRef<HTMLDivElement | null>(null);
   const [reconcileFlash, setReconcileFlash] = useState(false);
+
+  // R48: Holdings-by-Instrument card can show face value or current (accreted /
+  // par + accrued) value of active securities.
+  const [holdingsBasis, setHoldingsBasis] = useState<"face" | "current">("face");
+
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     if (params.get("reconcile") !== "1") return;
@@ -1094,13 +1101,24 @@ export default function Dashboard() {
               );
             })()}
 
-            {/* ── Round 47: holdings split by precise instrument type ──────── */}
+            {/* ── Round 47/48: holdings split by precise instrument type ────── */}
             {(() => {
               // Active (non-matured) register holdings grouped by precise type,
               // computed directly from the securities list so zero-coupon and
               // floating-rate paper show separately from T-bills / IFB / FXD.
-              const rows = (securities as { securityType?: string; faceValue?: unknown; isMatured?: boolean }[]) ?? [];
-              const groups: Record<string, number> = {};
+              // R48: each group carries both its FACE value and its CURRENT
+              // (accreted / par + accrued) value via the shared engine helper.
+              type SecRow = {
+                securityType?: string;
+                faceValue?: unknown;
+                purchasePrice?: unknown;
+                couponRate?: unknown;
+                issueDate?: unknown;
+                maturityDate?: unknown;
+                isMatured?: boolean;
+              };
+              const rows = (securities as SecRow[]) ?? [];
+              const groups: Record<string, { face: number; current: number }> = {};
               for (const s of rows) {
                 if (s?.isMatured) continue;
                 const face = parseFloat(String(s?.faceValue ?? "0")) || 0;
@@ -1117,7 +1135,22 @@ export default function Dashboard() {
                         : t === "fxd"
                           ? "fxd"
                           : "other";
-                groups[key] = (groups[key] ?? 0) + face;
+                let current = face;
+                if (s?.issueDate && s?.maturityDate) {
+                  current = currentSecurityValue({
+                    securityType: t,
+                    faceValue: face,
+                    purchasePrice: parseFloat(String(s?.purchasePrice ?? "")) || null,
+                    couponRate: parseFloat(String(s?.couponRate ?? "0")) || 0,
+                    issueDate: String(s.issueDate),
+                    maturityDate: String(s.maturityDate),
+                    isMatured: s?.isMatured ?? false,
+                  });
+                }
+                const g = groups[key] ?? { face: 0, current: 0 };
+                g.face += face;
+                g.current += current;
+                groups[key] = g;
               }
               const META: Record<string, { label: string; color: string }> = {
                 tbill: { label: "T-Bills", color: "#60a5fa" },
@@ -1129,23 +1162,56 @@ export default function Dashboard() {
               };
               const order = ["tbill", "zero_coupon", "ifb", "fxd", "floating_rate", "other"];
               const segs = order
-                .filter((k) => (groups[k] ?? 0) > 0)
-                .map((k) => ({ key: k, label: META[k].label, color: META[k].color, amt: groups[k] }));
-              const totalFace = segs.reduce((sum, s) => sum + s.amt, 0);
+                .filter((k) => (groups[k]?.face ?? 0) > 0)
+                .map((k) => ({
+                  key: k,
+                  label: META[k].label,
+                  color: META[k].color,
+                  amt: holdingsBasis === "current" ? groups[k].current : groups[k].face,
+                  face: groups[k].face,
+                  current: groups[k].current,
+                }));
+              const totalFace = segs.reduce((sum, s) => sum + s.face, 0);
+              const totalCurrent = segs.reduce((sum, s) => sum + s.current, 0);
+              const total = holdingsBasis === "current" ? totalCurrent : totalFace;
               // Only worth showing once the user holds at least two instrument
               // kinds, or any of the newer (zero/floating) types.
-              const hasExotic = (groups.zero_coupon ?? 0) > 0 || (groups.floating_rate ?? 0) > 0;
+              const hasExotic = (groups.zero_coupon?.face ?? 0) > 0 || (groups.floating_rate?.face ?? 0) > 0;
               if (totalFace <= 0 || (segs.length < 2 && !hasExotic)) return null;
+              const gain = totalCurrent - totalFace;
               return (
                 <div className="mt-4 rounded-xl border border-white/10 bg-white/[0.02] p-4 space-y-3">
-                  <div>
-                    <p className="text-xs font-medium uppercase tracking-widest text-muted-foreground">Holdings by Instrument</p>
-                    <p className="text-2xl font-serif font-bold text-foreground kes-amount">{formatKES(totalFace)}</p>
-                    <p className="text-xs text-muted-foreground">Face value of your active CBK securities, split by precise instrument type.</p>
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-xs font-medium uppercase tracking-widest text-muted-foreground">Holdings by Instrument</p>
+                      <p className="text-2xl font-serif font-bold text-foreground kes-amount">{formatKES(total)}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {holdingsBasis === "current"
+                          ? "Current (accreted / par + accrued) value of your active CBK securities today."
+                          : "Face (redemption) value of your active CBK securities, split by precise instrument type."}
+                      </p>
+                    </div>
+                    <div className="flex rounded-lg border border-white/10 bg-white/[0.02] p-0.5 shrink-0">
+                      {(["face", "current"] as const).map((b) => (
+                        <button
+                          key={b}
+                          type="button"
+                          onClick={() => setHoldingsBasis(b)}
+                          className={cn(
+                            "px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors",
+                            holdingsBasis === b
+                              ? "bg-primary/20 text-primary"
+                              : "text-muted-foreground hover:text-foreground",
+                          )}
+                        >
+                          {b === "face" ? "Face" : "Current"}
+                        </button>
+                      ))}
+                    </div>
                   </div>
                   <div className="w-full h-2.5 rounded-full overflow-hidden flex bg-white/5">
                     {segs.map((s) => (
-                      <div key={s.key} style={{ width: `${(s.amt / totalFace) * 100}%`, backgroundColor: s.color }} title={`${s.label}: ${formatKES(s.amt)}`} />
+                      <div key={s.key} style={{ width: `${total > 0 ? (s.amt / total) * 100 : 0}%`, backgroundColor: s.color }} title={`${s.label}: ${formatKES(s.amt)}`} />
                     ))}
                   </div>
                   <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-1.5">
@@ -1157,9 +1223,110 @@ export default function Dashboard() {
                       </div>
                     ))}
                   </div>
+                  {Math.abs(gain) >= 1 && (
+                    <p className="text-[11px] text-muted-foreground/80">
+                      {gain >= 0 ? "Accrued so far" : "Below face"}:{" "}
+                      <span className={cn("font-semibold", gain >= 0 ? "text-emerald-400" : "text-amber-400")}>
+                        {gain >= 0 ? "+" : "−"}{formatKES(Math.abs(gain))}
+                      </span>{" "}
+                      ({formatKES(totalCurrent)} current vs {formatKES(totalFace)} face). Discount paper accretes toward
+                      face; coupon bonds carry pro-rata accrued interest.
+                    </p>
+                  )}
                   <p className="text-[11px] text-muted-foreground/70">
                     Zero-coupon and floating-rate paper are shown on their own here, even though they sit inside the
                     T-Bill / FXD buckets elsewhere for tax and reconciliation purposes.
+                  </p>
+                </div>
+              );
+            })()}
+
+            {/* ── Round 48: maturity calendar — upcoming security redemptions ── */}
+            {(() => {
+              type SecRow = {
+                securityType?: string;
+                faceValue?: unknown;
+                maturityDate?: unknown;
+                isMatured?: boolean;
+              };
+              const rows = (securities as SecRow[]) ?? [];
+              const TYPE_LABEL: Record<string, string> = {
+                tbill_91: "91-Day T-Bill",
+                tbill_182: "182-Day T-Bill",
+                tbill_364: "364-Day T-Bill",
+                ifb: "IFB Bond",
+                fxd: "FXD Bond",
+                zero_coupon: "Zero-Coupon Bond",
+                floating_rate: "Floating-Rate Note",
+              };
+              const now = new Date();
+              const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+              const upcoming = rows
+                .filter((s) => !s?.isMatured && s?.maturityDate)
+                .map((s) => {
+                  const mt = new Date(String(s.maturityDate)).getTime();
+                  const days = Math.round((mt - startOfToday) / (1000 * 60 * 60 * 24));
+                  return {
+                    type: String(s?.securityType ?? ""),
+                    label: TYPE_LABEL[String(s?.securityType ?? "")] ?? "Security",
+                    face: parseFloat(String(s?.faceValue ?? "0")) || 0,
+                    maturity: mt,
+                    days,
+                  };
+                })
+                .filter((e) => Number.isFinite(e.maturity) && e.days >= 0 && e.face > 0)
+                .sort((a, b) => a.maturity - b.maturity)
+                .slice(0, 8);
+              if (upcoming.length === 0) return null;
+              return (
+                <div className="mt-4 rounded-xl border border-white/10 bg-white/[0.02] p-4 space-y-3">
+                  <div className="flex items-center gap-2">
+                    <CalendarClock className="w-4 h-4 text-primary shrink-0" />
+                    <div>
+                      <p className="text-xs font-medium uppercase tracking-widest text-muted-foreground">Maturity Calendar</p>
+                      <p className="text-xs text-muted-foreground">Upcoming security redemptions, soonest first. Plan your re-investments around these dates.</p>
+                    </div>
+                  </div>
+                  <div className="divide-y divide-white/5">
+                    {upcoming.map((e, i) => {
+                      const imminent = e.days <= 30;
+                      const soon = e.days <= 90;
+                      const dateStr = new Date(e.maturity).toLocaleDateString(undefined, {
+                        year: "numeric",
+                        month: "short",
+                        day: "numeric",
+                      });
+                      return (
+                        <Link key={i} href={`/ledger?focus=${e.maturity}`}>
+                          <div className="flex items-center gap-3 py-2 cursor-pointer hover:bg-white/[0.02] -mx-2 px-2 rounded-md transition-colors">
+                            <span
+                              className={cn(
+                                "w-2 h-2 rounded-full shrink-0",
+                                imminent ? "bg-red-400" : soon ? "bg-amber-400" : "bg-emerald-400",
+                              )}
+                            />
+                            <div className="min-w-0">
+                              <p className="text-xs font-medium text-foreground truncate">{e.label}</p>
+                              <p className="text-[11px] text-muted-foreground">{dateStr}</p>
+                            </div>
+                            <div className="ml-auto text-right shrink-0">
+                              <p className="text-xs font-semibold text-foreground kes-amount">{formatKESCompact(e.face)}</p>
+                              <p
+                                className={cn(
+                                  "text-[11px] font-medium",
+                                  imminent ? "text-red-400" : soon ? "text-amber-400" : "text-muted-foreground",
+                                )}
+                              >
+                                {e.days === 0 ? "Today" : e.days === 1 ? "In 1 day" : `In ${e.days} days`}
+                              </p>
+                            </div>
+                          </div>
+                        </Link>
+                      );
+                    })}
+                  </div>
+                  <p className="text-[11px] text-muted-foreground/70">
+                    Red dots mature within 30 days, amber within 90. Click a row to jump to that month in the ledger.
                   </p>
                 </div>
               );

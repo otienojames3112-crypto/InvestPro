@@ -513,3 +513,8 @@
 - [x] R35.5 runScenarios must also pass bank holdings (engine.ts ~9834)
 - [x] R35.6 Integration test: a term bank deposit maturing mid-horizon yields a ledger row with maturity narration and bankEnd dropping to 0 that month
 - [x] R35.7 Run full suite, checkpoint, regenerate source ZIP, deliver
+
+## Round 36 — Ledger CSV export
+- [x] R36.1 Add "Download CSV" button to the Month-by-Month Ledger header
+- [x] R36.2 Export the full projection (all months, not just current page/search) with all 15 columns incl. Bank In + Bank
+- [x] R36.3 Raw numeric values (no KES formatting) + UTF-8 BOM so Excel opens cleanly; filename ledger-{portfolio}-{date}.csv

@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
-import { BookOpen, RefreshCw, Search, Info } from "lucide-react";
+import { BookOpen, RefreshCw, Search, Info, Download } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useState, useMemo } from "react";
 import { toast } from "sonner";
@@ -23,6 +23,71 @@ export default function Ledger() {
     onError: () => toast.error("Failed to sync ledger"),
   });
   const handleSync = () => { if (portfolioId) syncMutation.mutate({ portfolioId }); };
+
+  // CSV export of the full ledger (every month, all columns including the Bank
+  // In + Bank columns). Raw numeric values are exported (no "KES"/thousands
+  // formatting) so the file opens cleanly in spreadsheets.
+  const handleExportCsv = () => {
+    if (!projection || projection.length === 0) {
+      toast.error("Nothing to export yet");
+      return;
+    }
+    const headers = [
+      "Month",
+      "Basis",
+      "Date",
+      "Save",
+      "CBK In",
+      "Bank In",
+      "MMF->Securities",
+      "Main Action",
+      "MMF End",
+      "T-Bill",
+      "IFB",
+      "FXD",
+      "Bank",
+      "Total",
+      "Phase",
+    ];
+    const escape = (v: string | number) => {
+      const s = String(v ?? "");
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const rows = projection.map((r) => [
+      r.monthNumber,
+      r.isActual ? "Actual" : "Projected",
+      getMonthLabel(startDate, r.monthNumber),
+      r.contribution,
+      r.cbkCashIn,
+      r.bankCashIn,
+      r.mmfToDhow,
+      r.mainAction ?? "",
+      r.mmfEnd,
+      r.tbillEnd,
+      r.ifbEnd,
+      r.fxdEnd,
+      r.bankEnd,
+      r.totalEnd,
+      getPhaseName(r.phase),
+    ]);
+    const csv = [headers, ...rows].map((line) => line.map(escape).join(",")).join("\n");
+    // Prepend a UTF-8 BOM so Excel reads it as UTF-8.
+    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    const safeName = (portfolio?.name ? String(portfolio.name) : "portfolio")
+      .replace(/[^a-z0-9]+/gi, "-")
+      .replace(/^-+|-+$/g, "")
+      .toLowerCase();
+    const stamp = new Date().toISOString().split("T")[0];
+    a.href = url;
+    a.download = `ledger-${safeName}-${stamp}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    toast.success(`Exported ${projection.length} months to CSV`);
+  };
 
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
@@ -66,16 +131,28 @@ export default function Ledger() {
                 : "Complete forward projection of your investment journey. Record deposits to anchor early months to actuals."}
             </p>
           </div>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleSync}
-            disabled={syncMutation.isPending}
-            className="gap-2"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${syncMutation.isPending ? "animate-spin" : ""}`} />
-            Sync
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleExportCsv}
+              disabled={!projection || projection.length === 0}
+              className="gap-2"
+            >
+              <Download className="w-3.5 h-3.5" />
+              Download CSV
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleSync}
+              disabled={syncMutation.isPending}
+              className="gap-2"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${syncMutation.isPending ? "animate-spin" : ""}`} />
+              Sync
+            </Button>
+          </div>
         </div>
 
         <Card>

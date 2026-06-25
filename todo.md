@@ -597,3 +597,10 @@
 - [x] R45.4 Create Portfolio dialog: let the user pick step-up frequency (every 3 / 6 / 12 months) and feed stepUpMonths into the same recommendStepUp solver.
 - [x] R45.5 Mirror the auto-recommend step-up control on the Rate Settings / Contributions page so edits to an existing portfolio can re-suggest a step-up (uses the saved portfolio's real rates/balances).
 - [x] R45.6 Tests for recon-after-delete, deposit price auto-derive, frequency-aware solver; full suite green, tsc clean, UI verified, checkpoint, refreshed source ZIP, deliver.
+
+## Round 46 (deposit drawer: zero-coupon & floating-rate paper)
+
+- [x] R46.1 Deposit drawer gov section: add zero_coupon and floating_rate as selectable security types (alongside tbill/ifb/fxd), with appropriate tenor/coupon inputs.
+- [x] R46.2 Reuse the existing discount-price preview for zero_coupon (discount instrument); show the right preview/fields for floating_rate (par/coupon instrument).
+- [x] R46.3 Server: deposit creation auto-creates the correct security (faceValue/purchasePrice/discount for zero_coupon; par + floating coupon for floating_rate), consistent with the CBK Securities Register.
+- [x] R46.4 Tests for both new types via the deposit path; full suite green, tsc clean, UI verified, checkpoint, deliver.

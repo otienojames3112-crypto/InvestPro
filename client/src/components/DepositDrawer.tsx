@@ -7,14 +7,18 @@ import { BANK_INSTRUMENT_TYPES, isTermBankInstrument, bankInstrumentLabel, type 
 import {
   computeMaturityDate,
   whtRateForSecurity,
+  defaultRateForSecurity,
+  tenorYearsForSecurity,
   IFB_TENORS,
   FXD_TENORS,
   DEFAULT_IFB_TENOR_YEARS,
   DEFAULT_FXD_TENOR_YEARS,
+  DEFAULT_ZERO_COUPON_TENOR_YEARS,
+  DEFAULT_FLOATING_TENOR_YEARS,
   TBILL_TENOR_DAYS,
   type SecurityType,
 } from "@shared/securityTenor";
-import { tbillPrice } from "@shared/discount";
+import { tbillPrice, zeroCouponPrice } from "@shared/discount";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -53,6 +57,8 @@ import {
   X,
   Building2,
   PiggyBank,
+  Coins,
+  Activity,
 } from "lucide-react";
 
 /**
@@ -75,14 +81,22 @@ type Destination = {
     institutionType: "mmf_fund" | "bank_instrument" | "government_security";
     mmfFundId?: number;
     bankHoldingId?: number;
-    bucket?: "mmf" | "tbill" | "ifb" | "fxd";
+    bucket?: "mmf" | "tbill" | "ifb" | "fxd" | "zero" | "floating";
+    // Round 46: precise gov security type carried for the new instrument kinds
+    // (zero-coupon / floating-rate) whose coarse bucket maps onto tbill / fxd.
+    govSecurityType?: SecurityType;
   };
 };
+
+/** The five government-security kinds selectable in the deposit drawer. */
+type GovKind = "tbill" | "ifb" | "fxd" | "zero" | "floating";
 
 const GOV_META = {
   tbill: { label: "CBK T-Bills", icon: <TrendingUp className="w-4 h-4" />, color: "text-blue-400", taxNote: "15% WHT on discount (final tax)" },
   ifb: { label: "IFB Bonds", icon: <ShieldCheck className="w-4 h-4" />, color: "text-violet-400", taxNote: "Tax-exempt (IFB)" },
   fxd: { label: "FXD Bonds", icon: <Landmark className="w-4 h-4" />, color: "text-orange-400", taxNote: "15% WHT on coupons" },
+  zero: { label: "Zero-Coupon Bonds", icon: <Coins className="w-4 h-4" />, color: "text-amber-400", taxNote: "15% WHT on discount (final tax)" },
+  floating: { label: "Floating-Rate Bonds", icon: <Activity className="w-4 h-4" />, color: "text-cyan-400", taxNote: "15% / 10% WHT on coupons" },
 } as const;
 
 interface DepositDrawerProps {
@@ -115,6 +129,13 @@ export function DepositDrawer({ open, onClose }: DepositDrawerProps) {
   // Round 45: rate settings power the live T-bill discount-price preview so the
   // user sees the actual cash they'll pay (below face) before recording.
   const { data: rateSettings } = trpc.settings.get.useQuery(
+    { portfolioId: portfolioId! },
+    { enabled: !!portfolioId },
+  );
+  // Round 46: the linked register securities let the history list label a gov
+  // deposit by its PRECISE instrument (zero-coupon / floating-rate), not just the
+  // coarse bucket it was mapped onto (tbill/fxd) for server storage.
+  const { data: securities = [] } = trpc.securities.list.useQuery(
     { portfolioId: portfolioId! },
     { enabled: !!portfolioId },
   );
@@ -205,7 +226,7 @@ export function DepositDrawer({ open, onClose }: DepositDrawerProps) {
       payload: { institutionType: "bank_instrument" },
     });
     // Government securities buckets
-    (["tbill", "ifb", "fxd"] as const).forEach((b) => {
+    (["tbill", "ifb", "fxd", "zero", "floating"] as const).forEach((b) => {
       const m = GOV_META[b];
       list.push({
         value: `gov:${b}`,
@@ -244,6 +265,10 @@ export function DepositDrawer({ open, onClose }: DepositDrawerProps) {
   const [govDetail, setGovDetail] = useState({
     tbillTenorDays: 364 as 91 | 182 | 364,
     bondTenorYears: DEFAULT_FXD_TENOR_YEARS as number,
+    // Round 46: independent tenors for zero-coupon and floating-rate paper so
+    // switching instrument kind doesn't clobber the FXD/IFB tenor choice.
+    zeroTenorYears: DEFAULT_ZERO_COUPON_TENOR_YEARS as number,
+    floatingTenorYears: DEFAULT_FLOATING_TENOR_YEARS as number,
   });
 
   const selectedDest = destinations.find((d) => d.value === form.destination);
@@ -252,7 +277,19 @@ export function DepositDrawer({ open, onClose }: DepositDrawerProps) {
     ? selectedDest.payload.bucket
     : undefined;
   const isGovTbill = govBucket === "tbill";
+  const isGovZero = govBucket === "zero";
+  const isGovFloating = govBucket === "floating";
+  // Coupon-bond inputs (FXD/IFB/floating) all use the year-tenor picker.
   const isGovBond = govBucket === "ifb" || govBucket === "fxd";
+  // A discount instrument is bought below face (T-bill or zero-coupon).
+  const isGovDiscount = isGovTbill || isGovZero;
+  // The bond-tenor (years) field is shared; pick the right backing state value.
+  const govBondTenorYears =
+    govBucket === "zero"
+      ? govDetail.zeroTenorYears
+      : govBucket === "floating"
+        ? govDetail.floatingTenorYears
+        : govDetail.bondTenorYears;
   // Resolve the precise security type from the bucket + chosen tenor.
   const govSecurityType: SecurityType | undefined = isGovTbill
     ? (`tbill_${govDetail.tbillTenorDays}` as SecurityType)
@@ -260,35 +297,44 @@ export function DepositDrawer({ open, onClose }: DepositDrawerProps) {
       ? "ifb"
       : govBucket === "fxd"
         ? "fxd"
-        : undefined;
+        : govBucket === "zero"
+          ? "zero_coupon"
+          : govBucket === "floating"
+            ? "floating_rate"
+            : undefined;
+  // Year-tenor is meaningful for every kind except T-bills (which use day count).
+  const govTenorYearsArg = isGovTbill ? null : govBondTenorYears;
   const govMaturity = govSecurityType
-    ? computeMaturityDate(govSecurityType, form.depositDate, isGovBond ? govDetail.bondTenorYears : null)
+    ? computeMaturityDate(govSecurityType, form.depositDate, govTenorYearsArg)
     : "";
   const govWht = govSecurityType
-    ? whtRateForSecurity(govSecurityType, isGovBond ? govDetail.bondTenorYears : null)
+    ? whtRateForSecurity(govSecurityType, govTenorYearsArg)
     : 0;
 
-  // Round 45: live discount-price preview for T-bills. Mirrors the server's
-  // auto-derivation (deposits.add) and the CBK Securities Register: the user
-  // enters the FACE value; we show the discounted purchase price they'll pay and
-  // the discount they earn at maturity. Uses the same tbillPrice helper + the
-  // portfolio's current rate for the chosen tenor.
-  const tbillFace = isGovTbill ? parseFloat(form.amount) || 0 : 0;
-  const tbillRateForPreview =
-    rateSettings == null
-      ? 0
+  // Round 45/46: live discount-price preview for DISCOUNT instruments (T-bills
+  // AND zero-coupon bonds). Mirrors the server's auto-derivation (deposits.add)
+  // and the CBK Securities Register: the user enters the FACE value; we show the
+  // discounted purchase price they'll pay and the discount earned at maturity.
+  // T-bills price on simple interest over days; zero-coupons compound over years.
+  const tbillFace = isGovDiscount ? parseFloat(form.amount) || 0 : 0;
+  const tbillRateForPreview = !isGovDiscount || rateSettings == null
+    ? 0
+    : isGovZero
+      ? defaultRateForSecurity("zero_coupon", rateSettings)
       : govDetail.tbillTenorDays === 91
         ? rateSettings.tbill91Rate
         : govDetail.tbillTenorDays === 182
           ? rateSettings.tbill182Rate
           : rateSettings.tbill364Rate;
   const tbillPreviewPrice =
-    isGovTbill && tbillFace > 0 && tbillRateForPreview > 0
-      ? tbillPrice(
-          tbillFace,
-          tbillRateForPreview,
-          TBILL_TENOR_DAYS[`tbill_${govDetail.tbillTenorDays}` as "tbill_91" | "tbill_182" | "tbill_364"],
-        )
+    isGovDiscount && tbillFace > 0 && tbillRateForPreview > 0
+      ? isGovZero
+        ? zeroCouponPrice(tbillFace, tbillRateForPreview, tenorYearsForSecurity("zero_coupon", govDetail.zeroTenorYears))
+        : tbillPrice(
+            tbillFace,
+            tbillRateForPreview,
+            TBILL_TENOR_DAYS[`tbill_${govDetail.tbillTenorDays}` as "tbill_91" | "tbill_182" | "tbill_364"],
+          )
       : null;
   const tbillPreviewDiscount =
     tbillPreviewPrice != null ? tbillFace - tbillPreviewPrice : null;
@@ -297,7 +343,12 @@ export function DepositDrawer({ open, onClose }: DepositDrawerProps) {
     setForm({ destination: "", amount: "", depositDate: new Date().toISOString().slice(0, 10), notes: "" });
     setNewBank({ bankName: "", instrumentType: "fixed_deposit" as BankInstrumentType, interestRate: "", tenorMonths: "12" });
     setSelectedBankRef("");
-    setGovDetail({ tbillTenorDays: 364, bondTenorYears: DEFAULT_FXD_TENOR_YEARS });
+    setGovDetail({
+      tbillTenorDays: 364,
+      bondTenorYears: DEFAULT_FXD_TENOR_YEARS,
+      zeroTenorYears: DEFAULT_ZERO_COUPON_TENOR_YEARS,
+      floatingTenorYears: DEFAULT_FLOATING_TENOR_YEARS,
+    });
   }
 
   async function handleSubmit() {
@@ -353,21 +404,38 @@ export function DepositDrawer({ open, onClose }: DepositDrawerProps) {
       return;
     }
 
+    // Round 46: the server's deposit bucket enum only accepts the four coarse
+    // values (mmf/tbill/ifb/fxd). Zero-coupon is a discount instrument → map to
+    // the "tbill" bucket; floating-rate is a coupon bond → map to "fxd". The
+    // PRECISE kind is still carried via govSecurityType, which the server uses
+    // first when creating the register row, so the mapping never loses fidelity.
+    const { govSecurityType: _ignored, bucket: _wideBucket, ...restPayload } = selectedDest.payload;
+    const submitBucket: "mmf" | "tbill" | "ifb" | "fxd" | undefined =
+      _wideBucket === "zero"
+        ? "tbill"
+        : _wideBucket === "floating"
+          ? "fxd"
+          : _wideBucket;
+    // The year-tenor we pass: zero uses its own tenor, floating uses its own,
+    // FXD/IFB use the shared bond tenor. T-bills carry no year tenor.
+    const sendBondTenor =
+      isGovBond || isGovZero || isGovFloating ? govBondTenorYears : undefined;
     addMutation.mutate({
       portfolioId,
       amount,
       depositDate: form.depositDate,
       notes: form.notes || undefined,
-      ...selectedDest.payload,
-      // Round 39: precise gov-security type + bond tenor so the auto-created
-      // register row gets the right maturity + WHT.
+      ...restPayload,
+      ...(submitBucket ? { bucket: submitBucket } : {}),
+      // Precise gov-security type + bond tenor so the auto-created register row
+      // gets the right maturity + WHT (covers tbill/ifb/fxd/zero/floating).
       ...(govSecurityType ? { govSecurityType } : {}),
-      ...(isGovBond ? { bondTenorYears: govDetail.bondTenorYears } : {}),
+      ...(sendBondTenor != null ? { bondTenorYears: sendBondTenor } : {}),
     });
   }
 
   // Resolve a deposit row to a human destination label for the history list.
-  function destLabelFor(d: { institutionType?: string | null; mmfFundId?: number | null; bankHoldingId?: number | null; bucket: string }): { label: string; icon: React.ReactNode; color: string; taxFree: boolean } {
+  function destLabelFor(d: { institutionType?: string | null; mmfFundId?: number | null; bankHoldingId?: number | null; bucket: string; securityId?: number | null }): { label: string; icon: React.ReactNode; color: string; taxFree: boolean } {
     if (d.institutionType === "bank_instrument" && d.bankHoldingId) {
       const h = bankHoldings.find((x) => x.id === d.bankHoldingId);
       return { label: h ? (h.label || `${h.bankName} deposit`) : "Bank deposit", icon: <Building2 className="w-4 h-4" />, color: "text-sky-300", taxFree: false };
@@ -378,6 +446,14 @@ export function DepositDrawer({ open, onClose }: DepositDrawerProps) {
       }
       const s = secondaries.find((x) => x.mmfFundId === d.mmfFundId);
       return { label: s ? (s.label || s.fundName) : "MMF fund", icon: <PiggyBank className="w-4 h-4" />, color: "text-emerald-300", taxFree: false };
+    }
+    // Round 46: prefer the linked register security's PRECISE type so a
+    // zero-coupon (stored under the tbill bucket) or floating-rate (stored under
+    // the fxd bucket) deposit is labelled accurately in the history.
+    if (d.securityId != null) {
+      const sec = securities.find((s) => s.id === d.securityId);
+      if (sec?.securityType === "zero_coupon") return { label: GOV_META.zero.label, icon: GOV_META.zero.icon, color: GOV_META.zero.color, taxFree: false };
+      if (sec?.securityType === "floating_rate") return { label: GOV_META.floating.label, icon: GOV_META.floating.icon, color: GOV_META.floating.color, taxFree: false };
     }
     if (d.bucket === "ifb") return { label: GOV_META.ifb.label, icon: GOV_META.ifb.icon, color: GOV_META.ifb.color, taxFree: true };
     if (d.bucket === "tbill") return { label: GOV_META.tbill.label, icon: GOV_META.tbill.icon, color: GOV_META.tbill.color, taxFree: false };
@@ -559,6 +635,38 @@ export function DepositDrawer({ open, onClose }: DepositDrawerProps) {
                         </Select>
                       </div>
                     )}
+                    {isGovZero && (
+                      <div className="space-y-1.5">
+                        <Label className="text-xs text-muted-foreground">Zero-coupon tenor (years)</Label>
+                        <Select
+                          value={String(govDetail.zeroTenorYears)}
+                          onValueChange={(v) => setGovDetail((g) => ({ ...g, zeroTenorYears: parseFloat(v) }))}
+                        >
+                          <SelectTrigger className="bg-white/5 border-white/10 h-9 text-sm"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            {[2, 3, 5, 7, 10, 15, 20].map((y) => (
+                              <SelectItem key={y} value={String(y)}>{y} years</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    )}
+                    {isGovFloating && (
+                      <div className="space-y-1.5">
+                        <Label className="text-xs text-muted-foreground">Floating-rate tenor (years)</Label>
+                        <Select
+                          value={String(govDetail.floatingTenorYears)}
+                          onValueChange={(v) => setGovDetail((g) => ({ ...g, floatingTenorYears: parseFloat(v) }))}
+                        >
+                          <SelectTrigger className="bg-white/5 border-white/10 h-9 text-sm"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            {[2, 3, 5, 7, 10, 15].map((y) => (
+                              <SelectItem key={y} value={String(y)}>{y} years</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    )}
                     <div className="flex items-center justify-between text-xs">
                       <span className="text-muted-foreground">Matures</span>
                       <span className="font-semibold text-foreground">
@@ -581,7 +689,7 @@ export function DepositDrawer({ open, onClose }: DepositDrawerProps) {
                     {govBucket === "ifb" && (
                       <p className="text-[11px] text-emerald-300/80">IFB coupons are tax-exempt (subject to legislative change).</p>
                     )}
-                    {isGovTbill && (
+                    {isGovDiscount && (
                       <div className="rounded-md border border-emerald-500/20 bg-emerald-500/5 p-2.5 space-y-1.5">
                         <div className="flex items-center justify-between text-xs">
                           <span className="text-muted-foreground">Face value (at maturity)</span>
@@ -602,19 +710,25 @@ export function DepositDrawer({ open, onClose }: DepositDrawerProps) {
                           </span>
                         </div>
                         <p className="text-[11px] text-muted-foreground/80 border-t border-white/10 pt-1.5">
-                          Enter the <span className="text-foreground">face value</span> above. A T-bill is bought
-                          below face; we record the discounted price you actually pay and accrete it to face at
-                          maturity, charging 15% WHT only on the discount — exactly like the Securities register.
+                          {isGovZero ? (
+                            <>Enter the <span className="text-foreground">face value</span> (redemption amount) above. A
+                            zero-coupon bond pays no coupons; it is bought below face and compounds up to face at
+                            maturity. We record the discounted price you pay and charge 15% WHT only on the
+                            accreted discount — exactly like the Securities register.</>
+                          ) : (
+                            <>Enter the <span className="text-foreground">face value</span> above. A T-bill is bought
+                            below face; we record the discounted price you actually pay and accrete it to face at
+                            maturity, charging 15% WHT only on the discount — exactly like the Securities register.</>
+                          )}
                         </p>
                       </div>
                     )}
-                    {isGovTbill && (
-                      <p className="text-[11px] text-muted-foreground/80 border-t border-white/10 pt-2">
-                        Buying a <span className="text-foreground">zero-coupon</span> or{" "}
-                        <span className="text-foreground">floating-rate</span> bond instead? Those are
-                        entered on the <span className="text-foreground">Securities register</span>, which
-                        captures their tenor and (for floaters) the benchmark + margin. This quick-deposit
-                        panel covers the routine 91/182/364-day T-bill auctions.
+                    {isGovFloating && (
+                      <p className="text-[11px] text-muted-foreground/80 border-t border-white/10 pt-1.5">
+                        A <span className="text-foreground">floating-rate</span> note pays a coupon that resets each
+                        period against a benchmark (e.g. the 91-day T-bill) plus a fixed margin. Enter the amount
+                        invested above; projections use the portfolio's floating-rate assumption, and 15% WHT applies
+                        to each coupon. Fine-tune the benchmark + margin on the <span className="text-foreground">Securities register</span>.
                       </p>
                     )}
                   </div>
@@ -724,7 +838,7 @@ export function DepositDrawer({ open, onClose }: DepositDrawerProps) {
 
               {/* Amount */}
               <div className="space-y-1.5">
-                <Label className="text-xs text-muted-foreground">{isGovTbill ? "Face value (KES)" : "Amount (KES)"}</Label>
+                <Label className="text-xs text-muted-foreground">{isGovDiscount ? "Face value (KES)" : "Amount (KES)"}</Label>
                 <Input
                   type="number"
                   min="1"

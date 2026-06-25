@@ -1,5 +1,6 @@
 import { useMemo } from "react";
-import { CalendarClock, TrendingUp, ShieldCheck, Landmark, Building2, ArrowRightLeft } from "lucide-react";
+import { Link } from "wouter";
+import { CalendarClock, TrendingUp, ShieldCheck, Landmark, Building2, ArrowRightLeft, ArrowUpRight } from "lucide-react";
 import { formatKES } from "@/lib/format";
 import { suggestReinvestBucket, type ReinvestHint } from "@shared/incomeBreakdown";
 
@@ -40,6 +41,21 @@ interface TimelineEvent {
   amount: number;
   label: string;
   kind: "tbill" | "ifb" | "fxd" | "bank";
+  /** 1-indexed month in the plan this maturity lands on, for ledger deep-linking. Null if plan start unknown. */
+  ledgerMonth: number | null;
+}
+
+/**
+ * 1-indexed month number within the plan that a calendar date falls on, given
+ * the plan start (inclusive). Returns null when start is unknown/invalid.
+ */
+export function ledgerMonthForDate(date: Date, startISO?: string | null): number | null {
+  if (!startISO) return null;
+  const start = new Date(startISO);
+  if (Number.isNaN(start.getTime())) return null;
+  const months = (date.getFullYear() - start.getFullYear()) * 12 + (date.getMonth() - start.getMonth());
+  const m = months + 1;
+  return m >= 1 ? m : null;
 }
 
 const WINDOW_DAYS = 90;
@@ -67,6 +83,7 @@ export function buildMaturityEvents(
   securities: SecurityLike[],
   bankHoldings: BankHoldingLike[],
   windowDays = WINDOW_DAYS,
+  startISO?: string | null,
 ): TimelineEvent[] {
   const today = startOfToday();
   const events: TimelineEvent[] = [];
@@ -90,6 +107,7 @@ export function buildMaturityEvents(
       amount: Number(s.faceValue) || 0,
       label,
       kind,
+      ledgerMonth: ledgerMonthForDate(date, startISO),
     });
   }
 
@@ -107,6 +125,7 @@ export function buildMaturityEvents(
       amount: Number(b.principal) || 0,
       label: b.label || b.bankName,
       kind: "bank",
+      ledgerMonth: ledgerMonthForDate(date, startISO),
     });
   }
 
@@ -137,14 +156,17 @@ export function MaturityTimeline({
   securities,
   bankHoldings,
   plan,
+  startISO,
 }: {
   securities: SecurityLike[];
   bankHoldings: BankHoldingLike[];
   plan?: PlanContext;
+  /** Plan start date (ISO) so each maturity can deep-link to its ledger row. */
+  startISO?: string | null;
 }) {
   const events = useMemo(
-    () => buildMaturityEvents(securities, bankHoldings),
-    [securities, bankHoldings],
+    () => buildMaturityEvents(securities, bankHoldings, WINDOW_DAYS, startISO),
+    [securities, bankHoldings, startISO],
   );
 
   // Reinvest hint for cash freeing up now: based on the active phase. Events all
@@ -231,14 +253,18 @@ export function MaturityTimeline({
             {events.map((e) => {
               const meta = KIND_META[e.kind];
               const Icon = meta.icon;
-              return (
-                <div
-                  key={e.id}
-                  className="flex items-center gap-3 rounded-lg border border-white/5 bg-white/[0.02] px-3 py-2"
-                >
+              const body = (
+                <>
                   <Icon className={`w-4 h-4 shrink-0 ${meta.color}`} />
                   <div className="min-w-0 flex-1">
-                    <div className="text-sm text-foreground truncate">{e.label}</div>
+                    <div className="text-sm text-foreground truncate flex items-center gap-1">
+                      {e.label}
+                      {e.ledgerMonth ? (
+                        <span className="text-[10px] text-muted-foreground/70 inline-flex items-center gap-0.5">
+                          · matures here <ArrowUpRight className="w-2.5 h-2.5" />
+                        </span>
+                      ) : null}
+                    </div>
                     <div className="text-[11px] text-muted-foreground">
                       {e.date.toLocaleDateString("en-KE", { day: "numeric", month: "short", year: "numeric" })}
                       {" · "}
@@ -253,6 +279,23 @@ export function MaturityTimeline({
                       </span>
                     ) : null}
                   </div>
+                </>
+              );
+              return e.ledgerMonth ? (
+                <Link
+                  key={e.id}
+                  href={`/ledger?focus=${e.ledgerMonth}`}
+                  className="flex items-center gap-3 rounded-lg border border-white/5 bg-white/[0.02] px-3 py-2 transition-colors hover:bg-white/[0.06] hover:border-white/15 cursor-pointer"
+                  title={`Jump to ledger month ${e.ledgerMonth} (where this matures)`}
+                >
+                  {body}
+                </Link>
+              ) : (
+                <div
+                  key={e.id}
+                  className="flex items-center gap-3 rounded-lg border border-white/5 bg-white/[0.02] px-3 py-2"
+                >
+                  {body}
                 </div>
               );
             })}

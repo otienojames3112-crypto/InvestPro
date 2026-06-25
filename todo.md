@@ -525,3 +525,9 @@
 - [x] R37.3 Portfolio Review CSV export (allocation + benchmarks + liquidity calendar) alongside existing Print/PDF
 - [x] R37.4 Tax Summary CSV export (tax lines + totals + yield reconciliation) and new Print/Save as PDF
 - [x] R37.5 Shared shared/csv.ts util (toCsv/downloadCsv/escapeCsvCell/slugify) + 5 unit tests; full suite 256 pass
+
+## Round 38 — Timeline deep-link + concentration drill-down
+- [x] R38.1 Add "matures here" markers on the Dashboard 90-day timeline that deep-link to the matching Month Ledger row
+- [x] R38.2 Ledger: support a deep-link target (URL hash/query) that scrolls to + highlights the referenced month row
+- [x] R38.3 Issuer-concentration drill-down: clicking the Dashboard warning opens the offending issuer's holdings
+- [x] R38.4 Run full suite, verify UI, checkpoint, deliver

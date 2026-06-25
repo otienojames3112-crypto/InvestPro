@@ -1,7 +1,7 @@
 import { usePortfolio } from "@/contexts/PortfolioContext";
 import { useSelectedFund } from "@/hooks/useSelectedFund";
 import { useDepositDrawer } from "@/contexts/DepositDrawerContext";
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect, useRef } from "react";
 import { trpc } from "@/lib/trpc";
 import { formatKES } from "@/lib/format";
 import { earlyBreakWhatIf } from "@shared/actuals";
@@ -59,6 +59,7 @@ import {
   PiggyBank,
   Pencil,
   Zap,
+  AlertTriangle,
 } from "lucide-react";
 
 type Bucket = "mmf" | "tbill" | "ifb" | "fxd";
@@ -95,6 +96,21 @@ export default function Deposits() {
   const { data: summary } = trpc.deposits.summary.useQuery({ portfolioId: portfolioId! }, { enabled: !!portfolioId });
   const { data: secondaries = [] } = trpc.secondaryMmfs.list.useQuery({ portfolioId: portfolioId! }, { enabled: !!portfolioId });
   const { data: bankHoldings = [] } = trpc.bankHoldings.list.useQuery({ portfolioId: portfolioId! }, { enabled: !!portfolioId });
+
+  // Issuer drill-down: arriving with ?issuer=<bank> (from the Dashboard
+  // concentration warning) highlights and scrolls to that issuer's holdings.
+  const [issuerFilter, setIssuerFilter] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
+    return new URLSearchParams(window.location.search).get("issuer");
+  });
+  const bankSectionRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (issuerFilter && bankHoldings.length > 0 && bankSectionRef.current) {
+      bankSectionRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }, [issuerFilter, bankHoldings.length]);
+  const issuerMatches = (name: string) =>
+    !!issuerFilter && name.trim().toLowerCase() === issuerFilter.trim().toLowerCase();
 
   const liveTarget = portfolio?.targetAmount ?? 0;
 
@@ -388,7 +404,26 @@ export default function Deposits() {
       </div>
 
       {/* Bank Instruments */}
-      <div className="rounded-xl border border-white/10 bg-white/5 overflow-hidden">
+      <div ref={bankSectionRef} className={`rounded-xl border bg-white/5 overflow-hidden transition-colors ${issuerFilter ? "border-amber-400/40" : "border-white/10"}`}>
+        {issuerFilter ? (
+          <div className="px-5 py-2.5 bg-amber-500/10 border-b border-amber-400/30 flex items-center gap-2 text-xs">
+            <AlertTriangle className="w-3.5 h-3.5 text-amber-300 shrink-0" />
+            <span className="text-amber-100">
+              Showing holdings flagged for concentration at <span className="font-semibold">{issuerFilter}</span>.
+            </span>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-6 px-2 text-xs text-amber-200 hover:text-amber-50 hover:bg-amber-500/20 ml-auto"
+              onClick={() => {
+                setIssuerFilter(null);
+                if (typeof window !== "undefined") window.history.replaceState(null, "", "/deposits");
+              }}
+            >
+              Clear
+            </Button>
+          </div>
+        ) : null}
         <div className="px-5 py-4 border-b border-white/10 flex items-center gap-2">
           <Building2 className="w-4 h-4 text-sky-300" />
           <h2 className="text-sm font-semibold text-foreground">Bank Instruments</h2>
@@ -437,7 +472,7 @@ export default function Deposits() {
                   : null;
                 const action = (h as { maturityAction?: "redeploy" | "rollover" }).maturityAction ?? "redeploy";
                 return (
-                <TableRow key={h.id} className="border-white/10 hover:bg-white/5">
+                <TableRow key={h.id} className={`border-white/10 transition-colors ${issuerMatches(h.bankName) ? "bg-amber-500/15 hover:bg-amber-500/20" : "hover:bg-white/5"}`}>
                   <TableCell className="text-sm text-foreground">
                     <div className="font-medium">{h.label || h.bankName}</div>
                     <div className="text-xs text-muted-foreground">{h.bankName}{h.isNegotiable ? " · negotiable" : ""}</div>

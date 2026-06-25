@@ -17,9 +17,19 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { toCsv, downloadCsv, slugify } from "@shared/csv";
+
+/** Read the ?focus=<month> query param once on mount (deep-link from the Dashboard timeline). */
+function useFocusMonth(): number | null {
+  return useMemo(() => {
+    if (typeof window === "undefined") return null;
+    const v = new URLSearchParams(window.location.search).get("focus");
+    const n = v ? parseInt(v, 10) : NaN;
+    return Number.isFinite(n) && n >= 1 ? n : null;
+  }, []);
+}
 
 export default function Ledger() {
   const { portfolioId, portfolio } = usePortfolio();
@@ -33,8 +43,11 @@ export default function Ledger() {
   });
   const handleSync = () => { if (portfolioId) syncMutation.mutate({ portfolioId }); };
 
+  const focusMonth = useFocusMonth();
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
+  const [highlightMonth, setHighlightMonth] = useState<number | null>(null);
+  const focusRowRef = useRef<HTMLTableRowElement | null>(null);
   const pageSize = 24;
 
   const startDate = portfolio?.startDate ? String(portfolio.startDate).split("T")[0] : "2026-07-01";
@@ -53,6 +66,28 @@ export default function Ledger() {
 
   const totalPages = Math.ceil(filtered.length / pageSize);
   const paged = filtered.slice((page - 1) * pageSize, page * pageSize);
+
+  // Deep-link: when arriving with ?focus=<month>, jump to the page holding that
+  // month (clearing any search filter so the row is reachable) and flash it.
+  useEffect(() => {
+    if (!focusMonth || !projection || projection.length === 0) return;
+    const idx = projection.findIndex((r) => r.monthNumber === focusMonth);
+    if (idx < 0) return;
+    if (search) setSearch("");
+    const targetPage = Math.floor(idx / pageSize) + 1;
+    setPage(targetPage);
+    setHighlightMonth(focusMonth);
+    const t = setTimeout(() => setHighlightMonth(null), 2600);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusMonth, projection]);
+
+  // Scroll the highlighted row into view once it is rendered on the active page.
+  useEffect(() => {
+    if (highlightMonth && focusRowRef.current) {
+      focusRowRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  }, [highlightMonth, page]);
 
   // Column totals over the CURRENTLY FILTERED set (so they track the search box).
   // Save and the two cash-in columns are flows, so they sum across months. The
@@ -249,8 +284,11 @@ export default function Ledger() {
                     : paged.map((r) => (
                         <tr
                           key={r.monthNumber}
+                          ref={r.monthNumber === highlightMonth ? focusRowRef : undefined}
                           className={`border-b border-border/40 transition-colors ${
-                            r.isActual
+                            r.monthNumber === highlightMonth
+                              ? "bg-primary/20 ring-1 ring-primary/50"
+                              : r.isActual
                               ? "bg-emerald-500/5 hover:bg-emerald-500/10"
                               : "hover:bg-muted/20"
                           } ${r.monthNumber === lastActualMonth ? "border-b-2 border-b-emerald-500/40" : ""}`}

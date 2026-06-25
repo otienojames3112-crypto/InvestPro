@@ -51,7 +51,7 @@ import { useDepositDrawer } from "@/contexts/DepositDrawerContext";
 import { useSelectedFund } from "@/hooks/useSelectedFund";
 import { CreatePortfolioDialog } from "@/components/PortfolioSelector";
 import { MaturityTimeline } from "@/components/MaturityTimeline";
-import { Plus, Compass } from "lucide-react";
+import { Plus, Compass, ArrowUpRight } from "lucide-react";
 import { useMemo, useState, useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { rateStaleness } from "@/lib/rateStaleness";
@@ -393,11 +393,19 @@ export default function Dashboard() {
               <ul className="space-y-0.5">
                 {concentration.breaches.map((b) => (
                   <li key={b.issuer}>
-                    <span className="text-amber-100 font-medium">{b.issuer}</span>: {formatKES(b.value)}{" "}
-                    (<span className="font-mono">{(b.share * 100).toFixed(1)}%</span> of {formatKES(concentration.netWorth)} net worth)
+                    <Link
+                      href={`/deposits?issuer=${encodeURIComponent(b.issuer)}`}
+                      className="group inline-flex items-center gap-1 hover:underline decoration-amber-300/50 underline-offset-2 cursor-pointer"
+                      title={`View ${b.issuer} holdings`}
+                    >
+                      <span className="text-amber-100 font-medium">{b.issuer}</span>: {formatKES(b.value)}{" "}
+                      (<span className="font-mono">{(b.share * 100).toFixed(1)}%</span> of {formatKES(concentration.netWorth)} net worth)
+                      <ArrowUpRight className="w-3 h-3 text-amber-300/70 group-hover:text-amber-200" />
+                    </Link>
                   </li>
                 ))}
               </ul>
+              <p className="text-[11px] text-amber-200/60">Click an issuer to see its holdings.</p>
             </div>
           </div>
         )}
@@ -1163,6 +1171,7 @@ export default function Dashboard() {
         <MaturityTimeline
           securities={securities as never}
           bankHoldings={bankHoldings as never}
+          startISO={portfolio ? String(portfolio.startDate).split("T")[0] : undefined}
           plan={
             portfolio
               ? {

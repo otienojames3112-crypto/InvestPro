@@ -23,6 +23,7 @@ import BankInstruments from "./pages/BankInstruments";
 import PortfolioReview from "./pages/PortfolioReview";
 import Reconciliation from "./pages/Reconciliation";
 import Withdrawals from "./pages/Withdrawals";
+import Learn from "./pages/Learn";
 
 function Router() {
   return (
@@ -34,6 +35,7 @@ function Router() {
       <Route path="/scenarios" component={Scenarios} />
       <Route path="/settings" component={Settings} />
       <Route path="/getting-started" component={GettingStarted} />
+      <Route path="/learn" component={Learn} />
       <Route path="/deposits" component={Deposits} />
       <Route path="/withdrawals" component={Withdrawals} />
       <Route path="/mmf-funds" component={MmfFunds} />

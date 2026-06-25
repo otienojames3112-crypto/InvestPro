@@ -22,7 +22,25 @@
  *     default to 10 years and let the user override per bond.)
  */
 
-export type SecurityType = "tbill_91" | "tbill_182" | "tbill_364" | "ifb" | "fxd";
+export type SecurityType =
+  | "tbill_91"
+  | "tbill_182"
+  | "tbill_364"
+  | "ifb"
+  | "fxd"
+  | "zero_coupon"
+  | "floating_rate";
+
+/** Round 42 — default tenors for the two new instrument types. */
+export const DEFAULT_ZERO_COUPON_TENOR_YEARS = 5;
+export const DEFAULT_FLOATING_TENOR_YEARS = 5;
+
+/** A zero-coupon bond is a (long-dated) discount instrument like a T-bill. */
+export function isDiscountInstrument(
+  t: SecurityType,
+): t is "tbill_91" | "tbill_182" | "tbill_364" | "zero_coupon" {
+  return isTbill(t) || t === "zero_coupon";
+}
 
 /** Days-to-maturity for the three T-bill tenors. */
 export const TBILL_TENOR_DAYS: Record<"tbill_91" | "tbill_182" | "tbill_364", number> = {
@@ -93,8 +111,8 @@ export function whtRateForSecurity(
   tenorYears?: number | null,
 ): number {
   if (securityType === "ifb") return 0;
-  if (isTbill(securityType)) return 15;
-  // FXD — tenor-tiered.
+  if (isTbill(securityType) || securityType === "zero_coupon") return 15;
+  // FXD + floating-rate bonds — tenor-tiered (floating coupons are taxable like FXD).
   const y = typeof tenorYears === "number" && tenorYears > 0 ? tenorYears : DEFAULT_FXD_TENOR_YEARS;
   return y >= FXD_WHT_TENOR_THRESHOLD_YEARS ? 10 : 15;
 }
@@ -154,7 +172,11 @@ export function computeMaturityDate(
       ? tenorYears
       : securityType === "ifb"
         ? DEFAULT_IFB_TENOR_YEARS
-        : DEFAULT_FXD_TENOR_YEARS;
+        : securityType === "zero_coupon"
+          ? DEFAULT_ZERO_COUPON_TENOR_YEARS
+          : securityType === "floating_rate"
+            ? DEFAULT_FLOATING_TENOR_YEARS
+            : DEFAULT_FXD_TENOR_YEARS;
   return toDateInput(addYears(issue, years));
 }
 
@@ -168,7 +190,11 @@ export function tenorYearsForSecurity(
     ? bondTenorYears
     : securityType === "ifb"
       ? DEFAULT_IFB_TENOR_YEARS
-      : DEFAULT_FXD_TENOR_YEARS;
+      : securityType === "zero_coupon"
+        ? DEFAULT_ZERO_COUPON_TENOR_YEARS
+        : securityType === "floating_rate"
+          ? DEFAULT_FLOATING_TENOR_YEARS
+          : DEFAULT_FXD_TENOR_YEARS;
 }
 
 /**
@@ -271,10 +297,15 @@ export function defaultRateForSecurity(
       const t = tenorRateFromMap(rates.ifbTenorRates, tenorYears ?? null);
       return t ?? num(rates.ifbCouponRate);
     }
-    case "fxd": {
+    case "fxd":
+    case "floating_rate": {
       const t = tenorRateFromMap(rates.fxdTenorRates, tenorYears ?? null);
       return t ?? num(rates.fxdCouponRate);
     }
+    case "zero_coupon":
+      // Zero-coupon bonds are priced off a yield; default to the 364-day T-bill
+      // rate as a reasonable long-discount proxy when nothing else is supplied.
+      return num(rates.tbill364Rate);
     default:
       return 0;
   }
@@ -289,8 +320,11 @@ export function securityTenorBadge(
   if (securityType === "tbill_182") return "182d";
   if (securityType === "tbill_364") return "364d";
   const y = tenorYearsForSecurity(securityType, bondTenorYears);
-  const label = Number.isInteger(y) ? `${y}y` : `${y}y`;
-  return securityType === "ifb" ? `IFB ${label}` : `FXD ${label}`;
+  const label = `${y}y`;
+  if (securityType === "ifb") return `IFB ${label}`;
+  if (securityType === "zero_coupon") return `ZCB ${label}`;
+  if (securityType === "floating_rate") return `FRB ${label}`;
+  return `FXD ${label}`;
 }
 
 /**

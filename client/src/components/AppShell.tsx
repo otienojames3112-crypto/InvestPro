@@ -10,6 +10,7 @@ import { ModeSwitcher, SandboxBanner } from "./ModeSwitcher";
 import {
   BarChart3,
   BookOpen,
+  GraduationCap,
   ChevronRight,
   Landmark,
   LayoutDashboard,
@@ -181,6 +182,7 @@ const navGroups = [
   {
     title: "Knowledge",
     items: [
+      { href: "/learn", label: "Learn the Basics", icon: GraduationCap },
       { href: "/mmf-strategy", label: "MMF Strategy", icon: PieChart },
       { href: "/bank-instruments", label: "Bank Instruments", icon: Building2 },
       { href: "/getting-started", label: "Getting Started", icon: MapPin },

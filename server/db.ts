@@ -522,6 +522,12 @@ export async function getActualsSummary(
       tenorYears: (s as { tenorYears?: string | null }).tenorYears != null
         ? parseFloat(String((s as { tenorYears?: string | null }).tenorYears))
         : null,
+      purchasePrice: (s as { purchasePrice?: string | null }).purchasePrice != null
+        ? parseFloat(String((s as { purchasePrice?: string | null }).purchasePrice))
+        : null,
+      discountRate: (s as { discountRate?: string | null }).discountRate != null
+        ? parseFloat(String((s as { discountRate?: string | null }).discountRate))
+        : null,
     })),
     withdrawals,
   );
@@ -569,7 +575,7 @@ export async function getActualsSummary(
   // Dashboard estimate cover ALL income-earning assets and tie to Daily Accrual.
   estInterestEarned += govAccruedInterestTotal(
     securityRows.map((s) => ({
-      securityType: String(s.securityType) as "tbill_91" | "tbill_182" | "tbill_364" | "ifb" | "fxd",
+      securityType: String(s.securityType) as "tbill_91" | "tbill_182" | "tbill_364" | "ifb" | "fxd" | "zero_coupon" | "floating_rate",
       faceValue: parseFloat(String(s.faceValue ?? "0")) || 0,
       couponRate: parseFloat(String(s.couponRate ?? "0")) || 0,
       issueDate: (s as { issueDate?: unknown }).issueDate as string | Date | null | undefined,
@@ -578,6 +584,9 @@ export async function getActualsSummary(
       isTaxExempt: !!s.isTaxExempt,
       tenorYears: (s as { tenorYears?: string | null }).tenorYears != null
         ? parseFloat(String((s as { tenorYears?: string | null }).tenorYears))
+        : null,
+      purchasePrice: (s as { purchasePrice?: string | null }).purchasePrice != null
+        ? parseFloat(String((s as { purchasePrice?: string | null }).purchasePrice))
         : null,
     })),
     todayISO,

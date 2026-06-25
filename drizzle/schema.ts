@@ -151,11 +151,39 @@ export type InsertLedgerEntry = typeof ledgerEntries.$inferInsert;
 export const securities = mysqlTable("securities", {
   id: int("id").autoincrement().primaryKey(),
   portfolioId: int("portfolioId").notNull(),
-  securityType: mysqlEnum("securityType", ["tbill_91", "tbill_182", "tbill_364", "ifb", "fxd"]).notNull(),
+  securityType: mysqlEnum("securityType", [
+    "tbill_91",
+    "tbill_182",
+    "tbill_364",
+    "ifb",
+    "fxd",
+    // Round 42: discount instrument with a long tenor (bought at a deep discount,
+    // no coupon, face at maturity) and a coupon bond whose rate resets to a
+    // benchmark periodically.
+    "zero_coupon",
+    "floating_rate",
+  ]).notNull(),
   faceValue: decimal("faceValue", { precision: 14, scale: 2 }).notNull(),
+  /**
+   * Round 42: DISCOUNT INSTRUMENTS (T-bills, zero-coupon bonds) are bought BELOW
+   * face. `purchasePrice` is the cash paid up front; `faceValue` is the amount
+   * redeemed at maturity. The discount (face − price) is the entire return and
+   * the only thing WHT applies to. Coupon bonds (FXD/IFB) are bought at par, so
+   * purchasePrice equals faceValue (or is left null and treated as par).
+   */
+  purchasePrice: decimal("purchasePrice", { precision: 14, scale: 2 }),
+  /** The discount/yield rate (% p.a.) used to price a discount instrument. */
+  discountRate: decimal("discountRate", { precision: 8, scale: 4 }),
   issueDate: date("issueDate").notNull(),
   maturityDate: date("maturityDate").notNull(),
   couponRate: decimal("couponRate", { precision: 8, scale: 4 }).notNull().default("0.0000"),
+  /**
+   * Round 42: FLOATING RATE BOND only. The coupon resets every `resetMonths` to
+   * (benchmark 91-day T-bill rate + `marginRate`). For fixed instruments these
+   * are null.
+   */
+  marginRate: decimal("marginRate", { precision: 8, scale: 4 }),
+  resetMonths: int("resetMonths"),
   /**
    * Round 39: bond tenor in years (e.g. 8.5, 10, 17). Null for T-bills (whose
    * tenor is fixed by type). Drives the maturity date and the tiered FXD WHT

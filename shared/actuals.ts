@@ -25,7 +25,7 @@ export type DepositRow = {
 };
 
 export type SecurityActual = {
-  /** "tbill_91" | "tbill_182" | "tbill_364" | "ifb" | "fxd" */
+  /** "tbill_91" | "tbill_182" | "tbill_364" | "ifb" | "fxd" | "zero_coupon" | "floating_rate" */
   securityType: string;
   faceValue: number;
   couponRate: number; // annual %, gross
@@ -33,6 +33,10 @@ export type SecurityActual = {
   isMatured?: boolean;
   /** Bond tenor in years (IFB/FXD). Used for the ledger IFB band + tiered WHT. */
   tenorYears?: number | null;
+  /** Round 42 — cash paid up front for a discount instrument (T-bill / zero-coupon). */
+  purchasePrice?: number | null;
+  /** Round 42 — discount/yield rate (%) for pricing a discount instrument. */
+  discountRate?: number | null;
 };
 
 export type SecondaryMmfActual = {
@@ -174,15 +178,25 @@ export function computeActualsTotals(
   for (const s of securities) {
     if (s.isMatured) continue;
     securitiesValue += s.faceValue;
-    const isTbill = s.securityType.startsWith("tbill");
+    // Round 42: zero-coupon bonds are discount instruments — group with T-bills.
+    const isTbill = s.securityType.startsWith("tbill") || s.securityType === "zero_coupon";
     const isIfb = s.securityType === "ifb";
     if (isTbill) {
       byBucket.tbill += s.faceValue;
       if (s.securityType === "tbill_91") tbillByTenor.d91 += s.faceValue;
       else if (s.securityType === "tbill_182") tbillByTenor.d182 += s.faceValue;
       else tbillByTenor.d364 += s.faceValue;
-      // T-bill return is the discount; approximate annual interest = face * rate.
-      tbillTax += whtOn(s.faceValue * (rates.tbillRate / 100), govWht);
+      // Round 42: WHT is charged on the DISCOUNT (face − price), which is the
+      // instrument's entire return — NOT on the face value. When the actual
+      // purchase price is recorded we use the true discount; otherwise we fall
+      // back to the face × tbillRate approximation for legacy rows.
+      const price = s.purchasePrice != null && Number(s.purchasePrice) > 0
+        ? Number(s.purchasePrice)
+        : null;
+      const discount = price != null && price < s.faceValue
+        ? s.faceValue - price
+        : s.faceValue * (rates.tbillRate / 100);
+      tbillTax += whtOn(discount, govWht);
     } else if (isIfb) {
       byBucket.ifb += s.faceValue; // IFB coupons are tax-exempt in Kenya
       if (s.faceValue > ifbDominantFace) {
@@ -778,7 +792,14 @@ export function estimateAnnualTaxLines(input: AnnualTaxInput): AnnualTaxResult {
 // out to the Daily Accrual government schedule rather than inventing a new model.
 
 export interface GovSecurityAccrualInput {
-  securityType: "tbill_91" | "tbill_182" | "tbill_364" | "ifb" | "fxd";
+  securityType:
+    | "tbill_91"
+    | "tbill_182"
+    | "tbill_364"
+    | "ifb"
+    | "fxd"
+    | "zero_coupon"
+    | "floating_rate";
   faceValue: number;
   couponRate: number; // % p.a.
   issueDate?: string | Date | null;
@@ -786,6 +807,8 @@ export interface GovSecurityAccrualInput {
   isMatured?: boolean;
   isTaxExempt?: boolean;
   tenorYears?: number | null;
+  /** Round 42 — cash paid up front for a discount instrument (T-bill / zero-coupon). */
+  purchasePrice?: number | null;
 }
 
 /** Tiered WHT % for a government security (IFB exempt, T-bills 15%, FXD tenor-tiered). */
@@ -795,7 +818,7 @@ export function govWhtPct(
   isTaxExempt?: boolean,
 ): number {
   if (isTaxExempt || securityType === "ifb") return 0;
-  if (securityType.startsWith("tbill")) return 15;
+  if (securityType.startsWith("tbill") || securityType === "zero_coupon") return 15;
   // FXD — tenor-tiered: 10% for tenor >= 10y, else 15%.
   const y = typeof tenorYears === "number" && tenorYears > 0 ? tenorYears : 10;
   return y >= 10 ? 10 : 15;
@@ -822,6 +845,38 @@ export function govAccruedInterestToDate(
   }
   const face = Math.max(0, sec.faceValue || 0);
   const rate = Math.max(0, sec.couponRate || 0);
+
+  // Round 42 — DISCOUNT INSTRUMENTS (T-bill / zero-coupon): the return is the
+  // discount (face − price) accreted pro-rata over the holding window, NOT a
+  // coupon. WHT applies to the discount only. This makes T-bills (couponRate 0)
+  // contribute their real return to the Dashboard estimate.
+  const isDiscount =
+    sec.securityType.startsWith("tbill") || sec.securityType === "zero_coupon";
+  const price =
+    sec.purchasePrice != null && Number(sec.purchasePrice) > 0
+      ? Number(sec.purchasePrice)
+      : null;
+  if (isDiscount && price != null && price < face) {
+    const issue = isoDay(sec.issueDate) ?? todayISO;
+    const maturity = isoDay(sec.maturityDate);
+    let endISO = todayISO;
+    if (maturity && maturity < todayISO) endISO = maturity;
+    const from = new Date(`${issue}T12:00:00.000Z`).getTime();
+    const to = new Date(`${endISO}T12:00:00.000Z`).getTime();
+    const totalFrom = from;
+    const totalTo = maturity
+      ? new Date(`${maturity}T12:00:00.000Z`).getTime()
+      : to;
+    if (!Number.isFinite(from) || !Number.isFinite(to)) return 0;
+    const elapsed = Math.max(0, Math.floor((to - from) / 86_400_000));
+    const tenorDays = Math.max(1, Math.floor((totalTo - totalFrom) / 86_400_000));
+    const fraction = Math.min(1, elapsed / tenorDays);
+    const grossDiscount = face - price;
+    const wht = govWhtPct(sec.securityType, sec.tenorYears, sec.isTaxExempt);
+    const net = grossDiscount * fraction * (1 - wht / 100);
+    return Math.max(0, Math.round(net * 100) / 100);
+  }
+
   if (!(face > 0) || !(rate > 0)) return 0;
 
   const issue = isoDay(sec.issueDate) ?? todayISO;

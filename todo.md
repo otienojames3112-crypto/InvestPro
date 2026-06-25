@@ -560,4 +560,15 @@
 - [x] R41.3 Make MMF Funds, Other Assets, and Withdrawals open as side panels (deep-link) like Dashboard/Month Ledger/Contributions
 - [x] R41.4 Verify Est. Interest Earned formula estimates interest across ALL assets (MMF, gov securities, bank instruments, other assets); same for Est. Annual Tax; reconcile both with Daily Accrual + Tax Summary (red-testable)
 - [x] R41.5 Add Accrual Inputs breakdown (7/30/90-day etc.) for Bank Instruments and each individual bank instrument, mirroring the MMF side of the Daily Income & Accrual Ledger
-- [ ] R41.6 Full suite green, tsc clean, UI verified, checkpoint, generate full source ZIP, deliver
+- [x] R41.6 Full suite green, tsc clean, UI verified, checkpoint, generate full source ZIP, deliver
+
+## Round 42 (T-bill discount mechanics + new security types + /learn page)
+- [x] R42.1 Schema: add purchasePrice + discountRate to securities; add margin + resetMonths for floating; add zero_coupon & floating_rate to securityType enum; generate + apply migration
+- [x] R42.2 Shared discount engine: tbillPrice = face/(1+r*t/365); zeroCouponPrice = face/(1+r)^years; accretedValue(price->face) straight-line/yield; whtOnDiscount = wht*(face-price); pure + tested
+- [x] R42.3 Engine lifecycle for bucket==='tbill' (and zero_coupon): buy deducts purchasePrice from MMF (not face); hold accretes price->face capped at face; mature credits face - wht*(face-price); NO separate interest line; tax base = discount
+- [x] R42.4 Propagate discount basis to surfaces: CBK Securities register (Face/Purchase Price/Discount cols), Dashboard T-bill bucket + net worth (accreted value), Ledger (cost on buy, face on maturity), Daily Accrual (accretion not compounding, WHT on discount), Tax Summary (WHT base = discount), Reconciliation (cost basis = price)
+- [x] R42.5 Add Zero-Coupon Bond type (compounded discount price, long tenor) to enum/forms/engine/tenor picker
+- [x] R42.6 Add Floating Rate Bond type (coupon = 91d T-bill rate + margin, reset semi-annually) to enum/forms; engine recomputes coupon at reset, semi-annual like FXD with WHT, principal at maturity (ship tracked-holding fallback if scope tight)
+- [x] R42.7 Build /learn page (route /learn): move glossary rendering here + add five worked stories (Wanjiku T-bill, Juma FXD, Otieno IFB, Amina zero-coupon, Chalo floater), each with "How the tool shows this"; keep inline GlossaryTerm tooltips working; add prominent "Glossary & Learn the basics" button on Getting Started
+- [x] R42.8 Glossary additions: T-bill, discount instrument, face vs purchase price, discount-as-return, coupon, coupon bond, FXD, IFB, zero-coupon, floating rate, benchmark/reference rate, accretion, yield vs coupon, semi-annual coupon, WHT on discount vs coupon, tenor, maturity, par value
+- [x] R42.9 Worked-example tests (price 96,400; maturity credit 99,460 = 100,000 - 540 WHT; MMF drops 96,400 at buy; accretes to 100,000); full suite + tsc clean; UI verified; checkpoint; refreshed source ZIP; deliver

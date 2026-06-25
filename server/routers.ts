@@ -107,9 +107,13 @@ import {
   computeMaturityDate,
   defaultRateForSecurity,
   whtRateForSecurity,
+  isDiscountInstrument,
+  tenorYearsForSecurity,
+  TBILL_TENOR_DAYS,
   type SecurityType as GovSecurityType,
 } from "../shared/securityTenor";
 import { buildAllocation, blendedYield } from "../shared/actuals";
+import { discountPriceForSecurity, tbillPrice } from "../shared/discount";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -266,15 +270,26 @@ function mapActualBankHoldings(
 }
 
 function mapActualSecurities(rows: Awaited<ReturnType<typeof getSecurities>>): ActualSecurity[] {
-  return rows.map((s) => ({
-    securityType: s.securityType as ActualSecurity["securityType"],
-    faceValue: parseFloat(String(s.faceValue)),
-    issueDate: normaliseDate(s.issueDate),
-    maturityDate: normaliseDate(s.maturityDate),
-    couponRate: parseFloat(String(s.couponRate)),
-    isTaxExempt: s.isTaxExempt,
-    isMatured: s.isMatured,
-  }));
+  return rows.map((s) => {
+    const num = (v: unknown): number | null =>
+      v != null && String(v) !== "" && Number.isFinite(parseFloat(String(v)))
+        ? parseFloat(String(v))
+        : null;
+    return {
+      securityType: s.securityType as ActualSecurity["securityType"],
+      faceValue: parseFloat(String(s.faceValue)),
+      issueDate: normaliseDate(s.issueDate),
+      maturityDate: normaliseDate(s.maturityDate),
+      couponRate: parseFloat(String(s.couponRate)),
+      isTaxExempt: s.isTaxExempt,
+      isMatured: s.isMatured,
+      // Round 42 — discount + floating-rate fields.
+      purchasePrice: num((s as { purchasePrice?: unknown }).purchasePrice),
+      discountRate: num((s as { discountRate?: unknown }).discountRate),
+      marginRate: num((s as { marginRate?: unknown }).marginRate),
+      resetMonths: num((s as { resetMonths?: unknown }).resetMonths),
+    };
+  });
 }
 
 /** Map DB secondary MMF rows into engine inputs (fund EAR treated as gross, WHT applied in engine). */
@@ -1099,23 +1114,31 @@ export const appRouter = router({
     add: protectedProcedure
       .input(z.object({
         portfolioId: z.number().int().positive(),
-        securityType: z.enum(["tbill_91", "tbill_182", "tbill_364", "ifb", "fxd"]),
+        securityType: z.enum(["tbill_91", "tbill_182", "tbill_364", "ifb", "fxd", "zero_coupon", "floating_rate"]),
         faceValue: z.number().min(50000),
         issueDate: z.string(),
         // maturityDate is now OPTIONAL — when omitted (or for T-bills) the server
         // derives it from the issue date + tenor via the shared tenor model.
         maturityDate: z.string().optional(),
-        // Bond tenor in years (IFB/FXD). Ignored for T-bills.
+        // Bond tenor in years (IFB/FXD/zero-coupon/floating). Ignored for T-bills.
         tenorYears: z.number().min(0.1).max(30).optional(),
         // couponRate optional — defaults from Rate Settings for the type.
         couponRate: z.number().min(0).max(50).optional(),
         isTaxExempt: z.boolean().optional(),
         notes: z.string().optional(),
+        // Round 42 — discount instruments (T-bill / zero-coupon).
+        purchasePrice: z.number().min(0).optional(),
+        discountRate: z.number().min(0).max(50).optional(),
+        // Round 42 — floating-rate bonds.
+        marginRate: z.number().min(0).max(20).optional(),
+        resetMonths: z.number().int().min(1).max(24).optional(),
       }))
       .mutation(async ({ ctx, input }) => {
         await requirePortfolio(input.portfolioId, ctx.user.id);
         const type = input.securityType as GovSecurityType;
         const isTbill = type.startsWith("tbill");
+        const isDiscount = isDiscountInstrument(type);
+        const isZero = type === "zero_coupon";
         const tenorYears = isTbill ? null : (input.tenorYears ?? null);
         // Maturity: always derive for T-bills; for bonds derive from tenor unless
         // an explicit date was supplied.
@@ -1127,8 +1150,25 @@ export const appRouter = router({
         let couponRate = input.couponRate;
         if (couponRate == null) {
           const rates = await getRateSettings(input.portfolioId);
-          couponRate = defaultRateForSecurity(type, rates);
+          couponRate = defaultRateForSecurity(type, rates, tenorYears);
         }
+        // Round 42 — discount-instrument pricing. Zero-coupon bonds carry NO
+        // coupon; their return is the discount, so force couponRate to 0.
+        const discountRate = input.discountRate ?? (isDiscount ? couponRate : undefined);
+        let purchasePrice = input.purchasePrice ?? null;
+        if (isDiscount && (purchasePrice == null || purchasePrice <= 0) && discountRate != null) {
+          const tenorDays = isTbill ? TBILL_TENOR_DAYS[type as "tbill_91" | "tbill_182" | "tbill_364"] : 0;
+          const tYears = tenorYearsForSecurity(type, tenorYears);
+          purchasePrice = discountPriceForSecurity({
+            isDiscount: true,
+            isZeroCoupon: isZero,
+            faceValue: input.faceValue,
+            ratePct: discountRate,
+            tenorDays,
+            tenorYears: tYears,
+          });
+        }
+        if (isZero) couponRate = 0;
         // Tax-exempt is derived: IFB exempt, everything else taxable.
         const isTaxExempt = input.isTaxExempt ?? type === "ifb";
         await addSecurity({
@@ -1141,6 +1181,10 @@ export const appRouter = router({
           tenorYears: tenorYears != null ? String(tenorYears) : null,
           isTaxExempt,
           notes: input.notes,
+          purchasePrice: purchasePrice != null ? String(Math.round(purchasePrice * 100) / 100) : null,
+          discountRate: discountRate != null ? String(discountRate) : null,
+          marginRate: input.marginRate != null ? String(input.marginRate) : null,
+          resetMonths: input.resetMonths ?? null,
         });
         return { success: true };
       }),
@@ -1152,13 +1196,18 @@ export const appRouter = router({
         isMatured: z.boolean().optional(),
         notes: z.string().optional(),
         // Full edit (Round 22) — any of these may be supplied.
-        securityType: z.enum(["tbill_91", "tbill_182", "tbill_364", "ifb", "fxd"]).optional(),
+        securityType: z.enum(["tbill_91", "tbill_182", "tbill_364", "ifb", "fxd", "zero_coupon", "floating_rate"]).optional(),
         faceValue: z.number().min(50000).optional(),
         issueDate: z.string().optional(),
         maturityDate: z.string().optional(),
         tenorYears: z.number().min(0.1).max(30).nullable().optional(),
         couponRate: z.number().min(0).max(50).optional(),
         isTaxExempt: z.boolean().optional(),
+        // Round 42 — discount + floating-rate fields.
+        purchasePrice: z.number().min(0).nullable().optional(),
+        discountRate: z.number().min(0).max(50).nullable().optional(),
+        marginRate: z.number().min(0).max(20).nullable().optional(),
+        resetMonths: z.number().int().min(1).max(24).nullable().optional(),
       }))
       .mutation(async ({ ctx, input }) => {
         // Verify ownership: the security must belong to a portfolio owned by the
@@ -1209,6 +1258,19 @@ export const appRouter = router({
           if (m) secUpdate.maturityDate = new Date(m + "T12:00:00Z");
         }
         if (input.couponRate !== undefined) secUpdate.couponRate = String(input.couponRate);
+        // Round 42 — discount + floating-rate fields.
+        if (input.purchasePrice !== undefined) {
+          secUpdate.purchasePrice = input.purchasePrice != null ? String(input.purchasePrice) : null;
+        }
+        if (input.discountRate !== undefined) {
+          secUpdate.discountRate = input.discountRate != null ? String(input.discountRate) : null;
+        }
+        if (input.marginRate !== undefined) {
+          secUpdate.marginRate = input.marginRate != null ? String(input.marginRate) : null;
+        }
+        if (input.resetMonths !== undefined) {
+          secUpdate.resetMonths = input.resetMonths ?? null;
+        }
         // Tax-exempt follows the type: switching to/from IFB resets it unless the
         // caller explicitly overrides.
         if (input.isTaxExempt !== undefined) {
@@ -1410,7 +1472,7 @@ export const appRouter = router({
         // Round 39: precise gov-security type + tenor so the auto-created register
         // row carries the right maturity, rate, and tiered WHT. When a t-bill
         // securityType is given it overrides the coarse "tbill" bucket default.
-        govSecurityType: z.enum(["tbill_91", "tbill_182", "tbill_364", "ifb", "fxd"]).optional(),
+        govSecurityType: z.enum(["tbill_91", "tbill_182", "tbill_364", "ifb", "fxd", "zero_coupon", "floating_rate"]).optional(),
         bondTenorYears: z.number().min(0.1).max(30).optional(),
         couponRate: z.number().min(0).max(50).optional(),
         amount: z.number().positive(),
@@ -2801,6 +2863,16 @@ export const appRouter = router({
           const maturityStr = computeMaturityDate(securityType, date, tenorYears);
           const maturity = new Date(`${maturityStr}T12:00:00.000Z`);
           const couponRate = defaultRateForSecurity(securityType, seedRates);
+          // Round 42 — for the sample T-bill, record its discount rate and derive
+          // the cash paid up front so the demo showcases true discount mechanics
+          // (purchase price < face; the discount is the return).
+          let discountRate: string | null = null;
+          let purchasePrice: string | null = null;
+          if (isTbillSeed) {
+            const tenorDays = TBILL_TENOR_DAYS[securityType as "tbill_91" | "tbill_182" | "tbill_364"];
+            discountRate = String(couponRate);
+            purchasePrice = String(Math.round(tbillPrice(amount, couponRate, tenorDays) * 100) / 100);
+          }
           const sec = await addSecurity({
             portfolioId: p.id,
             securityType,
@@ -2810,6 +2882,8 @@ export const appRouter = router({
             maturityDate: maturity,
             couponRate: String(couponRate),
             isTaxExempt: securityType === "ifb",
+            discountRate,
+            purchasePrice,
             notes: `Auto-created from sample deposit on ${date}`,
           });
           if (sec?.id) await updateDepositEntry(entry.id, p.id, { securityId: sec.id });

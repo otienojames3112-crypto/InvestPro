@@ -1,4 +1,10 @@
 import { tenorRateFromMap } from "../shared/securityTenor";
+import {
+  tbillPrice,
+  zeroCouponPrice,
+  whtOnDiscount,
+  accretedValue,
+} from "../shared/discount";
 /**
  * KES Investment Compounding Engine — v3
  *
@@ -111,6 +117,17 @@ export interface SecurityLot {
   couponRate: number;
   /** True for IFB — coupon is tax-exempt. */
   isTaxExempt: boolean;
+  /**
+   * Round 42 — DISCOUNT MECHANICS. Cash actually paid up front for a discount
+   * instrument (T-bill / zero-coupon). When > 0 and < faceValue, the lot is
+   * modelled as a true discount instrument: buy deducts this price, the value
+   * accretes price→face, and maturity pays face with WHT on the discount only.
+   * For coupon bonds (FXD/IFB) and legacy lots without a recorded price this is
+   * undefined and the lot keeps its par/face behaviour.
+   */
+  purchasePrice?: number;
+  /** Round 42 — true for a zero-coupon bond (long-dated discount instrument). */
+  isZeroCoupon?: boolean;
 }
 
 export interface MonthlyContributionOverride {
@@ -216,13 +233,28 @@ export interface ActualBankHolding {
 
 /** Actual security from the database (for actuals-seeded projection). */
 export interface ActualSecurity {
-  securityType: "tbill_91" | "tbill_182" | "tbill_364" | "ifb" | "fxd";
+  securityType:
+    | "tbill_91"
+    | "tbill_182"
+    | "tbill_364"
+    | "ifb"
+    | "fxd"
+    | "zero_coupon"
+    | "floating_rate";
   faceValue: number;
   issueDate: string;
   maturityDate: string;
   couponRate: number;
   isTaxExempt: boolean;
   isMatured: boolean;
+  /** Round 42 — cash paid for a discount instrument (T-bill / zero-coupon). */
+  purchasePrice?: number | null;
+  /** Round 42 — discount/yield rate used to price a discount instrument (%). */
+  discountRate?: number | null;
+  /** Round 42 — floating-rate bond: margin over the 91-day benchmark (%). */
+  marginRate?: number | null;
+  /** Round 42 — floating-rate bond: months between coupon resets. */
+  resetMonths?: number | null;
 }
 
 export interface MonthResult {
@@ -1022,19 +1054,50 @@ export function runProjection(
       (matDate.getFullYear() - issueDate.getFullYear()) * 12 +
       (matDate.getMonth() - issueDate.getMonth())
     );
+    // Round 42: map the security type into the engine's internal family.
+    //  - T-bills + zero-coupon  → "tbill" family (discount instruments)
+    //  - IFB                    → "ifb"   family (tax-exempt coupon)
+    //  - FXD + floating-rate    → "fxd"   family (taxable coupon)
+    const isZero = sec.securityType === "zero_coupon";
+    const isFloating = sec.securityType === "floating_rate";
+    const isDiscountFamily = sec.securityType.startsWith("tbill") || isZero;
     const bucket: "tbill" | "ifb" | "fxd" =
-      sec.securityType.startsWith("tbill") ? "tbill"
+      isDiscountFamily ? "tbill"
       : sec.securityType === "ifb" ? "ifb"
       : "fxd";
+
+    // Round 42: determine the cash paid up front for discount instruments. Prefer
+    // the explicitly recorded purchasePrice; otherwise derive it from the
+    // discount rate (compound pricing for zero-coupon, simple for T-bills). For
+    // coupon bonds and legacy lots without a price this stays undefined (par).
+    let purchasePrice: number | undefined;
+    if (isDiscountFamily) {
+      if (sec.purchasePrice != null && Number(sec.purchasePrice) > 0) {
+        purchasePrice = Number(sec.purchasePrice);
+      } else if (sec.discountRate != null && Number(sec.discountRate) > 0) {
+        const tenorDays = Math.max(
+          1,
+          Math.round((matDate.getTime() - issueDate.getTime()) / 86_400_000),
+        );
+        purchasePrice = isZero
+          ? zeroCouponPrice(sec.faceValue, Number(sec.discountRate), tenorDays / 365)
+          : tbillPrice(sec.faceValue, Number(sec.discountRate), tenorDays);
+      }
+    }
+
     lots.push({
       id: `actual-${lotIdCounter++}`,
       bucket,
       faceValue: sec.faceValue,
       issueMonth,
       tenorMonths,
+      // Floating-rate bonds carry their CURRENT reset coupon in couponRate.
       couponRate: sec.couponRate,
       isTaxExempt: sec.isTaxExempt,
+      ...(purchasePrice != null ? { purchasePrice } : {}),
+      ...(isZero ? { isZeroCoupon: true } : {}),
     });
+    void isFloating;
   }
 
   // Determine the last month at which new long bonds are allowed.
@@ -1215,18 +1278,37 @@ export function runProjection(
       }
 
       if (age === lot.tenorMonths) {
-        cbkCashIn += lot.faceValue;
         if (lot.bucket === "tbill") {
-          const tenorYears = lot.tenorMonths / 12;
-          // Use the rate matching the lot's tenor (91/182/364-day), not always 364.
-          const grossInterest = lot.faceValue * (tbillRateForTenor(lot.tenorMonths, rates) / 100) * tenorYears;
-          const netInterest = grossInterest * (1 - wht);
-          whtThisMonth += grossInterest * wht;
-          cbkCashIn += netInterest;
-          cbkActions.push(
-            `a ${tenorLabel(lot.bucket, lot.tenorMonths)} matures, returning KES ${Math.round(lot.faceValue + netInterest).toLocaleString()} to the MMF (KES ${Math.round(netInterest).toLocaleString()} net interest after ${rates.withholdingTax}% tax)`
-          );
+          // ── DISCOUNT INSTRUMENT MATURITY (Round 42) ──────────────────────
+          // A T-bill / zero-coupon is repaid its FACE value. The discount
+          // (face − price) is the entire return, and WHT applies to that
+          // discount only — never to the face. There is NO separate interest
+          // line: the face IS principal + return rolled together.
+          if (lot.purchasePrice != null && lot.purchasePrice > 0 && lot.purchasePrice < lot.faceValue) {
+            const whtAmt = whtOnDiscount(lot.faceValue, lot.purchasePrice, wht * 100);
+            const proceeds = lot.faceValue - whtAmt;
+            const netGain = lot.faceValue - lot.purchasePrice - whtAmt;
+            cbkCashIn += proceeds;
+            whtThisMonth += whtAmt;
+            cbkActions.push(
+              `a ${tenorLabel(lot.bucket, lot.tenorMonths)} matures at its KES ${Math.round(lot.faceValue).toLocaleString()} face value, returning KES ${Math.round(proceeds).toLocaleString()} to the MMF (KES ${Math.round(netGain).toLocaleString()} net discount earned after ${rates.withholdingTax}% tax on the discount)`
+            );
+          } else {
+            // Legacy lot without a recorded price: keep the previous behaviour
+            // (face + separately-computed net discount) so older projections and
+            // tests that seed face-only lots stay stable.
+            cbkCashIn += lot.faceValue;
+            const tenorYears = lot.tenorMonths / 12;
+            const grossInterest = lot.faceValue * (tbillRateForTenor(lot.tenorMonths, rates) / 100) * tenorYears;
+            const netInterest = grossInterest * (1 - wht);
+            whtThisMonth += grossInterest * wht;
+            cbkCashIn += netInterest;
+            cbkActions.push(
+              `a ${tenorLabel(lot.bucket, lot.tenorMonths)} matures, returning KES ${Math.round(lot.faceValue + netInterest).toLocaleString()} to the MMF (KES ${Math.round(netInterest).toLocaleString()} net interest after ${rates.withholdingTax}% tax)`
+            );
+          }
         } else {
+          cbkCashIn += lot.faceValue;
           cbkActions.push(
             `a ${tenorLabel(lot.bucket, lot.tenorMonths)} matures, returning KES ${Math.round(lot.faceValue).toLocaleString()} to the MMF`
           );
@@ -1468,14 +1550,25 @@ export function runProjection(
     for (const lot of lots) {
       if (lot.bucket === "tbill") {
         const age = m - lot.issueMonth;
-        const tenorYears = lot.tenorMonths / 12;
-        const grossDiscount = lot.faceValue * (tbillRateForTenor(lot.tenorMonths, rates) / 100) * tenorYears;
-        const netDiscount = grossDiscount * (1 - wht);
-        // During elapsed (actual) months hold the lot flat at face value so the
-        // "today" snapshot reconciles with recorded principal; accrue the discount
-        // only across the forward horizon (Fix #5 — unified basis).
-        const accruedDiscount = !isActualMonth && age > 0 ? netDiscount * (age / lot.tenorMonths) : 0;
-        const lotValue = lot.faceValue + accruedDiscount;
+        let lotValue: number;
+        if (lot.purchasePrice != null && lot.purchasePrice > 0 && lot.purchasePrice < lot.faceValue) {
+          // ── DISCOUNT INSTRUMENT VALUE (Round 42) ─────────────────────────
+          // The lot was bought BELOW face and accretes price→face as it ages,
+          // never exceeding face. This is accretion (price pulled up to par),
+          // not MMF-style compounding and not growth above face. The fraction
+          // is elapsed/tenor, clamped to [0,1] inside accretedValue().
+          const fraction = lot.tenorMonths > 0 ? age / lot.tenorMonths : 1;
+          lotValue = accretedValue(lot.faceValue, lot.purchasePrice, fraction);
+        } else {
+          // Legacy face-based lot (no recorded price): preserve prior behaviour —
+          // flat at face during elapsed months, accrue net discount above face
+          // across the forward horizon only.
+          const tenorYears = lot.tenorMonths / 12;
+          const grossDiscount = lot.faceValue * (tbillRateForTenor(lot.tenorMonths, rates) / 100) * tenorYears;
+          const netDiscount = grossDiscount * (1 - wht);
+          const accruedDiscount = !isActualMonth && age > 0 ? netDiscount * (age / lot.tenorMonths) : 0;
+          lotValue = lot.faceValue + accruedDiscount;
+        }
         tbillEnd += lotValue;
         // Bucket by nearest standard tenor (91d≈3m, 182d≈6m, 364d≈12m).
         if (lot.tenorMonths <= 4) tbill91End += lotValue;

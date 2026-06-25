@@ -1335,21 +1335,28 @@ export default function GettingStarted() {
             </CardContent>
           </Card>
 
-          <Card className="lg:col-span-3">
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base font-semibold flex items-center gap-2">
-                <BookMarked className="h-4 w-4 text-amber-400" /> Terms glossary
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="grid gap-x-6 gap-y-3 sm:grid-cols-2">
-              {GLOSSARY.map((g) => (
-                <div key={g.id} className="text-xs">
-                  <span className="font-semibold text-foreground">{g.term}.</span>{" "}
-                  <span className="text-muted-foreground">{g.def}</span>
+          <Link href="/learn" className="lg:col-span-3">
+            <Card className="group cursor-pointer border-primary/30 bg-primary/[0.04] transition-colors hover:border-primary/60 hover:bg-primary/[0.07]">
+              <CardContent className="flex flex-col gap-4 py-5 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex items-start gap-4">
+                  <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-primary/15">
+                    <BookMarked className="h-5 w-5 text-primary" />
+                  </div>
+                  <div>
+                    <p className="text-base font-semibold text-foreground">Learn the Basics &amp; full glossary</p>
+                    <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
+                      New to T-bills, coupon bonds, zero-coupon and floating-rate bonds? Read five short
+                      worked stories (Wanjiku, Juma, Otieno, Amina &amp; Chalo) that show exactly how each
+                      instrument pays you — plus every term defined in plain language.
+                    </p>
+                  </div>
                 </div>
-              ))}
-            </CardContent>
-          </Card>
+                <span className="inline-flex shrink-0 items-center gap-1 text-sm font-medium text-primary">
+                  Open Learn <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
+                </span>
+              </CardContent>
+            </Card>
+          </Link>
         </div>
 
         {/* Tab switcher */}

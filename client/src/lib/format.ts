@@ -84,6 +84,8 @@ export function getSecurityLabel(type: string): string {
     case "tbill_364": return "364-Day T-Bill";
     case "ifb": return "Infrastructure Bond (IFB)";
     case "fxd": return "Fixed Coupon Bond (FXD)";
+    case "zero_coupon": return "Zero-Coupon Bond";
+    case "floating_rate": return "Floating-Rate Bond";
     default: return type;
   }
 }

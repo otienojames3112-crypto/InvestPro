@@ -2064,3 +2064,26 @@ export function solveForStepUp(
     message: `To reach KES ${target.toLocaleString()} in ${horizonMonths} months starting at KES ${start.toLocaleString()}/month, step up by about KES ${recommendedStepUp.toLocaleString()} every ${settings.stepUpMonths ?? 6} months.${shortHorizonNote}`,
   };
 }
+
+/**
+ * Project the ending value for a SPECIFIC starting contribution + step-up amount.
+ * Used by the Create-Portfolio dialog to show an exact "projected vs target"
+ * delta even when the user types a custom step-up (rather than the recommended
+ * one). Same engine as everything else, so the delta agrees with the Scenarios
+ * page once the portfolio exists.
+ */
+export function projectEndingValue(
+  settings: EngineSettings,
+  startingContribution: number,
+  stepUpAmount: number,
+  rateHistory: RateSnapshot[] = [],
+  secondaryMmfs: SecondaryMmfInput[] = []
+): number {
+  const s: EngineSettings = {
+    ...settings,
+    startingContribution: Math.max(0, Math.round(startingContribution || 0)),
+    stepUpAmount: Math.max(0, stepUpAmount || 0),
+  };
+  const results = runProjection(s, [], rateHistory, [], [], secondaryMmfs);
+  return Math.round(results[results.length - 1]?.totalEnd ?? 0);
+}

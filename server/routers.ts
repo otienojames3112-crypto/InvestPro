@@ -78,6 +78,7 @@ import {
   generateMilestones,
   solveForContribution,
   solveForStepUp,
+  projectEndingValue,
   deriveSafetyFloor,
   SWEEP_LOT_SIZE,
   SCENARIO_STEPUPS,
@@ -956,6 +957,74 @@ export const appRouter = router({
       }),
 
     /**
+     * Portfolio-aware step-up recommendation for the Settings (Plan) page. Uses
+     * the saved portfolio's REAL rates, selected fund, rate history and secondary
+     * MMFs, but lets the page override the starting contribution and step-up
+     * frequency with the currently-entered (possibly unsaved) values, so the
+     * "recommended" figure reflects what the user is editing. Same engine as the
+     * Scenarios page, so the two agree.
+     */
+    recommendStepUpForPortfolio: protectedProcedure
+      .input(z.object({
+        portfolioId: z.number().int().positive(),
+        startingContribution: z.number().min(0).optional(),
+        stepUpMonths: z.number().int().min(1).max(24).optional(),
+      }))
+      .query(async ({ ctx, input }) => {
+        const p = await requirePortfolio(input.portfolioId, ctx.user.id);
+        const [rates, fundEar] = await Promise.all([getRateSettings(input.portfolioId), getSelectedFundEar(p)]);
+        const baseSettings = dbToEngine(rates, p, fundEar);
+        const rh = mapRateHistory(await getRateHistory(input.portfolioId));
+        const secondaryMmfs = mapSecondaryMmfs(await getSecondaryMmfs(input.portfolioId));
+        const startingContribution = input.startingContribution ?? baseSettings.startingContribution;
+        const settings: EngineSettings = {
+          ...baseSettings,
+          stepUpMonths: input.stepUpMonths ?? baseSettings.stepUpMonths,
+          startingContribution,
+          stepUpAmount: 0,
+        };
+        return solveForStepUp(settings, startingContribution, rh, secondaryMmfs);
+      }),
+
+    /**
+     * Stateless projection of a SPECIFIC step-up for the Create-Portfolio dialog,
+     * so the "projected vs target" delta is exact even when the user types a custom
+     * step-up. Uses the same default CBK rates a fresh portfolio is seeded with.
+     */
+    projectDraft: protectedProcedure
+      .input(z.object({
+        targetAmount: z.number().positive(),
+        horizonMonths: z.number().int().min(1).max(600),
+        startingContribution: z.number().min(0),
+        stepUpAmount: z.number().min(0),
+        startDate: z.string().optional(),
+        stepUpMonths: z.number().int().min(1).max(24).optional(),
+      }))
+      .query(async ({ input }) => {
+        const settings: EngineSettings = {
+          ...DEFAULT_SETTINGS,
+          targetAmount: input.targetAmount,
+          horizonMonths: input.horizonMonths,
+          stepUpMonths: input.stepUpMonths ?? DEFAULT_SETTINGS.stepUpMonths,
+          startDate: input.startDate ? normaliseDate(input.startDate) : DEFAULT_SETTINGS.startDate,
+          startingContribution: input.startingContribution,
+          stepUpAmount: input.stepUpAmount,
+        };
+        const projectedEndingValue = projectEndingValue(
+          settings,
+          input.startingContribution,
+          input.stepUpAmount,
+          [],
+          [],
+        );
+        return {
+          projectedEndingValue,
+          target: input.targetAmount,
+          delta: projectedEndingValue - input.targetAmount,
+        };
+      }),
+
+    /**
      * What-if overlay: re-run the projection with one or more secondary-MMF
      * monthly contributions replaced, and return both the baseline and the
      * what-if month series + final values so the UI can compare them.
@@ -1559,8 +1628,35 @@ export const appRouter = router({
           const maturityStr = computeMaturityDate(securityType, input.depositDate, tenorYears);
           const maturity = new Date(maturityStr + "T12:00:00Z");
           // Rate: caller override, else the type's default from Rate Settings.
-          const couponRate =
+          let couponRate =
             input.couponRate ?? defaultRateForSecurity(securityType, rates);
+          // Round 45 — mirror the Securities Register discount mechanics so a
+          // gov security added via Record Deposits behaves identically to one
+          // added in the register. For discount instruments (T-bills and
+          // zero-coupon bonds) the user pays BELOW face; we derive the
+          // purchase price + discount rate here so the engine accretes it to
+          // face and charges WHT only on the discount. faceValue stays equal to
+          // the entered amount (keeps the gov sub-check face-vs-deposit green).
+          const isZeroDep = securityType === "zero_coupon";
+          const isDiscountDep = isTbill || isZeroDep;
+          const discountRateDep = isDiscountDep ? couponRate : null;
+          let purchasePriceDep: number | null = null;
+          if (isDiscountDep && discountRateDep != null && discountRateDep > 0) {
+            const tenorDaysDep = isTbill
+              ? TBILL_TENOR_DAYS[securityType as "tbill_91" | "tbill_182" | "tbill_364"]
+              : 0;
+            const tYearsDep = tenorYearsForSecurity(securityType, tenorYears);
+            purchasePriceDep = discountPriceForSecurity({
+              isDiscount: true,
+              isZeroCoupon: isZeroDep,
+              faceValue: input.amount,
+              ratePct: discountRateDep,
+              tenorDays: tenorDaysDep,
+              tenorYears: tYearsDep,
+            });
+          }
+          // Zero-coupon bonds carry no periodic coupon — the return IS the discount.
+          if (isZeroDep) couponRate = 0;
           const sec = await addSecurity({
             portfolioId: input.portfolioId,
             securityType,
@@ -1568,6 +1664,11 @@ export const appRouter = router({
             faceValue: String(input.amount),
             issueDate: issue,
             maturityDate: maturity,
+            purchasePrice:
+              purchasePriceDep != null
+                ? String(Math.round(purchasePriceDep * 100) / 100)
+                : null,
+            discountRate: discountRateDep != null ? String(discountRateDep) : null,
             couponRate: String(couponRate),
             isTaxExempt: securityType === "ifb",
             notes: `Auto-created from deposit on ${input.depositDate}`,

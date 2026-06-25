@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Settings as SettingsIcon, RefreshCw, Info, Pencil } from "lucide-react";
+import { Settings as SettingsIcon, RefreshCw, Info, Pencil, Sparkles } from "lucide-react";
 import { UpdateRatesPanel } from "@/components/UpdateRatesPanel";
 import { toast } from "sonner";
 import { useForm } from "react-hook-form";
@@ -258,6 +258,29 @@ export default function Settings() {
     { enabled: !!portfolioId }
   );
 
+  // ── Live step-up recommendation (portfolio-aware) ─────────────────────────
+  // Mirrors the Create-dialog auto-recommend, but uses the saved portfolio's
+  // real rates/balances and the currently-entered contribution + frequency.
+  const watchedStepUpMonths = planForm.watch("stepUpMonths");
+  const watchedStepUpAmount = planForm.watch("stepUpAmount");
+  const [stepUpReco, setStepUpReco] = useState<{ startingContribution: number; stepUpMonths: number } | null>(null);
+  useEffect(() => {
+    if (!portfolioId) return;
+    const sc = Number(watchedContribution);
+    const sm = Number(watchedStepUpMonths);
+    if (!Number.isFinite(sc) || sc < 0 || !Number.isFinite(sm) || sm < 1) {
+      setStepUpReco(null);
+      return;
+    }
+    const t = setTimeout(() => setStepUpReco({ startingContribution: sc, stepUpMonths: sm }), 450);
+    return () => clearTimeout(t);
+  }, [portfolioId, watchedContribution, watchedStepUpMonths]);
+  const stepUpRecoQuery = trpc.projection.recommendStepUpForPortfolio.useQuery(
+    stepUpReco ? { portfolioId: portfolioId!, ...stepUpReco } : { portfolioId: portfolioId! },
+    { enabled: !!portfolioId && !!stepUpReco, staleTime: 30_000 }
+  );
+  const stepUpRec = stepUpReco ? stepUpRecoQuery.data : undefined;
+
   if (!portfolioId) {
     return (
       <AppShell>
@@ -320,10 +343,47 @@ export default function Settings() {
               <div className="space-y-1.5">
                 <Label className="text-xs font-medium">Step-Up Amount per Period (KES)</Label>
                 <Input type="number" step="100" min="0" {...planForm.register("stepUpAmount", { valueAsNumber: true })} />
+                {stepUpRec && (
+                  <div className="flex items-center gap-2 text-xs">
+                    <Sparkles className="w-3 h-3 text-primary shrink-0" />
+                    {stepUpRec.alreadyHitsAtZero ? (
+                      <span className="text-muted-foreground">
+                        Already reaches target at this contribution — <strong className="text-foreground">no step-up needed</strong>.
+                        {Number(watchedStepUpAmount) > 0 && (
+                          <button
+                            type="button"
+                            className="ml-1 text-primary hover:underline"
+                            onClick={() => planForm.setValue("stepUpAmount", 0, { shouldDirty: true })}
+                          >
+                            Set to 0
+                          </button>
+                        )}
+                      </span>
+                    ) : stepUpRec.feasible ? (
+                      <span className="text-muted-foreground">
+                        Recommended: <strong className="text-foreground">{stepUpRec.recommendedStepUp.toLocaleString("en-KE")}</strong>{" "}
+                        <span className="text-muted-foreground/70">to reach target (projected {stepUpRec.projectedEndingValue.toLocaleString("en-KE")})</span>
+                        <button
+                          type="button"
+                          className="ml-1 text-primary hover:underline disabled:opacity-50"
+                          disabled={Number(watchedStepUpAmount) === stepUpRec.recommendedStepUp}
+                          onClick={() => planForm.setValue("stepUpAmount", stepUpRec.recommendedStepUp, { shouldDirty: true })}
+                        >
+                          Use recommended
+                        </button>
+                      </span>
+                    ) : (
+                      <span className="text-amber-400">
+                        Even a large step-up won’t reach the target at this contribution — raise the Month-1 amount, extend the horizon, or lower the target.
+                      </span>
+                    )}
+                  </div>
+                )}
               </div>
               <div className="space-y-1.5">
                 <Label className="text-xs font-medium">Step-Up Every N Months</Label>
                 <Input type="number" step="1" min="1" max="24" {...planForm.register("stepUpMonths", { valueAsNumber: true })} />
+                <p className="text-xs text-muted-foreground">Common cadences: 3, 6, or 12 months.</p>
               </div>
               <div className="space-y-1.5">
                 <Label className="text-xs font-medium">MMF Safety Floor (KES)</Label>

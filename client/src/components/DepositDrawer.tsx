@@ -11,8 +11,10 @@ import {
   FXD_TENORS,
   DEFAULT_IFB_TENOR_YEARS,
   DEFAULT_FXD_TENOR_YEARS,
+  TBILL_TENOR_DAYS,
   type SecurityType,
 } from "@shared/securityTenor";
+import { tbillPrice } from "@shared/discount";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -110,6 +112,12 @@ export function DepositDrawer({ open, onClose }: DepositDrawerProps) {
     { enabled: !!portfolioId }
   );
   const { data: bankInstrumentRefs = [] } = trpc.bankInstruments.list.useQuery();
+  // Round 45: rate settings power the live T-bill discount-price preview so the
+  // user sees the actual cash they'll pay (below face) before recording.
+  const { data: rateSettings } = trpc.settings.get.useQuery(
+    { portfolioId: portfolioId! },
+    { enabled: !!portfolioId },
+  );
 
   const liveTarget = portfolio?.targetAmount ?? 0;
 
@@ -259,6 +267,31 @@ export function DepositDrawer({ open, onClose }: DepositDrawerProps) {
   const govWht = govSecurityType
     ? whtRateForSecurity(govSecurityType, isGovBond ? govDetail.bondTenorYears : null)
     : 0;
+
+  // Round 45: live discount-price preview for T-bills. Mirrors the server's
+  // auto-derivation (deposits.add) and the CBK Securities Register: the user
+  // enters the FACE value; we show the discounted purchase price they'll pay and
+  // the discount they earn at maturity. Uses the same tbillPrice helper + the
+  // portfolio's current rate for the chosen tenor.
+  const tbillFace = isGovTbill ? parseFloat(form.amount) || 0 : 0;
+  const tbillRateForPreview =
+    rateSettings == null
+      ? 0
+      : govDetail.tbillTenorDays === 91
+        ? rateSettings.tbill91Rate
+        : govDetail.tbillTenorDays === 182
+          ? rateSettings.tbill182Rate
+          : rateSettings.tbill364Rate;
+  const tbillPreviewPrice =
+    isGovTbill && tbillFace > 0 && tbillRateForPreview > 0
+      ? tbillPrice(
+          tbillFace,
+          tbillRateForPreview,
+          TBILL_TENOR_DAYS[`tbill_${govDetail.tbillTenorDays}` as "tbill_91" | "tbill_182" | "tbill_364"],
+        )
+      : null;
+  const tbillPreviewDiscount =
+    tbillPreviewPrice != null ? tbillFace - tbillPreviewPrice : null;
 
   function resetForm() {
     setForm({ destination: "", amount: "", depositDate: new Date().toISOString().slice(0, 10), notes: "" });
@@ -549,6 +582,33 @@ export function DepositDrawer({ open, onClose }: DepositDrawerProps) {
                       <p className="text-[11px] text-emerald-300/80">IFB coupons are tax-exempt (subject to legislative change).</p>
                     )}
                     {isGovTbill && (
+                      <div className="rounded-md border border-emerald-500/20 bg-emerald-500/5 p-2.5 space-y-1.5">
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="text-muted-foreground">Face value (at maturity)</span>
+                          <span className="font-semibold text-foreground kes-amount">
+                            {tbillFace > 0 ? formatKES(tbillFace) : "\u2014"}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="text-muted-foreground">You pay now (discounted price)</span>
+                          <span className="font-semibold text-emerald-300 kes-amount">
+                            {tbillPreviewPrice != null ? formatKES(tbillPreviewPrice) : "\u2014"}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="text-muted-foreground">Discount earned ({tbillRateForPreview > 0 ? `${tbillRateForPreview.toFixed(2)}%` : "rate"})</span>
+                          <span className="font-semibold text-foreground kes-amount">
+                            {tbillPreviewDiscount != null ? `+${formatKES(tbillPreviewDiscount)}` : "\u2014"}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-muted-foreground/80 border-t border-white/10 pt-1.5">
+                          Enter the <span className="text-foreground">face value</span> above. A T-bill is bought
+                          below face; we record the discounted price you actually pay and accrete it to face at
+                          maturity, charging 15% WHT only on the discount — exactly like the Securities register.
+                        </p>
+                      </div>
+                    )}
+                    {isGovTbill && (
                       <p className="text-[11px] text-muted-foreground/80 border-t border-white/10 pt-2">
                         Buying a <span className="text-foreground">zero-coupon</span> or{" "}
                         <span className="text-foreground">floating-rate</span> bond instead? Those are
@@ -664,7 +724,7 @@ export function DepositDrawer({ open, onClose }: DepositDrawerProps) {
 
               {/* Amount */}
               <div className="space-y-1.5">
-                <Label className="text-xs text-muted-foreground">Amount (KES)</Label>
+                <Label className="text-xs text-muted-foreground">{isGovTbill ? "Face value (KES)" : "Amount (KES)"}</Label>
                 <Input
                   type="number"
                   min="1"

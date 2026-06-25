@@ -290,14 +290,16 @@ export async function deleteSecurity(id: number) {
   // security must also remove that deposit so it cannot become an orphan that still
   // shows in the contribution history while its register holding is gone. Without
   // this, the two sides drift and reconcileGov reports a phantom gap.
-  const linkedDeposits = await db
-    .select()
-    .from(depositEntries)
-    .where(eq(depositEntries.securityId, id));
+  //
+  // Round 45 (recon-after-delete fix): a redeemed gov security also owns a
+  // withdrawal_entries row (withdrawalEntries.securityId) recorded when it was
+  // cashed out. If we drop the security + its deposit but leave that withdrawal
+  // behind, the gov sub-check nets (gone deposit) − (surviving withdrawal) and
+  // reports a phantom negative gap that turns the Reconciliation page red. So the
+  // cascade must remove BOTH linked sides — deposit and withdrawal.
   await db.delete(securities).where(eq(securities.id, id));
-  if (linkedDeposits.length > 0) {
-    await db.delete(depositEntries).where(eq(depositEntries.securityId, id));
-  }
+  await db.delete(depositEntries).where(eq(depositEntries.securityId, id));
+  await db.delete(withdrawalEntries).where(eq(withdrawalEntries.securityId, id));
 }
 
 // ─── Contribution Overrides ─────────────────────────────────────────────────────

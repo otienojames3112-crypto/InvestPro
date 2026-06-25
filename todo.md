@@ -588,3 +588,12 @@
 - [x] R44.3 Stateless tRPC `projection.recommendStepUp` taking draft inputs (targetAmount, horizonMonths, startingContribution, startDate, stepUpMonths) + default CBK rates; no saved portfolio required so it works inside the Create dialog.
 - [x] R44.4 Wire Create Portfolio dialog: debounce on target/horizon/month1 changes → call recommendStepUp → prefill Step-up field with the recommendation + an "Auto" hint; user can still override. Keep stepUpMonths = 6 consistent with Scenarios.
 - [x] R44.5 Full suite green, tsc clean, UI verified, checkpoint, refreshed source ZIP, deliver
+
+## Round 45 (delta + step-up frequency + mirror control + recon-delete fix + deposit price auto-derive)
+
+- [x] R45.1 Reproduce & fix the reconciliation error that occurs after a security is deleted (likely an orphaned/linked-row or null-field path in the reconciliation procedure or deleteSecurity cascade).
+- [x] R45.2 Record Deposits flow: when adding a gov security (e.g. T-bill), auto-derive the purchase price from the face value (same discount logic used in the CBK Securities Register), instead of treating the deposit amount as face with no discount.
+- [x] R45.3 Create Portfolio dialog: show a live "projected end value vs target" surplus/shortfall delta before the user clicks Create.
+- [x] R45.4 Create Portfolio dialog: let the user pick step-up frequency (every 3 / 6 / 12 months) and feed stepUpMonths into the same recommendStepUp solver.
+- [x] R45.5 Mirror the auto-recommend step-up control on the Rate Settings / Contributions page so edits to an existing portfolio can re-suggest a step-up (uses the saved portfolio's real rates/balances).
+- [x] R45.6 Tests for recon-after-delete, deposit price auto-derive, frequency-aware solver; full suite green, tsc clean, UI verified, checkpoint, refreshed source ZIP, deliver.

@@ -77,6 +77,7 @@ import {
   getScheduledContribution,
   generateMilestones,
   solveForContribution,
+  solveForStepUp,
   deriveSafetyFloor,
   SWEEP_LOT_SIZE,
   SCENARIO_STEPUPS,
@@ -920,6 +921,38 @@ export const appRouter = router({
         const stepUp = input.stepUpAmount ?? settings.stepUpAmount;
         const secondaryMmfs = mapSecondaryMmfs(await getSecondaryMmfs(input.portfolioId));
         return solveForContribution(settings, stepUp, rh, secondaryMmfs);
+      }),
+
+    /**
+     * Stateless forward step-up recommendation for the Create-Portfolio dialog.
+     * The user fixes the Month-1 contribution; we recommend the step-up/period
+     * that reaches the target. No saved portfolio is required — settings are
+     * built from the platform default CBK rates (the exact rates a freshly
+     * created portfolio is seeded with), so the recommendation matches what the
+     * portfolio's Scenarios page will show once it exists.
+     */
+    recommendStepUp: protectedProcedure
+      .input(z.object({
+        targetAmount: z.number().positive(),
+        horizonMonths: z.number().int().min(1).max(600),
+        startingContribution: z.number().min(0),
+        startDate: z.string().optional(),
+        stepUpMonths: z.number().int().min(1).max(24).optional(),
+      }))
+      .query(async ({ input }) => {
+        // Build engine settings from the platform defaults (same fallbacks
+        // dbToEngine uses for a brand-new portfolio) overridden by draft inputs.
+        const settings: EngineSettings = {
+          ...DEFAULT_SETTINGS,
+          targetAmount: input.targetAmount,
+          horizonMonths: input.horizonMonths,
+          stepUpMonths: input.stepUpMonths ?? DEFAULT_SETTINGS.stepUpMonths,
+          startDate: input.startDate ? normaliseDate(input.startDate) : DEFAULT_SETTINGS.startDate,
+          // startingContribution/stepUpAmount are supplied/ignored by the solver.
+          startingContribution: input.startingContribution,
+          stepUpAmount: 0,
+        };
+        return solveForStepUp(settings, input.startingContribution, [], []);
       }),
 
     /**

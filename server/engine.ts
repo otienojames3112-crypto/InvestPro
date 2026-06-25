@@ -1937,3 +1937,130 @@ export function solveForContribution(
     message: `To reach KES ${target.toLocaleString()} in ${horizonMonths} months, start at KES ${requiredStartingContribution.toLocaleString()}/month${stepUpNote}.${shortHorizonNote}`,
   };
 }
+
+// ─── Forward Step-Up Solver ───────────────────────────────────────────────────
+
+/** Maximum step-up/period the solver will try before declaring infeasible. */
+export const SOLVER_MAX_STEPUP = 500_000;
+
+/** Recommended step-ups are rounded UP to the nearest this many KES for a clean figure. */
+export const STEPUP_ROUNDING = 500;
+
+export interface StepUpSolverResult {
+  /** Whether a feasible step-up was found within the cap (given the fixed Month-1 contribution). */
+  feasible: boolean;
+  /** Recommended step-up amount per period (KES), rounded up to STEPUP_ROUNDING. */
+  recommendedStepUp: number;
+  /** The fixed starting (Month 1) contribution this recommendation is based on. */
+  startingContribution: number;
+  /** Projected ending value at the recommended step-up. */
+  projectedEndingValue: number;
+  /** True when the plan already reaches target at zero step-up (recommendedStepUp = 0). */
+  alreadyHitsAtZero: boolean;
+  /** Shortfall if infeasible (how much short the plan is even at the step-up cap). */
+  shortfall: number;
+  /** Whether the target is contribution-driven (short horizon). */
+  isShortHorizon: boolean;
+  /** Human-readable explanation. */
+  message: string;
+}
+
+/**
+ * Forward solver used by the Create-Portfolio dialog: the user FIXES the Month-1
+ * contribution, and we recommend the step-up/period that makes the projection
+ * reach the target. This is the mirror of {@link solveForContribution} (which
+ * fixes the step-up and solves for the contribution) and uses the SAME
+ * {@link runProjection} engine, so a portfolio created with the recommended
+ * step-up will agree with the Scenarios page.
+ *
+ * Strategy:
+ *   - Hold startingContribution fixed (caller supplies it).
+ *   - If the plan already reaches target with NO step-up, recommend 0.
+ *   - Otherwise binary-search the step-up amount until the horizon total ≥ target,
+ *     then round UP to STEPUP_ROUNDING for a clean recommendation.
+ *   - If even SOLVER_MAX_STEPUP doesn't reach the target, report infeasible.
+ *
+ * @param settings            - Base settings (target, horizon, rates, stepUpMonths). stepUpAmount is ignored.
+ * @param startingContribution - The fixed Month-1 contribution (KES/month).
+ * @param rateHistory         - Rate history for time-locked projection.
+ * @param secondaryMmfs       - Optional tracked secondary MMFs.
+ */
+export function solveForStepUp(
+  settings: EngineSettings,
+  startingContribution: number,
+  rateHistory: RateSnapshot[] = [],
+  secondaryMmfs: SecondaryMmfInput[] = []
+): StepUpSolverResult {
+  const horizonMonths = settings.horizonMonths ?? 120;
+  const isShortHorizon = horizonMonths < SHORT_HORIZON_THRESHOLD;
+  const target = settings.targetAmount;
+  const start = Math.max(0, Math.round(startingContribution || 0));
+
+  const project = (stepUpAmount: number): number => {
+    const s: EngineSettings = { ...settings, startingContribution: start, stepUpAmount };
+    const results = runProjection(s, [], rateHistory, [], [], secondaryMmfs);
+    return results[results.length - 1]?.totalEnd ?? 0;
+  };
+
+  // 1) Already on track with no step-up at all?
+  const atZero = project(0);
+  if (atZero >= target) {
+    return {
+      feasible: true,
+      recommendedStepUp: 0,
+      startingContribution: start,
+      projectedEndingValue: Math.round(atZero),
+      alreadyHitsAtZero: true,
+      shortfall: 0,
+      isShortHorizon,
+      message: `At KES ${start.toLocaleString()}/month, the plan already reaches KES ${target.toLocaleString()} within ${horizonMonths} months — no step-up required.`,
+    };
+  }
+
+  // 2) Feasibility check at the step-up cap.
+  const atCap = project(SOLVER_MAX_STEPUP);
+  if (atCap < target) {
+    const shortfall = target - atCap;
+    return {
+      feasible: false,
+      recommendedStepUp: SOLVER_MAX_STEPUP,
+      startingContribution: start,
+      projectedEndingValue: Math.round(atCap),
+      alreadyHitsAtZero: false,
+      shortfall,
+      isShortHorizon,
+      message: `Even with a very large step-up, KES ${start.toLocaleString()}/month cannot reach KES ${target.toLocaleString()} in ${horizonMonths} months. Consider a higher Month-1 amount, a longer horizon, or a lower target.`,
+    };
+  }
+
+  // 3) Binary-search the minimum step-up that reaches target.
+  let lo = 0;
+  let hi = SOLVER_MAX_STEPUP;
+  for (let iter = 0; iter < 60; iter++) {
+    const mid = (lo + hi) / 2;
+    if (project(mid) >= target) {
+      hi = mid;
+    } else {
+      lo = mid;
+    }
+  }
+
+  // Round UP to a clean increment so the recommendation comfortably clears target.
+  const recommendedStepUp = Math.ceil(hi / STEPUP_ROUNDING) * STEPUP_ROUNDING;
+  const projectedEndingValue = project(recommendedStepUp);
+
+  const shortHorizonNote = isShortHorizon
+    ? ` Note: this is a short-horizon plan (${horizonMonths} months), so the result is primarily contribution-driven.`
+    : "";
+
+  return {
+    feasible: true,
+    recommendedStepUp,
+    startingContribution: start,
+    projectedEndingValue: Math.round(projectedEndingValue),
+    alreadyHitsAtZero: false,
+    shortfall: 0,
+    isShortHorizon,
+    message: `To reach KES ${target.toLocaleString()} in ${horizonMonths} months starting at KES ${start.toLocaleString()}/month, step up by about KES ${recommendedStepUp.toLocaleString()} every ${settings.stepUpMonths ?? 6} months.${shortHorizonNote}`,
+  };
+}

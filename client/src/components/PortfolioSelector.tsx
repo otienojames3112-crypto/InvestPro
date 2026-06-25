@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { ChevronDown, Plus, Briefcase, Check } from "lucide-react";
+import { useState, useEffect, useRef } from "react";
+import { ChevronDown, Plus, Briefcase, Check, Sparkles, Loader2 } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -26,6 +26,13 @@ import { toast } from "sonner";
 /**
  * The create-portfolio dialog. Extracted so it can be opened either from the
  * sidebar dropdown or from an empty-state onboarding screen.
+ *
+ * As the user fills in target, horizon, start date, and Month-1 contribution,
+ * the dialog calls the stateless `projection.recommendStepUp` query (debounced)
+ * and auto-fills the Step-up field with the amount that reaches the target.
+ * Because that query uses the SAME projection engine + default CBK rates the
+ * Scenarios page uses, the recommendation stays in sync with the Scenarios
+ * comparison once the portfolio exists. The user can always override the value.
  */
 export function CreatePortfolioDialog({
   open,
@@ -42,8 +49,61 @@ export function CreatePortfolioDialog({
   const [horizonMonths, setHorizonMonths] = useState("");
   const [startingContribution, setStartingContribution] = useState("");
   const [stepUpAmount, setStepUpAmount] = useState("");
+  // Tracks whether the user has hand-edited the step-up field. Once they do, we
+  // stop auto-overwriting it so we never clobber a deliberate choice.
+  const [stepUpTouched, setStepUpTouched] = useState(false);
 
   const utils = trpc.useUtils();
+
+  // ── Live step-up recommendation ───────────────────────────────────────────
+  const target = parseFloat(targetAmount);
+  const horizon = parseInt(horizonMonths);
+  const month1 = parseFloat(startingContribution);
+  const recoInputValid =
+    Number.isFinite(target) && target >= 100000 &&
+    Number.isFinite(horizon) && horizon >= 12 && horizon <= 240 &&
+    Number.isFinite(month1) && month1 >= 0;
+
+  // Debounce the draft inputs so we only query once typing settles.
+  const [debounced, setDebounced] = useState<{
+    targetAmount: number; horizonMonths: number; startingContribution: number; startDate: string;
+  } | null>(null);
+  useEffect(() => {
+    if (!open || !recoInputValid) {
+      setDebounced(null);
+      return;
+    }
+    const t = setTimeout(() => {
+      setDebounced({
+        targetAmount: target,
+        horizonMonths: horizon,
+        startingContribution: month1,
+        startDate,
+      });
+    }, 400);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, recoInputValid, target, horizon, month1, startDate]);
+
+  const recoQuery = trpc.projection.recommendStepUp.useQuery(
+    debounced
+      ? { ...debounced, stepUpMonths: 6 }
+      : { targetAmount: 0, horizonMonths: 0, startingContribution: 0 },
+    { enabled: !!debounced, staleTime: 60_000 }
+  );
+  const reco = debounced ? recoQuery.data : undefined;
+
+  // Auto-fill the step-up field from the recommendation, unless the user has
+  // taken control of it. Keeps the field in lock-step with the inputs.
+  const lastAppliedRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (stepUpTouched) return;
+    if (!reco || !reco.feasible) return;
+    if (lastAppliedRef.current === reco.recommendedStepUp) return;
+    lastAppliedRef.current = reco.recommendedStepUp;
+    setStepUpAmount(String(reco.recommendedStepUp));
+  }, [reco, stepUpTouched]);
+
   const createMutation = trpc.portfolios.create.useMutation({
     onSuccess: async (data) => {
       await refetch();
@@ -64,29 +124,57 @@ export function CreatePortfolioDialog({
     setHorizonMonths("");
     setStartingContribution("");
     setStepUpAmount("");
+    setStepUpTouched(false);
+    setDebounced(null);
+    lastAppliedRef.current = null;
   }
 
   function handleCreate() {
     if (!name.trim()) return toast.error("Portfolio name is required");
-    const target = parseFloat(targetAmount);
-    const horizon = parseInt(horizonMonths);
-    const month1 = parseFloat(startingContribution);
+    const t = parseFloat(targetAmount);
+    const h = parseInt(horizonMonths);
+    const m1 = parseFloat(startingContribution);
     const stepUp = parseFloat(stepUpAmount);
-    if (!target || target < 100000) return toast.error("Enter a target of at least KES 100,000");
-    if (!horizon || horizon < 12 || horizon > 240) return toast.error("Enter a horizon between 12 and 240 months");
-    if (Number.isNaN(month1) || month1 < 0) return toast.error("Enter a valid Month 1 contribution");
+    if (!t || t < 100000) return toast.error("Enter a target of at least KES 100,000");
+    if (!h || h < 12 || h > 240) return toast.error("Enter a horizon between 12 and 240 months");
+    if (Number.isNaN(m1) || m1 < 0) return toast.error("Enter a valid Month 1 contribution");
     createMutation.mutate({
       name: name.trim(),
       description: description.trim() || undefined,
-      targetAmount: target,
+      targetAmount: t,
       startDate,
-      horizonMonths: horizon,
-      startingContribution: month1,
+      horizonMonths: h,
+      startingContribution: m1,
       stepUpAmount: Number.isNaN(stepUp) ? 0 : stepUp,
       stepUpMonths: 6,
       safetyFloor: 50000,
       isSandbox: mode === "sandbox",
     });
+  }
+
+  // Build the helper line shown under the step-up field.
+  const fmt = (n: number) => `KES ${Math.round(n).toLocaleString()}`;
+  const showSpinner = !!debounced && recoQuery.isFetching && !reco;
+  let recoHint: { tone: "muted" | "good" | "warn"; text: string } | null = null;
+  if (showSpinner) {
+    recoHint = { tone: "muted", text: "Calculating the step-up needed to reach your target…" };
+  } else if (reco) {
+    if (!reco.feasible) {
+      recoHint = {
+        tone: "warn",
+        text: `Even a large step-up won't reach ${fmt(target)} in ${horizon} months from ${fmt(month1)}/month. Try a higher Month 1, a longer horizon, or a lower target.`,
+      };
+    } else if (reco.alreadyHitsAtZero) {
+      recoHint = {
+        tone: "good",
+        text: `At ${fmt(month1)}/month you already reach ${fmt(target)} — no step-up needed (recommended 0).`,
+      };
+    } else {
+      recoHint = {
+        tone: "good",
+        text: `Recommended: step up by ${fmt(reco.recommendedStepUp)} every 6 months to reach ${fmt(target)} (projected ${fmt(reco.projectedEndingValue)}). Matches the Scenarios page.`,
+      };
+    }
   }
 
   return (
@@ -133,8 +221,55 @@ export function CreatePortfolioDialog({
             </div>
           </div>
           <div className="space-y-1.5">
-            <Label>Step-up amount (KES / period)</Label>
-            <Input type="number" placeholder="Optional — increase every 6 months" value={stepUpAmount} onChange={(e) => setStepUpAmount(e.target.value)} />
+            <div className="flex items-center justify-between">
+              <Label>Step-up amount (KES / period)</Label>
+              {!stepUpTouched && reco?.feasible && (
+                <span className="inline-flex items-center gap-1 text-[11px] font-medium text-primary">
+                  <Sparkles className="h-3 w-3" /> Auto
+                </span>
+              )}
+              {stepUpTouched && recoInputValid && (
+                <button
+                  type="button"
+                  className="text-[11px] font-medium text-primary hover:underline"
+                  onClick={() => {
+                    setStepUpTouched(false);
+                    lastAppliedRef.current = null;
+                    if (reco?.feasible) setStepUpAmount(String(reco.recommendedStepUp));
+                  }}
+                >
+                  Reset to recommended
+                </button>
+              )}
+            </div>
+            <Input
+              type="number"
+              placeholder="Optional — increase every 6 months"
+              value={stepUpAmount}
+              onChange={(e) => {
+                setStepUpTouched(true);
+                setStepUpAmount(e.target.value);
+              }}
+            />
+            {recoHint && (
+              <p
+                className={
+                  "flex items-start gap-1.5 text-xs " +
+                  (recoHint.tone === "warn"
+                    ? "text-destructive"
+                    : recoHint.tone === "good"
+                    ? "text-muted-foreground"
+                    : "text-muted-foreground")
+                }
+              >
+                {showSpinner ? (
+                  <Loader2 className="mt-0.5 h-3 w-3 shrink-0 animate-spin" />
+                ) : (
+                  <Sparkles className="mt-0.5 h-3 w-3 shrink-0 text-primary" />
+                )}
+                <span>{recoHint.text}</span>
+              </p>
+            )}
           </div>
         </div>
         <DialogFooter>

@@ -580,3 +580,11 @@
 - [x] R43.4 estimateAnnualTaxLines taxes T-bills/zero-coupons on actual discount (face - purchasePrice) using lot tenor/rate, NOT annualized face×364-day; Dashboard Est. Annual Tax reads from same function so Dashboard tax == Tax Summary tax to the shilling. Add cross-page test.
 - [x] R43.5 Trim: Dashboard tax/interest cards consistent time base (both to-date OR relabel "Projected annual tax"); rename ledger "MMF→Dhow" column to "Swept → securities"; Record Deposit gov flow either offers zero_coupon/floating or intentionally documented as register-only.
 - [x] R43.6 Full suite green, tsc clean, UI verified, checkpoint, refreshed source ZIP, deliver
+
+## Round 44 (auto-recommended step-up in Create Portfolio dialog)
+
+- [x] R44.1 Add pure engine `solveForStepUp`(settings, startingContribution, ...)` — binary-search the step-up/period that makes the projection reach target given a fixed Month 1 contribution; returns recommendedStepUp (rounded to clean increment), feasible flag, projectedEndingValue. If zero step-up already hits target, recommend 0. Mirrors solveForContribution so it uses the same runProjection engine.
+- [x] R44.2 Engine tests: solveForStepUp recommendation, when fed back through runProjection/runScenarios, reaches target (consistency with Scenarios page); edge cases (already hits at 0, infeasible at cap).
+- [x] R44.3 Stateless tRPC `projection.recommendStepUp` taking draft inputs (targetAmount, horizonMonths, startingContribution, startDate, stepUpMonths) + default CBK rates; no saved portfolio required so it works inside the Create dialog.
+- [x] R44.4 Wire Create Portfolio dialog: debounce on target/horizon/month1 changes → call recommendStepUp → prefill Step-up field with the recommendation + an "Auto" hint; user can still override. Keep stepUpMonths = 6 consistent with Scenarios.
+- [x] R44.5 Full suite green, tsc clean, UI verified, checkpoint, refreshed source ZIP, deliver

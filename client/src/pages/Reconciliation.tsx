@@ -31,7 +31,10 @@ export default function Reconciliation() {
 
   const full = data?.full;
   const mmf = data?.mmf;
-  const reconciled = !!full?.reconciled && !!mmf?.ok;
+  const gov = data?.gov;
+  const bank = data?.bank;
+  const reconciled =
+    !!full?.reconciled && !!mmf?.ok && (gov?.ok ?? true) && (bank?.ok ?? true);
 
   return (
     <AppShell>
@@ -57,7 +60,7 @@ export default function Reconciliation() {
           </p>
         </div>
 
-        {isLoading || !full || !mmf ? (
+        {isLoading || !full || !mmf || !gov || !bank ? (
           <Skeleton className="h-64 w-full" />
         ) : (
           <>
@@ -204,6 +207,103 @@ export default function Reconciliation() {
                     <p className="text-lg font-semibold tabular-nums">
                       {formatKES(mmf.diff, 2)}{" "}
                       {mmf.ok ? (
+                        <span className="text-emerald-600 text-sm">✓</span>
+                      ) : (
+                        <span className="text-destructive text-sm">✗</span>
+                      )}
+                    </p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Round 39: government-securities sub-check */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">
+                  Government securities check (register vs deposits)
+                </CardTitle>
+                <CardDescription>
+                  Every government-security deposit auto-creates one CBK register
+                  row at the same face value. The live register total must equal
+                  the gov-security deposits (net of any redemptions).
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="grid gap-4 sm:grid-cols-3">
+                  <div className="rounded-md border p-4">
+                    <p className="text-xs text-muted-foreground">
+                      CBK register face total
+                    </p>
+                    <p className="text-lg font-semibold tabular-nums">
+                      {formatKES(gov.registerFaceTotal, 2)}
+                    </p>
+                  </div>
+                  <div className="rounded-md border p-4">
+                    <p className="text-xs text-muted-foreground">
+                      Linked gov deposits (net)
+                    </p>
+                    <p className="text-lg font-semibold tabular-nums">
+                      {formatKES(gov.linkedDepositTotal, 2)}
+                    </p>
+                  </div>
+                  <div
+                    className={`rounded-md border p-4 ${
+                      gov.ok ? "border-emerald-500/40" : "border-destructive/40"
+                    }`}
+                  >
+                    <p className="text-xs text-muted-foreground">Difference</p>
+                    <p className="text-lg font-semibold tabular-nums">
+                      {formatKES(gov.diff, 2)}{" "}
+                      {gov.ok ? (
+                        <span className="text-emerald-600 text-sm">✓</span>
+                      ) : (
+                        <span className="text-destructive text-sm">✗</span>
+                      )}
+                    </p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Round 39: bank-instruments sub-check */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">
+                  Bank instruments check (holdings vs deposits)
+                </CardTitle>
+                <CardDescription>
+                  Active bank-instrument principals must equal bank-instrument
+                  deposits net of bank withdrawals.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="grid gap-4 sm:grid-cols-3">
+                  <div className="rounded-md border p-4">
+                    <p className="text-xs text-muted-foreground">
+                      Active bank principals
+                    </p>
+                    <p className="text-lg font-semibold tabular-nums">
+                      {formatKES(bank.holdingPrincipalTotal, 2)}
+                    </p>
+                  </div>
+                  <div className="rounded-md border p-4">
+                    <p className="text-xs text-muted-foreground">
+                      Bank deposits (net of withdrawals)
+                    </p>
+                    <p className="text-lg font-semibold tabular-nums">
+                      {formatKES(bank.netDepositTotal, 2)}
+                    </p>
+                  </div>
+                  <div
+                    className={`rounded-md border p-4 ${
+                      bank.ok ? "border-emerald-500/40" : "border-destructive/40"
+                    }`}
+                  >
+                    <p className="text-xs text-muted-foreground">Difference</p>
+                    <p className="text-lg font-semibold tabular-nums">
+                      {formatKES(bank.diff, 2)}{" "}
+                      {bank.ok ? (
                         <span className="text-emerald-600 text-sm">✓</span>
                       ) : (
                         <span className="text-destructive text-sm">✗</span>

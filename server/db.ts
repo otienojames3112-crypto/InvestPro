@@ -519,6 +519,9 @@ export async function getActualsSummary(
       couponRate: parseFloat(String(s.couponRate ?? "0")) || 0,
       isTaxExempt: !!s.isTaxExempt,
       isMatured: !!s.isMatured,
+      tenorYears: (s as { tenorYears?: string | null }).tenorYears != null
+        ? parseFloat(String((s as { tenorYears?: string | null }).tenorYears))
+        : null,
     })),
     withdrawals,
   );

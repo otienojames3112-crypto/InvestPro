@@ -16,11 +16,26 @@ import { useState, useMemo, useEffect } from "react";
 import { useMaturingWindow } from "@/hooks/useMaturingWindow";
 import { toast } from "sonner";
 import { useForm, Controller } from "react-hook-form";
+import {
+  computeMaturityDate,
+  defaultRateForSecurity,
+  whtRateForSecurity,
+  tenorYearsForSecurity,
+  inferBondTenorYears,
+  IFB_TENORS,
+  FXD_TENORS,
+  DEFAULT_IFB_TENOR_YEARS,
+  DEFAULT_FXD_TENOR_YEARS,
+  type SecurityType,
+} from "@shared/securityTenor";
+import { SecurityTenorFields } from "@/components/SecurityTenorFields";
 
 interface SecurityForm {
-  securityType: "tbill_91" | "tbill_182" | "tbill_364" | "ifb" | "fxd";
+  securityType: SecurityType;
   faceValue: number;
   issueDate: string;
+  /** Bond tenor in years (IFB/FXD). Ignored for T-bills. */
+  tenorYears: number;
   maturityDate: string;
   couponRate: number;
   isTaxExempt: boolean;
@@ -50,6 +65,12 @@ export default function Securities() {
   const { portfolioId } = usePortfolio();
   const utils = trpc.useUtils();
   const { data: securities, isLoading } = trpc.securities.list.useQuery(
+    { portfolioId: portfolioId! },
+    { enabled: !!portfolioId }
+  );
+  // Round 39: pull the portfolio's rate settings so the dialogs can auto-fill the
+  // discount/coupon rate for the chosen security type (single source of truth).
+  const { data: rateSettings } = trpc.settings.get.useQuery(
     { portfolioId: portfolioId! },
     { enabled: !!portfolioId }
   );
@@ -128,6 +149,7 @@ export default function Securities() {
       securityType: "tbill_364",
       faceValue: 50000,
       issueDate: new Date().toISOString().split("T")[0],
+      tenorYears: DEFAULT_FXD_TENOR_YEARS,
       maturityDate: "",
       couponRate: 0,
       isTaxExempt: false,
@@ -136,12 +158,33 @@ export default function Securities() {
   });
   const editType = editForm.watch("securityType");
   const editIsBond = editType === "ifb" || editType === "fxd";
+  const editIssue = editForm.watch("issueDate");
+  const editTenor = editForm.watch("tenorYears");
+  // Keep the (read-only) maturity field in the edit form in sync with the derived
+  // value so submit always sends a consistent date.
+  useEffect(() => {
+    const m = computeMaturityDate(editType, editIssue, editIsBond ? editTenor : null);
+    if (m) editForm.setValue("maturityDate", m);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editType, editIssue, editTenor, editIsBond]);
 
   function openEdit(s: NonNullable<typeof securities>[number]) {
+    const t = s.securityType as SecurityForm["securityType"];
+    const isB = t === "ifb" || t === "fxd";
+    // Recover the tenor: prefer the stored value, else infer from issue/maturity.
+    const storedTenor =
+      (s as { tenorYears?: string | number | null }).tenorYears != null
+        ? parseFloat(String((s as { tenorYears?: string | number | null }).tenorYears))
+        : null;
+    const inferred = isB
+      ? storedTenor ?? inferBondTenorYears(t, s.issueDate, s.maturityDate) ??
+        (t === "ifb" ? DEFAULT_IFB_TENOR_YEARS : DEFAULT_FXD_TENOR_YEARS)
+      : DEFAULT_FXD_TENOR_YEARS;
     editForm.reset({
-      securityType: s.securityType as SecurityForm["securityType"],
+      securityType: t,
       faceValue: parseFloat(String(s.faceValue)) || 50000,
       issueDate: new Date(s.issueDate).toISOString().split("T")[0],
+      tenorYears: inferred,
       maturityDate: new Date(s.maturityDate).toISOString().split("T")[0],
       couponRate: parseFloat(String(s.couponRate)) || 0,
       isTaxExempt: !!s.isTaxExempt,
@@ -152,24 +195,27 @@ export default function Securities() {
 
   function onEditSubmit(data: SecurityForm) {
     if (editId == null) return;
+    const isB = data.securityType === "ifb" || data.securityType === "fxd";
     updateMutation.mutate({
       id: editId,
       securityType: data.securityType,
       faceValue: data.faceValue,
       issueDate: data.issueDate,
-      maturityDate: data.maturityDate,
-      couponRate: editIsBond ? data.couponRate : 0,
+      // Maturity is derived; omit it so the server recomputes from type+tenor.
+      tenorYears: isB ? data.tenorYears : null,
+      couponRate: isB ? data.couponRate : 0,
       isTaxExempt: data.securityType === "ifb" ? true : data.isTaxExempt,
       notes: data.notes,
     });
   }
 
   const [open, setOpen] = useState(false);
-  const { register, handleSubmit, reset, control, watch } = useForm<SecurityForm>({
+  const { register, handleSubmit, reset, control, watch, setValue } = useForm<SecurityForm>({
     defaultValues: {
       securityType: "tbill_364",
       faceValue: 50000,
       issueDate: new Date().toISOString().split("T")[0],
+      tenorYears: DEFAULT_FXD_TENOR_YEARS,
       maturityDate: "",
       couponRate: 0,
       isTaxExempt: false,
@@ -179,14 +225,43 @@ export default function Securities() {
 
   const secType = watch("securityType");
   const isBond = secType === "ifb" || secType === "fxd";
+  const addIssue = watch("issueDate");
+  const addTenor = watch("tenorYears");
+
+  // When the type switches to a bond, snap the tenor to that type's default so the
+  // picker never shows an out-of-range value (e.g. an FXD-only 25y on an IFB).
+  useEffect(() => {
+    if (secType === "ifb") setValue("tenorYears", DEFAULT_IFB_TENOR_YEARS);
+    else if (secType === "fxd") setValue("tenorYears", DEFAULT_FXD_TENOR_YEARS);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [secType]);
+
+  // Auto-fill the coupon/discount rate from Rate Settings whenever the type
+  // changes (the user can still override the bond coupon before submitting).
+  useEffect(() => {
+    setValue("couponRate", defaultRateForSecurity(secType, rateSettings));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [secType, rateSettings]);
+
+  // Keep the (read-only) maturity in the add form in sync with the derived value.
+  useEffect(() => {
+    const m = computeMaturityDate(secType, addIssue, isBond ? addTenor : null);
+    if (m) setValue("maturityDate", m);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [secType, addIssue, addTenor, isBond]);
 
   function onSubmit(data: SecurityForm) {
     if (!portfolioId) return;
-      addMutation.mutate({
-        portfolioId: portfolioId!,
-      ...data,
-      couponRate: isBond ? data.couponRate : 0,
+    addMutation.mutate({
+      portfolioId: portfolioId!,
+      securityType: data.securityType,
+      faceValue: data.faceValue,
+      issueDate: data.issueDate,
+      // Maturity is derived server-side from type + tenor; omit the explicit date.
+      tenorYears: isBond ? data.tenorYears : undefined,
+      couponRate: isBond ? data.couponRate : data.couponRate,
       isTaxExempt: secType === "ifb" ? true : data.isTaxExempt,
+      notes: data.notes,
     });
   }
 
@@ -249,7 +324,7 @@ export default function Securities() {
                           <SelectItem value="tbill_182">182-Day T-Bill</SelectItem>
                           <SelectItem value="tbill_364">364-Day T-Bill</SelectItem>
                           <SelectItem value="ifb">Infrastructure Bond (IFB) — Tax Exempt</SelectItem>
-                          <SelectItem value="fxd">Fixed Coupon Bond (FXD) — 15% WHT</SelectItem>
+                          <SelectItem value="fxd">Fixed Coupon Bond (FXD) — tiered WHT</SelectItem>
                         </SelectContent>
                       </Select>
                     )}
@@ -260,23 +335,22 @@ export default function Securities() {
                     <Label className="text-xs">Face Value (KES)</Label>
                     <Input type="number" step="50000" min="50000" {...register("faceValue", { valueAsNumber: true })} />
                   </div>
-                  {isBond && (
-                    <div className="space-y-1.5">
-                      <Label className="text-xs">Coupon Rate (%)</Label>
-                      <Input type="number" step="0.01" min="0" {...register("couponRate", { valueAsNumber: true })} />
-                    </div>
-                  )}
-                </div>
-                <div className="grid grid-cols-2 gap-3">
                   <div className="space-y-1.5">
-                    <Label className="text-xs">Issue Date</Label>
-                    <Input type="date" {...register("issueDate")} />
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label className="text-xs">Maturity Date</Label>
-                    <Input type="date" {...register("maturityDate")} required />
+                    <Label className="text-xs">{isBond ? "Coupon Rate (%)" : "Discount Rate (%)"}</Label>
+                    <Input type="number" step="0.01" min="0" {...register("couponRate", { valueAsNumber: true })} />
                   </div>
                 </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs">Issue Date</Label>
+                  <Input type="date" {...register("issueDate")} />
+                </div>
+                {/* Round 39: structured tenor + auto-maturity + WHT treatment */}
+                <SecurityTenorFields
+                  securityType={secType}
+                  issueDate={addIssue}
+                  tenorYears={addTenor}
+                  onTenorChange={(y) => setValue("tenorYears", y)}
+                />
                 <div className="space-y-1.5">
                   <Label className="text-xs">Notes (optional)</Label>
                   <Input placeholder="e.g. IFB/2026/10Y" {...register("notes")} />
@@ -628,7 +702,7 @@ export default function Securities() {
                         <SelectItem value="tbill_182">182-Day T-Bill</SelectItem>
                         <SelectItem value="tbill_364">364-Day T-Bill</SelectItem>
                         <SelectItem value="ifb">Infrastructure Bond (IFB) — Tax Exempt</SelectItem>
-                        <SelectItem value="fxd">Fixed Coupon Bond (FXD) — 15% WHT</SelectItem>
+                        <SelectItem value="fxd">Fixed Coupon Bond (FXD) — tiered WHT</SelectItem>
                       </SelectContent>
                     </Select>
                   )}
@@ -639,23 +713,22 @@ export default function Securities() {
                   <Label className="text-xs">Face Value (KES)</Label>
                   <Input type="number" step="50000" min="50000" {...editForm.register("faceValue", { valueAsNumber: true })} />
                 </div>
-                {editIsBond && (
-                  <div className="space-y-1.5">
-                    <Label className="text-xs">Coupon Rate (%)</Label>
-                    <Input type="number" step="0.01" min="0" {...editForm.register("couponRate", { valueAsNumber: true })} />
-                  </div>
-                )}
-              </div>
-              <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1.5">
-                  <Label className="text-xs">Issue Date</Label>
-                  <Input type="date" {...editForm.register("issueDate")} />
-                </div>
-                <div className="space-y-1.5">
-                  <Label className="text-xs">Maturity Date</Label>
-                  <Input type="date" {...editForm.register("maturityDate")} required />
+                  <Label className="text-xs">{editIsBond ? "Coupon Rate (%)" : "Discount Rate (%)"}</Label>
+                  <Input type="number" step="0.01" min="0" {...editForm.register("couponRate", { valueAsNumber: true })} />
                 </div>
               </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs">Issue Date</Label>
+                <Input type="date" {...editForm.register("issueDate")} />
+              </div>
+              {/* Round 39: structured tenor + auto-maturity + WHT treatment */}
+              <SecurityTenorFields
+                securityType={editType}
+                issueDate={editIssue}
+                tenorYears={editTenor}
+                onTenorChange={(y) => editForm.setValue("tenorYears", y)}
+              />
               {editType !== "ifb" && editIsBond && (
                 <div className="flex items-center justify-between rounded-lg border border-border px-3 py-2">
                   <Label className="text-xs">Tax-exempt</Label>

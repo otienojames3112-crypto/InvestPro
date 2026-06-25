@@ -280,3 +280,116 @@ export function suggestReinvestBucket(
     rationale: rationaleByPhase[phase],
   };
 }
+
+// ─── Day-by-day accrual schedules (Round 39) ────────────────────────────────
+//
+// The MMF tab shows a true day-by-day table where interest compounds daily.
+// Government securities and bank instruments do NOT compound intra-period — a
+// T-bill accretes its discount on a straight line to par, and a coupon/fixed
+// deposit pays simple interest on its (constant) face/principal. These helpers
+// produce a per-day schedule with the CORRECT method for each instrument so the
+// Daily Accrual page can render an honest day-by-day breakdown.
+
+export interface DailyAccrualRow {
+  day: number;
+  /** Opening accrued-interest balance for the day (excludes principal). */
+  openingAccrued: number;
+  grossDay: number;
+  whtDay: number;
+  netDay: number;
+  /** Closing accrued-interest balance for the day (cumulative net). */
+  closingAccrued: number;
+}
+
+export interface DailyAccrualSchedule {
+  rows: DailyAccrualRow[];
+  grossTotal: number;
+  whtTotal: number;
+  netTotal: number;
+  base: number;
+}
+
+/**
+ * Government-security day-by-day accrual. Both T-bill discount accretion and
+ * coupon accrual are STRAIGHT-LINE (simple, non-compounding): each day earns an
+ * identical slice of the annual gross. IFBs are tax-exempt; T-bills and FXD
+ * coupons attract 15% WHT.
+ */
+export function buildSecurityDailySchedule(
+  securities: SecurityIncomeInput[],
+  days: number,
+): DailyAccrualSchedule {
+  const n = Math.max(1, Math.floor(days));
+  let grossPerDay = 0;
+  let whtPerDay = 0;
+  let base = 0;
+  for (const s of securities) {
+    if (!isLiveSecurity(s)) continue;
+    const faceValue = Math.max(0, s.faceValue);
+    const ratePct = Math.max(0, s.couponRate);
+    const grossAnnual = faceValue * (ratePct / 100);
+    const taxExempt = s.isTaxExempt || s.securityType === "ifb";
+    base += faceValue;
+    grossPerDay += grossAnnual / 365;
+    whtPerDay += taxExempt ? 0 : (grossAnnual * (GOV_WHT_PCT / 100)) / 365;
+  }
+  return buildStraightLineSchedule(grossPerDay, whtPerDay, base, n);
+}
+
+/**
+ * Bank-instrument day-by-day accrual. Simple daily interest on the (constant)
+ * principal — no intra-period compounding for fixed/call/savings deposits in
+ * this tracker. WHT is each holding's own rate (usually 15%).
+ */
+export function buildBankDailySchedule(
+  holdings: BankIncomeInput[],
+  days: number,
+): DailyAccrualSchedule {
+  const n = Math.max(1, Math.floor(days));
+  let grossPerDay = 0;
+  let whtPerDay = 0;
+  let base = 0;
+  for (const h of holdings) {
+    if (h.isActive === false) continue;
+    const principal = Math.max(0, h.principal);
+    const ratePct = Math.max(0, h.interestRate);
+    const dayCount = h.dayCountBasis && h.dayCountBasis > 0 ? h.dayCountBasis : 365;
+    const grossAnnual = principal * (ratePct / 100) * (365 / dayCount);
+    const whtPct = Math.max(0, h.whtRate ?? GOV_WHT_PCT);
+    base += principal;
+    grossPerDay += grossAnnual / 365;
+    whtPerDay += (grossAnnual * (whtPct / 100)) / 365;
+  }
+  return buildStraightLineSchedule(grossPerDay, whtPerDay, base, n);
+}
+
+/** Shared straight-line builder: identical gross/wht slice every day. */
+function buildStraightLineSchedule(
+  grossPerDay: number,
+  whtPerDay: number,
+  base: number,
+  days: number,
+): DailyAccrualSchedule {
+  const rows: DailyAccrualRow[] = [];
+  const netPerDay = grossPerDay - whtPerDay;
+  let cumulativeNet = 0;
+  for (let d = 1; d <= days; d++) {
+    const openingAccrued = cumulativeNet;
+    cumulativeNet += netPerDay;
+    rows.push({
+      day: d,
+      openingAccrued,
+      grossDay: grossPerDay,
+      whtDay: whtPerDay,
+      netDay: netPerDay,
+      closingAccrued: cumulativeNet,
+    });
+  }
+  return {
+    rows,
+    grossTotal: grossPerDay * days,
+    whtTotal: whtPerDay * days,
+    netTotal: netPerDay * days,
+    base,
+  };
+}

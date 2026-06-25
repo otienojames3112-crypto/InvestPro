@@ -160,3 +160,69 @@ export function reconcileMmf(
     ok: Math.abs(diff) <= RECON_TOLERANCE_KES,
   };
 }
+
+/**
+ * Round 39 — government-securities sub-check.
+ *
+ * Cross-checks the CBK register (the single source of truth) against the
+ * government-security DEPOSITS that are supposed to have created it. Every
+ * gov-security deposit auto-creates exactly one linked register row at the same
+ * face value, so the sum of live register face values must equal the sum of
+ * (non-matured) linked gov-security deposit amounts. A mismatch means a deposit
+ * lost its register link, or a register lot was edited without syncing its
+ * deposit — the exact double-count / orphan bugs this guard exists to catch.
+ */
+export interface ReconGovResult {
+  registerFaceTotal: number;
+  linkedDepositTotal: number;
+  diff: number;
+  ok: boolean;
+}
+
+export function reconcileGov(
+  registerFaceValues: number[],
+  linkedGovDepositAmounts: number[],
+): ReconGovResult {
+  const registerFaceTotal = round2(registerFaceValues.reduce((a, b) => a + b, 0));
+  const linkedDepositTotal = round2(linkedGovDepositAmounts.reduce((a, b) => a + b, 0));
+  const diff = round2(registerFaceTotal - linkedDepositTotal);
+  return {
+    registerFaceTotal,
+    linkedDepositTotal,
+    diff,
+    ok: Math.abs(diff) <= RECON_TOLERANCE_KES,
+  };
+}
+
+/**
+ * Round 39 — bank-instruments sub-check.
+ *
+ * The sum of active bank-instrument principals (as the Dashboard/Portfolio
+ * Review value them) must equal the sum of bank-instrument deposits net of
+ * bank-instrument withdrawals. If a deposit increased a holding's principal but
+ * the holding total drifts, this row turns red.
+ */
+export interface ReconBankResult {
+  holdingPrincipalTotal: number;
+  netDepositTotal: number;
+  diff: number;
+  ok: boolean;
+}
+
+export function reconcileBank(
+  bankHoldingPrincipals: number[],
+  bankDepositAmounts: number[],
+  bankWithdrawalAmounts: number[],
+): ReconBankResult {
+  const holdingPrincipalTotal = round2(bankHoldingPrincipals.reduce((a, b) => a + b, 0));
+  const deposits = bankDepositAmounts.reduce((a, b) => a + b, 0);
+  const withdrawals = bankWithdrawalAmounts.reduce((a, b) => a + b, 0);
+  const netDepositTotal = round2(deposits - withdrawals);
+  const diff = round2(holdingPrincipalTotal - netDepositTotal);
+  return {
+    holdingPrincipalTotal,
+    netDepositTotal,
+    diff,
+    ok: Math.abs(diff) <= RECON_TOLERANCE_KES,
+  };
+}

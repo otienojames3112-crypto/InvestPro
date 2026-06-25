@@ -89,7 +89,13 @@ import {
   type SecondaryMmfInput,
 } from "./engine";
 import { COOKIE_NAME } from "../shared/const";
-import { reconcile, reconcileMmf } from "../shared/reconciliation";
+import { reconcile, reconcileMmf, reconcileGov, reconcileBank } from "../shared/reconciliation";
+import {
+  computeMaturityDate,
+  defaultRateForSecurity,
+  whtRateForSecurity,
+  type SecurityType as GovSecurityType,
+} from "../shared/securityTenor";
 import { buildAllocation, blendedYield } from "../shared/actuals";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -732,9 +738,36 @@ export const appRouter = router({
         taxSummaryBase,
       };
 
+      // ── Round 39: government-securities + bank-instruments sub-checks ──────────
+      // The register face total must equal the sum of gov-security deposits that
+      // created it; the active bank principals must equal bank deposits net of
+      // bank withdrawals. These catch orphaned register lots / drifted principals.
+      const allDeposits = depositRowsForAlloc;
+      const linkedGovDepositAmounts = allDeposits
+        .filter((d) => d.institutionType === "government_security")
+        .map((d) => parseFloat(String(d.amount ?? "0")) || 0);
+      const bankDepositAmounts = allDeposits
+        .filter((d) => d.institutionType === "bank_instrument")
+        .map((d) => parseFloat(String(d.amount ?? "0")) || 0);
+      const withdrawalRows = await getWithdrawalEntries(input.portfolioId);
+      const govWithdrawalAmounts = withdrawalRows
+        .filter((w) => w.sourceType === "government_security")
+        .map((w) => parseFloat(String(w.amount ?? "0")) || 0);
+      const bankWithdrawalAmounts = withdrawalRows
+        .filter((w) => w.sourceType === "bank_instrument")
+        .map((w) => parseFloat(String(w.amount ?? "0")) || 0);
+      // Net gov deposits by withdrawals so a partially-redeemed security still
+      // reconciles against its remaining register face. Expressed as a single
+      // net figure compared to the register total.
+      const govWithdrawalTotal = govWithdrawalAmounts.reduce((a, b) => a + b, 0);
+      const linkedGovDepositGross = linkedGovDepositAmounts.reduce((a, b) => a + b, 0);
+      const netLinkedGov = [Math.max(0, linkedGovDepositGross - govWithdrawalTotal)];
+
       return {
         full: reconcile(inputs),
         mmf: reconcileMmf(inputs.accrualLedgerMmfTotal, inputs.primaryMmfBalance, inputs.secondaryMmfBalances),
+        gov: reconcileGov(securityFaceValues, netLinkedGov),
+        bank: reconcileBank(bankHoldingPrincipals, bankDepositAmounts, bankWithdrawalAmounts),
       };
     }),
 
@@ -973,21 +1006,44 @@ export const appRouter = router({
         securityType: z.enum(["tbill_91", "tbill_182", "tbill_364", "ifb", "fxd"]),
         faceValue: z.number().min(50000),
         issueDate: z.string(),
-        maturityDate: z.string(),
-        couponRate: z.number().min(0).max(50),
-        isTaxExempt: z.boolean(),
+        // maturityDate is now OPTIONAL — when omitted (or for T-bills) the server
+        // derives it from the issue date + tenor via the shared tenor model.
+        maturityDate: z.string().optional(),
+        // Bond tenor in years (IFB/FXD). Ignored for T-bills.
+        tenorYears: z.number().min(0.1).max(30).optional(),
+        // couponRate optional — defaults from Rate Settings for the type.
+        couponRate: z.number().min(0).max(50).optional(),
+        isTaxExempt: z.boolean().optional(),
         notes: z.string().optional(),
       }))
       .mutation(async ({ ctx, input }) => {
         await requirePortfolio(input.portfolioId, ctx.user.id);
+        const type = input.securityType as GovSecurityType;
+        const isTbill = type.startsWith("tbill");
+        const tenorYears = isTbill ? null : (input.tenorYears ?? null);
+        // Maturity: always derive for T-bills; for bonds derive from tenor unless
+        // an explicit date was supplied.
+        const maturityStr =
+          isTbill || !input.maturityDate
+            ? computeMaturityDate(type, input.issueDate, tenorYears)
+            : input.maturityDate;
+        // Coupon/discount rate: use supplied value, else default from settings.
+        let couponRate = input.couponRate;
+        if (couponRate == null) {
+          const rates = await getRateSettings(input.portfolioId);
+          couponRate = defaultRateForSecurity(type, rates);
+        }
+        // Tax-exempt is derived: IFB exempt, everything else taxable.
+        const isTaxExempt = input.isTaxExempt ?? type === "ifb";
         await addSecurity({
           portfolioId: input.portfolioId,
           securityType: input.securityType,
           faceValue: String(input.faceValue),
-          issueDate: new Date(input.issueDate),
-          maturityDate: new Date(input.maturityDate),
-          couponRate: String(input.couponRate),
-          isTaxExempt: input.isTaxExempt,
+          issueDate: new Date(input.issueDate + "T12:00:00Z"),
+          maturityDate: new Date(maturityStr + "T12:00:00Z"),
+          couponRate: String(couponRate),
+          tenorYears: tenorYears != null ? String(tenorYears) : null,
+          isTaxExempt,
           notes: input.notes,
         });
         return { success: true };
@@ -1004,6 +1060,7 @@ export const appRouter = router({
         faceValue: z.number().min(50000).optional(),
         issueDate: z.string().optional(),
         maturityDate: z.string().optional(),
+        tenorYears: z.number().min(0.1).max(30).nullable().optional(),
         couponRate: z.number().min(0).max(50).optional(),
         isTaxExempt: z.boolean().optional(),
       }))
@@ -1017,6 +1074,19 @@ export const appRouter = router({
         }
         await requirePortfolio(existing.portfolioId, ctx.user.id);
 
+        // Resolve the effective type/issue/tenor (post-edit) so we can re-derive
+        // the maturity date deterministically via the shared tenor model.
+        const effType = (input.securityType ?? existing.securityType) as GovSecurityType;
+        const effIsTbill = effType.startsWith("tbill");
+        const effIssue = input.issueDate ?? String(existing.issueDate);
+        const effTenor = effIsTbill
+          ? null
+          : input.tenorYears !== undefined
+            ? input.tenorYears
+            : existing.tenorYears != null
+              ? parseFloat(String(existing.tenorYears))
+              : null;
+
         // Build the partial update for the register row.
         const secUpdate: Record<string, unknown> = {};
         if (input.isMatured !== undefined) secUpdate.isMatured = input.isMatured;
@@ -1024,9 +1094,32 @@ export const appRouter = router({
         if (input.securityType !== undefined) secUpdate.securityType = input.securityType;
         if (input.faceValue !== undefined) secUpdate.faceValue = String(input.faceValue);
         if (input.issueDate !== undefined) secUpdate.issueDate = new Date(input.issueDate + "T12:00:00Z");
-        if (input.maturityDate !== undefined) secUpdate.maturityDate = new Date(input.maturityDate + "T12:00:00Z");
+        // Persist tenor (bonds only); T-bills always clear it.
+        if (effIsTbill) {
+          secUpdate.tenorYears = null;
+        } else if (input.tenorYears !== undefined) {
+          secUpdate.tenorYears = input.tenorYears != null ? String(input.tenorYears) : null;
+        }
+        // Maturity: if the type/issue/tenor changed and no explicit maturity was
+        // supplied, recompute it; otherwise honour the explicit date.
+        if (input.maturityDate !== undefined) {
+          secUpdate.maturityDate = new Date(input.maturityDate + "T12:00:00Z");
+        } else if (
+          input.securityType !== undefined ||
+          input.issueDate !== undefined ||
+          input.tenorYears !== undefined
+        ) {
+          const m = computeMaturityDate(effType, effIssue, effTenor);
+          if (m) secUpdate.maturityDate = new Date(m + "T12:00:00Z");
+        }
         if (input.couponRate !== undefined) secUpdate.couponRate = String(input.couponRate);
-        if (input.isTaxExempt !== undefined) secUpdate.isTaxExempt = input.isTaxExempt;
+        // Tax-exempt follows the type: switching to/from IFB resets it unless the
+        // caller explicitly overrides.
+        if (input.isTaxExempt !== undefined) {
+          secUpdate.isTaxExempt = input.isTaxExempt;
+        } else if (input.securityType !== undefined) {
+          secUpdate.isTaxExempt = effType === "ifb";
+        }
         await updateSecurity(input.id, secUpdate as Partial<typeof existing>);
 
         // Keep the linked deposit row in sync so the live actuals + accrual
@@ -1218,6 +1311,12 @@ export const appRouter = router({
         bankHoldingId: z.number().int().positive().optional(),
         // bucket is required for government securities; for MMF/bank it is derived.
         bucket: z.enum(["mmf", "tbill", "ifb", "fxd"]).optional(),
+        // Round 39: precise gov-security type + tenor so the auto-created register
+        // row carries the right maturity, rate, and tiered WHT. When a t-bill
+        // securityType is given it overrides the coarse "tbill" bucket default.
+        govSecurityType: z.enum(["tbill_91", "tbill_182", "tbill_364", "ifb", "fxd"]).optional(),
+        bondTenorYears: z.number().min(0.1).max(30).optional(),
+        couponRate: z.number().min(0).max(50).optional(),
         amount: z.number().positive(),
         depositDate: z.string(),
         notes: z.string().optional(),
@@ -1256,27 +1355,30 @@ export const appRouter = router({
             getSelectedFundEar(await requirePortfolio(input.portfolioId, ctx.user.id)),
           ]);
           void fundEar;
-          // Map the legacy bucket to a register securityType + default tenor.
-          const securityType: "tbill_364" | "ifb" | "fxd" =
-            bucket === "tbill" ? "tbill_364" : bucket === "ifb" ? "ifb" : "fxd";
-          const tenorMonths = bucket === "tbill" ? 12 : 24;
+          // Resolve the precise security type. A caller-supplied govSecurityType
+          // wins; otherwise fall back to the coarse bucket (defaulting t-bill to
+          // the 364-day tenor for back-compat).
+          const securityType: GovSecurityType =
+            input.govSecurityType ??
+            (bucket === "tbill" ? "tbill_364" : bucket === "ifb" ? "ifb" : "fxd");
+          const isTbill = securityType.startsWith("tbill");
+          const tenorYears = isTbill ? null : (input.bondTenorYears ?? null);
           const issue = new Date(input.depositDate + "T12:00:00Z");
-          const maturity = new Date(issue);
-          maturity.setMonth(maturity.getMonth() + tenorMonths);
+          // Maturity is derived deterministically from type + issue + tenor.
+          const maturityStr = computeMaturityDate(securityType, input.depositDate, tenorYears);
+          const maturity = new Date(maturityStr + "T12:00:00Z");
+          // Rate: caller override, else the type's default from Rate Settings.
           const couponRate =
-            bucket === "ifb"
-              ? parseFloat(String(rates?.ifbCouponRate ?? "0")) || 0
-              : bucket === "fxd"
-                ? parseFloat(String(rates?.fxdCouponRate ?? "0")) || 0
-                : 0;
+            input.couponRate ?? defaultRateForSecurity(securityType, rates);
           const sec = await addSecurity({
             portfolioId: input.portfolioId,
             securityType,
+            tenorYears: tenorYears != null ? String(tenorYears) : null,
             faceValue: String(input.amount),
             issueDate: issue,
             maturityDate: maturity,
             couponRate: String(couponRate),
-            isTaxExempt: bucket === "ifb",
+            isTaxExempt: securityType === "ifb",
             notes: `Auto-created from deposit on ${input.depositDate}`,
           });
           if (sec?.id) {
@@ -2591,26 +2693,25 @@ export const appRouter = router({
           notes: "Sample data",
         });
         if (institutionType === "government_security" && entry) {
-          const securityType: "tbill_364" | "ifb" | "fxd" =
+          const securityType: GovSecurityType =
             bucket === "tbill" ? "tbill_364" : bucket === "ifb" ? "ifb" : "fxd";
-          const tenorMonths = bucket === "tbill" ? 12 : 24;
+          const isTbillSeed = securityType.startsWith("tbill");
+          // Give the sample FXD a realistic 12-year tenor so it exercises the
+          // 10% (>=10y) tiered-WHT path; IFB uses its default tenor.
+          const tenorYears = isTbillSeed ? null : securityType === "fxd" ? 12 : null;
           const issue = new Date(`${date}T12:00:00.000Z`);
-          const maturity = new Date(issue);
-          maturity.setMonth(maturity.getMonth() + tenorMonths);
-          const couponRate =
-            bucket === "ifb"
-              ? parseFloat(String(seedRates?.ifbCouponRate ?? "0")) || 0
-              : bucket === "fxd"
-                ? parseFloat(String(seedRates?.fxdCouponRate ?? "0")) || 0
-                : 0;
+          const maturityStr = computeMaturityDate(securityType, date, tenorYears);
+          const maturity = new Date(`${maturityStr}T12:00:00.000Z`);
+          const couponRate = defaultRateForSecurity(securityType, seedRates);
           const sec = await addSecurity({
             portfolioId: p.id,
             securityType,
+            tenorYears: tenorYears != null ? String(tenorYears) : null,
             faceValue: String(amount),
             issueDate: issue,
             maturityDate: maturity,
             couponRate: String(couponRate),
-            isTaxExempt: bucket === "ifb",
+            isTaxExempt: securityType === "ifb",
             notes: `Auto-created from sample deposit on ${date}`,
           });
           if (sec?.id) await updateDepositEntry(entry.id, p.id, { securityId: sec.id });

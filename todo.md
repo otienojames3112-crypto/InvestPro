@@ -531,3 +531,14 @@
 - [x] R38.2 Ledger: support a deep-link target (URL hash/query) that scrolls to + highlights the referenced month row
 - [x] R38.3 Issuer-concentration drill-down: clicking the Dashboard warning opens the offending issuer's holdings
 - [x] R38.4 Run full suite, verify UI, checkpoint, deliver
+
+## Round 39 — Foolproof security entry, tiered WHT, split ledger, gov/bank reconciliation & accrual
+- [x] R39.1 Auto-set maturity date from security type/tenor (issue + tenor) on Securities add/edit dialogs AND Record Deposit gov-security flow; keep linked deposit/register in sync
+- [x] R39.2 Structured tenor pickers: IFB (6.5/7/7.5/8.5 short-mid; 11/14/15/17/19 long), FXD (2/5/10/15/20/25y); selecting tenor auto-sets maturity + drives WHT
+- [x] R39.3 Auto-pull rate from Rate Settings on type/tenor selection (T-bill discount by tenor, IFB coupon, FXD coupon), editable override; encode tiered FXD WHT (15% <10y, 10% >=10y), IFB 0%, T-bill 15%; editable WHT field; update glossary
+- [x] R39.4 Split ledger T-Bill column into 91/182/364 + IFB tenor band; keep Bank column; totals still reconcile
+- [x] R39.5 Add reconcileGov + reconcileBank sub-checks (principal + accrued interest/WHT) as own rows on Reconciliation page; test that breaking a gov value turns the gov row red
+- [x] R39.6 Day-by-day accrual for gov (T-bill straight-line accretion; FXD/IFB daily-accrued coupon reset at coupon dates, FXD tiered WHT, IFB 0%) and bank (simple daily interest at quoted rate w/ holding WHT) in MmfAccrual tabs
+- [x] R39.7 Make ledger fully reactive to off-schedule actual deposits (actual-month rows seeded from recorded deposits; projection re-bases forward); test off-schedule deposit re-bases ledger + reconciles
+- [x] R39.8 Full-system consistency sweep: maturity dates, rates, tiered WHT, ledger columns all tie out via shared functions; report residual drift
+- [x] R39.9 Tests green, UI verified, checkpoint, regenerate source bundle/ZIP, deliver

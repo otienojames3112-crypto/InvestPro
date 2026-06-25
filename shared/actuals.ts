@@ -31,6 +31,8 @@ export type SecurityActual = {
   couponRate: number; // annual %, gross
   isTaxExempt: boolean;
   isMatured?: boolean;
+  /** Bond tenor in years (IFB/FXD). Used for the ledger IFB band + tiered WHT. */
+  tenorYears?: number | null;
 };
 
 export type SecondaryMmfActual = {
@@ -161,6 +163,11 @@ export function computeActualsTotals(
   // `WHT_RATES` table in shared/accrual.ts, so there is one tax authority.
   const govWht = rates.withholdingTax || WHT_RATES.tbill;
   const byBucket = { mmf: depositsContributed, tbill: 0, ifb: 0, fxd: 0 };
+  // Round 39: per-tenor T-bill split + dominant IFB band so the ledger's actual
+  // (today) row matches the projected rows' tenor columns.
+  const tbillByTenor = { d91: 0, d182: 0, d364: 0 };
+  let ifbDominantFace = 0;
+  let ifbTenorYears = 0;
   let securitiesValue = 0;
   let tbillTax = 0;
   let fxdTax = 0;
@@ -171,10 +178,17 @@ export function computeActualsTotals(
     const isIfb = s.securityType === "ifb";
     if (isTbill) {
       byBucket.tbill += s.faceValue;
+      if (s.securityType === "tbill_91") tbillByTenor.d91 += s.faceValue;
+      else if (s.securityType === "tbill_182") tbillByTenor.d182 += s.faceValue;
+      else tbillByTenor.d364 += s.faceValue;
       // T-bill return is the discount; approximate annual interest = face * rate.
       tbillTax += whtOn(s.faceValue * (rates.tbillRate / 100), govWht);
     } else if (isIfb) {
       byBucket.ifb += s.faceValue; // IFB coupons are tax-exempt in Kenya
+      if (s.faceValue > ifbDominantFace) {
+        ifbDominantFace = s.faceValue;
+        ifbTenorYears = s.tenorYears != null ? Math.round(Number(s.tenorYears) * 10) / 10 : 0;
+      }
     } else {
       // FXD bond
       byBucket.fxd += s.faceValue;
@@ -237,6 +251,9 @@ export function computeActualsTotals(
     grossDepositsContributed: depositsContributed,
     withdrawalsByBucket: wd,
     byBucket,
+    /** Round 39: per-tenor T-bill split + dominant IFB band for the ledger. */
+    tbillByTenor,
+    ifbTenorYears,
     taxBreakdown: {
       mmf: Math.round(mmfTax * 100) / 100,
       tbill: Math.round(tbillTax * 100) / 100,

@@ -104,7 +104,11 @@ export default function Ledger() {
       mmfToDhow: sum((r) => r.mmfToDhow),
       endMmf: last?.mmfEnd ?? 0,
       endTbill: last?.tbillEnd ?? 0,
+      endTbill91: last?.tbill91End ?? 0,
+      endTbill182: last?.tbill182End ?? 0,
+      endTbill364: last?.tbill364End ?? 0,
       endIfb: last?.ifbEnd ?? 0,
+      endIfbTenor: last?.ifbTenorYears ?? 0,
       endFxd: last?.fxdEnd ?? 0,
       endBank: last?.bankEnd ?? 0,
       endTotal: last?.totalEnd ?? 0,
@@ -123,7 +127,7 @@ export default function Ledger() {
     }
     const headers = [
       "Month", "Basis", "Date", "Save", "CBK In", "Bank In", "MMF->Securities",
-      "Main Action", "MMF End", "T-Bill", "IFB", "FXD", "Bank", "Total", "Phase",
+      "Main Action", "MMF End", "T-Bill 91d", "T-Bill 182d", "T-Bill 364d", "IFB", "FXD", "Bank", "Total", "Phase",
     ];
     const rows = rowsSrc.map((r) => [
       r.monthNumber,
@@ -135,7 +139,9 @@ export default function Ledger() {
       r.mmfToDhow,
       r.mainAction ?? "",
       r.mmfEnd,
-      r.tbillEnd,
+      r.tbill91End,
+      r.tbill182End,
+      r.tbill364End,
       r.ifbEnd,
       r.fxdEnd,
       r.bankEnd,
@@ -152,7 +158,7 @@ export default function Ledger() {
       flowSum((r) => r.bankCashIn),
       flowSum((r) => r.mmfToDhow),
       `Ending balances at month ${last.monthNumber}`,
-      last.mmfEnd, last.tbillEnd, last.ifbEnd, last.fxdEnd, last.bankEnd, last.totalEnd,
+      last.mmfEnd, last.tbill91End, last.tbill182End, last.tbill364End, last.ifbEnd, last.fxdEnd, last.bankEnd, last.totalEnd,
       "",
     ];
     const csv = toCsv(headers, [...rows, totalRow]);
@@ -262,7 +268,9 @@ export default function Ledger() {
                     <th className="text-right px-4 py-3 text-muted-foreground font-medium whitespace-nowrap">MMF→Dhow</th>
                     <th className="text-left px-4 py-3 text-muted-foreground font-medium">Main Action</th>
                     <th className="text-right px-4 py-3 text-muted-foreground font-medium whitespace-nowrap">MMF End</th>
-                    <th className="text-right px-4 py-3 text-muted-foreground font-medium whitespace-nowrap">T-Bill</th>
+                    <th className="text-right px-4 py-3 text-muted-foreground font-medium whitespace-nowrap">T-Bill 91d</th>
+                    <th className="text-right px-4 py-3 text-muted-foreground font-medium whitespace-nowrap">T-Bill 182d</th>
+                    <th className="text-right px-4 py-3 text-muted-foreground font-medium whitespace-nowrap">T-Bill 364d</th>
                     <th className="text-right px-4 py-3 text-muted-foreground font-medium whitespace-nowrap">IFB</th>
                     <th className="text-right px-4 py-3 text-muted-foreground font-medium whitespace-nowrap">FXD</th>
                     <th className="text-right px-4 py-3 text-muted-foreground font-medium whitespace-nowrap">Bank</th>
@@ -373,10 +381,23 @@ export default function Ledger() {
                             {formatKES(r.mmfEnd)}
                           </td>
                           <td className="px-4 py-2.5 text-right kes-amount text-muted-foreground">
-                            {r.tbillEnd > 0 ? formatKES(r.tbillEnd) : "–"}
+                            {r.tbill91End > 0 ? formatKES(r.tbill91End) : "–"}
                           </td>
                           <td className="px-4 py-2.5 text-right kes-amount text-muted-foreground">
-                            {r.ifbEnd > 0 ? formatKES(r.ifbEnd) : "–"}
+                            {r.tbill182End > 0 ? formatKES(r.tbill182End) : "–"}
+                          </td>
+                          <td className="px-4 py-2.5 text-right kes-amount text-muted-foreground">
+                            {r.tbill364End > 0 ? formatKES(r.tbill364End) : "–"}
+                          </td>
+                          <td className="px-4 py-2.5 text-right kes-amount text-muted-foreground">
+                            {r.ifbEnd > 0 ? (
+                              <span className="inline-flex items-center gap-1">
+                                {formatKES(r.ifbEnd)}
+                                {r.ifbTenorYears > 0 && (
+                                  <span className="text-[10px] text-violet-400/80">{r.ifbTenorYears}y</span>
+                                )}
+                              </span>
+                            ) : "–"}
                           </td>
                           <td className="px-4 py-2.5 text-right kes-amount text-muted-foreground">
                             {r.fxdEnd > 0 ? formatKES(r.fxdEnd) : "–"}
@@ -412,7 +433,9 @@ export default function Ledger() {
                         Ending balances · month {totals.lastMonth}
                       </td>
                       <td className="px-4 py-3 text-right kes-amount">{formatKES(totals.endMmf)}</td>
-                      <td className="px-4 py-3 text-right kes-amount">{totals.endTbill > 0 ? formatKES(totals.endTbill) : "–"}</td>
+                      <td className="px-4 py-3 text-right kes-amount">{totals.endTbill91 > 0 ? formatKES(totals.endTbill91) : "–"}</td>
+                      <td className="px-4 py-3 text-right kes-amount">{totals.endTbill182 > 0 ? formatKES(totals.endTbill182) : "–"}</td>
+                      <td className="px-4 py-3 text-right kes-amount">{totals.endTbill364 > 0 ? formatKES(totals.endTbill364) : "–"}</td>
                       <td className="px-4 py-3 text-right kes-amount">{totals.endIfb > 0 ? formatKES(totals.endIfb) : "–"}</td>
                       <td className="px-4 py-3 text-right kes-amount">{totals.endFxd > 0 ? formatKES(totals.endFxd) : "–"}</td>
                       <td className="px-4 py-3 text-right kes-amount">{totals.endBank > 0 ? formatKES(totals.endBank) : "–"}</td>

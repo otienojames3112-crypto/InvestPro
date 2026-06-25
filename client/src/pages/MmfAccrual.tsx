@@ -41,9 +41,12 @@ import { simulateAccrual, oneDayInterest, geometricDailyRate, type DayRow } from
 import {
   buildSecurityIncome,
   buildBankIncome,
+  buildSecurityDailySchedule,
+  buildBankDailySchedule,
   type SecurityIncomeInput,
   type BankIncomeInput,
   type IncomeSummary,
+  type DailyAccrualSchedule,
 } from "@shared/incomeBreakdown";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Landmark, Building2 } from "lucide-react";
@@ -204,6 +207,49 @@ export default function MmfAccrual() {
   const bankIncome: IncomeSummary = useMemo(
     () =>
       buildBankIncome(
+        (bankHoldingsData as unknown[]).map((b) => {
+          const r = b as Record<string, unknown>;
+          return {
+            id: Number(r.id),
+            bankName: String(r.bankName ?? ""),
+            label: (r.label as string | null) ?? null,
+            instrumentType: String(r.instrumentType) as BankIncomeInput["instrumentType"],
+            principal: Number(r.principal) || 0,
+            interestRate: Number(r.interestRate) || 0,
+            whtRate: Number(r.whtRate) || 15,
+            dayCountBasis: Number(r.dayCountBasis) || 365,
+            maturityDate: (r.maturityDate as string | null) ?? null,
+            isActive: r.isActive !== false,
+          } satisfies BankIncomeInput;
+        }),
+        days,
+      ),
+    [bankHoldingsData, days],
+  );
+
+  const securityDaily = useMemo(
+    () =>
+      buildSecurityDailySchedule(
+        (securitiesData as unknown[]).map((s) => {
+          const r = s as Record<string, unknown>;
+          return {
+            id: Number(r.id),
+            securityType: String(r.securityType) as SecurityIncomeInput["securityType"],
+            faceValue: Number(r.faceValue) || 0,
+            couponRate: Number(r.couponRate) || 0,
+            isTaxExempt: !!r.isTaxExempt,
+            maturityDate: (r.maturityDate as string | null) ?? null,
+            isMatured: !!r.isMatured,
+          } satisfies SecurityIncomeInput;
+        }),
+        days,
+      ),
+    [securitiesData, days],
+  );
+
+  const bankDaily = useMemo(
+    () =>
+      buildBankDailySchedule(
         (bankHoldingsData as unknown[]).map((b) => {
           const r = b as Record<string, unknown>;
           return {
@@ -643,9 +689,11 @@ export default function MmfAccrual() {
             title="Government Securities — interest breakdown"
             blurb="T-Bills earn a discount and Treasury bonds (FXD) pay a coupon, both taxed at 15% WHT. Infrastructure Bonds (IFB) are tax-exempt in Kenya. Figures are simple pro-rata of the annual gross over the chosen horizon (coupons/discounts do not compound intra-period like an MMF)."
             summary={securityIncome}
+            schedule={securityDaily}
             days={days}
             emptyHint="No live government securities in this portfolio. Add T-Bills, IFB, or FXD on the CBK Securities page."
             baseLabel="Face value"
+            scheduleNote="Government paper accretes on a STRAIGHT LINE — each day earns an identical slice (no intra-period compounding). T-bill discount accretes to par; coupons accrue evenly."
           />
         )}
 
@@ -654,9 +702,11 @@ export default function MmfAccrual() {
             title="Bank Instruments — interest breakdown"
             blurb="Fixed, call, and savings deposits earn simple interest at their quoted rate, taxed at each holding's WHT rate (usually 15%). Figures are pro-rata of the annual gross over the chosen horizon on a 365-day-equivalent basis."
             summary={bankIncome}
+            schedule={bankDaily}
             days={days}
             emptyHint="No active bank instruments in this portfolio. Add fixed/call/target deposits on the Record Deposits → Bank page."
             baseLabel="Principal"
+            scheduleNote="Bank deposits pay SIMPLE daily interest on a constant principal (no intra-period compounding in this tracker)."
           />
         )}
       </div>
@@ -669,16 +719,20 @@ function IncomeBreakdownSection({
   title,
   blurb,
   summary,
+  schedule,
   days,
   emptyHint,
   baseLabel,
+  scheduleNote,
 }: {
   title: string;
   blurb: string;
   summary: IncomeSummary;
+  schedule: DailyAccrualSchedule;
   days: number;
   emptyHint: string;
   baseLabel: string;
+  scheduleNote: string;
 }) {
   const empty = summary.rows.length === 0;
   return (
@@ -737,6 +791,42 @@ function IncomeBreakdownSection({
                         <TableCell className="text-right tabular-nums text-red-500">{r.whtHorizon > 0 ? `−${kes(r.whtHorizon)}` : "—"}</TableCell>
                         <TableCell className="text-right tabular-nums text-primary">{kes(r.netHorizon)}</TableCell>
                         <TableCell className="text-right tabular-nums">{kes(r.grossAnnual)}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Round 39: true day-by-day accrual schedule (correct method per instrument) */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Day-by-Day Breakdown ({days}-day horizon)</CardTitle>
+              <CardDescription>{scheduleNote}</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="rounded-md border overflow-x-auto max-h-[480px] overflow-y-auto">
+                <Table>
+                  <TableHeader className="sticky top-0 bg-card z-10">
+                    <TableRow>
+                      <TableHead>Day</TableHead>
+                      <TableHead className="text-right">Opening accrued</TableHead>
+                      <TableHead className="text-right">Gross</TableHead>
+                      <TableHead className="text-right">WHT</TableHead>
+                      <TableHead className="text-right">Net</TableHead>
+                      <TableHead className="text-right">Closing accrued</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {schedule.rows.map((d) => (
+                      <TableRow key={d.day}>
+                        <TableCell className="tabular-nums">{d.day}</TableCell>
+                        <TableCell className="text-right tabular-nums">{kes(d.openingAccrued)}</TableCell>
+                        <TableCell className="text-right tabular-nums">{kes(d.grossDay)}</TableCell>
+                        <TableCell className="text-right tabular-nums text-red-500">{d.whtDay > 0 ? `−${kes(d.whtDay)}` : "—"}</TableCell>
+                        <TableCell className="text-right tabular-nums text-primary">{kes(d.netDay)}</TableCell>
+                        <TableCell className="text-right tabular-nums font-medium">{kes(d.closingAccrued)}</TableCell>
                       </TableRow>
                     ))}
                   </TableBody>

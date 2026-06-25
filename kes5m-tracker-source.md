@@ -497,6 +497,12 @@ export const portfolios = mysqlTable("portfolios", {
   foundationFrac: decimal("foundationFrac", { precision: 5, scale: 4 }).notNull().default("0.2000"),
   growthFrac: decimal("growthFrac", { precision: 5, scale: 4 }).notNull().default("0.5000"),
   deRiskingFrac: decimal("deRiskingFrac", { precision: 5, scale: 4 }).notNull().default("0.1500"),
+  /**
+   * Round 34: editable per-issuer concentration cap (%). No single bank/issuer
+   * may exceed this share of net worth before the Dashboard banner warns.
+   * Government securities are sovereign and exempt. Default 25%.
+   */
+  concentrationCapPct: decimal("concentrationCapPct", { precision: 5, scale: 2 }).notNull().default("25.00"),
   // finalLiquidityFrac is implied: 1 - foundationFrac - growthFrac - deRiskingFrac
   /** Editable source URL for CBK T-Bills rates page */
   cbkSourceUrl: varchar("cbkSourceUrl", { length: 500 }).notNull().default("https://www.centralbank.go.ke/bills-bonds/treasury-bills/"),
@@ -647,6 +653,47 @@ export const depositEntries = mysqlTable("deposit_entries", {
 
 export type DepositEntry = typeof depositEntries.$inferSelect;
 export type InsertDepositEntry = typeof depositEntries.$inferInsert;
+
+/**
+ * Withdrawal entries — real money taken OUT of an account, per portfolio.
+ *
+ * A withdrawal is the money-out counterpart to deposit_entries. It reduces the
+ * source account's balance, flows through the actuals aggregation (net worth,
+ * dashboard totals, reconciliation), and — for a fixed deposit broken early —
+ * records any forfeited interest so the tax/net-worth picture stays honest.
+ *
+ * The source is identified the same way deposits name their destination:
+ * - mmf_fund: pulled from an MMF account (mmfFundId set; primary or secondary)
+ * - bank_instrument: pulled from a bank holding (bankHoldingId set)
+ * - government_security: matured/redeemed cash from a CBK lot (securityId set)
+ */
+export const withdrawalEntries = mysqlTable("withdrawal_entries", {
+  id: int("id").autoincrement().primaryKey(),
+  portfolioId: int("portfolioId").notNull(),
+  /** Where the money came from. Mirrors deposit_entries.institutionType. */
+  sourceType: mysqlEnum("sourceType", ["mmf_fund", "bank_instrument", "government_security"]).notNull().default("mmf_fund"),
+  /** FK to mmf_funds.id when sourceType = mmf_fund (null = primary fund). */
+  mmfFundId: int("mmfFundId"),
+  /** FK to bank_instrument_holdings.id when sourceType = bank_instrument. */
+  bankHoldingId: int("bankHoldingId"),
+  /** FK to securities.id when sourceType = government_security. */
+  securityId: int("securityId"),
+  /** Gross amount withdrawn (KES, positive number). */
+  amount: decimal("amount", { precision: 14, scale: 2 }).notNull(),
+  /** Interest forfeited by an early fixed-deposit break (KES). 0 otherwise. */
+  forfeitedInterest: decimal("forfeitedInterest", { precision: 14, scale: 2 }).notNull().default("0.00"),
+  /** True when this was an early break of a fixed deposit before maturity. */
+  isEarlyWithdrawal: boolean("isEarlyWithdrawal").notNull().default(false),
+  withdrawalDate: date("withdrawalDate").notNull(),
+  /** Optional reason / destination note. */
+  reason: text("reason"),
+  notes: text("notes"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type WithdrawalEntry = typeof withdrawalEntries.$inferSelect;
+export type InsertWithdrawalEntry = typeof withdrawalEntries.$inferInsert;
 
 /**
  * Rate history — per-portfolio rate snapshots for time-locked projection.
@@ -874,7 +921,7 @@ export const bankInstruments = mysqlTable("bank_instruments", {
   /** Bank name, e.g. "Equity Bank" */
   bankName: varchar("bankName", { length: 200 }).notNull(),
   /** Instrument type */
-  instrumentType: mysqlEnum("instrumentType", ["call_deposit", "fixed_deposit"]).notNull(),
+  instrumentType: mysqlEnum("instrumentType", ["call_deposit", "fixed_deposit", "ordinary_savings", "target_savings", "tiered_savings"]).notNull(),
   /** Minimum amount (KES) */
   minAmount: decimal("minAmount", { precision: 14, scale: 2 }).notNull().default("0.00"),
   /** Typical tenor, e.g. "1–12 months" */
@@ -915,8 +962,14 @@ export const bankInstrumentHoldings = mysqlTable("bank_instrument_holdings", {
   bankName: varchar("bankName", { length: 200 }).notNull(),
   /** Optional user label, e.g. "Equity 3-month FD" */
   label: varchar("label", { length: 200 }),
-  /** Instrument type */
-  instrumentType: mysqlEnum("instrumentType", ["call_deposit", "fixed_deposit"]).notNull(),
+  /** Instrument type (Round 30: all five bank-deposit kinds). */
+  instrumentType: mysqlEnum("instrumentType", [
+    "call_deposit",
+    "fixed_deposit",
+    "ordinary_savings",
+    "target_savings",
+    "tiered_savings",
+  ]).notNull(),
   /** Principal placed (KES) */
   principal: decimal("principal", { precision: 14, scale: 2 }).notNull().default("0.00"),
   /** Annual interest rate (% p.a.) — manually editable */
@@ -939,6 +992,22 @@ export const bankInstrumentHoldings = mysqlTable("bank_instrument_holdings", {
   payoutFrequency: mysqlEnum("payoutFrequency", ["maturity", "monthly", "quarterly", "on_call"]).notNull().default("maturity"),
   /** Current accrued value (KES) — updated manually or computed */
   currentValue: decimal("currentValue", { precision: 14, scale: 2 }).notNull().default("0.00"),
+  /**
+   * Early-break penalty (% of interest forfeited) if a TERM deposit
+   * (fixed/target-savings) is withdrawn before maturity. 0 = no penalty.
+   * Modelled by the withdrawal flow when breaking a term deposit early.
+   */
+  earlyBreakPenaltyPct: decimal("earlyBreakPenaltyPct", { precision: 6, scale: 4 }).notNull().default("0.0000"),
+  /**
+   * Round 31: what the engine does with a TERM deposit's principal+interest at
+   * maturity.
+   *   - "redeploy"  (default): cash returns to the MMF and the yield-max
+   *     allocator re-deploys it per the sweep rules.
+   *   - "rollover": the deposit auto-renews for the same tenor at the same rate
+   *     (principal+interest rolled into a fresh term), staying in the bank.
+   * Ignored for LIQUID kinds (call/ordinary/tiered savings), which never mature.
+   */
+  maturityAction: mysqlEnum("maturityAction", ["redeploy", "rollover"]).notNull().default("redeploy"),
   notes: text("notes"),
   isActive: boolean("isActive").notNull().default(true),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
@@ -1028,19 +1097,41 @@ import {} from "./schema";
 
 export interface DayRow {
   day: number;
+  /** Calendar date for this row (ISO YYYY-MM-DD) when a startDate is supplied. */
+  date?: string;
   openingBalance: number;
   grossInterest: number;
   wht: number;
   netInterest: number;
   closingBalance: number;
+  /** The annual EAR (%) actually applied on this day (reflects rate changes). */
+  appliedEar?: number;
+  /** The WHT rate (%) actually applied on this day. */
+  appliedWht?: number;
 }
 
 export type CreditingFrequency = "daily" | "monthly";
 
 /**
- * Simulate daily MMF interest accrual.
+ * Geometric daily rate from an EFFECTIVE annual rate (EAR).
  *
- * - dailyRate = annualEar% / dayCount  (dayCount is 365 or 360)
+ * A money-market fund quotes an EAR that ALREADY embeds annual compounding,
+ * so the correct per-day rate is the geometric root:
+ *
+ *     dailyRate = (1 + EAR/100)^(1/dayCount) - 1
+ *
+ * Compounding this rate over `dayCount` days reproduces the EAR exactly.
+ * (The old `EAR/100/dayCount` simple rate over-states interest because it
+ * then double-counts compounding when applied daily.)
+ */
+export function geometricDailyRate(annualEar: number, dayCount: number): number {
+  return Math.pow(1 + annualEar / 100, 1 / dayCount) - 1;
+}
+
+/**
+ * Simulate daily MMF interest accrual using the GEOMETRIC daily rate.
+ *
+ * - dailyRate = (1 + EAR/100)^(1/dayCount) - 1   (dayCount is 365 or 360)
  * - gross     = balance * dailyRate
  * - wht       = gross * whtRate%
  * - net       = gross - wht
@@ -1057,7 +1148,7 @@ export function simulateAccrual(
   days: number
 ): DayRow[] {
   const rows: DayRow[] = [];
-  const dailyRate = annualEar / 100 / dayCount;
+  const dailyRate = geometricDailyRate(annualEar, dayCount);
   let balance = principal;
   let accruedNet = 0;
   let accrualBase = principal;
@@ -1076,6 +1167,8 @@ export function simulateAccrual(
         wht,
         netInterest: net,
         closingBalance: balance,
+        appliedEar: annualEar,
+        appliedWht: whtRate,
       });
     } else {
       const gross = accrualBase * dailyRate;
@@ -1096,20 +1189,109 @@ export function simulateAccrual(
         wht,
         netInterest: net,
         closingBalance: closing,
+        appliedEar: annualEar,
+        appliedWht: whtRate,
       });
     }
   }
   return rows;
 }
 
-/** One full day of interest on a principal (no compounding). */
+/** A dated rate change: from `effectiveDate` onward, use this EAR / WHT. */
+export interface AccrualRatePoint {
+  /** ISO YYYY-MM-DD — the first day this rate applies. */
+  effectiveDate: string;
+  /** Effective annual rate (%) of the fund from this date. */
+  ear: number;
+  /** Withholding-tax rate (%) from this date. */
+  whtRate: number;
+}
+
+/** Add `n` days to an ISO date (UTC, no DST drift). */
+function addDays(iso: string, n: number): string {
+  const d = new Date(`${iso}T12:00:00.000Z`);
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+
+/**
+ * Pick the EAR / WHT in force on a given date from a sorted rate history.
+ * Uses the LATEST point whose effectiveDate <= the target date (the old rate
+ * applies up to a change date; the new rate applies from the change date on).
+ * Falls back to the first point when the date precedes all history.
+ */
+export function ratesOnDate(
+  date: string,
+  history: AccrualRatePoint[],
+  fallback: { ear: number; whtRate: number }
+): { ear: number; whtRate: number } {
+  if (!history || history.length === 0) return fallback;
+  const sorted = [...history].sort((a, b) => a.effectiveDate.localeCompare(b.effectiveDate));
+  let chosen: AccrualRatePoint | null = null;
+  for (const p of sorted) {
+    if (p.effectiveDate <= date) chosen = p;
+    else break;
+  }
+  if (!chosen) {
+    // Date precedes all history — use the earliest known point.
+    return { ear: sorted[0].ear, whtRate: sorted[0].whtRate };
+  }
+  return { ear: chosen.ear, whtRate: chosen.whtRate };
+}
+
+/**
+ * Date-aware daily accrual that CARRIES ACROSS MONTHS and PICKS UP RATE/WHT
+ * CHANGES BY DATE (Fix #4).
+ *
+ * Every day is dated from `startDate`. The EAR and WHT used on each day come
+ * from `history` via {@link ratesOnDate}, so a rate change on date D uses the
+ * OLD rate for days before D and the NEW rate from D forward. Net interest
+ * compounds daily (the closing balance of one day is the opening of the next),
+ * so the ledger continues correctly across month and rate boundaries over the
+ * full period — not just a 30-day window.
+ */
+export function simulateAccrualDated(
+  principal: number,
+  startDate: string,
+  dayCount: number,
+  days: number,
+  history: AccrualRatePoint[],
+  fallback: { ear: number; whtRate: number }
+): DayRow[] {
+  const rows: DayRow[] = [];
+  let balance = principal;
+  for (let i = 0; i < days; i++) {
+    const date = addDays(startDate, i);
+    const { ear, whtRate } = ratesOnDate(date, history, fallback);
+    const dailyRate = geometricDailyRate(ear, dayCount);
+    const opening = balance;
+    const gross = balance * dailyRate;
+    const wht = gross * (whtRate / 100);
+    const net = gross - wht;
+    balance += net;
+    rows.push({
+      day: i + 1,
+      date,
+      openingBalance: opening,
+      grossInterest: gross,
+      wht,
+      netInterest: net,
+      closingBalance: balance,
+      appliedEar: ear,
+      appliedWht: whtRate,
+    });
+  }
+  return rows;
+}
+
+/** One full day of interest on a principal (no compounding, geometric rate). */
 export function oneDayInterest(
   principal: number,
   annualEar: number,
   dayCount: number,
   whtRate: number
 ): { gross: number; wht: number; net: number } {
-  const gross = principal * (annualEar / 100 / dayCount);
+  const gross = principal * geometricDailyRate(annualEar, dayCount);
   const wht = gross * (whtRate / 100);
   return { gross, wht, net: gross - wht };
 }
@@ -1204,7 +1386,21 @@ export type BankHoldingActual = {
   interestRate: number;
   whtRate?: number | null;
   isActive?: boolean;
+  /** Accrued current value if tracked; falls back to principal when absent. */
+  currentValue?: number | null;
 };
+
+/**
+ * The value a single bank holding contributes to net worth: its accrued
+ * `currentValue` when present and positive, otherwise its `principal`.
+ * Inactive holdings contribute nothing.
+ */
+export function bankHoldingValue(b: BankHoldingActual): number {
+  if (b.isActive === false) return 0;
+  const cv = Number(b.currentValue ?? 0);
+  if (cv > 0) return cv;
+  return Number(b.principal ?? 0);
+}
 
 export type ActualsRates = {
   withholdingTax: number; // percent, e.g. 15
@@ -1213,12 +1409,71 @@ export type ActualsRates = {
   fxdCouponRate: number; // percent gross
 };
 
+/** A recorded withdrawal (money OUT). Mirrors the deposit source taxonomy. */
+export type WithdrawalRow = {
+  sourceType: "mmf_fund" | "bank_instrument" | "government_security";
+  /** null = primary MMF; a secondary fund id otherwise. */
+  mmfFundId?: number | null;
+  amount: number;
+};
+
+/** Net withdrawals by source bucket, classifying primary vs secondary MMF. */
+function sumWithdrawals(
+  withdrawals: WithdrawalRow[],
+  secondaryFundIds: Set<number>,
+) {
+  let primaryMmf = 0;
+  let secondaryMmf = 0;
+  let bank = 0;
+  let gov = 0;
+  for (const w of withdrawals) {
+    const amt = Math.max(0, w.amount);
+    if (w.sourceType === "bank_instrument") bank += amt;
+    else if (w.sourceType === "government_security") gov += amt;
+    else if (w.sourceType === "mmf_fund" && w.mmfFundId != null && secondaryFundIds.has(w.mmfFundId)) {
+      secondaryMmf += amt;
+    } else {
+      primaryMmf += amt;
+    }
+  }
+  return { primaryMmf, secondaryMmf, bank, gov };
+}
+
+/**
+ * Estimate the NET interest (after WHT) earned on a single MMF principal between
+ * `fromISO` and `toISO`, using the same geometric daily-compounding model as the
+ * accrual ledger. Returns 0 for non-positive principal or zero/negative elapsed
+ * days. This is an estimate for display only — the authoritative day-by-day
+ * figures live in the accrual ledger.
+ */
+export function estInterestToDate(
+  principal: number,
+  annualEar: number,
+  whtRate: number,
+  fromISO: string,
+  toISO: string,
+  dayCount = 365,
+): number {
+  if (!(principal > 0) || !(annualEar > 0)) return 0;
+  const from = new Date(`${String(fromISO).slice(0, 10)}T12:00:00.000Z`).getTime();
+  const to = new Date(`${String(toISO).slice(0, 10)}T12:00:00.000Z`).getTime();
+  if (!Number.isFinite(from) || !Number.isFinite(to)) return 0;
+  const days = Math.floor((to - from) / 86_400_000);
+  if (days <= 0) return 0;
+  const dailyRate = Math.pow(1 + annualEar / 100, 1 / dayCount) - 1;
+  const grossFactor = Math.pow(1 + dailyRate, days);
+  const gross = principal * (grossFactor - 1);
+  const net = gross * (1 - (whtRate || 0) / 100);
+  return Math.max(0, Math.round(net * 100) / 100);
+}
+
 export function computeActualsTotals(
   deposits: DepositRow[],
   secondaries: SecondaryMmfActual[],
   bankHoldings: BankHoldingActual[],
   rates: ActualsRates,
   securities: SecurityActual[] = [],
+  withdrawals: WithdrawalRow[] = [],
 ) {
   const secondaryFundIds = new Set(
     secondaries.map((s) => s.mmfFundId).filter((id): id is number => typeof id === "number"),
@@ -1288,19 +1543,40 @@ export function computeActualsTotals(
     bankTax += whtOn(b.principal * (b.interestRate / 100), bWht);
   }
 
-  const mmfTax = whtOn(depositsContributed * (rates.mmfYield / 100), rates.withholdingTax || WHT_RATES.mmfInterest);
+  // ── Apply recorded withdrawals (money OUT), netted by source bucket ──────────
+  // Each bucket is floored at 0 so an over-withdrawal can never produce a
+  // negative balance in the aggregation (the router validates available funds).
+  const wd = sumWithdrawals(withdrawals, secondaryFundIds);
+  const netPrimaryMmf = Math.max(0, depositsContributed - wd.primaryMmf);
+  const netSecondaryMmf = Math.max(0, secondaryMmfBalance - wd.secondaryMmf);
+  const netBank = Math.max(0, bankBalance - wd.bank);
+  const netSecurities = Math.max(0, securitiesValue - wd.gov);
+
+  // Recompute primary-MMF bucket and tax on the post-withdrawal base.
+  byBucket.mmf = netPrimaryMmf;
+
+  const mmfTax = whtOn(netPrimaryMmf * (rates.mmfYield / 100), rates.withholdingTax || WHT_RATES.mmfInterest);
   const ifbTax = 0; // IFB coupons are tax-exempt in Kenya
 
+  // Tax bases for secondary/bank scale down proportionally to the remaining balance.
+  const secScale = secondaryMmfBalance > 0 ? netSecondaryMmf / secondaryMmfBalance : 0;
+  const bankScale = bankBalance > 0 ? netBank / bankBalance : 0;
+  secondaryMmfTax = secondaryMmfTax * secScale;
+  bankTax = bankTax * bankScale;
+
   const totalContributed =
-    depositsContributed + securitiesValue + secondaryMmfBalance + bankBalance;
+    netPrimaryMmf + netSecurities + netSecondaryMmf + netBank;
   const taxLiability = mmfTax + tbillTax + ifbTax + fxdTax + secondaryMmfTax + bankTax;
 
   return {
     totalContributed,
-    depositsContributed,
-    securitiesValue,
-    secondaryMmfBalance,
-    bankBalance,
+    depositsContributed: netPrimaryMmf,
+    securitiesValue: netSecurities,
+    secondaryMmfBalance: netSecondaryMmf,
+    bankBalance: netBank,
+    /** Gross figures before withdrawals, for audit/debug. */
+    grossDepositsContributed: depositsContributed,
+    withdrawalsByBucket: wd,
     byBucket,
     taxBreakdown: {
       mmf: Math.round(mmfTax * 100) / 100,
@@ -1313,6 +1589,338 @@ export function computeActualsTotals(
     taxLiability,
   };
 }
+
+/**
+ * CANONICAL SUM-OF-PARTS NET WORTH (Round 30).
+ *
+ * Every page that displays a portfolio total MUST derive net worth from this one
+ * function so no page can silently omit a pocket (the Round-30 bug was Portfolio
+ * Review and Tax Summary excluding bank-instrument holdings, showing KES 46,000
+ * while the Dashboard correctly showed KES 143,500).
+ *
+ * Net worth = primary-MMF principal + every secondary-MMF balance + every active
+ * bank-instrument value (accrued currentValue, else principal) + every un-matured
+ * CBK security face value + every other-asset current value.
+ *
+ * This is intentionally pure and framework-free so it is shared verbatim between
+ * the Dashboard, Portfolio Review, Tax Summary and the Reconciliation page.
+ */
+export interface NetWorthParts {
+  primaryMmf: number;
+  secondaryMmf: number[]; // each secondary MMF balance
+  bank: number[]; // each active bank-instrument value (currentValue || principal)
+  securities: number[]; // each un-matured CBK security face value
+  other: number[]; // each other-asset current value
+}
+
+export interface NetWorthBreakdown {
+  primaryMmf: number;
+  secondaryMmf: number;
+  bank: number;
+  securities: number;
+  other: number;
+  total: number;
+}
+
+export function sumOfPartsNetWorth(parts: NetWorthParts): NetWorthBreakdown {
+  const sum = (xs: number[]) => xs.reduce((a, b) => a + (Number(b) || 0), 0);
+  const primaryMmf = Number(parts.primaryMmf) || 0;
+  const secondaryMmf = sum(parts.secondaryMmf);
+  const bank = sum(parts.bank);
+  const securities = sum(parts.securities);
+  const other = sum(parts.other);
+  const total = primaryMmf + secondaryMmf + bank + securities + other;
+  return { primaryMmf, secondaryMmf, bank, securities, other, total };
+}
+
+
+/**
+ * EARLY-BREAK "WHAT-IF" (Round 31) — shared, framework-free, used by the
+ * holding card and unit tests.
+ *
+ * Breaking a TERM deposit (fixed / goal savings) before maturity forfeits a
+ * share of the interest accrued so far — the bank's early-break penalty,
+ * expressed as a % of accrued interest. This helper estimates:
+ *   - accruedInterest:  net interest earned from `startISO` to today, and
+ *   - netIfBrokenNow:   principal + interest retained after the penalty.
+ *
+ * It deliberately mirrors `estInterestToDate` so the accrued figure matches the
+ * Dashboard's estimated-interest line. Pure: no React/DOM/Date-locale deps.
+ */
+export interface EarlyBreakWhatIfInput {
+  principal: number;
+  interestRate: number; // % p.a. gross
+  whtRate?: number | null; // % WHT on interest, default 15
+  startISO: string; // placement date (YYYY-MM-DD)
+  earlyBreakPenaltyPct: number; // % of accrued interest forfeited
+  asOfISO?: string; // defaults to today
+  dayCount?: number; // 365 or 360
+}
+
+export interface EarlyBreakWhatIfResult {
+  accruedInterest: number; // net interest earned to date (after WHT)
+  penaltyAmount: number; // interest forfeited by breaking now
+  retainedInterest: number; // interest you keep if you break now
+  netIfBrokenNow: number; // principal + retained interest
+}
+
+export function earlyBreakWhatIf(input: EarlyBreakWhatIfInput): EarlyBreakWhatIfResult {
+  const principal = Math.max(0, Number(input.principal) || 0);
+  const wht = input.whtRate == null ? 15 : Number(input.whtRate);
+  const asOf = (input.asOfISO ?? new Date().toISOString().slice(0, 10)).slice(0, 10);
+  const accruedInterest = estInterestToDate(
+    principal,
+    Number(input.interestRate) || 0,
+    wht,
+    input.startISO,
+    asOf,
+    input.dayCount ?? 365,
+  );
+  const penaltyFrac = Math.min(1, Math.max(0, (Number(input.earlyBreakPenaltyPct) || 0) / 100));
+  const penaltyAmount = Math.round(accruedInterest * penaltyFrac * 100) / 100;
+  const retainedInterest = Math.round((accruedInterest - penaltyAmount) * 100) / 100;
+  const netIfBrokenNow = Math.round((principal + retainedInterest) * 100) / 100;
+  return { accruedInterest, penaltyAmount, retainedInterest, netIfBrokenNow };
+}
+
+
+/**
+ * ROUND 32 — ONE SHARED VALUATION PATH
+ * ------------------------------------------------------------------------
+ * The Dashboard, Portfolio Review, Tax Summary and Reconciliation pages must
+ * all derive net worth and blended yield from the SAME code. Previously each
+ * page hand-rolled its own bucket math, which let Portfolio Review double-count
+ * secondary-MMF deposits (a secondary-fund deposit row is `bucket:"mmf"` AND
+ * `institutionType:"mmf_fund"`, so it leaked into the primary-MMF bucket while
+ * ALSO being added via the secondary balance) and let Tax Summary compute an
+ * impossible net yield. These helpers are the single source of truth; both the
+ * pages and the reconciliation cross-check call them with the same raw inputs.
+ */
+
+/** Raw deposit row as returned by `trpc.deposits.list`. */
+export interface RawDepositRow {
+  amount: number | string;
+  bucket: string; // "mmf" | "tbill" | "ifb" | "fxd"
+  institutionType?: string | null;
+  mmfFundId?: number | null;
+}
+
+/** Raw security row as returned by `trpc.securities.list`. */
+export interface RawSecurityRow {
+  securityType: string;
+  faceValue: number | string;
+  isMatured?: boolean | null;
+}
+
+/** Raw secondary-MMF row as returned by `trpc.secondaryMmfs.list`. */
+export interface RawSecondaryMmf {
+  mmfFundId?: number | null;
+  currentBalance: number | string;
+  ear: number | string;
+}
+
+/** Raw bank-holding row as returned by `trpc.bankHoldings.list`. */
+export interface RawBankHolding {
+  principal: number | string;
+  interestRate?: number | string | null;
+  isActive?: boolean | null;
+  currentValue?: number | string | null;
+}
+
+/** Raw other-asset row as returned by `trpc.otherHoldings.list`. */
+export interface RawOtherHolding {
+  assetClass: string;
+  currentValue: number | string;
+}
+
+/**
+ * True when a deposit row represents a SECONDARY-MMF contribution rather than
+ * the primary fund. A deposit into ANY MMF fund that is not the portfolio's
+ * primary fund is, by definition, a secondary contribution — its balance is
+ * already represented by that secondary fund's `currentBalance`, so counting
+ * the deposit row again is the classic double-count.
+ *
+ * Detection is deliberately robust against caller mistakes (Round 33): a row is
+ * treated as secondary when EITHER its fund id is in the explicit secondary-fund
+ * set OR (when a `primaryFundId` is known) its fund id differs from the primary.
+ * Relying on the secondary-set alone is fragile — if a caller passes the wrong
+ * id (e.g. the secondary ROW id instead of its FUND id) the set never matches
+ * and the deposit leaks back into the primary bucket. The primary-fund check is
+ * the reliable fallback.
+ */
+function isSecondaryMmfDeposit(
+  d: RawDepositRow,
+  secondaryFundIds: Set<number>,
+  primaryFundId?: number | null,
+): boolean {
+  if (d.institutionType !== "mmf_fund" || d.mmfFundId == null) return false;
+  if (secondaryFundIds.has(d.mmfFundId)) return true;
+  if (primaryFundId != null && d.mmfFundId !== primaryFundId) return true;
+  return false;
+}
+
+export interface AllocationInput {
+  deposits: RawDepositRow[];
+  securities: RawSecurityRow[];
+  secondaryMmfs: RawSecondaryMmf[];
+  bankHoldings: RawBankHolding[];
+  otherHoldings: RawOtherHolding[];
+  /** Human labels for other-asset classes (e.g. { equity: "Equities" }). */
+  assetLabels?: Record<string, string>;
+  /**
+   * The portfolio's PRIMARY fund id, if known. When provided, any `mmf_fund`
+   * deposit whose fund id differs from this is treated as a secondary
+   * contribution and excluded from the primary-MMF bucket — a robust guard
+   * against the secondary-fund set being mis-populated by the caller.
+   */
+  primaryFundId?: number | null;
+}
+
+export interface AllocationItem {
+  label: string;
+  value: number;
+}
+
+export interface AllocationResult {
+  /** Primary-MMF deposit balance (secondary-fund rows excluded). */
+  primaryMmf: number;
+  /** Sum of secondary-MMF current balances. */
+  secondaryMmf: number;
+  /** Un-matured CBK securities, split by type. */
+  tbill: number;
+  ifb: number;
+  fxd: number;
+  /** Active bank deposits at accrued value. */
+  bank: number;
+  /** Other tracked assets by class. */
+  other: Record<string, number>;
+  /** Sorted allocation rows for the donut/bar. */
+  items: AllocationItem[];
+  /** Total net worth = sum of every part. */
+  netWorth: number;
+}
+
+/**
+ * THE single net-worth + allocation builder. Used by Portfolio Review (render)
+ * and Reconciliation (cross-check). Excludes secondary-MMF and bank/government
+ * deposit ROWS from the primary-MMF bucket so nothing is counted twice.
+ */
+export function buildAllocation(input: AllocationInput): AllocationResult {
+  const num = (x: unknown) => Number(x) || 0;
+  const secondaryFundIds = new Set<number>(
+    input.secondaryMmfs
+      .map((s) => s.mmfFundId)
+      .filter((id): id is number => typeof id === "number"),
+  );
+
+  let primaryMmf = 0;
+  for (const d of input.deposits) {
+    if (d.institutionType === "government_security" || d.institutionType === "bank_instrument") continue;
+    if (isSecondaryMmfDeposit(d, secondaryFundIds, input.primaryFundId)) continue; // avoid double count
+    if (d.bucket === "mmf") primaryMmf += num(d.amount);
+  }
+
+  let tbill = 0, ifb = 0, fxd = 0;
+  for (const s of input.securities) {
+    if (s.isMatured) continue;
+    const face = num(s.faceValue);
+    if (String(s.securityType).startsWith("tbill")) tbill += face;
+    else if (s.securityType === "ifb") ifb += face;
+    else fxd += face;
+  }
+
+  const secondaryMmf = input.secondaryMmfs.reduce((a, s) => a + num(s.currentBalance), 0);
+
+  const bank = input.bankHoldings
+    .filter((b) => b.isActive !== false)
+    .reduce(
+      (a, b) =>
+        a +
+        bankHoldingValue({
+          principal: num(b.principal),
+          interestRate: num(b.interestRate),
+          isActive: b.isActive !== false,
+          currentValue: num(b.currentValue),
+        }),
+      0,
+    );
+
+  const other: Record<string, number> = {};
+  for (const h of input.otherHoldings) {
+    other[h.assetClass] = (other[h.assetClass] ?? 0) + num(h.currentValue);
+  }
+
+  const labels = input.assetLabels ?? {};
+  const items: AllocationItem[] = [];
+  const govAndMmf = primaryMmf + secondaryMmf + tbill + ifb + fxd;
+  if (govAndMmf > 0) items.push({ label: "MMF + CBK Securities", value: govAndMmf });
+  if (bank > 0) items.push({ label: "Bank Deposits", value: bank });
+  for (const [k, v] of Object.entries(other)) {
+    if (v > 0) items.push({ label: labels[k] ?? k, value: v });
+  }
+  items.sort((a, b) => b.value - a.value);
+
+  const netWorth = govAndMmf + bank + Object.values(other).reduce((a, b) => a + b, 0);
+  return { primaryMmf, secondaryMmf, tbill, ifb, fxd, bank, other, items, netWorth };
+}
+
+export interface BlendedYieldInput {
+  /** Primary-MMF balance and its EAR (%). */
+  primaryMmf: number;
+  primaryMmfRate: number;
+  /** Each secondary MMF: balance + EAR (%). */
+  secondaryMmfs: { balance: number; rate: number }[];
+  /** Each active bank deposit: value + rate (%). */
+  bankHoldings: { value: number; rate: number }[];
+  /** Each un-matured security: value + gross rate (%) + tax-exempt flag. */
+  securities: { value: number; rate: number; taxExempt: boolean }[];
+  /** WHT % applied to taxable interest (e.g. 15). */
+  whtRate: number;
+}
+
+export interface BlendedYieldResult {
+  /** Total interest-bearing balance. */
+  base: number;
+  /** Balance-weighted gross yield (%). */
+  grossYield: number;
+  /** Net-of-WHT yield (%): gross minus tax on the taxable portion only. */
+  netYield: number;
+  /** Yield lost to WHT (pp). */
+  taxDrag: number;
+}
+
+/**
+ * THE single blended-yield function. Net yield is computed on the SAME base as
+ * gross: net = (sum of net annual income) / base, where each component's net is
+ * gross income minus WHT (zero WHT for tax-exempt IFB coupons). This removes the
+ * old fragile keyword filter that dropped bank-deposit income from the numerator
+ * while keeping its balance in the denominator (the cause of the impossible
+ * 3.56% net yield). Pure and unit-testable.
+ */
+export function blendedYield(input: BlendedYieldInput): BlendedYieldResult {
+  const wht = Math.max(0, Number(input.whtRate) || 0) / 100;
+  type Part = { bal: number; rate: number; taxExempt: boolean };
+  const parts: Part[] = [];
+  if (input.primaryMmf > 0) parts.push({ bal: input.primaryMmf, rate: input.primaryMmfRate, taxExempt: false });
+  for (const s of input.secondaryMmfs) if (s.balance > 0) parts.push({ bal: s.balance, rate: s.rate, taxExempt: false });
+  for (const b of input.bankHoldings) if (b.value > 0) parts.push({ bal: b.value, rate: b.rate, taxExempt: false });
+  for (const s of input.securities) if (s.value > 0) parts.push({ bal: s.value, rate: s.rate, taxExempt: s.taxExempt });
+
+  const base = parts.reduce((a, p) => a + p.bal, 0);
+  if (base <= 0) return { base: 0, grossYield: 0, netYield: 0, taxDrag: 0 };
+
+  let grossIncome = 0;
+  let netIncome = 0;
+  for (const p of parts) {
+    const gross = p.bal * (p.rate / 100);
+    const net = p.taxExempt ? gross : gross * (1 - wht);
+    grossIncome += gross;
+    netIncome += net;
+  }
+  const grossYield = (grossIncome / base) * 100;
+  const netYield = (netIncome / base) * 100;
+  return { base, grossYield, netYield, taxDrag: grossYield - netYield };
+}
 ```
 
 ### `shared/const.ts`
@@ -1323,6 +1931,580 @@ export const ONE_YEAR_MS = 1000 * 60 * 60 * 24 * 365;
 export const AXIOS_TIMEOUT_MS = 30_000;
 export const UNAUTHED_ERR_MSG = 'Please login (10001)';
 export const NOT_ADMIN_ERR_MSG = 'You do not have required permission (10002)';
+
+/**
+ * Bank-instrument deposit types (Round 30).
+ *
+ * Five kinds are recordable. TERM kinds (fixed_deposit, target_savings) have a
+ * maturity date and accrue to maturity, then return principal + interest to the
+ * MMF for redeployment. LIQUID kinds (call_deposit, ordinary_savings,
+ * tiered_savings) accrue in place and stay withdrawable (no maturity lock).
+ */
+export type BankInstrumentType =
+  | "call_deposit"
+  | "fixed_deposit"
+  | "ordinary_savings"
+  | "target_savings"
+  | "tiered_savings";
+
+export interface BankInstrumentMeta {
+  value: BankInstrumentType;
+  /** Short label, e.g. "Fixed Deposit". */
+  label: string;
+  /** Whether the deposit locks until a maturity date (term) or stays liquid. */
+  isTerm: boolean;
+  /** One-line plain-language description for the picker. */
+  hint: string;
+}
+
+export const BANK_INSTRUMENT_TYPES: BankInstrumentMeta[] = [
+  {
+    value: "fixed_deposit",
+    label: "Fixed Deposit",
+    isTerm: true,
+    hint: "Locked for a set term at a fixed rate; pays principal + interest at maturity.",
+  },
+  {
+    value: "call_deposit",
+    label: "Call Deposit",
+    isTerm: false,
+    hint: "Liquid; withdraw on short notice. Lower rate than a fixed deposit.",
+  },
+  {
+    value: "ordinary_savings",
+    label: "Ordinary / Regular Savings",
+    isTerm: false,
+    hint: "Everyday savings account; fully liquid, modest interest.",
+  },
+  {
+    value: "target_savings",
+    label: "Target / Goal Savings",
+    isTerm: true,
+    hint: "Goal account with a target date; early withdrawal may forfeit some interest.",
+  },
+  {
+    value: "tiered_savings",
+    label: "Tiered / High-Yield Savings",
+    isTerm: false,
+    hint: "Liquid savings whose rate rises with balance tiers.",
+  },
+];
+
+/** True when a bank-instrument type locks to a maturity date (term deposit). */
+export function isTermBankInstrument(t: BankInstrumentType): boolean {
+  return t === "fixed_deposit" || t === "target_savings";
+}
+
+/** Short human label for a bank-instrument type. */
+export function bankInstrumentLabel(t: string): string {
+  return BANK_INSTRUMENT_TYPES.find((m) => m.value === t)?.label ?? "Bank Deposit";
+}
+```
+
+### `shared/csv.ts`
+
+```ts
+// Shared CSV helpers used by the Ledger, Portfolio Review and Tax Summary
+// exports. Kept framework-free (no DOM) in `toCsv` so it is unit-testable; the
+// browser-only `downloadCsv` lives here too but is only called from the client.
+
+/** A single CSV cell value. */
+export type CsvCell = string | number | null | undefined;
+
+/** Escape one cell: quote it when it contains a comma, quote or newline. */
+export function escapeCsvCell(v: CsvCell): string {
+  const s = v === null || v === undefined ? "" : String(v);
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+/**
+ * Build a CSV string from a header row plus data rows. Pure — no DOM access —
+ * so it can be exercised directly in Vitest.
+ */
+export function toCsv(headers: CsvCell[], rows: CsvCell[][]): string {
+  return [headers, ...rows]
+    .map((line) => line.map(escapeCsvCell).join(","))
+    .join("\n");
+}
+
+/** Slugify a portfolio/page name into a filename-safe token. */
+export function slugify(name: string | null | undefined, fallback = "portfolio"): string {
+  const slug = (name ? String(name) : fallback)
+    .replace(/[^a-z0-9]+/gi, "-")
+    .replace(/^-+|-+$/g, "")
+    .toLowerCase();
+  return slug || fallback;
+}
+
+/**
+ * Trigger a browser download of `csv` as a UTF-8 file. A BOM is prepended so
+ * Excel detects UTF-8 correctly. Browser-only.
+ */
+export function downloadCsv(csv: string, filename: string): void {
+  const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+```
+
+### `shared/incomeBreakdown.ts`
+
+```ts
+/**
+ * Pure interest-accrual breakdowns for NON-MMF income sources (Round 34).
+ *
+ * The Daily Accrual page historically only modelled MMF accrual. These helpers
+ * extend the same "gross / WHT / net" treatment to:
+ *   - Government securities (T-Bills discount, IFB coupon [tax-exempt], FXD coupon)
+ *   - Bank instruments (fixed / call / savings deposits)
+ *
+ * Everything here is framework-free and unit-tested. Money figures are KES.
+ * "Horizon" interest is a simple (non-compounding) pro-rata of the annual gross
+ * over `days`, which matches how coupon/discount instruments actually pay — they
+ * do NOT compound intra-period like a daily-credited MMF.
+ */
+
+export type SecurityType = "tbill_91" | "tbill_182" | "tbill_364" | "ifb" | "fxd";
+export type BankInstrumentType =
+  | "call_deposit"
+  | "fixed_deposit"
+  | "ordinary_savings"
+  | "target_savings"
+  | "tiered_savings";
+
+export interface SecurityIncomeInput {
+  id: number;
+  securityType: SecurityType;
+  faceValue: number;
+  couponRate: number; // % p.a. (for t-bills this is the discount/annualised yield)
+  isTaxExempt: boolean;
+  maturityDate?: string | Date | null;
+  isMatured?: boolean;
+}
+
+export interface BankIncomeInput {
+  id: number;
+  bankName: string;
+  label?: string | null;
+  instrumentType: BankInstrumentType;
+  principal: number;
+  interestRate: number; // % p.a.
+  whtRate: number; // % (usually 15)
+  dayCountBasis?: number; // 360 / 365
+  maturityDate?: string | Date | null;
+  isActive?: boolean;
+}
+
+export interface IncomeRow {
+  id: number;
+  label: string;
+  /** Sub-label, e.g. instrument kind or security type. */
+  kind: string;
+  base: number; // face value / principal the interest is earned on
+  ratePct: number; // annual gross rate applied
+  grossAnnual: number;
+  whtAnnual: number;
+  netAnnual: number;
+  grossHorizon: number;
+  whtHorizon: number;
+  netHorizon: number;
+  taxExempt: boolean;
+}
+
+export interface IncomeSummary {
+  rows: IncomeRow[];
+  grossAnnual: number;
+  whtAnnual: number;
+  netAnnual: number;
+  grossHorizon: number;
+  whtHorizon: number;
+  netHorizon: number;
+  base: number;
+}
+
+/** Standard WHT on government paper: T-bills & FXD coupons 15%, IFB exempt. */
+const GOV_WHT_PCT = 15;
+
+const SECURITY_LABELS: Record<SecurityType, string> = {
+  tbill_91: "91-day T-Bill",
+  tbill_182: "182-day T-Bill",
+  tbill_364: "364-day T-Bill",
+  ifb: "Infrastructure Bond (IFB)",
+  fxd: "Fixed-coupon Bond (FXD)",
+};
+
+function proRata(annual: number, days: number): number {
+  return (annual * days) / 365;
+}
+
+function isLiveSecurity(s: SecurityIncomeInput): boolean {
+  if (s.isMatured) return false;
+  if (!s.maturityDate) return true;
+  const m = new Date(s.maturityDate);
+  m.setHours(0, 0, 0, 0);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return m.getTime() >= today.getTime();
+}
+
+/** Build the government-securities income breakdown over `days`. */
+export function buildSecurityIncome(
+  securities: SecurityIncomeInput[],
+  days: number,
+): IncomeSummary {
+  const rows: IncomeRow[] = [];
+  for (const s of securities) {
+    if (!isLiveSecurity(s)) continue;
+    const base = Math.max(0, s.faceValue);
+    const ratePct = Math.max(0, s.couponRate);
+    const grossAnnual = base * (ratePct / 100);
+    // IFBs are tax-exempt in Kenya; T-bills and FXD coupons attract 15% WHT.
+    const taxExempt = s.isTaxExempt || s.securityType === "ifb";
+    const whtAnnual = taxExempt ? 0 : grossAnnual * (GOV_WHT_PCT / 100);
+    const netAnnual = grossAnnual - whtAnnual;
+    rows.push({
+      id: s.id,
+      label: SECURITY_LABELS[s.securityType] ?? s.securityType,
+      kind: s.securityType.startsWith("tbill") ? "Treasury Bill (discount)" : s.securityType === "ifb" ? "Tax-exempt coupon" : "Taxable coupon",
+      base,
+      ratePct,
+      grossAnnual,
+      whtAnnual,
+      netAnnual,
+      grossHorizon: proRata(grossAnnual, days),
+      whtHorizon: proRata(whtAnnual, days),
+      netHorizon: proRata(netAnnual, days),
+      taxExempt,
+    });
+  }
+  return summarize(rows);
+}
+
+const BANK_LABELS: Record<BankInstrumentType, string> = {
+  call_deposit: "Call deposit",
+  fixed_deposit: "Fixed deposit",
+  ordinary_savings: "Ordinary savings",
+  target_savings: "Target / goal savings",
+  tiered_savings: "Tiered savings",
+};
+
+/** Build the bank-instrument income breakdown over `days`. */
+export function buildBankIncome(
+  holdings: BankIncomeInput[],
+  days: number,
+): IncomeSummary {
+  const rows: IncomeRow[] = [];
+  for (const h of holdings) {
+    if (h.isActive === false) continue;
+    const base = Math.max(0, h.principal);
+    const ratePct = Math.max(0, h.interestRate);
+    const dayCount = h.dayCountBasis && h.dayCountBasis > 0 ? h.dayCountBasis : 365;
+    // Annual gross on a 365-equivalent basis (so pro-rata uses the same denom).
+    const grossAnnual = base * (ratePct / 100) * (365 / dayCount);
+    const whtPct = Math.max(0, h.whtRate ?? GOV_WHT_PCT);
+    const whtAnnual = grossAnnual * (whtPct / 100);
+    const netAnnual = grossAnnual - whtAnnual;
+    rows.push({
+      id: h.id,
+      label: h.label?.trim() ? h.label : h.bankName,
+      kind: BANK_LABELS[h.instrumentType] ?? h.instrumentType,
+      base,
+      ratePct,
+      grossAnnual,
+      whtAnnual,
+      netAnnual,
+      grossHorizon: proRata(grossAnnual, days),
+      whtHorizon: proRata(whtAnnual, days),
+      netHorizon: proRata(netAnnual, days),
+      taxExempt: false,
+    });
+  }
+  return summarize(rows);
+}
+
+function summarize(rows: IncomeRow[]): IncomeSummary {
+  return {
+    rows,
+    grossAnnual: rows.reduce((s, r) => s + r.grossAnnual, 0),
+    whtAnnual: rows.reduce((s, r) => s + r.whtAnnual, 0),
+    netAnnual: rows.reduce((s, r) => s + r.netAnnual, 0),
+    grossHorizon: rows.reduce((s, r) => s + r.grossHorizon, 0),
+    whtHorizon: rows.reduce((s, r) => s + r.whtHorizon, 0),
+    netHorizon: rows.reduce((s, r) => s + r.netHorizon, 0),
+    base: rows.reduce((s, r) => s + r.base, 0),
+  };
+}
+
+// ─── Reinvest hint (Round 34) ───────────────────────────────────────────────
+
+export type Phase = "foundation" | "growth" | "de-risking" | "final-liquidity";
+
+/**
+ * Phase boundaries as month numbers, from proportional fractions of the horizon.
+ * Mirrors the engine's getPhaseBoundaries so the client can compute the active
+ * phase without importing server code.
+ */
+export function phaseForMonth(
+  monthIntoPlan: number,
+  horizonMonths: number,
+  fractions?: { foundationFrac: number; growthFrac: number; deRiskingFrac: number },
+): Phase {
+  const f = fractions ?? { foundationFrac: 0.2, growthFrac: 0.5, deRiskingFrac: 0.15 };
+  const foundationEnd = Math.round(horizonMonths * f.foundationFrac);
+  const growthEnd = Math.round(horizonMonths * (f.foundationFrac + f.growthFrac));
+  const deRiskingEnd = Math.round(horizonMonths * (f.foundationFrac + f.growthFrac + f.deRiskingFrac));
+  if (monthIntoPlan <= foundationEnd) return "foundation";
+  if (monthIntoPlan <= growthEnd) return "growth";
+  if (monthIntoPlan <= deRiskingEnd) return "de-risking";
+  return "final-liquidity";
+}
+
+export interface ReinvestHint {
+  phase: Phase;
+  /** Recommended next bucket for freed-up cash. */
+  bucket: "mmf" | "tbill" | "ifb" | "fxd";
+  bucketLabel: string;
+  /** Short human rationale. */
+  rationale: string;
+}
+
+const PHASE_TARGETS: Record<Phase, { mmf: number; tbill: number; ifb: number; fxd: number }> = {
+  foundation: { mmf: 0.5, tbill: 0.5, ifb: 0, fxd: 0 },
+  growth: { mmf: 0.2, tbill: 0.2, ifb: 0.45, fxd: 0.15 },
+  "de-risking": { mmf: 0.25, tbill: 0.35, ifb: 0.3, fxd: 0.1 },
+  "final-liquidity": { mmf: 0.4, tbill: 0.45, ifb: 0.1, fxd: 0.05 },
+};
+
+const BUCKET_LABELS = { mmf: "Money Market Fund", tbill: "T-Bills", ifb: "IFB bond", fxd: "FXD bond" } as const;
+
+/**
+ * Suggest where freed-up cash from a maturing instrument should go, given the
+ * phase the plan is in on the maturity date and which bucket is currently most
+ * UNDER its phase target. If `currentWeights` is omitted, we fall back to the
+ * phase's single largest non-MMF target bucket (the "growth engine" of that phase).
+ */
+export function suggestReinvestBucket(
+  monthIntoPlan: number,
+  horizonMonths: number,
+  isShortHorizon = false,
+  fractions?: { foundationFrac: number; growthFrac: number; deRiskingFrac: number },
+  currentWeights?: { mmf: number; tbill: number; ifb: number; fxd: number },
+): ReinvestHint {
+  if (isShortHorizon) {
+    return {
+      phase: "foundation",
+      bucket: "tbill",
+      bucketLabel: BUCKET_LABELS.tbill,
+      rationale: "Short-horizon plan — keep it simple with MMF + 91-day T-Bills only.",
+    };
+  }
+  const phase = phaseForMonth(monthIntoPlan, horizonMonths, fractions);
+  const target = PHASE_TARGETS[phase];
+
+  let bucket: "mmf" | "tbill" | "ifb" | "fxd";
+  if (currentWeights) {
+    // Pick the bucket with the largest (target − current) gap, ignoring MMF
+    // unless every other bucket is at/over target (then park in MMF).
+    const gaps: { b: "tbill" | "ifb" | "fxd"; gap: number }[] = (["tbill", "ifb", "fxd"] as const).map((b) => ({
+      b,
+      gap: target[b] - (currentWeights[b] ?? 0),
+    }));
+    gaps.sort((a, b) => b.gap - a.gap);
+    bucket = gaps[0].gap > 0 ? gaps[0].b : "mmf";
+  } else {
+    // No weights given: pick the single largest non-MMF target for this phase.
+    const order: ("tbill" | "ifb" | "fxd")[] = ["ifb", "tbill", "fxd"];
+    bucket = order.reduce((best, b) => (target[b] > target[best] ? b : best), order[0]);
+    if (target[bucket] === 0) bucket = "tbill";
+  }
+
+  const rationaleByPhase: Record<Phase, string> = {
+    foundation: "Foundation phase — build the safe base with MMF and short T-Bills.",
+    growth: "Growth phase — tilt new cash toward IFB/FXD bonds for higher long-run yield.",
+    "de-risking": "De-risking phase — rebalance toward shorter T-Bills and trim long bonds.",
+    "final-liquidity": "Final-liquidity phase — keep new cash short and liquid for the goal date.",
+  };
+
+  return {
+    phase,
+    bucket,
+    bucketLabel: BUCKET_LABELS[bucket],
+    rationale: rationaleByPhase[phase],
+  };
+}
+```
+
+### `shared/reconciliation.ts`
+
+```ts
+/**
+ * Independent reconciliation of a portfolio's "today" value across all subsystems.
+ *
+ * Each source is computed from its OWN data path; they must agree within TOLERANCE.
+ * The whole point is to catch when the live valuation paths (computeActualsTotals,
+ * runProjection, the accrual base) disagree — so this file must NOT invent a new
+ * valuation. It only compares numbers the live pages already produce.
+ *
+ * Keep this free of React / DOM / tRPC imports so it stays trivially testable.
+ */
+
+export const RECON_TOLERANCE_KES = 5; // rounding slack
+
+export interface ReconSource {
+  key: string;
+  label: string;
+  value: number;
+  detail: string;
+}
+
+export interface ReconResult {
+  sources: ReconSource[];
+  maxDiff: number;
+  reconciled: boolean;
+  mismatches: Array<{ key: string; label: string; diff: number }>;
+  reference: number; // the value all others are compared against
+}
+
+export interface ReconInputs {
+  // 1. Component holdings (the "sum of parts" net worth)
+  primaryMmfBalance: number; // primary MMF balance today
+  secondaryMmfBalances: number[]; // each tracked secondary MMF balance
+  bankHoldingPrincipals: number[]; // each active bank instrument principal/current value
+  securityFaceValues: number[]; // each active CBK register security face/current value
+  otherAssetValues: number[]; // equities/real estate current values (if included in net worth)
+
+  // 2. Engine projection value at the current month
+  projectionTodayValue: number;
+
+  // 3. Dashboard actuals aggregation (computeActualsTotals "total held today")
+  dashboardActualsTotal: number;
+
+  // 4. Daily-accrual ledger MMF base (primary + secondaries), summed
+  accrualLedgerMmfTotal: number;
+
+  // 5. Net worth as displayed on the dashboard "Live Net Worth" card
+  dashboardNetWorth: number;
+
+  // 6. Net worth as displayed on the Portfolio Review page (sum of allocation rows).
+  //    Round 30: every page that shows a portfolio total is a reconciled source,
+  //    so a page that silently omits a pocket (the bank-deposit bug) is flagged red.
+  portfolioReviewNetWorth?: number;
+
+  // 7. Fixed-income + bank base the Tax Summary blends yield across.
+  taxSummaryBase?: number;
+}
+
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
+export function reconcile(inputs: ReconInputs): ReconResult {
+  const sumParts =
+    inputs.primaryMmfBalance +
+    inputs.secondaryMmfBalances.reduce((a, b) => a + b, 0) +
+    inputs.bankHoldingPrincipals.reduce((a, b) => a + b, 0) +
+    inputs.securityFaceValues.reduce((a, b) => a + b, 0) +
+    inputs.otherAssetValues.reduce((a, b) => a + b, 0);
+
+  const sources: ReconSource[] = [
+    {
+      key: "sumParts",
+      label: "Sum of all holdings (net worth from parts)",
+      value: round2(sumParts),
+      detail: "Primary MMF + secondary MMFs + bank deposits + CBK securities + other assets",
+    },
+    {
+      key: "projection",
+      label: "Engine projection value (today)",
+      value: round2(inputs.projectionTodayValue),
+      detail: "runProjection totalEnd at the current actual month",
+    },
+    {
+      key: "dashboardActuals",
+      label: "Dashboard 'total held today'",
+      value: round2(inputs.dashboardActualsTotal),
+      detail: "computeActualsTotals aggregation",
+    },
+    {
+      key: "accrual",
+      label: "Daily-accrual MMF base (summed)",
+      value: round2(inputs.accrualLedgerMmfTotal),
+      detail: "Per-fund accrual ledger starting balance — MMF portion only",
+    },
+    {
+      key: "netWorth",
+      label: "Dashboard 'Live Net Worth' card",
+      value: round2(inputs.dashboardNetWorth),
+      detail: "Headline net-worth figure",
+    },
+  ];
+
+  // Round 30: include the Portfolio Review and Tax Summary page totals as their
+  // own reconciled sources. They are derived from the same sum-of-parts helper,
+  // so they reconcile green; if either page ever omits a pocket again, its row
+  // turns red here instead of giving false assurance.
+  if (typeof inputs.portfolioReviewNetWorth === "number") {
+    sources.push({
+      key: "portfolioReview",
+      label: "Portfolio Review net-worth allocation",
+      value: round2(inputs.portfolioReviewNetWorth),
+      detail: "Sum of the allocation rows (MMF + CBK + bank deposits + other assets)",
+    });
+  }
+  if (typeof inputs.taxSummaryBase === "number") {
+    sources.push({
+      key: "taxSummary",
+      label: "Tax Summary blended-yield base",
+      value: round2(inputs.taxSummaryBase),
+      detail: "Fixed-income + bank base the Tax Summary blends yield across",
+    });
+  }
+
+  // Compare everything to the "sum of parts" reference.
+  const reference = round2(sumParts);
+
+  // The accrual source is MMF-only; reconcile it against the MMF subtotal
+  // separately (see reconcileMmf), not the whole portfolio.
+  const fullPortfolioSources = sources.filter((s) => s.key !== "accrual");
+  const mismatches = fullPortfolioSources
+    .filter((s) => Math.abs(s.value - reference) > RECON_TOLERANCE_KES)
+    .map((s) => ({ key: s.key, label: s.label, diff: round2(s.value - reference) }));
+
+  const maxDiff = Math.max(0, ...fullPortfolioSources.map((s) => Math.abs(s.value - reference)));
+
+  return {
+    sources,
+    maxDiff: round2(maxDiff),
+    reconciled: mismatches.length === 0,
+    mismatches,
+    reference,
+  };
+}
+
+/**
+ * Separate MMF-only check so the accrual ledger base can be validated against the
+ * MMF subtotal rather than the whole portfolio.
+ */
+export function reconcileMmf(
+  accrualLedgerMmfTotal: number,
+  primaryMmfBalance: number,
+  secondaryMmfBalances: number[],
+): { mmfSubtotal: number; accrual: number; diff: number; ok: boolean } {
+  const mmfSubtotal = primaryMmfBalance + secondaryMmfBalances.reduce((a, b) => a + b, 0);
+  const diff = round2(accrualLedgerMmfTotal - mmfSubtotal);
+  return {
+    mmfSubtotal: round2(mmfSubtotal),
+    accrual: round2(accrualLedgerMmfTotal),
+    diff,
+    ok: Math.abs(diff) <= RECON_TOLERANCE_KES,
+  };
+}
 ```
 
 ### `shared/types.ts`
@@ -1509,6 +2691,10 @@ export interface ActualDeposit {
  * primary MMF, so identical money grows identically regardless of pocket.
  */
 export interface ActualBankHolding {
+  /** Optional display label, used in plain-language ledger maturity narration. */
+  label?: string | null;
+  /** Bank name, used as a fallback label in the ledger. */
+  bankName?: string | null;
   principal: number;
   /** Gross annual interest rate % (WHT applied internally). */
   interestRate: number;
@@ -1519,6 +2705,32 @@ export interface ActualBankHolding {
   /** ISO date the holding started accruing (YYYY-MM-DD). */
   startDate?: string | null;
   isActive?: boolean;
+  /**
+   * Bank instrument kind. Determines whether the holding is TERM (matures and
+   * pays out — fixed_deposit, target_savings) or LIQUID (accrues in place, no
+   * maturity lock — call_deposit, ordinary_savings, tiered_savings).
+   */
+  instrumentType?:
+    | "call_deposit"
+    | "fixed_deposit"
+    | "ordinary_savings"
+    | "target_savings"
+    | "tiered_savings"
+    | null;
+  /** Tenor in months for term deposits (fixed/goal). null/0 for liquid deposits. */
+  tenorMonths?: number | null;
+  /** ISO maturity date (term deposits). When present it drives the maturity month. */
+  maturityDate?: string | null;
+  /** Payout cadence. "maturity" = principal+interest returns at maturity. */
+  payoutFrequency?: "maturity" | "monthly" | "quarterly" | "on_call" | null;
+  /**
+   * Round 31 — what the engine does with a TERM deposit at maturity:
+   *   "redeploy" (default) → cash returns to the MMF for the yield-max allocator.
+   *   "rollover"           → auto-renew the same tenor at the same rate.
+   */
+  maturityAction?: "redeploy" | "rollover" | null;
+  /** Early-break penalty (% of accrued interest forfeited) if broken before maturity. */
+  earlyBreakPenaltyPct?: number | null;
 }
 
 /** Actual security from the database (for actuals-seeded projection). */
@@ -1547,6 +2759,8 @@ export interface MonthResult {
   secondaryMmfEnd: number;
   /** Combined projected balance of all bank instrument holdings this month. */
   bankEnd: number;
+  /** Cash returned to the MMF this month by a maturing bank term deposit. */
+  bankCashIn: number;
   phase: "foundation" | "growth" | "de-risking" | "final-liquidity";
   sweepTarget: "tbill" | "ifb" | "fxd" | null;
   /** Total WHT withheld this month (MMF + T-Bill + FXD). */
@@ -1555,6 +2769,33 @@ export interface MonthResult {
   isActual: boolean;
   /** True when the short-horizon strategy is active (MMF + T-bills only). */
   isShortHorizon: boolean;
+  /**
+   * Why each instrument was chosen this month — the net-of-tax yield ranking the
+   * allocator evaluated, plus which families actually received the sweep. Null on
+   * months with no sweep. Drives the Ledger "why this instrument" tooltip.
+   */
+  sweepRationale: SweepRationale | null;
+}
+
+export interface SweepRationaleCandidate {
+  bucket: "tbill" | "ifb" | "fxd";
+  label: string;
+  grossPct: number;
+  netPct: number;
+  taxNote: string;
+  /** 1-based rank by net-of-tax yield (1 = highest). */
+  rank: number;
+  /** True if this family actually received part of the sweep this month. */
+  chosen: boolean;
+}
+
+export interface SweepRationale {
+  /** Total amount swept out of the MMF this month (KES). */
+  amount: number;
+  /** Net-yield-ranked candidates the allocator compared. */
+  candidates: SweepRationaleCandidate[];
+  /** Plain-language one-liner summarising the decision. */
+  summary: string;
 }
 
 export interface YearMilestone {
@@ -1598,6 +2839,38 @@ export interface SolverResult {
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 export const SCENARIO_STEPUPS = [0, 500, 1000, 1500, 2000, 2500, 3000, 4000, 5000];
+
+/**
+ * Build a dynamic step-up ladder that is relevant to THIS portfolio rather than a
+ * fixed 0–5,000 spread. The ladder always:
+ *   - starts at 0 (the "no step-up" baseline),
+ *   - includes the user's current step-up exactly (so their plan is on the chart),
+ *   - spreads sensibly around and beyond the current value so larger plans
+ *     (e.g. +79,000) are covered, not capped at 5,000.
+ * For small/zero current step-ups it falls back to the classic small-grid feel.
+ * Returns a sorted, de-duplicated, non-negative integer ladder of ~9 points.
+ */
+export function deriveStepUps(currentStepUp: number): number[] {
+  const cur = Math.max(0, Math.round(currentStepUp || 0));
+  // For a small current step-up, keep the familiar fine-grained low-end grid
+  // but still guarantee the current value is present.
+  if (cur <= 5000) {
+    const base = [0, 500, 1000, 1500, 2000, 2500, 3000, 4000, 5000];
+    const set = new Set<number>([...base, cur]);
+    return Array.from(set).filter((n) => n >= 0).sort((a, b) => a - b);
+  }
+  // For larger step-ups, build a spread centered on the current value:
+  // 0, then a ladder from ~0.4x to ~1.6x of current in even steps, including cur.
+  const lo = Math.round(cur * 0.4);
+  const hi = Math.round(cur * 1.6);
+  const points = new Set<number>([0, cur]);
+  const steps = 7; // interior points
+  for (let i = 0; i <= steps; i++) {
+    const v = Math.round(lo + ((hi - lo) * i) / steps);
+    points.add(Math.max(0, v));
+  }
+  return Array.from(points).sort((a, b) => a - b);
+}
 
 /** Maximum starting contribution the solver will try before declaring infeasible. */
 const SOLVER_MAX_CONTRIBUTION = 1_000_000;
@@ -1753,6 +3026,332 @@ export function getSweepTargetForMonth(
 }
 
 /**
+ * Target NON-MMF bucket weights by phase, as fractions of the investable base
+ * (everything except the MMF safety floor). These mirror the documented plan:
+ *   Foundation:      MMF 50 / Tbill 50 / IFB  0 / FXD  0
+ *   Growth:          MMF 20 / Tbill 20 / IFB 45 / FXD 15
+ *   De-risking:      MMF 25 / Tbill 35 / IFB 30 / FXD 10
+ *   Final liquidity: MMF 40 / Tbill 45 / IFB 10 / FXD  5
+ * Short-horizon plans use MMF + 91-day T-bills only.
+ */
+export function getPhaseAllocation(
+  phase: "foundation" | "growth" | "de-risking" | "final-liquidity",
+  isShortHorizon = false
+): { mmf: number; tbill: number; ifb: number; fxd: number } {
+  if (isShortHorizon) return { mmf: 0.5, tbill: 0.5, ifb: 0, fxd: 0 };
+  switch (phase) {
+    case "foundation":
+      return { mmf: 0.5, tbill: 0.5, ifb: 0.0, fxd: 0.0 };
+    case "growth":
+      return { mmf: 0.2, tbill: 0.2, ifb: 0.45, fxd: 0.15 };
+    case "de-risking":
+      return { mmf: 0.25, tbill: 0.35, ifb: 0.3, fxd: 0.1 };
+    case "final-liquidity":
+      return { mmf: 0.4, tbill: 0.45, ifb: 0.1, fxd: 0.05 };
+    default:
+      return { mmf: 0.5, tbill: 0.5, ifb: 0, fxd: 0 };
+  }
+}
+
+/** Tenor (months) to use for a freshly-swept lot of each bucket, by phase. */
+function tenorFor(
+  bucket: "tbill" | "ifb" | "fxd",
+  phase: string,
+  isShortHorizon: boolean
+): number {
+  if (bucket === "ifb") return 24; // IFBs are long instruments
+  if (bucket === "fxd") return 24; // FXD coupon bonds
+  // T-bills: 364-day in growth/foundation, 182-day de-risking, 91-day final/short
+  if (isShortHorizon || phase === "final-liquidity") return 3;
+  if (phase === "de-risking") return 6;
+  return 12;
+}
+
+/**
+ * Number of whole months before the horizon in which NO new securities may be
+ * bought — surplus must accumulate in MMF instead. The investor needs CASH at
+ * the goal date, so even a 91-day (3-month) bill bought this close would mature
+ * after the deadline. Defined as min(3, ceil(horizon/4)) so very short plans
+ * still get a sensible no-buy tail without freezing the whole horizon.
+ */
+export function noBuyTailMonths(horizonMonths: number): number {
+  return Math.min(3, Math.max(1, Math.ceil(horizonMonths / 4)));
+}
+
+/**
+ * END-STATE LIQUIDITY RULE (the core principle of a goal-dated plan).
+ *
+ * Decide whether a sweep is allowed in month `m`, and if so the LONGEST T-bill
+ * tenor (months) whose maturity still lands on or before the horizon. We never
+ * buy an instrument that matures after the goal date — at the deadline the
+ * investor needs cash, not paper maturing later.
+ *
+ * Returns:
+ *   - allowed=false when m is inside the no-buy tail, OR no tenor fits.
+ *   - maxTbillTenor: the longest of {12,6,3} months that satisfies
+ *                    m + tenor <= horizon (progressively shortens near the end:
+ *                    364 → 182 → 91 → none).
+ *   - allowLongBonds: true only when a 24-month bond would still mature by the
+ *                     horizon (i.e. m + 24 <= horizon). Otherwise IFB/FXD are
+ *                     disallowed and their intended share folds into T-bills.
+ */
+export function liquidityGuardForMonth(
+  m: number,
+  horizonMonths: number,
+): { allowed: boolean; maxTbillTenor: 0 | 3 | 6 | 12; allowLongBonds: boolean } {
+  const tail = noBuyTailMonths(horizonMonths);
+  // Final stretch: stop sweeping entirely, accumulate in MMF.
+  if (m > horizonMonths - tail) {
+    return { allowed: false, maxTbillTenor: 0, allowLongBonds: false };
+  }
+  const monthsLeft = horizonMonths - m; // months remaining after this month
+  let maxTbillTenor: 0 | 3 | 6 | 12 = 0;
+  if (monthsLeft >= 12) maxTbillTenor = 12;
+  else if (monthsLeft >= 6) maxTbillTenor = 6;
+  else if (monthsLeft >= 3) maxTbillTenor = 3;
+  else maxTbillTenor = 0;
+  const allowLongBonds = monthsLeft >= 24;
+  return { allowed: maxTbillTenor > 0, maxTbillTenor, allowLongBonds };
+}
+
+/**
+ * NET-OF-TAX YIELD RANKING (Round 28).
+ *
+ * For a given month's rates and the tenors the liquidity guard currently permits,
+ * compute the effective NET annual yield of each auto-investable CBK family and
+ * return them ranked highest-first. This is the basis of the yield-maximizing
+ * sweep: within what end-state liquidity allows, deploy toward the family that
+ * keeps the most money after tax.
+ *   - T-bill: discount taxed at WHT; we score the LONGEST permitted tenor (its
+ *             364/182/91-day rate) since longer bills generally yield more and the
+ *             guard already caps tenor so nothing matures past the goal.
+ *   - IFB:    coupon is TAX-EXEMPT, so its gross rate is its net rate — usually the
+ *             top of the table. Only available when long bonds still fit (allowLongBonds).
+ *   - FXD:    coupon taxed at WHT. Only available when long bonds still fit.
+ * Returns an array of { bucket, grossPct, netPct, tenorMonths, label } sorted by netPct desc.
+ */
+export interface RankedInstrument {
+  bucket: "tbill" | "ifb" | "fxd";
+  grossPct: number;
+  netPct: number;
+  tenorMonths: number;
+  label: string;
+  taxNote: string;
+}
+
+/**
+ * SOVEREIGN-PREFERENCE THRESHOLD (Round 30, EDITABLE).
+ *
+ * Government-backed instruments (T-bills, IFBs, FXD bonds) carry sovereign credit
+ * backing that bank deposits do not. When a bank deposit's net-of-tax yield
+ * advantage over the best government instrument is smaller than this threshold
+ * (percentage points), the allocator PREFERS the government instrument anyway.
+ * Set to 1.0pp by the plan brief; expose/raise/lower to taste.
+ */
+export const SOVEREIGN_PREFERENCE_THRESHOLD_PCT = 1.0;
+
+/**
+ * PER-ISSUER (BANK) CONCENTRATION CAP (Round 30, EDITABLE).
+ *
+ * For credit-risk diversification, no single bank/issuer may exceed this share of
+ * the whole portfolio. Government securities are sovereign and EXEMPT from this
+ * cap (they have their own 60% family cap for liquidity balance). 25% per the brief.
+ */
+export const ISSUER_CONCENTRATION_CAP = 0.25;
+
+/**
+ * EARLY-BREAK "WHAT-IF" (Round 31).
+ *
+ * Computes what an investor nets if they break a TERM deposit (fixed/goal
+ * savings) TODAY instead of holding it to maturity. Breaking early forfeits a
+ * share of the interest accrued so far (the bank's early-break penalty) on top
+ * of giving up all future interest. Pure function — exported for the holding
+ * card and for unit testing.
+ *
+ * @param principal        Original principal placed (KES).
+ * @param accruedInterest  Net interest accrued to date (KES, after WHT).
+ * @param valueAtMaturity  Projected net value if held to maturity (KES).
+ * @param penaltyPct        Early-break penalty as a % of accrued interest forfeited.
+ */
+export interface EarlyBreakWhatIf {
+  /** Cash available now if broken early (principal + retained interest). */
+  netIfBrokenNow: number;
+  /** Interest forfeited by breaking early (penalty + any future interest given up). */
+  interestForfeited: number;
+  /** The penalty amount charged on accrued interest. */
+  penaltyAmount: number;
+  /** What you keep instead by holding to maturity. */
+  valueAtMaturity: number;
+  /** Cost of breaking early vs holding (valueAtMaturity - netIfBrokenNow). */
+  costOfBreaking: number;
+}
+
+export function earlyBreakWhatIf(
+  principal: number,
+  accruedInterest: number,
+  valueAtMaturity: number,
+  penaltyPct: number,
+): EarlyBreakWhatIf {
+  const safePrincipal = Math.max(0, principal);
+  const safeAccrued = Math.max(0, accruedInterest);
+  const penaltyFrac = Math.min(1, Math.max(0, penaltyPct / 100));
+  const penaltyAmount = safeAccrued * penaltyFrac;
+  const retainedInterest = safeAccrued - penaltyAmount;
+  const netIfBrokenNow = safePrincipal + retainedInterest;
+  const matValue = Math.max(netIfBrokenNow, valueAtMaturity);
+  return {
+    netIfBrokenNow: Math.round(netIfBrokenNow * 100) / 100,
+    interestForfeited: Math.round((matValue - netIfBrokenNow) * 100) / 100,
+    penaltyAmount: Math.round(penaltyAmount * 100) / 100,
+    valueAtMaturity: Math.round(matValue * 100) / 100,
+    costOfBreaking: Math.round((matValue - netIfBrokenNow) * 100) / 100,
+  };
+}
+
+/**
+ * PER-ISSUER CONCENTRATION DETECTION (Round 31).
+ *
+ * Given each issuer's current value and the whole-portfolio net worth, return the
+ * issuers whose share exceeds ISSUER_CONCENTRATION_CAP (default 25%). Government
+ * securities are sovereign and excluded by the caller. Pure + unit-testable.
+ */
+export interface IssuerConcentration {
+  issuer: string;
+  value: number;
+  share: number; // 0..1
+}
+
+export function detectIssuerConcentration(
+  issuerValues: { issuer: string; value: number }[],
+  netWorth: number,
+  cap: number = ISSUER_CONCENTRATION_CAP,
+): IssuerConcentration[] {
+  if (netWorth <= 0) return [];
+  // Aggregate by issuer name (case-insensitive) so multiple deposits at the same
+  // bank are summed before testing the cap.
+  const byIssuer = new Map<string, { issuer: string; value: number }>();
+  for (const iv of issuerValues) {
+    const key = iv.issuer.trim().toLowerCase();
+    const prev = byIssuer.get(key);
+    if (prev) prev.value += iv.value;
+    else byIssuer.set(key, { issuer: iv.issuer.trim(), value: iv.value });
+  }
+  const out: IssuerConcentration[] = [];
+  for (const { issuer, value } of Array.from(byIssuer.values())) {
+    const share = value / netWorth;
+    if (share > cap) out.push({ issuer, value, share });
+  }
+  return out.sort((a, b) => b.share - a.share);
+}
+
+/**
+ * Apply the sovereign-preference tie-break to a net-yield-ranked candidate list.
+ * Bank candidates (bucket "bank") are demoted below a government candidate when
+ * their net-yield advantage is within SOVEREIGN_PREFERENCE_THRESHOLD_PCT. Pure
+ * government-only lists are returned unchanged. Exported for direct unit testing.
+ */
+export function applySovereignPreference<T extends { bucket: string; netPct: number }>(
+  ranked: T[],
+  thresholdPct: number = SOVEREIGN_PREFERENCE_THRESHOLD_PCT,
+): T[] {
+  const isGov = (b: string) => b === "tbill" || b === "ifb" || b === "fxd";
+  const bestGovNet = Math.max(
+    -Infinity,
+    ...ranked.filter((r) => isGov(r.bucket)).map((r) => r.netPct),
+  );
+  if (!Number.isFinite(bestGovNet)) return ranked;
+  // Stable re-sort: a bank candidate only beating gov by < threshold sorts after gov.
+  return [...ranked].sort((a, b) => {
+    const aBankClose = a.bucket === "bank" && a.netPct - bestGovNet < thresholdPct;
+    const bBankClose = b.bucket === "bank" && b.netPct - bestGovNet < thresholdPct;
+    if (aBankClose && !bBankClose) return 1;
+    if (!aBankClose && bBankClose) return -1;
+    return b.netPct - a.netPct;
+  });
+}
+
+export function rankInstrumentsByNetYield(
+  rates: Pick<EngineSettings, "tbill91Rate" | "tbill182Rate" | "tbill364Rate" | "ifbCouponRate" | "fxdCouponRate" | "withholdingTax">,
+  opts: { maxTbillTenor: 0 | 3 | 6 | 12; allowLongBonds: boolean; longBondTenorMonths?: number },
+): RankedInstrument[] {
+  const out: RankedInstrument[] = [];
+  const wht = rates.withholdingTax;
+  // T-bill at the longest permitted tenor.
+  if (opts.maxTbillTenor > 0) {
+    const t = opts.maxTbillTenor;
+    const gross = tbillRateForTenor(t, rates);
+    out.push({
+      bucket: "tbill",
+      grossPct: gross,
+      netPct: netYield(gross, wht),
+      tenorMonths: t,
+      label: tenorLabel("tbill", t),
+      taxNote: `${wht}% WHT on discount`,
+    });
+  }
+  if (opts.allowLongBonds) {
+    const bondTenor = opts.longBondTenorMonths ?? 24;
+    // IFB — tax exempt: net == gross.
+    out.push({
+      bucket: "ifb",
+      grossPct: rates.ifbCouponRate,
+      netPct: rates.ifbCouponRate,
+      tenorMonths: bondTenor,
+      label: tenorLabel("ifb", bondTenor),
+      taxNote: "tax-exempt",
+    });
+    // FXD — coupon taxed.
+    out.push({
+      bucket: "fxd",
+      grossPct: rates.fxdCouponRate,
+      netPct: netYield(rates.fxdCouponRate, wht),
+      tenorMonths: bondTenor,
+      label: tenorLabel("fxd", bondTenor),
+      taxNote: `${wht}% WHT on coupon`,
+    });
+  }
+  return out.sort((a, b) => b.netPct - a.netPct);
+}
+
+/** Join a list into plain English: [a] -> "a"; [a,b] -> "a and b"; [a,b,c] -> "a, b and c". */
+export function joinWithAnd(parts: string[]): string {
+  if (parts.length === 0) return "";
+  if (parts.length === 1) return parts[0];
+  return parts.slice(0, -1).join(", ") + " and " + parts[parts.length - 1];
+}
+
+/** Capitalise the first character of a string. */
+export function capitalise(s: string): string {
+  return s.length === 0 ? s : s[0].toUpperCase() + s.slice(1);
+}
+
+/** Lower-case the first character of a string (for mid-sentence joins). */
+export function lowerFirst(s: string): string {
+  return s.length === 0 ? s : s[0].toLowerCase() + s.slice(1);
+}
+
+/** Human-readable tenor label for a swept lot, e.g. "364-day T-bill". */
+export function tenorLabel(bucket: "tbill" | "ifb" | "fxd", tenorMonths: number): string {
+  if (bucket === "tbill") {
+    if (tenorMonths <= 3) return "91-day T-bill";
+    if (tenorMonths <= 6) return "182-day T-bill";
+    return "364-day T-bill";
+  }
+  if (bucket === "ifb") return `${tenorMonths}-month IFB`;
+  return `${tenorMonths}-month FXD`;
+}
+
+/** The gross T-bill rate that matches a lot's tenor (91/182/364-day). */
+export function tbillRateForTenor(
+  tenorMonths: number,
+  rates: Pick<EngineSettings, "tbill91Rate" | "tbill182Rate" | "tbill364Rate">,
+): number {
+  if (tenorMonths <= 3) return rates.tbill91Rate;
+  if (tenorMonths <= 6) return rates.tbill182Rate;
+  return rates.tbill364Rate;
+}
+
+/**
  * 1-based month offset of a given ISO date relative to the plan start date.
  * Month 1 = the start month. Returns null when the date is missing/invalid.
  * A date before the start date clamps to 1; the caller decides further clamping.
@@ -1833,19 +3432,52 @@ export function runProjection(
     whtRate: s.whtRate,
   }));
 
-  // ── Bank instrument holdings (live actuals) ──
-  // Each accrues simple interest on its principal during elapsed months on the
-  // same monthly footing as the primary MMF (own rate, WHT, day-count).
+  // ── Bank instrument holdings (live actuals → goal-directed capital) ──
+  // Round 30: every bank holding is projected forward toward the goal, not parked
+  // as a side balance. LIQUID kinds (call/ordinary/tiered savings) accrue in place
+  // and stay withdrawable. TERM kinds (fixed_deposit, target/goal savings) accrue
+  // to their maturity month, then return principal + final net interest to the MMF
+  // where the yield-max allocator re-deploys the cash (see maturity handling in
+  // the monthly loop). Each accrues monthly net interest on its own rate/WHT.
+  const LIQUID_BANK_KINDS = new Set(["call_deposit", "ordinary_savings", "tiered_savings"]);
   const bankState = bankHoldings
     .filter((b) => b.isActive !== false)
-    .map((b) => ({
-      balance: b.principal || 0,
-      principal: b.principal || 0,
-      interestRate: b.interestRate || 0,
-      whtRate: b.whtRate ?? null,
-      // Month offset (1-based) at which the holding begins accruing.
-      startMonth: monthOffsetFromStart(b.startDate, startDate) ?? 1,
-    }));
+    .map((b) => {
+      const kind = b.instrumentType ?? "call_deposit";
+      const isLiquid = LIQUID_BANK_KINDS.has(kind);
+      // Term deposits mature on their maturity date (preferred) or start+tenor.
+      let maturityMonth: number | null = null;
+      if (!isLiquid) {
+        const fromDate = monthOffsetFromStart(b.maturityDate, startDate);
+        if (fromDate != null) maturityMonth = fromDate;
+        else if (b.tenorMonths && b.tenorMonths > 0) {
+          const start = monthOffsetFromStart(b.startDate, startDate) ?? 1;
+          maturityMonth = start + Math.round(b.tenorMonths);
+        }
+      }
+      return {
+        label: b.label ?? b.bankName ?? null,
+        kind,
+        isLiquid,
+        balance: b.principal || 0,
+        principal: b.principal || 0,
+        interestRate: b.interestRate || 0,
+        whtRate: b.whtRate ?? null,
+        // Month offset (1-based) at which the holding begins accruing.
+        startMonth: monthOffsetFromStart(b.startDate, startDate) ?? 1,
+        // Forward month at which a term deposit matures (null = never matures).
+        maturityMonth,
+        // Tenor in months — needed to schedule the NEXT maturity when rolling over.
+        tenorMonths: b.tenorMonths && b.tenorMonths > 0 ? Math.round(b.tenorMonths) : null,
+        // Round 31: what to do with principal+interest at maturity.
+        //   "redeploy" → cash to MMF, re-deployed by the yield-max sweep.
+        //   "rollover" → auto-renew same tenor at same rate, staying in the bank.
+        maturityAction: (b.maturityAction ?? "redeploy") as "redeploy" | "rollover",
+        // Set true once a term deposit has matured and paid out into the MMF
+        // (only used for the "redeploy" path; rollovers keep accruing).
+        matured: false,
+      };
+    });
 
   // ── Per-month placement of actual primary-MMF deposits ──
   // Deposits attributed to the PRIMARY plan (primary MMF fund, or legacy bucket
@@ -1992,23 +3624,87 @@ export function runProjection(
       secondaryMmfEnd += sec.balance;
     }
 
-    // ── Bank instrument holdings ──
-    // Same unified rule: principal is held flat through elapsed months (so the
-    // "today" total equals the recorded principal), then accrues simple monthly
-    // interest on its own rate/WHT/day-count going forward. Bank deposits do not
-    // compound into the MMF; they grow in place as a separate pocket.
+    // ── Bank instrument holdings (goal-directed capital) ──
+    // Unified rule: principal is held flat through elapsed (actual) months (so the
+    // "today" total equals recorded principal), then accrues simple monthly
+    // interest on its own rate/WHT/day-count going forward.
+    //   - LIQUID kinds (call/ordinary/tiered savings): accrue in place, never
+    //     mature, stay withdrawable — they remain in the bank pocket (bankEnd).
+    //   - TERM kinds (fixed_deposit, target/goal savings): accrue until their
+    //     maturity month, then return PRINCIPAL + accrued net interest to the MMF
+    //     and are re-deployed by the yield-max sweep below. This is what makes a
+    //     maturing bank deposit goal-directed capital rather than a side balance.
     let bankEnd = 0;
+    let bankMaturedCashIn = 0;
+    const bankMaturityActions: string[] = [];
+    const bankPlacementActions: string[] = [];
     for (const b of bankState) {
+      if (b.matured) continue;
       if (b.balance === 0) continue;
+      const bWhtPct = b.whtRate ?? rates.withholdingTax;
+      const bWht = bWhtPct / 100;
+
+      // Placement narration: in the FORWARD month the deposit first appears
+      // (its startMonth, or month 1 for an opening holding), state where the
+      // principal came from so a layperson can trace every shilling.
+      if (!isActualMonth && m === b.startMonth) {
+        const placeKind =
+          b.kind === "fixed_deposit" ? "fixed deposit"
+          : b.kind === "target_savings" ? "goal/target savings"
+          : b.kind === "call_deposit" ? "call deposit"
+          : "savings deposit";
+        const whoPlace = b.label ? `${b.label} ${placeKind}` : `a ${placeKind}`;
+        const tenorPart =
+          !b.isLiquid && b.maturityMonth != null
+            ? `, maturing ${(() => { const d = new Date(startDate); d.setMonth(d.getMonth() + (b.maturityMonth - 1)); return d.toLocaleDateString("en-GB", { month: "short", year: "numeric" }); })()}`
+            : "";
+        bankPlacementActions.push(
+          `Placed KES ${Math.round(b.principal).toLocaleString()} in ${whoPlace} at ${b.interestRate}%${tenorPart}`
+        );
+      }
+
+      // Accrue this month's net interest on the forward path.
       if (!isActualMonth && m >= b.startMonth) {
-        const bWhtPct = b.whtRate ?? rates.withholdingTax;
-        const bWht = bWhtPct / 100;
-        // Monthly simple interest = principal × annualRate × (1/12), net of WHT.
         const grossInterest = b.balance * (b.interestRate / 100) / 12;
         const netInterest = grossInterest * (1 - bWht);
         whtThisMonth += grossInterest * bWht;
         b.balance += netInterest;
       }
+
+      // Term-deposit maturity: in the forward maturity month, either roll over
+      // (auto-renew, staying in the bank) or redeploy (return to the MMF).
+      if (!isActualMonth && !b.isLiquid && b.maturityMonth != null && m >= b.maturityMonth) {
+        const payout = b.balance;
+        const interestPortion = Math.max(0, payout - b.principal);
+        const niceKind =
+          b.kind === "fixed_deposit" ? "fixed deposit"
+          : b.kind === "target_savings" ? "goal/target savings"
+          : "bank deposit";
+        const who = b.label ? `${b.label} ${niceKind}` : `a ${niceKind}`;
+
+        if (b.maturityAction === "rollover" && b.tenorMonths && b.tenorMonths > 0) {
+          // Auto-renew: principal+interest becomes the new principal for a fresh
+          // term at the same rate. The deposit keeps accruing in the bank and the
+          // next maturity is scheduled one tenor later.
+          b.principal = payout;
+          b.maturityMonth = b.maturityMonth + b.tenorMonths;
+          bankMaturityActions.push(
+            `${who} matured and auto-rolled over KES ${Math.round(payout).toLocaleString()} into a fresh ${b.tenorMonths}-month term at ${b.interestRate}% (principal + KES ${Math.round(interestPortion).toLocaleString()} net interest reinvested)`
+          );
+          bankEnd += b.balance; // stays in the bank pocket
+          continue;
+        }
+
+        // Default: redeploy to the MMF for the yield-max allocator.
+        bankMaturedCashIn += payout;
+        b.matured = true;
+        b.balance = 0;
+        bankMaturityActions.push(
+          `${who} matured, returning KES ${Math.round(payout).toLocaleString()} to the MMF (KES ${Math.round(b.principal).toLocaleString()} principal + KES ${Math.round(interestPortion).toLocaleString()} net interest)`
+        );
+        continue; // do not add to bankEnd; the cash is now in the MMF
+      }
+
       bankEnd += b.balance;
     }
 
@@ -2026,15 +3722,20 @@ export function runProjection(
 
       if (age === lot.tenorMonths) {
         cbkCashIn += lot.faceValue;
-        cbkActions.push(`${lot.bucket.toUpperCase()} maturity KES ${Math.round(lot.faceValue).toLocaleString()}`);
-
         if (lot.bucket === "tbill") {
           const tenorYears = lot.tenorMonths / 12;
-          const grossInterest = lot.faceValue * (rates.tbill364Rate / 100) * tenorYears;
+          // Use the rate matching the lot's tenor (91/182/364-day), not always 364.
+          const grossInterest = lot.faceValue * (tbillRateForTenor(lot.tenorMonths, rates) / 100) * tenorYears;
           const netInterest = grossInterest * (1 - wht);
           whtThisMonth += grossInterest * wht;
           cbkCashIn += netInterest;
-          cbkActions.push(`T-bill net discount KES ${Math.round(netInterest).toLocaleString()}`);
+          cbkActions.push(
+            `a ${tenorLabel(lot.bucket, lot.tenorMonths)} matures, returning KES ${Math.round(lot.faceValue + netInterest).toLocaleString()} to the MMF (KES ${Math.round(netInterest).toLocaleString()} net interest after ${rates.withholdingTax}% tax)`
+          );
+        } else {
+          cbkActions.push(
+            `a ${tenorLabel(lot.bucket, lot.tenorMonths)} matures, returning KES ${Math.round(lot.faceValue).toLocaleString()} to the MMF`
+          );
         }
         continue;
       }
@@ -2043,12 +3744,12 @@ export function runProjection(
         const grossCoupon = (lot.couponRate / 100 / 2) * lot.faceValue;
         if (lot.isTaxExempt) {
           cbkCashIn += grossCoupon;
-          cbkActions.push(`IFB coupon KES ${Math.round(grossCoupon).toLocaleString()} (tax-exempt)`);
+          cbkActions.push(`an IFB pays a KES ${Math.round(grossCoupon).toLocaleString()} coupon into the MMF (tax-exempt)`);
         } else {
           const netCoupon = grossCoupon * (1 - wht);
           whtThisMonth += grossCoupon * wht;
           cbkCashIn += netCoupon;
-          cbkActions.push(`FXD coupon KES ${Math.round(netCoupon).toLocaleString()} (net of ${rates.withholdingTax}% WHT)`);
+          cbkActions.push(`an FXD bond pays a KES ${Math.round(netCoupon).toLocaleString()} coupon into the MMF (after ${rates.withholdingTax}% tax)`);
         }
       }
 
@@ -2056,48 +3757,203 @@ export function runProjection(
     }
 
     lots = survivingLots;
+    // Matured term-deposit cash joins maturing-security cash in the MMF, where the
+    // yield-max sweep below re-deploys it toward the goal (Round 30, R30.3).
     mmf += cbkCashIn;
+    mmf += bankMaturedCashIn;
 
     let mmfToDhow = 0;
     let sweepTarget: "tbill" | "ifb" | "fxd" | null = null;
+    // Per-bucket lot counts bought this month (for the ledger "main action" label).
+    const sweepBuy = { tbill: 0, ifb: 0, fxd: 0 };
+    // Net-yield ranking the allocator compared this month (for the ledger tooltip).
+    let sweepRationale: SweepRationale | null = null;
+    let rankedThisMonth: RankedInstrument[] = [];
 
-    // No new long bonds in final-liquidity phase
-    const noNewLongBonds = m > deRiskingEnd;
+    // ── END-STATE LIQUIDITY GUARD (Fix #1) ──
+    // Decide what this month is allowed to buy so nothing matures after the
+    // horizon. `tbillTenorThisMonth` is the longest tenor that still matures by
+    // the goal date; `allowLongBonds` is false unless a 24-month bond fits.
+    const guard = liquidityGuardForMonth(m, horizonMonths);
+    // No new long bonds either in the final-liquidity phase (legacy rule) OR
+    // whenever a 24-month bond would mature past the horizon (new rule).
+    const noNewLongBonds = m > deRiskingEnd || !guard.allowLongBonds;
+    const tbillTenorThisMonth = guard.maxTbillTenor;
 
-    if (!isActualMonth) {
-      const maxLots = Math.floor((mmf - settings.safetyFloor) / SWEEP_LOT_SIZE);
+    if (!isActualMonth && guard.allowed) {
+      // ── SWEEP / ALLOCATION DECISION RULE (Fix #8) ──────────────────────────
+      // The goal-driven sweep deploys surplus MMF cash according to three rules,
+      // in priority order:
+      //   (a) END-STATE LIQUIDITY (Fix #1): never buy an instrument that matures
+      //       after the horizon. The liquidity guard caps the T-bill tenor and
+      //       disables long bonds (IFB/FXD) as the goal date approaches, and stops
+      //       sweeping entirely in the final stretch so the plan lands ~100% liquid.
+      //   (b) HIGHEST NET-OF-TAX YIELD for the allowed tenor: within what the guard
+      //       permits, the phase allocation tilts toward the higher net-yield CBK
+      //       instruments (IFB tax-exempt, then FXD, then T-bills for liquidity).
+      //   (c) NEVER LOCK PAST THE HORIZON: enforced by (a).
+      //
+      // BANK INSTRUMENTS (call/fixed deposits): these are modelled as user-tracked
+      // ACTUALS rather than auto-bought by the projection. Their rates are
+      // negotiated per bank/relationship (the reference data is explicitly
+      // "indicative" and "negotiable"), so the deterministic engine does not invent
+      // a negotiated rate to sweep into. Any bank deposit the user RECORDS accrues
+      // on its own rate/WHT (see bankState above), counts toward the portfolio
+      // total and the liquidity calendar, and — being mostly call deposits — is as
+      // liquid as MMF. Call deposits therefore need no horizon guard; a recorded
+      // fixed deposit maturing past the horizon is surfaced to the user (and an
+      // early withdrawal forfeits interest via the withdrawals flow).
+      //
+      // Allocation-targeted sweep: deploy surplus TOWARD the phase's non-MMF bucket
+      // mix instead of dumping the entire surplus into a single bucket. Each month
+      // we size the desired KES in each non-MMF bucket from the phase weights, then
+      // buy whole 50k lots to close the largest gaps without exceeding the surplus.
+      const investableBase = mmf - settings.safetyFloor;
+      const maxLots = Math.floor(investableBase / SWEEP_LOT_SIZE);
+
       if (maxLots > 0) {
-        const target = getSweepTargetForMonth(m, sweepCount, horizonMonths, fractions, isShortHorizon);
-        if (target) {
-          const effectiveBucket = noNewLongBonds && target.bucket !== "tbill"
-            ? { bucket: "tbill" as const, tenorMonths: 3 }
-            : target;
+        const alloc = getPhaseAllocation(phase, isShortHorizon);
 
-          sweepTarget = effectiveBucket.bucket;
-          const lotsCount = maxLots;
-          const totalSweep = lotsCount * SWEEP_LOT_SIZE;
+        // Current KES already held in each non-MMF bucket (face value).
+        const held = { tbill: 0, ifb: 0, fxd: 0 };
+        for (const lot of lots) held[lot.bucket] += lot.faceValue;
 
-          if (mmf - totalSweep >= settings.safetyFloor) {
-            mmf -= totalSweep;
-            mmfToDhow = totalSweep;
+        // Size targets against the WHOLE portfolio (MMF + all lots), so the phase
+        // weights describe the end-state mix rather than just this month's surplus.
+        // This keeps IFB/FXD from being starved by rolling T-bill maturities: their
+        // gap stays open until they reach their share of the full portfolio.
+        const portfolioTotal = mmf + held.tbill + held.ifb + held.fxd;
+        const want = {
+          tbill: alloc.tbill * portfolioTotal,
+          ifb: alloc.ifb * portfolioTotal,
+          fxd: alloc.fxd * portfolioTotal,
+        };
 
-            for (let i = 0; i < lotsCount; i++) {
+        // Gap to close per bucket (never negative). In the final-liquidity phase,
+        // do NOT add IFB/FXD — fold their intended share into T-bills.
+        const gap = {
+          tbill: Math.max(0, want.tbill - held.tbill),
+          ifb: noNewLongBonds ? 0 : Math.max(0, want.ifb - held.ifb),
+          fxd: noNewLongBonds ? 0 : Math.max(0, want.fxd - held.fxd),
+        };
+        if (noNewLongBonds) {
+          gap.tbill += Math.max(0, want.ifb - held.ifb) + Math.max(0, want.fxd - held.fxd);
+        }
+
+        // ── YIELD-MAXIMIZING ORDER (Round 28) ──────────────────────────────
+        // Fill the phase gaps in order of NET-OF-TAX YIELD (highest first) for the
+        // instruments the liquidity guard currently permits, instead of a fixed
+        // ifb→fxd→tbill order. IFB (tax-exempt) usually ranks top, but if FXD's
+        // after-tax coupon or a long T-bill out-yields it for this month's rates,
+        // money flows there first. A per-family CONCENTRATION CAP keeps any single
+        // family from absorbing the whole surplus in one month.
+        const ranked = rankInstrumentsByNetYield(rates, {
+          maxTbillTenor: tbillTenorThisMonth,
+          allowLongBonds: !noNewLongBonds,
+          longBondTenorMonths: 24,
+        });
+        rankedThisMonth = ranked;
+        // Concentration cap: at most this share of the whole portfolio in one family.
+        const FAMILY_CONCENTRATION_CAP = 0.6;
+        const capKES = (mmf + held.tbill + held.ifb + held.fxd) * FAMILY_CONCENTRATION_CAP;
+        let remaining = maxLots;
+        // Order the three families by their net-yield rank for this month.
+        const order = ranked.map((r) => r.bucket).filter((b) => gap[b] > 0);
+        // Ensure tbill is always a fallback target even if it wasn't ranked above 0 gap.
+        for (const b of [...order, "tbill" as const]) {
+          if (remaining <= 0) break;
+          if (sweepBuy[b] > 0 && order.includes(b)) continue; // already filled in ranked pass
+          const headroomKES = Math.max(0, capKES - (held[b] + sweepBuy[b] * SWEEP_LOT_SIZE));
+          const wantLots = Math.floor(Math.min(gap[b], headroomKES) / SWEEP_LOT_SIZE);
+          const lotsForB = Math.min(remaining, wantLots);
+          if (lotsForB > 0) {
+            sweepBuy[b] += lotsForB;
+            remaining -= lotsForB;
+          }
+        }
+        // Any leftover affordable lots (rounding / capped families) go to T-bills
+        // for liquidity — they are the most liquid CBK family and always permitted.
+        if (remaining > 0) {
+          sweepBuy.tbill += remaining;
+          remaining = 0;
+        }
+
+        const totalLots = sweepBuy.tbill + sweepBuy.ifb + sweepBuy.fxd;
+        const totalSweep = totalLots * SWEEP_LOT_SIZE;
+
+        if (totalLots > 0 && mmf - totalSweep >= settings.safetyFloor) {
+          mmf -= totalSweep;
+          mmfToDhow = totalSweep;
+          // Representative target for any single-target consumers (largest buy).
+          sweepTarget = (["ifb", "fxd", "tbill"] as const).reduce(
+            (a, b) => (sweepBuy[b] > sweepBuy[a] ? b : a),
+            "tbill" as "tbill" | "ifb" | "fxd"
+          );
+
+          for (const b of ["tbill", "ifb", "fxd"] as const) {
+            for (let i = 0; i < sweepBuy[b]; i++) {
+              // T-bill tenor is capped by the liquidity guard so the lot always
+              // matures on or before the horizon. Long bonds keep their phase
+              // tenor (only reached when allowLongBonds was true).
+              const lotTenor =
+                b === "tbill"
+                  ? Math.min(tenorFor(b, phase, isShortHorizon), tbillTenorThisMonth || 3)
+                  : tenorFor(b, phase, isShortHorizon);
               lots.push({
                 id: `sim-${m}-${lotIdCounter++}`,
-                bucket: effectiveBucket.bucket,
-                faceValue: 50000,
+                bucket: b,
+                faceValue: SWEEP_LOT_SIZE,
                 issueMonth: m,
-                tenorMonths: effectiveBucket.tenorMonths,
-                couponRate: effectiveBucket.bucket === "ifb"
-                  ? rates.ifbCouponRate
-                  : effectiveBucket.bucket === "fxd"
-                  ? rates.fxdCouponRate
-                  : 0,
-                isTaxExempt: effectiveBucket.bucket === "ifb",
+                tenorMonths: lotTenor,
+                couponRate:
+                  b === "ifb" ? rates.ifbCouponRate : b === "fxd" ? rates.fxdCouponRate : 0,
+                isTaxExempt: b === "ifb",
               });
             }
-            sweepCount++;
           }
+          sweepCount++;
+
+          // SWEEP RATIONALE (Round 29): persist the net-yield ranking the
+          // allocator compared so the ledger can explain WHY each instrument was
+          // chosen this month.
+          const chosenBuckets = new Set(
+            (["tbill", "ifb", "fxd"] as const).filter((b) => sweepBuy[b] > 0),
+          );
+          const candidates: SweepRationaleCandidate[] = rankedThisMonth.map((r, i) => ({
+            bucket: r.bucket,
+            label: r.label,
+            grossPct: Math.round(r.grossPct * 100) / 100,
+            netPct: Math.round(r.netPct * 100) / 100,
+            taxNote: r.taxNote,
+            rank: i + 1,
+            chosen: chosenBuckets.has(r.bucket),
+          }));
+          const top = candidates.find((c) => c.chosen) ?? candidates[0];
+          const familyName = (b: "tbill" | "ifb" | "fxd") =>
+            b === "tbill" ? "T-bill" : b === "ifb" ? "IFB" : "FXD";
+          let summary: string;
+          if (top) {
+            const beat = candidates.filter((c) => c.rank > top.rank);
+            const beatTxt =
+              beat.length > 0
+                ? ` It out-yields ${joinWithAnd(
+                    beat.map((c) => familyName(c.bucket) + " (" + c.netPct.toFixed(2) + "% net)"),
+                  )} after tax.`
+                : "";
+            summary =
+              "Chosen for the highest net-of-tax yield among instruments allowed to mature by your goal date: " +
+              familyName(top.bucket) + " at " + top.netPct.toFixed(2) + "% net (" +
+              top.grossPct.toFixed(2) + "% gross, " + top.taxNote + ")." + beatTxt +
+              " The MMF safety floor is kept liquid and no single family exceeds 60% of the portfolio.";
+          } else {
+            summary =
+              "Surplus above the MMF safety floor was swept into the highest net-of-tax instrument allowed to mature by your goal date.";
+          }
+          sweepRationale = {
+            amount: Math.round(mmfToDhow * 100) / 100,
+            candidates,
+            summary,
+          };
         }
       }
     }
@@ -2109,7 +3965,7 @@ export function runProjection(
       if (lot.bucket === "tbill") {
         const age = m - lot.issueMonth;
         const tenorYears = lot.tenorMonths / 12;
-        const grossDiscount = lot.faceValue * (rates.tbill364Rate / 100) * tenorYears;
+        const grossDiscount = lot.faceValue * (tbillRateForTenor(lot.tenorMonths, rates) / 100) * tenorYears;
         const netDiscount = grossDiscount * (1 - wht);
         // During elapsed (actual) months hold the lot flat at face value so the
         // "today" snapshot reconciles with recorded principal; accrue the discount
@@ -2123,19 +3979,56 @@ export function runProjection(
       }
     }
 
+    // Tenor used by T-bills bought THIS month (for the label) — the guard caps it.
+    const sweptTbillTenor = Math.min(tenorFor("tbill", phase, isShortHorizon), tbillTenorThisMonth || 3);
     let mainAction = "";
-    const sweepDesc = mmfToDhow > 0
-      ? `sweep KES ${Math.round(mmfToDhow).toLocaleString()} → ${sweepTarget?.toUpperCase()} (${Math.round(mmfToDhow / 50000)} lot${mmfToDhow > 50000 ? "s" : ""})`
-      : "";
-    if (cbkActions.length > 0 && sweepDesc) {
-      mainAction = `${cbkActions.join("; ")}; ${sweepDesc}`;
-    } else if (cbkActions.length > 0) {
-      mainAction = `${cbkActions.join("; ")}; deposit to MMF`;
-    } else if (sweepDesc) {
-      mainAction = `Deposit to MMF; ${sweepDesc}`;
-    } else {
-      mainAction = "Deposit to MMF; no DhowCSD sweep this month";
+    // ── PLAIN-LANGUAGE MAIN ACTION (Round 28) ──────────────────────────────
+    // Describe each buy as a move FROM the MMF INTO a named instrument, with its
+    // tenor and the calendar month it matures — e.g.
+    // "Move KES 50,000 from the MMF into a 182-day T-bill maturing May 2027".
+    const monthName = (offsetFromThis: number): string => {
+      const d = new Date(startDate);
+      d.setMonth(d.getMonth() + (m - 1) + offsetFromThis);
+      return d.toLocaleDateString("en-GB", { month: "short", year: "numeric" });
+    };
+    const buyParts: string[] = [];
+    if (sweepBuy.ifb > 0) {
+      const t = tenorFor("ifb", phase, isShortHorizon);
+      buyParts.push(`${sweepBuy.ifb === 1 ? "a" : sweepBuy.ifb + "×"} ${tenorLabel("ifb", t)} (tax-exempt) maturing ${monthName(t)}`);
     }
+    if (sweepBuy.fxd > 0) {
+      const t = tenorFor("fxd", phase, isShortHorizon);
+      buyParts.push(`${sweepBuy.fxd === 1 ? "a" : sweepBuy.fxd + "×"} ${tenorLabel("fxd", t)} maturing ${monthName(t)}`);
+    }
+    if (sweepBuy.tbill > 0) {
+      buyParts.push(`${sweepBuy.tbill === 1 ? "a" : sweepBuy.tbill + "×"} ${tenorLabel("tbill", sweptTbillTenor)} maturing ${monthName(sweptTbillTenor)}`);
+    }
+    const sweepDesc = mmfToDhow > 0
+      ? `Move KES ${Math.round(mmfToDhow).toLocaleString()} from the MMF into ${joinWithAnd(buyParts)}`
+      : "";
+    // Maturities/coupons already arrive as plain phrases. Round 30: bank term
+    // deposits maturing this month are narrated alongside CBK maturities so the
+    // investor sees, month by month, exactly what matured and where it went.
+    const maturityActions = [...cbkActions, ...bankMaturityActions];
+    // Did any cash mature into the MMF this month (CBK or bank term deposit)?
+    const maturedCashThisMonth = cbkCashIn + bankMaturedCashIn > 0;
+    if (maturityActions.length > 0 && sweepDesc) {
+      mainAction = `${capitalise(maturityActions.join("; "))}, then ${lowerFirst(sweepDesc)}`;
+    } else if (maturityActions.length > 0) {
+      // Cash matured but nothing was re-deployed — say so explicitly and why.
+      mainAction = `${capitalise(maturityActions.join("; "))}; kept in the MMF (no instrument matures before your goal date)`;
+    } else if (sweepDesc) {
+      mainAction = sweepDesc;
+    } else {
+      mainAction = "Add this month's saving to the MMF; nothing swept into securities this month";
+    }
+    // Prepend any bank-deposit placement narration so the investor sees where a
+    // newly-appearing bank balance came from (Round 35).
+    if (bankPlacementActions.length > 0) {
+      mainAction = `${capitalise(bankPlacementActions.join("; "))}. ${mainAction}`;
+    }
+    // Silence unused-variable lints when no maturity occurred.
+    void maturedCashThisMonth;
 
     const total = mmf + tbillEnd + ifbEnd + fxdEnd + secondaryMmfEnd + bankEnd;
 
@@ -2152,11 +4045,13 @@ export function runProjection(
       totalEnd: Math.round(total    * 100) / 100,
       secondaryMmfEnd: Math.round(secondaryMmfEnd * 100) / 100,
       bankEnd: Math.round(bankEnd * 100) / 100,
+      bankCashIn: Math.round(bankMaturedCashIn * 100) / 100,
       phase,
       sweepTarget,
       whtThisMonth: Math.round(whtThisMonth * 100) / 100,
       isActual: isActualMonth,
       isShortHorizon,
+      sweepRationale,
     });
   }
 
@@ -2169,12 +4064,14 @@ export function runScenarios(
   baseSettings: EngineSettings,
   stepUps: number[] = SCENARIO_STEPUPS,
   rateHistory: RateSnapshot[] = [],
-  secondaryMmfs: SecondaryMmfInput[] = []
+  secondaryMmfs: SecondaryMmfInput[] = [],
+  bankHoldings: ActualBankHolding[] = [],
+  primaryFundId: number | null = null
 ): ScenarioResult[] {
   const horizonMonths = baseSettings.horizonMonths ?? 120;
   return stepUps.map((stepUp) => {
     const settings = { ...baseSettings, stepUpAmount: stepUp };
-    const results = runProjection(settings, [], rateHistory, [], [], secondaryMmfs);
+    const results = runProjection(settings, [], rateHistory, [], [], secondaryMmfs, bankHoldings, primaryFundId);
     const last = results[results.length - 1];
 
     let totalContributed = 0;
@@ -2412,6 +4309,7 @@ import {
   securities,
   contributionOverrides,
   depositEntries,
+  withdrawalEntries,
   rateHistory,
   accountStatus,
   type InsertPortfolio,
@@ -2421,6 +4319,7 @@ import {
   type InsertSecurity,
   type InsertContributionOverride,
   type InsertDepositEntry,
+  type InsertWithdrawalEntry,
   type InsertRateHistory,
   type InsertAccountStatus,
   portfolioSecondaryMmfs,
@@ -2428,7 +4327,7 @@ import {
   type InsertBankInstrumentHolding,
 } from "../drizzle/schema";
 import { ENV } from "./_core/env";
-import { computeActualsTotals } from "../shared/actuals";
+import { computeActualsTotals, estInterestToDate } from "../shared/actuals";
 
 let _db: ReturnType<typeof drizzle> | null = null;
 
@@ -2829,6 +4728,49 @@ export async function deleteDepositEntry(id: number, portfolioId: number) {
   }
 }
 
+// ─── Withdrawals (money OUT) ─────────────────────────────────────────────────
+
+export async function getWithdrawalEntries(portfolioId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select()
+    .from(withdrawalEntries)
+    .where(eq(withdrawalEntries.portfolioId, portfolioId))
+    .orderBy(desc(withdrawalEntries.withdrawalDate));
+}
+
+export async function addWithdrawalEntry(data: InsertWithdrawalEntry) {
+  const db = await getDb();
+  if (!db) return null;
+  await db.insert(withdrawalEntries).values(data);
+  const [row] = await db
+    .select()
+    .from(withdrawalEntries)
+    .where(eq(withdrawalEntries.portfolioId, data.portfolioId))
+    .orderBy(desc(withdrawalEntries.createdAt))
+    .limit(1);
+  return row ?? null;
+}
+
+export async function deleteWithdrawalEntry(id: number, portfolioId: number) {
+  const db = await getDb();
+  if (!db) return;
+  await db
+    .delete(withdrawalEntries)
+    .where(and(eq(withdrawalEntries.id, id), eq(withdrawalEntries.portfolioId, portfolioId)));
+}
+
+/** Net withdrawn amount per source bucket (positive = money out). */
+export async function getWithdrawalsForActuals(portfolioId: number) {
+  const rows = await getWithdrawalEntries(portfolioId);
+  return rows.map((w) => ({
+    sourceType: w.sourceType as "mmf_fund" | "bank_instrument" | "government_security",
+    mmfFundId: (w as { mmfFundId?: number | null }).mmfFundId ?? null,
+    amount: parseFloat(String(w.amount ?? "0")) || 0,
+  }));
+}
+
 export async function getActualsSummary(
   portfolioId: number,
   targetAmount: number,
@@ -2848,6 +4790,7 @@ export async function getActualsSummary(
   const secondaries = await getSecondaryMmfs(portfolioId);
   const bankHoldings = await getBankInstrumentHoldings(portfolioId);
   const securityRows = await getSecurities(portfolioId);
+  const withdrawals = await getWithdrawalsForActuals(portfolioId);
 
   // Delegate the (double-counting-safe) aggregation to the pure, unit-tested helper.
   const agg = computeActualsTotals(
@@ -2877,10 +4820,48 @@ export async function getActualsSummary(
       isTaxExempt: !!s.isTaxExempt,
       isMatured: !!s.isMatured,
     })),
+    withdrawals,
   );
 
   const annualFxdCouponIncome = agg.byBucket.fxd * (fxdCouponRate / 100);
   const remainingToTarget = Math.max(0, targetAmount - agg.totalContributed);
+
+  // ── Estimated NET interest earned to date ───────────────────────────────────
+  // Accrue each primary-MMF deposit from its deposit date to today at the fund
+  // EAR (geometric daily compounding, after WHT). Secondary MMFs and bank
+  // holdings accrue from their own start dates where available. This is a
+  // display estimate; the accrual ledger holds the authoritative day-by-day run.
+  const todayISO = new Date().toISOString().slice(0, 10);
+  const secondaryFundIdSet = new Set(
+    secondaries.map((s) => s.mmfFundId).filter((id): id is number => typeof id === "number"),
+  );
+  let estInterestEarned = 0;
+  for (const row of rows) {
+    const instType = (row as { institutionType?: string | null }).institutionType ?? null;
+    const fundId = (row as { mmfFundId?: number | null }).mmfFundId ?? null;
+    // Only primary-MMF deposits accrue here; secondary/bank/gov are handled below.
+    if (instType === "bank_instrument" || instType === "government_security") continue;
+    if (instType === "mmf_fund" && fundId != null && secondaryFundIdSet.has(fundId)) continue;
+    const amt = parseFloat(row.amount) || 0;
+    const dateISO = String((row as { depositDate?: unknown }).depositDate ?? todayISO).slice(0, 10);
+    estInterestEarned += estInterestToDate(amt, mmfYield, withholdingTax, dateISO, todayISO);
+  }
+  for (const s of secondaries) {
+    const bal = parseFloat(String(s.currentBalance ?? "0")) || 0;
+    const ear = parseFloat(String(s.ear ?? "0")) || 0;
+    const wht = parseFloat(String(s.whtRate ?? "15")) || 15;
+    const startISO = String((s as { startDate?: unknown; createdAt?: unknown }).startDate ?? (s as { createdAt?: unknown }).createdAt ?? todayISO).slice(0, 10);
+    estInterestEarned += estInterestToDate(bal, ear, wht, startISO, todayISO);
+  }
+  for (const b of bankHoldings) {
+    if (!b.isActive) continue;
+    const principal = parseFloat(String(b.principal ?? "0")) || 0;
+    const rate = parseFloat(String(b.interestRate ?? "0")) || 0;
+    const wht = parseFloat(String(b.whtRate ?? "15")) || 15;
+    const startISO = String((b as { startDate?: unknown; createdAt?: unknown }).startDate ?? (b as { createdAt?: unknown }).createdAt ?? todayISO).slice(0, 10);
+    estInterestEarned += estInterestToDate(principal, rate, wht, startISO, todayISO);
+  }
+  estInterestEarned = Math.round(estInterestEarned * 100) / 100;
 
   return {
     totalContributed: agg.totalContributed,
@@ -2896,6 +4877,9 @@ export async function getActualsSummary(
     secondaryCount: secondaries.length,
     bankHoldingCount: bankHoldings.filter((b) => b.isActive).length,
     entryCount: rows.length,
+    withdrawalCount: withdrawals.length,
+    totalWithdrawn: withdrawals.reduce((s, w) => s + w.amount, 0),
+    estInterestEarned,
   };
 }
 
@@ -3397,6 +5381,9 @@ import {
   addDepositEntry,
   updateDepositEntry,
   deleteDepositEntry,
+  getWithdrawalEntries,
+  addWithdrawalEntry,
+  deleteWithdrawalEntry,
   addRateHistorySnapshot,
   getRateHistory,
   getAccountStatuses,
@@ -3439,6 +5426,7 @@ import {
 import {
   runProjection,
   runScenarios,
+  deriveStepUps,
   checkMilestones,
   getScheduledContribution,
   generateMilestones,
@@ -3446,6 +5434,8 @@ import {
   deriveSafetyFloor,
   SWEEP_LOT_SIZE,
   SCENARIO_STEPUPS,
+  detectIssuerConcentration,
+  ISSUER_CONCENTRATION_CAP,
   type EngineSettings,
   type ActualDeposit,
   type ActualSecurity,
@@ -3453,6 +5443,8 @@ import {
   type SecondaryMmfInput,
 } from "./engine";
 import { COOKIE_NAME } from "../shared/const";
+import { reconcile, reconcileMmf } from "../shared/reconciliation";
+import { buildAllocation, blendedYield } from "../shared/actuals";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -3550,17 +5542,58 @@ function mapActualDeposits(rows: Awaited<ReturnType<typeof getDepositEntries>>):
   }));
 }
 
+/**
+ * Map primary-MMF withdrawals into NEGATIVE primary-MMF deposit rows so the
+ * engine's actual-seeding loop reduces the seeded "today" MMF balance on the
+ * withdrawal date (mirrors how positive deposits raise it). Only primary-fund
+ * withdrawals are modelled here — bank / secondary / government-security
+ * withdrawals are already reflected by their decremented principal / balance /
+ * matured-flag in their own tables.
+ */
+function mapPrimaryMmfWithdrawalsAsDeposits(
+  rows: Awaited<ReturnType<typeof getWithdrawalEntries>>,
+  primaryFundId: number | null,
+): ActualDeposit[] {
+  return rows
+    .filter((w) => {
+      if (w.sourceType !== "mmf_fund") return false;
+      const fid = (w as { mmfFundId?: number | null }).mmfFundId ?? null;
+      // Primary fund: either no fund id recorded, or it matches the portfolio's primary.
+      return fid == null || primaryFundId == null || fid === primaryFundId;
+    })
+    .map((w) => ({
+      bucket: "mmf" as const,
+      amount: -(parseFloat(String(w.amount ?? "0")) || 0),
+      depositDate: normaliseDate(w.withdrawalDate),
+      institutionType: "mmf_fund" as ActualDeposit["institutionType"],
+      mmfFundId: (w as { mmfFundId?: number | null }).mmfFundId ?? null,
+      bankHoldingId: null,
+    }));
+}
+
 /** Map DB bank instrument holdings into engine actuals inputs. */
 function mapActualBankHoldings(
   rows: Awaited<ReturnType<typeof getBankInstrumentHoldings>>
 ): ActualBankHolding[] {
   return rows.map((b) => ({
+    label: (b as { label?: string | null }).label ?? null,
+    bankName: (b as { bankName?: string | null }).bankName ?? null,
     principal: parseFloat(String(b.principal ?? "0")) || 0,
     interestRate: parseFloat(String(b.interestRate ?? "0")) || 0,
     whtRate: b.whtRate != null ? parseFloat(String(b.whtRate)) : null,
     dayCountBasis: (b as { dayCountBasis?: number | null }).dayCountBasis ?? 365,
     startDate: normaliseDate((b as { startDate?: Date | string | null }).startDate),
     isActive: !!b.isActive,
+    // Round 30: term/maturity metadata drives forward maturity + redeployment.
+    instrumentType: (b as { instrumentType?: ActualBankHolding["instrumentType"] }).instrumentType ?? null,
+    tenorMonths: (b as { tenorMonths?: number | null }).tenorMonths ?? null,
+    maturityDate: normaliseDate((b as { maturityDate?: Date | string | null }).maturityDate),
+    payoutFrequency: (b as { payoutFrequency?: ActualBankHolding["payoutFrequency"] }).payoutFrequency ?? null,
+    // Round 31: maturity behaviour (rollover vs redeploy) + early-break penalty.
+    maturityAction: (b as { maturityAction?: ActualBankHolding["maturityAction"] }).maturityAction ?? "redeploy",
+    earlyBreakPenaltyPct: (b as { earlyBreakPenaltyPct?: string | number | null }).earlyBreakPenaltyPct != null
+      ? parseFloat(String((b as { earlyBreakPenaltyPct?: string | number | null }).earlyBreakPenaltyPct))
+      : null,
   }));
 }
 
@@ -3613,6 +5646,8 @@ const portfolioCreateInput = z.object({
   foundationFrac: z.number().min(0.05).max(0.5).optional(),
   growthFrac: z.number().min(0.1).max(0.7).optional(),
   deRiskingFrac: z.number().min(0.05).max(0.4).optional(),
+  // Round 34: editable per-issuer concentration cap (%). 5–100.
+  concentrationCapPct: z.number().min(5).max(100).optional(),
 });
 
 const rateOnlyInput = z.object({
@@ -3664,6 +5699,7 @@ export const appRouter = router({
           foundationFrac: parseFloat(String(p.foundationFrac)),
           growthFrac: parseFloat(String(p.growthFrac)),
           deRiskingFrac: parseFloat(String(p.deRiskingFrac)),
+          concentrationCapPct: parseFloat(String((p as { concentrationCapPct?: string }).concentrationCapPct ?? "25")),
           cbkSourceUrl: p.cbkSourceUrl,
           sanlamSourceUrl: p.sanlamSourceUrl,
           ratesLastUpdatedAt: p.ratesLastUpdatedAt ?? null,
@@ -3691,6 +5727,7 @@ export const appRouter = router({
         foundationFrac: parseFloat(String(p.foundationFrac)),
         growthFrac: parseFloat(String(p.growthFrac)),
         deRiskingFrac: parseFloat(String(p.deRiskingFrac)),
+        concentrationCapPct: parseFloat(String((p as { concentrationCapPct?: string }).concentrationCapPct ?? "25")),
         cbkSourceUrl: p.cbkSourceUrl,
         sanlamSourceUrl: p.sanlamSourceUrl,
         ratesLastUpdatedAt: p.ratesLastUpdatedAt ?? null,
@@ -3719,6 +5756,7 @@ export const appRouter = router({
         foundationFrac: String(input.foundationFrac ?? 0.20),
         growthFrac: String(input.growthFrac ?? 0.50),
         deRiskingFrac: String(input.deRiskingFrac ?? 0.15),
+        concentrationCapPct: String(input.concentrationCapPct ?? 25),
       });
       if (!p) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Failed to create portfolio." });
       // Ensure a rate_settings row exists
@@ -3744,6 +5782,7 @@ export const appRouter = router({
           foundationFrac: String(input.foundationFrac ?? 0.20),
           growthFrac: String(input.growthFrac ?? 0.50),
           deRiskingFrac: String(input.deRiskingFrac ?? 0.15),
+          ...(input.concentrationCapPct != null ? { concentrationCapPct: String(input.concentrationCapPct) } : {}),
         });
         return { success: true };
       }),
@@ -3843,7 +5882,11 @@ export const appRouter = router({
       const rateHistoryRows = await getRateHistory(input.portfolioId);
       const rh = mapRateHistory(rateHistoryRows);
       const depositRows = await getDepositEntries(input.portfolioId);
-      const actualDeposits = mapActualDeposits(depositRows);
+      const withdrawalRows = await getWithdrawalEntries(input.portfolioId);
+      const actualDeposits = [
+        ...mapActualDeposits(depositRows),
+        ...mapPrimaryMmfWithdrawalsAsDeposits(withdrawalRows, p.mmfFundId ?? null),
+      ];
       const securityRows = await getSecurities(input.portfolioId);
       const actualSecurities = mapActualSecurities(securityRows);
       const secondaryMmfs = mapSecondaryMmfs(await getSecondaryMmfs(input.portfolioId));
@@ -3867,7 +5910,10 @@ export const appRouter = router({
       const rateHistoryRows = await getRateHistory(input.portfolioId);
       const rh = mapRateHistory(rateHistoryRows);
       const secondaryMmfs = mapSecondaryMmfs(await getSecondaryMmfs(input.portfolioId));
-      return runScenarios(settings, SCENARIO_STEPUPS, rh, secondaryMmfs);
+      const bankHoldings = mapActualBankHoldings(await getBankInstrumentHoldings(input.portfolioId));
+      const currentStepUp = Number(p?.stepUpAmount ?? 0);
+      const stepUps = deriveStepUps(currentStepUp);
+      return runScenarios(settings, stepUps, rh, secondaryMmfs, bankHoldings, p.mmfFundId ?? null);
     }),
 
     milestones: protectedProcedure.input(portfolioIdInput).query(async ({ ctx, input }) => {
@@ -3876,6 +5922,174 @@ export const appRouter = router({
       const settings = dbToEngine(rates, p, fundEar);
       const secondaryMmfs = mapSecondaryMmfs(await getSecondaryMmfs(input.portfolioId));
       return generateMilestones(settings, secondaryMmfs);
+    }),
+
+    /**
+     * Reconciliation: independently recompute the portfolio's "today" value from
+     * five sources and assert they agree. Reuses the EXACT helpers the live pages
+     * use (getActualsSummary + runProjection) so any disagreement surfaces here.
+     */
+    reconciliation: protectedProcedure.input(portfolioIdInput).query(async ({ ctx, input }) => {
+      const p = await requirePortfolio(input.portfolioId, ctx.user.id);
+      const [rates, fundEar] = await Promise.all([getRateSettings(input.portfolioId), getSelectedFundEar(p)]);
+      const settings = dbToEngine(rates, p, fundEar);
+
+      // ── Principal-basis sources (the same path the Dashboard uses) ──
+      const summary = await getActualsSummary(
+        input.portfolioId,
+        settings.targetAmount,
+        settings.withholdingTax,
+        settings.fxdCouponRate,
+        settings.mmfYield,
+        settings.tbill364Rate,
+      );
+
+      const secondaries = await getSecondaryMmfs(input.portfolioId);
+      const bank = await getBankInstrumentHoldings(input.portfolioId);
+      const securities = await getSecurities(input.portfolioId);
+
+      const primaryMmfBalance = summary?.depositsContributed ?? 0;
+      const secondaryMmfBalances = secondaries.map((s) => parseFloat(String(s.currentBalance ?? "0")) || 0);
+      const bankHoldingPrincipals = bank
+        .filter((b) => b.isActive)
+        .map((b) => parseFloat(String(b.principal ?? "0")) || 0);
+      const securityFaceValues = securities
+        .filter((s) => !s.isMatured)
+        .map((s) => parseFloat(String(s.faceValue ?? "0")) || 0);
+
+      const dashboardActualsTotal = summary?.totalContributed ?? 0;
+
+      // ── Engine projection "today" value ──
+      // Use the last actual-seeded month's totalEnd (the same figure the Dashboard
+      // reconciliation card reads). When there are no elapsed actual months yet,
+      // the engine has nothing seeded, so the principal sum-of-parts is the correct
+      // "today" basis — fall back to it to keep the comparison on one footing.
+      const overrides = await getContributionOverrides(input.portfolioId);
+      const mappedOverrides = overrides.map((o) => ({
+        monthNumber: o.monthNumber,
+        overrideAmount: o.overrideAmount ? parseFloat(String(o.overrideAmount)) : undefined,
+        lumpSum: o.lumpSum ? parseFloat(String(o.lumpSum)) : undefined,
+      }));
+      const rh = mapRateHistory(await getRateHistory(input.portfolioId));
+      const projection = runProjection(
+        settings,
+        mappedOverrides,
+        rh,
+        [
+          ...mapActualDeposits(await getDepositEntries(input.portfolioId)),
+          ...mapPrimaryMmfWithdrawalsAsDeposits(
+            await getWithdrawalEntries(input.portfolioId),
+            p.mmfFundId ?? null,
+          ),
+        ],
+        mapActualSecurities(securities),
+        mapSecondaryMmfs(secondaries),
+        mapActualBankHoldings(bank),
+        p.mmfFundId ?? null,
+      );
+      const sumParts =
+        primaryMmfBalance +
+        secondaryMmfBalances.reduce((a, b) => a + b, 0) +
+        bankHoldingPrincipals.reduce((a, b) => a + b, 0) +
+        securityFaceValues.reduce((a, b) => a + b, 0);
+      // The engine intentionally accrues the PRIMARY MMF through elapsed (actual)
+      // months so the projected "today" balance matches the daily-accrual ledger
+      // (see actualsReconciliation.test.ts). The other four sources are on a
+      // recorded-principal basis. To reconcile every source on ONE footing, strip
+      // the actual-period primary-MMF accrual back to recorded principal:
+      //   principalBasisToday = totalEnd - (mmfEnd_today - recordedMmfPrincipal)
+      // Secondary MMFs and bank holdings are already held flat in actual months.
+      const lastActual = [...projection].reverse().find((r) => r.isActual);
+      const projectionTodayValue = lastActual
+        ? lastActual.totalEnd - (lastActual.mmfEnd - primaryMmfBalance)
+        : sumParts;
+
+      // Round 32: Portfolio Review and Tax Summary sources are now computed by
+      // calling the SAME shared functions the pages render with (`buildAllocation`
+      // and `blendedYield`), fed from the raw DB rows — NOT by re-stating the
+      // reference. If a page's shared math drifts (e.g. a double-count creeps back
+      // into buildAllocation, or a pocket is dropped), its source diverges from the
+      // principal-basis reference and the row turns red. This makes the cross-check
+      // real rather than a tautology.
+      const depositRowsForAlloc = await getDepositEntries(input.portfolioId);
+      const otherHoldingRows = await getOtherHoldings(input.portfolioId);
+      const allocation = buildAllocation({
+        deposits: depositRowsForAlloc.map((d) => ({
+          amount: parseFloat(String(d.amount ?? "0")) || 0,
+          bucket: d.bucket,
+          institutionType: d.institutionType,
+          mmfFundId: d.mmfFundId,
+        })),
+        securities: securities.map((s) => ({
+          securityType: s.securityType,
+          faceValue: parseFloat(String(s.faceValue ?? "0")) || 0,
+          isMatured: s.isMatured,
+        })),
+        secondaryMmfs: secondaries.map((s) => ({
+          // Round 33 fix: use the secondary's FUND id (mmfFundId), NOT the row
+          // primary key (s.id). Passing s.id meant the secondary-fund set never
+          // matched the deposit's mmfFundId, so a secondary-MMF deposit leaked
+          // into the primary bucket AND was counted again via the balance
+          // (the +KES 2,500 double-count seen on the live Reconciliation page).
+          mmfFundId: s.mmfFundId ?? null,
+          currentBalance: parseFloat(String(s.currentBalance ?? "0")) || 0,
+          ear: parseFloat(String(s.ear ?? "0")) || 0,
+        })),
+        bankHoldings: bank.map((b) => ({
+          principal: parseFloat(String(b.principal ?? "0")) || 0,
+          interestRate: parseFloat(String(b.interestRate ?? "0")) || 0,
+          isActive: b.isActive,
+          // Reconcile on the PRINCIPAL basis (matches the reference): ignore accrued
+          // currentValue here so an un-elapsed deposit reconciles to its principal.
+          currentValue: 0,
+        })),
+        otherHoldings: otherHoldingRows.map((h) => ({
+          assetClass: h.assetClass,
+          currentValue: parseFloat(String(h.currentValue ?? "0")) || 0,
+        })),
+        // Robust guard: any mmf_fund deposit into a non-primary fund is secondary.
+        primaryFundId: p.mmfFundId ?? null,
+      });
+      // Other assets are not part of the principal-basis reference, so subtract
+      // them to compare the same pockets the reference covers.
+      const otherTotal = Object.values(allocation.other).reduce((a, b) => a + b, 0);
+      const portfolioReviewNetWorth = allocation.netWorth - otherTotal;
+
+      const taxBlended = blendedYield({
+        primaryMmf: allocation.primaryMmf,
+        primaryMmfRate: settings.mmfYield,
+        secondaryMmfs: secondaries.map((s) => ({
+          balance: parseFloat(String(s.currentBalance ?? "0")) || 0,
+          rate: parseFloat(String(s.ear ?? "0")) || 0,
+        })),
+        bankHoldings: bankHoldingPrincipals.map((v) => ({ value: v, rate: 0 })),
+        securities: [
+          { value: allocation.tbill, rate: settings.tbill364Rate, taxExempt: false },
+          { value: allocation.ifb, rate: settings.ifbCouponRate, taxExempt: true },
+          { value: allocation.fxd, rate: settings.fxdCouponRate, taxExempt: false },
+        ],
+        whtRate: settings.withholdingTax,
+      });
+      const taxSummaryBase = taxBlended.base;
+
+      const inputs = {
+        primaryMmfBalance,
+        secondaryMmfBalances,
+        bankHoldingPrincipals,
+        securityFaceValues,
+        otherAssetValues: [],
+        projectionTodayValue,
+        dashboardActualsTotal,
+        accrualLedgerMmfTotal: primaryMmfBalance + secondaryMmfBalances.reduce((a, b) => a + b, 0),
+        dashboardNetWorth: dashboardActualsTotal,
+        portfolioReviewNetWorth,
+        taxSummaryBase,
+      };
+
+      return {
+        full: reconcile(inputs),
+        mmf: reconcileMmf(inputs.accrualLedgerMmfTotal, inputs.primaryMmfBalance, inputs.secondaryMmfBalances),
+      };
     }),
 
     contributionSchedule: protectedProcedure.input(portfolioIdInput).query(async ({ ctx, input }) => {
@@ -4056,7 +6270,23 @@ export const appRouter = router({
       }));
       const rateHistoryRows = await getRateHistory(input.portfolioId);
       const rh = mapRateHistory(rateHistoryRows);
-      const results = runProjection(settings, mappedOverrides, rh);
+      const actualDeposits = [
+        ...mapActualDeposits(await getDepositEntries(input.portfolioId)),
+        ...mapPrimaryMmfWithdrawalsAsDeposits(await getWithdrawalEntries(input.portfolioId), p.mmfFundId ?? null),
+      ];
+      const actualSecurities = mapActualSecurities(await getSecurities(input.portfolioId));
+      const secondaryMmfs = mapSecondaryMmfs(await getSecondaryMmfs(input.portfolioId));
+      const bankHoldings = mapActualBankHoldings(await getBankInstrumentHoldings(input.portfolioId));
+      const results = runProjection(
+        settings,
+        mappedOverrides,
+        rh,
+        actualDeposits,
+        actualSecurities,
+        secondaryMmfs,
+        bankHoldings,
+        p.mmfFundId ?? null,
+      );
 
       const startDate = new Date(`${settings.startDate}T12:00:00.000Z`);
       const entries = results.map((r) => {
@@ -4503,6 +6733,9 @@ export const appRouter = router({
           secondaryCount: 0,
           bankHoldingCount: 0,
           entryCount: 0,
+          withdrawalCount: 0,
+          totalWithdrawn: 0,
+          estInterestEarned: 0,
         };
       }
       return {
@@ -4518,8 +6751,151 @@ export const appRouter = router({
         secondaryCount: summary.secondaryCount,
         bankHoldingCount: summary.bankHoldingCount,
         entryCount: summary.entryCount,
+        withdrawalCount: summary.withdrawalCount,
+        totalWithdrawn: round2(summary.totalWithdrawn),
+        estInterestEarned: round2(summary.estInterestEarned ?? 0),
       };
     }),
+  }),
+
+  // ─── Withdrawals (money OUT) ───────────────────────────────────────────────
+  withdrawals: router({
+    list: protectedProcedure.input(portfolioIdInput).query(async ({ ctx, input }) => {
+      await requirePortfolio(input.portfolioId, ctx.user.id);
+      return getWithdrawalEntries(input.portfolioId);
+    }),
+
+    add: protectedProcedure
+      .input(z.object({
+        portfolioId: z.number().int().positive(),
+        sourceType: z.enum(["mmf_fund", "bank_instrument", "government_security"]),
+        mmfFundId: z.number().int().positive().optional(),
+        bankHoldingId: z.number().int().positive().optional(),
+        securityId: z.number().int().positive().optional(),
+        amount: z.number().positive(),
+        withdrawalDate: z.string(),
+        reason: z.string().optional(),
+        notes: z.string().optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const p = await requirePortfolio(input.portfolioId, ctx.user.id);
+        const [rates, fundEar] = await Promise.all([getRateSettings(input.portfolioId), getSelectedFundEar(p)]);
+        const settings = dbToEngine(rates, p, fundEar);
+
+        // Validate that the source has enough available to cover the withdrawal.
+        const summary = await getActualsSummary(
+          input.portfolioId,
+          settings.targetAmount,
+          settings.withholdingTax,
+          settings.fxdCouponRate,
+          settings.mmfYield,
+          settings.tbill364Rate,
+        );
+        let available = 0;
+        if (input.sourceType === "bank_instrument") available = summary?.bankBalance ?? 0;
+        else if (input.sourceType === "government_security") available = summary?.securitiesValue ?? 0;
+        else if (input.mmfFundId && p.mmfFundId !== input.mmfFundId) available = summary?.secondaryMmfBalance ?? 0;
+        else available = summary?.depositsContributed ?? 0;
+        if (input.amount > available + 0.005) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `Withdrawal of KES ${input.amount.toLocaleString()} exceeds the available balance of KES ${available.toLocaleString(undefined, { maximumFractionDigits: 2 })} in this source.`,
+          });
+        }
+
+        // Early fixed-deposit break? Detect and compute forfeited interest.
+        let isEarlyWithdrawal = false;
+        let forfeitedInterest = 0;
+        if (input.sourceType === "bank_instrument" && input.bankHoldingId) {
+          const holdings = await getBankInstrumentHoldings(input.portfolioId);
+          const h = holdings.find((x) => x.id === input.bankHoldingId);
+          // A TERM deposit (fixed deposit OR target/goal savings) broken before
+          // its maturity date is an early withdrawal that forfeits accrued interest.
+          const isTermDeposit = h && (h.instrumentType === "fixed_deposit" || h.instrumentType === "target_savings");
+          if (h && isTermDeposit && h.maturityDate) {
+            const maturity = new Date(h.maturityDate);
+            const wDate = new Date(input.withdrawalDate + "T12:00:00Z");
+            if (wDate < maturity) {
+              isEarlyWithdrawal = true;
+              // Forfeit interest accrued to date on the withdrawn portion: a fixed
+              // deposit broken early typically loses ALL accrued interest on that money.
+              const start = h.startDate ? new Date(h.startDate) : new Date(h.createdAt);
+              const days = Math.max(0, (wDate.getTime() - start.getTime()) / 86_400_000);
+              const rate = parseFloat(String(h.interestRate ?? "0")) / 100;
+              const dayCount = h.dayCountBasis || 365;
+              forfeitedInterest = Math.round(input.amount * rate * (days / dayCount) * 100) / 100;
+            }
+          }
+          // Reduce the holding principal to keep actuals in sync. When the
+          // withdrawal empties the deposit (full break), deactivate the holding
+          // so it drops out of net worth, the liquidity calendar and yield blend.
+          if (h) {
+            const newPrincipal = Math.max(0, (parseFloat(String(h.principal)) || 0) - input.amount);
+            await updateBankInstrumentHolding(input.bankHoldingId, input.portfolioId, {
+              principal: String(newPrincipal),
+              ...(newPrincipal <= 0.005 ? { isActive: false } : {}),
+            });
+          }
+        }
+
+        // Reduce a secondary-MMF balance when applicable.
+        if (input.sourceType === "mmf_fund" && input.mmfFundId && p.mmfFundId !== input.mmfFundId) {
+          const secs = await getSecondaryMmfs(input.portfolioId);
+          const sec = secs.find((s) => s.mmfFundId === input.mmfFundId);
+          if (sec) {
+            const newBal = Math.max(0, (parseFloat(String(sec.currentBalance)) || 0) - input.amount);
+            await updateSecondaryMmf(sec.id, input.portfolioId, { currentBalance: String(newBal) });
+          }
+        }
+
+        // Mark a redeemed government security as matured when fully withdrawn.
+        if (input.sourceType === "government_security" && input.securityId) {
+          await updateSecurity(input.securityId, { isMatured: true });
+        }
+
+        const entry = await addWithdrawalEntry({
+          portfolioId: input.portfolioId,
+          sourceType: input.sourceType,
+          mmfFundId: input.mmfFundId ?? null,
+          bankHoldingId: input.bankHoldingId ?? null,
+          securityId: input.securityId ?? null,
+          amount: String(input.amount),
+          forfeitedInterest: String(forfeitedInterest),
+          isEarlyWithdrawal,
+          withdrawalDate: new Date(input.withdrawalDate),
+          reason: input.reason,
+          notes: input.notes,
+        });
+
+        await addAuditLog({
+          portfolioId: input.portfolioId,
+          entity: "withdrawal",
+          action: "create",
+          field: input.sourceType,
+          newValue: String(input.amount),
+          changedByOpenId: ctx.user.openId,
+          changedByName: ctx.user.name ?? null,
+          summary: `Recorded ${input.sourceType.replace("_", " ")} withdrawal of KES ${input.amount.toLocaleString()} on ${input.withdrawalDate}${isEarlyWithdrawal ? ` (early FD break — forfeited KES ${forfeitedInterest.toLocaleString()})` : ""}`,
+        });
+        return { success: true, entry, isEarlyWithdrawal, forfeitedInterest };
+      }),
+
+    delete: protectedProcedure
+      .input(z.object({ portfolioId: z.number().int().positive(), id: z.number() }))
+      .mutation(async ({ ctx, input }) => {
+        await requirePortfolio(input.portfolioId, ctx.user.id);
+        await deleteWithdrawalEntry(input.id, input.portfolioId);
+        await addAuditLog({
+          portfolioId: input.portfolioId,
+          entity: "withdrawal",
+          entityId: input.id,
+          action: "delete",
+          changedByOpenId: ctx.user.openId,
+          changedByName: ctx.user.name ?? null,
+          summary: `Deleted withdrawal entry #${input.id}`,
+        });
+        return { success: true };
+      }),
   }),
 
   // ─── Contribution Overrides ───────────────────────────────────────────────────
@@ -5047,18 +7423,64 @@ export const appRouter = router({
           maturityDate: r.maturityDate ? normaliseDate(r.maturityDate) : null,
           payoutFrequency: r.payoutFrequency,
           currentValue: Number(r.currentValue),
+          earlyBreakPenaltyPct: Number((r as { earlyBreakPenaltyPct?: string | number }).earlyBreakPenaltyPct ?? 0),
+          maturityAction: (r as { maturityAction?: "redeploy" | "rollover" }).maturityAction ?? "redeploy",
           notes: r.notes ?? null,
           isActive: r.isActive,
           createdAt: r.createdAt,
           updatedAt: r.updatedAt,
         }));
       }),
+    /**
+     * Round 31: per-issuer concentration check for the Dashboard banner. Returns
+     * any bank/issuer whose active-deposit value exceeds ISSUER_CONCENTRATION_CAP
+     * (25%) of total net worth. Government securities are sovereign and excluded.
+     * Server-authoritative: net worth comes from getActualsSummary so the banner
+     * cannot drift from the Dashboard total.
+     */
+    concentration: protectedProcedure
+      .input(z.object({ portfolioId: z.number().int().positive() }))
+      .query(async ({ ctx, input }) => {
+        const p = await requirePortfolio(input.portfolioId, ctx.user.id);
+        const rates = await getRateSettings(input.portfolioId);
+        const fundEar = await getSelectedFundEar(p);
+        const settings = dbToEngine(rates, p, fundEar);
+        const summary = await getActualsSummary(
+          input.portfolioId,
+          settings.targetAmount,
+          settings.withholdingTax,
+          settings.fxdCouponRate,
+          settings.mmfYield,
+          settings.tbill364Rate,
+        );
+        const netWorth = summary ? summary.totalContributed : 0;
+        const rows = await getBankInstrumentHoldings(input.portfolioId);
+        const issuerValues = rows
+          .filter((r) => r.isActive)
+          .map((r) => ({
+            issuer: r.bankName,
+            // Use the larger of current value vs principal (mirrors net-worth basis).
+            value: Math.max(Number(r.currentValue) || 0, Number(r.principal) || 0),
+          }));
+        const capPct = parseFloat(String((p as { concentrationCapPct?: string }).concentrationCapPct ?? "25"));
+        const cap = (Number.isFinite(capPct) && capPct > 0 ? capPct : 25) / 100;
+        const breaches = detectIssuerConcentration(issuerValues, netWorth, cap);
+        return {
+          cap,
+          netWorth: Math.round(netWorth * 100) / 100,
+          breaches: breaches.map((b) => ({
+            issuer: b.issuer,
+            value: Math.round(b.value * 100) / 100,
+            share: Math.round(b.share * 10000) / 10000,
+          })),
+        };
+      }),
     add: protectedProcedure
       .input(z.object({
         portfolioId: z.number().int().positive(),
         bankName: z.string().min(1).max(200),
         label: z.string().max(200).optional(),
-        instrumentType: z.enum(["call_deposit", "fixed_deposit"]),
+        instrumentType: z.enum(["call_deposit", "fixed_deposit", "ordinary_savings", "target_savings", "tiered_savings"]),
         principal: z.number().min(0).default(0),
         interestRate: z.number().min(0).max(100).default(0),
         rateAsOfDate: z.string().optional(),
@@ -5069,11 +7491,13 @@ export const appRouter = router({
         tenorMonths: z.number().int().min(0).optional(),
         maturityDate: z.string().optional(),
         payoutFrequency: z.enum(["maturity", "monthly", "quarterly", "on_call"]).default("maturity"),
+        earlyBreakPenaltyPct: z.number().min(0).max(100).default(0),
+        maturityAction: z.enum(["redeploy", "rollover"]).default("redeploy"),
         notes: z.string().max(1000).optional(),
       }))
       .mutation(async ({ ctx, input }) => {
         await requirePortfolio(input.portfolioId, ctx.user.id);
-        await addBankInstrumentHolding({
+        const created = await addBankInstrumentHolding({
           portfolioId: input.portfolioId,
           bankName: input.bankName,
           label: input.label,
@@ -5088,6 +7512,8 @@ export const appRouter = router({
           tenorMonths: input.tenorMonths ?? null,
           maturityDate: input.maturityDate ? new Date(`${input.maturityDate}T12:00:00.000Z`) : null,
           payoutFrequency: input.payoutFrequency,
+          earlyBreakPenaltyPct: String(input.earlyBreakPenaltyPct),
+          maturityAction: input.maturityAction,
           currentValue: String(input.principal),
         });
         await addAuditLog({
@@ -5100,7 +7526,7 @@ export const appRouter = router({
           changedByName: ctx.user.name ?? null,
           summary: `Added ${input.instrumentType.replace("_", " ")} at ${input.bankName} (KES ${input.principal.toLocaleString()})`,
         });
-        return { success: true };
+        return { success: true, id: created?.id ?? null };
       }),
     update: protectedProcedure
       .input(z.object({
@@ -5108,7 +7534,7 @@ export const appRouter = router({
         portfolioId: z.number().int().positive(),
         bankName: z.string().min(1).max(200).optional(),
         label: z.string().max(200).optional(),
-        instrumentType: z.enum(["call_deposit", "fixed_deposit"]).optional(),
+        instrumentType: z.enum(["call_deposit", "fixed_deposit", "ordinary_savings", "target_savings", "tiered_savings"]).optional(),
         principal: z.number().min(0).optional(),
         interestRate: z.number().min(0).max(100).optional(),
         rateAsOfDate: z.string().optional(),
@@ -5119,6 +7545,8 @@ export const appRouter = router({
         tenorMonths: z.number().int().min(0).optional(),
         maturityDate: z.string().optional(),
         payoutFrequency: z.enum(["maturity", "monthly", "quarterly", "on_call"]).optional(),
+        earlyBreakPenaltyPct: z.number().min(0).max(100).optional(),
+        maturityAction: z.enum(["redeploy", "rollover"]).optional(),
         notes: z.string().max(1000).optional(),
         isActive: z.boolean().optional(),
       }))
@@ -5139,6 +7567,8 @@ export const appRouter = router({
           ...(rest.tenorMonths !== undefined && { tenorMonths: rest.tenorMonths }),
           ...(rest.maturityDate !== undefined && { maturityDate: new Date(`${rest.maturityDate}T12:00:00.000Z`) }),
           ...(rest.payoutFrequency !== undefined && { payoutFrequency: rest.payoutFrequency }),
+          ...(rest.earlyBreakPenaltyPct !== undefined && { earlyBreakPenaltyPct: String(rest.earlyBreakPenaltyPct) }),
+          ...(rest.maturityAction !== undefined && { maturityAction: rest.maturityAction }),
           ...(rest.notes !== undefined && { notes: rest.notes }),
           ...(rest.isActive !== undefined && { isActive: rest.isActive }),
         });
@@ -5275,7 +7705,7 @@ export const appRouter = router({
     add: protectedProcedure
       .input(z.object({
         bankName: z.string().min(1).max(200),
-        instrumentType: z.enum(["call_deposit", "fixed_deposit"]),
+        instrumentType: z.enum(["call_deposit", "fixed_deposit", "ordinary_savings", "target_savings", "tiered_savings"]),
         minAmount: z.number().min(0).default(0),
         typicalTenor: z.string().max(100).optional(),
         indicativeRate: z.number().min(0).max(100).optional(),
@@ -5302,7 +7732,7 @@ export const appRouter = router({
       .input(z.object({
         id: z.number().int().positive(),
         bankName: z.string().min(1).max(200).optional(),
-        instrumentType: z.enum(["call_deposit", "fixed_deposit"]).optional(),
+        instrumentType: z.enum(["call_deposit", "fixed_deposit", "ordinary_savings", "target_savings", "tiered_savings"]).optional(),
         minAmount: z.number().min(0).optional(),
         typicalTenor: z.string().max(100).optional(),
         indicativeRate: z.number().min(0).max(100).nullable().optional(),
@@ -5493,14 +7923,18 @@ export const appRouter = router({
       await ensureRateSettings(p.id);
 
       // A few primary-fund (MMF) and government-security deposits.
-      const seedDeposit = (
+      // For government securities we mirror deposits.add: create the deposit AND a
+      // linked register row (the single source of truth) so the sample portfolio
+      // reconciles cleanly (deposit ledger ↔ CBK register ↔ engine valuation).
+      const seedRates = await getRateSettings(p.id);
+      const seedDeposit = async (
         bucket: "mmf" | "tbill" | "ifb" | "fxd",
         institutionType: "mmf_fund" | "government_security",
         amount: number,
         date: string,
         mmfFundId?: number,
-      ) =>
-        addDepositEntry({
+      ) => {
+        const entry = await addDepositEntry({
           portfolioId: p.id,
           bucket,
           institutionType,
@@ -5510,6 +7944,33 @@ export const appRouter = router({
           depositDate: new Date(`${date}T12:00:00.000Z`),
           notes: "Sample data",
         });
+        if (institutionType === "government_security" && entry) {
+          const securityType: "tbill_364" | "ifb" | "fxd" =
+            bucket === "tbill" ? "tbill_364" : bucket === "ifb" ? "ifb" : "fxd";
+          const tenorMonths = bucket === "tbill" ? 12 : 24;
+          const issue = new Date(`${date}T12:00:00.000Z`);
+          const maturity = new Date(issue);
+          maturity.setMonth(maturity.getMonth() + tenorMonths);
+          const couponRate =
+            bucket === "ifb"
+              ? parseFloat(String(seedRates?.ifbCouponRate ?? "0")) || 0
+              : bucket === "fxd"
+                ? parseFloat(String(seedRates?.fxdCouponRate ?? "0")) || 0
+                : 0;
+          const sec = await addSecurity({
+            portfolioId: p.id,
+            securityType,
+            faceValue: String(amount),
+            issueDate: issue,
+            maturityDate: maturity,
+            couponRate: String(couponRate),
+            isTaxExempt: bucket === "ifb",
+            notes: `Auto-created from sample deposit on ${date}`,
+          });
+          if (sec?.id) await updateDepositEntry(entry.id, p.id, { securityId: sec.id });
+        }
+        return entry;
+      };
       // Primary-fund MMF deposits dated across the elapsed months (months 1, 2, 4).
       await seedDeposit("mmf", "mmf_fund", 90000, monthsAfterStart(0, 5), primary?.id);
       await seedDeposit("mmf", "mmf_fund", 30000, monthsAfterStart(1, 5), primary?.id);
@@ -5559,6 +8020,47 @@ export const appRouter = router({
         maturityDate: bankMaturity,
         payoutFrequency: "maturity",
         currentValue: "200000",
+      });
+
+      // A TARGET/GOAL savings term deposit that MATURES within the elapsed window
+      // (opened month 1, 4-month tenor → matures around month 5) so the Month
+      // Ledger demonstrates a real maturity + redeployment of principal+interest.
+      const goalStart = new Date(Date.UTC(startBase.getUTCFullYear(), startBase.getUTCMonth() + 1, 10, 12, 0, 0));
+      const goalMaturity = new Date(Date.UTC(startBase.getUTCFullYear(), startBase.getUTCMonth() + 5, 10, 12, 0, 0));
+      await addBankInstrumentHolding({
+        portfolioId: p.id,
+        bankName: "KCB",
+        label: "Goal savings (matured)",
+        instrumentType: "target_savings",
+        principal: "80000",
+        interestRate: "9.0000",
+        rateAsOfDate: goalStart,
+        isNegotiable: false,
+        dayCountBasis: 365,
+        whtRate: "15.0000",
+        startDate: goalStart,
+        tenorMonths: 4,
+        maturityDate: goalMaturity,
+        payoutFrequency: "maturity",
+        earlyBreakPenaltyPct: "25.00",
+        currentValue: "80000",
+      });
+
+      // A LIQUID tiered / high-yield savings account (accrues in place, no lock).
+      await addBankInstrumentHolding({
+        portfolioId: p.id,
+        bankName: "NCBA",
+        label: "Tiered savings",
+        instrumentType: "tiered_savings",
+        principal: "45000",
+        interestRate: "8.0000",
+        rateAsOfDate: bankStart,
+        isNegotiable: false,
+        dayCountBasis: 365,
+        whtRate: "15.0000",
+        startDate: bankStart,
+        payoutFrequency: "on_call",
+        currentValue: "45000",
       });
 
       return { success: true, portfolioId: p.id };
@@ -5799,6 +8301,8 @@ import TaxSummary from "./pages/TaxSummary";
 import MmfStrategy from "./pages/MmfStrategy";
 import BankInstruments from "./pages/BankInstruments";
 import PortfolioReview from "./pages/PortfolioReview";
+import Reconciliation from "./pages/Reconciliation";
+import Withdrawals from "./pages/Withdrawals";
 
 function Router() {
   return (
@@ -5811,12 +8315,14 @@ function Router() {
       <Route path="/settings" component={Settings} />
       <Route path="/getting-started" component={GettingStarted} />
       <Route path="/deposits" component={Deposits} />
+      <Route path="/withdrawals" component={Withdrawals} />
       <Route path="/mmf-funds" component={MmfFunds} />
       <Route path="/mmf-accrual" component={MmfAccrual} />
       <Route path="/mmf-strategy" component={MmfStrategy} />
       <Route path="/bank-instruments" component={BankInstruments} />
       <Route path="/tax-summary" component={TaxSummary} />
       <Route path="/portfolio-review" component={PortfolioReview} />
+      <Route path="/reconciliation" component={Reconciliation} />
       <Route path="/other-assets" component={OtherAssets} />
       <Route path="/404" component={NotFound} />
       <Route component={NotFound} />
@@ -6783,6 +9289,7 @@ import {
   Settings,
   TrendingUp,
   ArrowDownCircle,
+  ArrowUpCircle,
   MapPin,
   PiggyBank,
   Briefcase,
@@ -6791,6 +9298,7 @@ import {
   PieChart,
   Building2,
   ClipboardCheck,
+  Scale,
   X,
 } from "lucide-react";
 import { Link, useLocation } from "wouter";
@@ -6927,6 +9435,7 @@ const navGroups = [
       { href: "/securities", label: "CBK Securities", icon: Landmark },
       { href: "/mmf-funds", label: "MMF Funds", icon: PiggyBank },
       { href: "/other-assets", label: "Other Assets", icon: Briefcase },
+      { href: "/withdrawals", label: "Withdrawals", icon: ArrowUpCircle },
     ],
   },
   {
@@ -6934,6 +9443,7 @@ const navGroups = [
     items: [
       { href: "/scenarios", label: "Scenarios", icon: BarChart3 },
       { href: "/portfolio-review", label: "Portfolio Review", icon: ClipboardCheck },
+      { href: "/reconciliation", label: "Reconciliation", icon: Scale },
       { href: "/mmf-accrual", label: "Daily Accrual", icon: CalendarClock },
       { href: "/tax-summary", label: "Tax Summary", icon: Receipt },
     ],
@@ -7256,6 +9766,7 @@ import { usePortfolio } from "@/contexts/PortfolioContext";
 import { useSelectedFund } from "@/hooks/useSelectedFund";
 import { trpc } from "@/lib/trpc";
 import { formatKES } from "@/lib/format";
+import { BANK_INSTRUMENT_TYPES, isTermBankInstrument, bankInstrumentLabel, type BankInstrumentType } from "@shared/const";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -7368,6 +9879,10 @@ export function DepositDrawer({ open, onClose }: DepositDrawerProps) {
     onError: (err) => toast.error(err.message),
   });
 
+  // Inline bank-holding creation: lets the user open a brand-new bank call/fixed
+  // deposit straight from the deposit drawer (no need to visit another page first).
+  const createBankHolding = trpc.bankHoldings.add.useMutation();
+
   const deleteMutation = trpc.deposits.delete.useMutation({
     onSuccess: () => {
       utils.deposits.list.invalidate();
@@ -7413,7 +9928,7 @@ export function DepositDrawer({ open, onClose }: DepositDrawerProps) {
     for (const h of bankHoldings) {
       list.push({
         value: `bank:${h.id}`,
-        label: h.label || `${h.bankName} ${h.instrumentType === "fixed_deposit" ? "Fixed Deposit" : "Call Deposit"}`,
+        label: h.label || `${h.bankName} ${bankInstrumentLabel(h.instrumentType)}`,
         sublabel: `${h.bankName} · ${h.interestRate.toFixed(2)}% p.a.`,
         group: "Bank instruments",
         icon: <Building2 className="w-4 h-4" />,
@@ -7422,6 +9937,18 @@ export function DepositDrawer({ open, onClose }: DepositDrawerProps) {
         payload: { institutionType: "bank_instrument", bankHoldingId: h.id },
       });
     }
+    // "Open a brand-new bank deposit" — always available so a bank instrument can
+    // be funded directly from here even when the portfolio has none yet.
+    list.push({
+      value: "bank:new",
+      label: "+ New bank deposit",
+      sublabel: "Open a call or fixed deposit at a bank",
+      group: "Bank instruments",
+      icon: <PlusCircle className="w-4 h-4" />,
+      color: "text-sky-400",
+      taxNote: "15% WHT on interest (final tax)",
+      payload: { institutionType: "bank_instrument" },
+    });
     // Government securities buckets
     (["tbill", "ifb", "fxd"] as const).forEach((b) => {
       const m = GOV_META[b];
@@ -7447,18 +9974,75 @@ export function DepositDrawer({ open, onClose }: DepositDrawerProps) {
     depositDate: new Date().toISOString().slice(0, 10),
     notes: "",
   });
+  // Fields shown only when opening a brand-new bank deposit inline.
+  const [newBank, setNewBank] = useState({
+    bankName: "",
+    instrumentType: "fixed_deposit" as BankInstrumentType,
+    interestRate: "",
+    tenorMonths: "12",
+  });
 
   const selectedDest = destinations.find((d) => d.value === form.destination);
+  const isNewBank = form.destination === "bank:new";
 
   function resetForm() {
     setForm({ destination: "", amount: "", depositDate: new Date().toISOString().slice(0, 10), notes: "" });
+    setNewBank({ bankName: "", instrumentType: "fixed_deposit" as BankInstrumentType, interestRate: "", tenorMonths: "12" });
   }
 
-  function handleSubmit() {
+  async function handleSubmit() {
     const amount = parseFloat(form.amount);
     if (!amount || amount <= 0) { toast.error("Please enter a valid amount"); return; }
     if (!portfolioId) return;
     if (!selectedDest) { toast.error("Please choose where the money went"); return; }
+
+    // Opening a brand-new bank deposit: create the holding first, then record the
+    // deposit into the newly created holding so actuals stay in one place.
+    if (isNewBank) {
+      const bankName = newBank.bankName.trim();
+      if (!bankName) { toast.error("Enter the bank name"); return; }
+      const rate = parseFloat(newBank.interestRate);
+      if (isNaN(rate) || rate < 0) { toast.error("Enter a valid interest rate"); return; }
+      const isTerm = isTermBankInstrument(newBank.instrumentType);
+      const tenor = isTerm ? Math.max(1, parseInt(newBank.tenorMonths || "12", 10)) : undefined;
+      try {
+        const start = new Date(form.depositDate + "T12:00:00.000Z");
+        let maturity: string | undefined;
+        if (isTerm && tenor) {
+          const m = new Date(start);
+          m.setMonth(m.getMonth() + tenor);
+          maturity = m.toISOString().slice(0, 10);
+        }
+        const res = await createBankHolding.mutateAsync({
+          portfolioId,
+          bankName,
+          label: `${bankName} ${isTerm ? `${tenor}-month ${bankInstrumentLabel(newBank.instrumentType).toLowerCase()}` : bankInstrumentLabel(newBank.instrumentType).toLowerCase()}`,
+          instrumentType: newBank.instrumentType,
+          principal: 0, // principal is added by the deposit below to avoid double counting
+          interestRate: rate,
+          rateAsOfDate: form.depositDate,
+          startDate: form.depositDate,
+          tenorMonths: tenor,
+          maturityDate: maturity,
+          payoutFrequency: isTerm ? "maturity" : "on_call",
+          maturityAction: isTerm ? ("redeploy" as const) : undefined,
+        });
+        if (!res?.id) { toast.error("Could not open the bank deposit"); return; }
+        await utils.bankHoldings.list.invalidate();
+        addMutation.mutate({
+          portfolioId,
+          amount,
+          depositDate: form.depositDate,
+          notes: form.notes || undefined,
+          institutionType: "bank_instrument",
+          bankHoldingId: res.id,
+        });
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : "Could not open the bank deposit");
+      }
+      return;
+    }
+
     addMutation.mutate({
       portfolioId,
       amount,
@@ -7621,7 +10205,7 @@ export function DepositDrawer({ open, onClose }: DepositDrawerProps) {
                   <p className="text-xs text-muted-foreground">{selectedDest.sublabel} · {selectedDest.taxNote}</p>
                 ) : (
                   <p className="text-xs text-muted-foreground">
-                    Don't see your bank deposit or extra MMF? Add it first on the relevant page, then it appears here.
+                    Choose where the money landed. To open a new bank call/fixed deposit, pick “+ New bank deposit”. Extra MMF funds are added on the MMF Funds page.
                   </p>
                 )}
                 {selectedDest?.payload.bucket === "fxd" && (
@@ -7637,6 +10221,71 @@ export function DepositDrawer({ open, onClose }: DepositDrawerProps) {
                   </div>
                 )}
               </div>
+
+              {/* Inline new-bank-deposit details */}
+              {isNewBank && (
+                <div className="space-y-3 rounded-lg border border-sky-500/20 bg-sky-500/5 p-3">
+                  <div className="flex items-center gap-2">
+                    <Building2 className="w-3.5 h-3.5 text-sky-300" />
+                    <p className="text-xs font-semibold text-sky-300">New bank deposit details</p>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs text-muted-foreground">Bank name</Label>
+                    <Input
+                      placeholder="e.g. Equity Bank"
+                      value={newBank.bankName}
+                      onChange={(e) => setNewBank((b) => ({ ...b, bankName: e.target.value }))}
+                      className="bg-white/5 border-white/10 h-9 text-sm"
+                    />
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="space-y-1.5">
+                      <Label className="text-xs text-muted-foreground">Type</Label>
+                      <Select
+                        value={newBank.instrumentType}
+                        onValueChange={(v) => setNewBank((b) => ({ ...b, instrumentType: v as BankInstrumentType }))}
+                      >
+                        <SelectTrigger className="bg-white/5 border-white/10 h-9 text-sm">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent className="bg-[#0d1117] border-white/10">
+                          {BANK_INSTRUMENT_TYPES.map((t) => (
+                            <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs text-muted-foreground">Rate (% p.a.)</Label>
+                      <Input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        placeholder="e.g. 10.5"
+                        value={newBank.interestRate}
+                        onChange={(e) => setNewBank((b) => ({ ...b, interestRate: e.target.value }))}
+                        className="bg-white/5 border-white/10 font-mono h-9 text-sm"
+                      />
+                    </div>
+                  </div>
+                  {isTermBankInstrument(newBank.instrumentType) && (
+                    <div className="space-y-1.5">
+                      <Label className="text-xs text-muted-foreground">Tenor (months)</Label>
+                      <Input
+                        type="number"
+                        min="1"
+                        step="1"
+                        placeholder="e.g. 12"
+                        value={newBank.tenorMonths}
+                        onChange={(e) => setNewBank((b) => ({ ...b, tenorMonths: e.target.value }))}
+                        className="bg-white/5 border-white/10 font-mono h-9 text-sm"
+                      />
+                      <p className="text-xs text-muted-foreground">Maturity is set automatically from the deposit date. Early withdrawal usually forfeits interest.</p>
+                    </div>
+                  )}
+                  <p className="text-xs text-muted-foreground">Bank rates are indicative and usually negotiable. You can edit this deposit later on the Other Assets page.</p>
+                </div>
+              )}
 
               {/* Amount */}
               <div className="space-y-1.5">
@@ -7676,10 +10325,10 @@ export function DepositDrawer({ open, onClose }: DepositDrawerProps) {
 
               <Button
                 onClick={handleSubmit}
-                disabled={addMutation.isPending}
+                disabled={addMutation.isPending || createBankHolding.isPending}
                 className="w-full bg-primary hover:bg-primary/90 text-primary-foreground font-semibold"
               >
-                {addMutation.isPending ? "Saving…" : "Record Deposit"}
+                {addMutation.isPending || createBankHolding.isPending ? "Saving…" : isNewBank ? "Open Deposit & Record" : "Record Deposit"}
               </Button>
             </div>
           )}
@@ -8649,7 +11298,7 @@ interface Props {
 
 export function UpdateRatesPanel({ portfolioId }: Props) {
   const utils = trpc.useUtils();
-  const { fundName: selectedFundName, fundLabel: selectedFundLabel } = useSelectedFund();
+  const { fundName: selectedFundName, fundLabel: selectedFundLabel, fundEar: selectedFundEar, hasFund } = useSelectedFund();
   const { data: settings, isLoading } = trpc.settings.get.useQuery({ portfolioId });
 
   const [mmfYield, setMmfYield] = useState("");
@@ -8817,21 +11466,37 @@ export function UpdateRatesPanel({ portfolioId }: Props) {
           <div className="space-y-4">
             <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Enter New Rates (% p.a., gross before WHT)</p>
             <div className="rounded-lg border border-border/50 bg-background/40 p-3 text-xs text-muted-foreground">
-              <span className="font-medium text-foreground">Which rate is used where?</span> The projection engine and accrual ledger use the <span className="font-medium text-amber-300">MMF Yield</span> you set here (gross, before WHT). Your selected fund <span className="font-medium text-foreground">{selectedFundName}</span> publishes its own effective annual yield, which you can copy into the MMF Yield field to keep them aligned. T-Bill / IFB / FXD rates feed the corresponding buckets only.
+              <span className="font-medium text-foreground">Which rate is used where?</span>{" "}
+              {hasFund ? (
+                <>The projection and accrual ledger use <span className="font-medium text-foreground">{selectedFundName}</span>'s published effective annual yield (<span className="font-medium text-amber-300">{selectedFundEar.toFixed(2)}% gross</span>) — the manual MMF Yield field below is ignored while a fund is selected. T-Bill / IFB / FXD rates feed the corresponding buckets only.</>
+              ) : (
+                <>No fund is selected, so the projection uses the manual <span className="font-medium text-amber-300">MMF Yield</span> below (gross, before WHT) as a fallback. Select a fund on the MMF Strategy page to drive it from the fund's EAR. T-Bill / IFB / FXD rates feed the corresponding buckets only.</>
+              )}
             </div>
             <div className="grid grid-cols-2 gap-3">
-              {[
-                { label: "MMF Yield", value: mmfYield, setter: setMmfYield },
-                { label: "Withholding Tax", value: withholdingTax, setter: setWithholdingTax },
-              ].map(({ label, value, setter }) => (
-                <div key={label} className="space-y-1">
-                  <Label className="text-xs">{label}</Label>
+              {hasFund ? (
+                <div className="space-y-1">
+                  <Label className="text-xs">{selectedFundLabel} Yield (authoritative)</Label>
+                  <div className="flex h-8 items-center rounded-md border border-border/50 bg-muted/40 px-2.5 text-sm font-medium text-foreground">
+                    {selectedFundEar.toFixed(2)}%
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-1">
+                  <Label className="text-xs">MMF Yield (fallback)</Label>
                   <div className="relative">
-                    <Input type="number" step="0.01" min="0" max="100" value={value} onChange={(e) => setter(e.target.value)} className="h-8 text-sm pr-8" onClick={(e) => e.stopPropagation()} />
+                    <Input type="number" step="0.01" min="0" max="100" value={mmfYield} onChange={(e) => setMmfYield(e.target.value)} className="h-8 text-sm pr-8" onClick={(e) => e.stopPropagation()} />
                     <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">%</span>
                   </div>
                 </div>
-              ))}
+              )}
+              <div className="space-y-1">
+                <Label className="text-xs">Withholding Tax</Label>
+                <div className="relative">
+                  <Input type="number" step="0.01" min="0" max="100" value={withholdingTax} onChange={(e) => setWithholdingTax(e.target.value)} className="h-8 text-sm pr-8" onClick={(e) => e.stopPropagation()} />
+                  <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">%</span>
+                </div>
+              </div>
             </div>
             <div className="grid grid-cols-3 gap-3">
               {[
@@ -8940,10 +11605,17 @@ import {
 import { toast } from "sonner";
 import { Landmark, Plus, Pencil, Trash2, Info, Percent } from "lucide-react";
 
+type BankInstrumentType =
+  | "call_deposit"
+  | "fixed_deposit"
+  | "ordinary_savings"
+  | "target_savings"
+  | "tiered_savings";
+
 interface BankRow {
   id: number;
   bankName: string;
-  instrumentType: "call_deposit" | "fixed_deposit";
+  instrumentType: BankInstrumentType;
   minAmount: number;
   typicalTenor: string | null;
   indicativeRate: number | null;
@@ -8966,7 +11638,7 @@ function kes(n: number): string {
 const EMPTY = {
   id: 0,
   bankName: "",
-  instrumentType: "fixed_deposit" as "call_deposit" | "fixed_deposit",
+  instrumentType: "fixed_deposit" as BankInstrumentType,
   minAmount: "0",
   typicalTenor: "",
   indicativeRate: "",
@@ -9014,6 +11686,18 @@ export default function BankInstruments() {
   );
   const fixedRows = useMemo(
     () => (rows ?? []).filter((r) => r.instrumentType === "fixed_deposit"),
+    [rows]
+  );
+  const ordinarySavingsRows = useMemo(
+    () => (rows ?? []).filter((r) => r.instrumentType === "ordinary_savings"),
+    [rows]
+  );
+  const targetSavingsRows = useMemo(
+    () => (rows ?? []).filter((r) => r.instrumentType === "target_savings"),
+    [rows]
+  );
+  const tieredSavingsRows = useMemo(
+    () => (rows ?? []).filter((r) => r.instrumentType === "tiered_savings"),
     [rows]
   );
 
@@ -9151,7 +11835,7 @@ export default function BankInstruments() {
             </div>
             <p className="text-muted-foreground text-sm max-w-3xl">
               Call and fixed deposit products from major Kenyan banks — a
-              reference for the cash/deposit alternatives to money market funds.
+              reference for the cash/deposit and savings alternatives to money market funds.
               Posted rates are indicative and almost always{" "}
               <strong>negotiable</strong> for larger balances; treat them as a
               starting point for your own rate conversation with the bank.
@@ -9190,6 +11874,45 @@ export default function BankInstruments() {
                 </CardDescription>
               </CardHeader>
               <CardContent>{renderTable(callRows)}</CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base flex items-center gap-2">
+                  <Percent className="w-4 h-4 text-primary" /> Ordinary / Regular Savings
+                </CardTitle>
+                <CardDescription>
+                  Instant or near-instant access savings accounts. Lower,
+                  variable rates; some limit withdrawals to keep interest.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>{renderTable(ordinarySavingsRows)}</CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base flex items-center gap-2">
+                  <Percent className="w-4 h-4 text-primary" /> Target / Goal Savings
+                </CardTitle>
+                <CardDescription>
+                  Locked for a chosen period to enforce discipline. Often higher
+                  than ordinary savings; early break usually carries a penalty.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>{renderTable(targetSavingsRows)}</CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base flex items-center gap-2">
+                  <Percent className="w-4 h-4 text-primary" /> Tiered / High-Yield Savings
+                </CardTitle>
+                <CardDescription>
+                  Rate rises with the balance band; the strongest savings rates
+                  but usually need a larger minimum to reach the top tier.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>{renderTable(tieredSavingsRows)}</CardContent>
             </Card>
           </>
         )}
@@ -9233,7 +11956,7 @@ export default function BankInstruments() {
                   onValueChange={(v) =>
                     setForm((f) => ({
                       ...f,
-                      instrumentType: v as "call_deposit" | "fixed_deposit",
+                      instrumentType: v as BankInstrumentType,
                     }))
                   }
                 >
@@ -9243,6 +11966,9 @@ export default function BankInstruments() {
                   <SelectContent>
                     <SelectItem value="fixed_deposit">Fixed Deposit</SelectItem>
                     <SelectItem value="call_deposit">Call Deposit</SelectItem>
+                    <SelectItem value="ordinary_savings">Ordinary / Regular Savings</SelectItem>
+                    <SelectItem value="target_savings">Target / Goal Savings</SelectItem>
+                    <SelectItem value="tiered_savings">Tiered / High-Yield Savings</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -9669,7 +12395,8 @@ import { Link } from "wouter";
 import { useDepositDrawer } from "@/contexts/DepositDrawerContext";
 import { useSelectedFund } from "@/hooks/useSelectedFund";
 import { CreatePortfolioDialog } from "@/components/PortfolioSelector";
-import { Plus, Compass } from "lucide-react";
+import { MaturityTimeline } from "@/components/MaturityTimeline";
+import { Plus, Compass, ArrowUpRight } from "lucide-react";
 import { useMemo, useState, useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { rateStaleness } from "@/lib/rateStaleness";
@@ -9763,6 +12490,18 @@ export default function Dashboard() {
     { enabled: !!portfolioId }
   );
   const secondaryMmfTotal = secondaryMmfs.reduce((sum, s) => sum + s.currentBalance, 0);
+  const { data: bankHoldings = [] } = trpc.bankHoldings.list.useQuery(
+    { portfolioId: portfolioId! },
+    { enabled: !!portfolioId }
+  );
+  const { data: concentration } = trpc.bankHoldings.concentration.useQuery(
+    { portfolioId: portfolioId! },
+    { enabled: !!portfolioId }
+  );
+  const { data: securities = [] } = trpc.securities.list.useQuery(
+    { portfolioId: portfolioId! },
+    { enabled: !!portfolioId }
+  );
   const updatePortfolioMutation = trpc.portfolios.update.useMutation({
     onSuccess: () => {
       toast.success("Target updated — projection recalculated");
@@ -9856,6 +12595,19 @@ export default function Dashboard() {
   const surplusOrShortfall = projectedFinalValue - targetAmount;
   const willHitTarget = projectedFinalValue >= targetAmount;
 
+  // ── End-state liquidity at the goal date (Fix #1 UI) ──
+  // Liquid = cash-equivalent at the horizon: primary MMF + secondary MMFs +
+  // bank balances (call deposits are liquid). Locked = CBK securities still
+  // held at the final month (these only exist if a tenor fits before the goal).
+  const liquidAtGoal =
+    (lastData?.mmfEnd ?? 0) + (lastData?.secondaryMmfEnd ?? 0) + (lastData?.bankEnd ?? 0);
+  const lockedAtGoal =
+    (lastData?.tbillEnd ?? 0) + (lastData?.ifbEnd ?? 0) + (lastData?.fxdEnd ?? 0);
+  const liquidPctAtGoal =
+    projectedFinalValue > 0 ? (liquidAtGoal / projectedFinalValue) * 100 : 100;
+  // "Fully liquid" if <0.5% is locked in securities maturing past the goal.
+  const landsFullyLiquid = lockedAtGoal < projectedFinalValue * 0.005;
+
   const chartData = useMemo(() => {
     if (!projection) return [];
     return projection.map((r) => ({
@@ -9865,8 +12617,16 @@ export default function Dashboard() {
       tbill: r.tbillEnd,
       ifb: r.ifbEnd,
       fxd: r.fxdEnd,
+      bank: r.bankEnd ?? 0,
     }));
   }, [projection]);
+
+  // Whether this portfolio holds any bank instrument (call/fixed deposit). Bank
+  // deposits are user-recorded actuals, so the band/card only appear when present.
+  const usesBankInstruments = useMemo(
+    () => !!projection?.some((r) => (r.bankEnd ?? 0) > 0),
+    [projection]
+  );
 
   // Whether this plan ever holds government securities (T-bills / IFB / FXD).
   // Short-horizon or MMF-only plans never do, so we avoid claiming "CBK securities".
@@ -9964,6 +12724,37 @@ export default function Dashboard() {
           </Badge>
         </div>
 
+        {/* ── Per-issuer concentration warning (Round 31) ──────────────── */}
+        {concentration && concentration.breaches.length > 0 && (
+          <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 flex gap-3">
+            <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+            <div className="text-xs text-amber-200/90 leading-relaxed space-y-1">
+              <p>
+                <strong className="text-amber-100">Concentration warning —</strong>{" "}
+                {concentration.breaches.length === 1 ? "one issuer holds" : `${concentration.breaches.length} issuers each hold`}{" "}
+                more than {(concentration.cap * 100).toFixed(0)}% of your net worth. Kenyan deposit insurance (KDIC) only covers
+                up to KES 500,000 per bank, so spreading large balances across institutions reduces single-bank risk.
+              </p>
+              <ul className="space-y-0.5">
+                {concentration.breaches.map((b) => (
+                  <li key={b.issuer}>
+                    <Link
+                      href={`/deposits?issuer=${encodeURIComponent(b.issuer)}`}
+                      className="group inline-flex items-center gap-1 hover:underline decoration-amber-300/50 underline-offset-2 cursor-pointer"
+                      title={`View ${b.issuer} holdings`}
+                    >
+                      <span className="text-amber-100 font-medium">{b.issuer}</span>: {formatKES(b.value)}{" "}
+                      (<span className="font-mono">{(b.share * 100).toFixed(1)}%</span> of {formatKES(concentration.netWorth)} net worth)
+                      <ArrowUpRight className="w-3 h-3 text-amber-300/70 group-hover:text-amber-200" />
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+              <p className="text-[11px] text-amber-200/60">Click an issuer to see its holdings.</p>
+            </div>
+          </div>
+        )}
+
         {/* ── What the engine projection means ───────────────────────────── */}
         <div className="rounded-xl border border-primary/20 bg-primary/5 p-4 flex gap-3">
           <Info className="w-4 h-4 text-primary shrink-0 mt-0.5" />
@@ -10033,6 +12824,21 @@ export default function Dashboard() {
                     </span>
                   )}
                 </p>
+                {!projLoading && projectedFinalValue > 0 && (
+                  <p className="text-xs mt-1">
+                    {landsFullyLiquid ? (
+                      <span className="text-emerald-400 inline-flex items-center gap-1">
+                        <CheckCircle2 className="w-3 h-3" /> Lands fully liquid at goal —
+                        {" "}{liquidPctAtGoal.toFixed(0)}% in cash/MMF, withdrawable on the goal date
+                      </span>
+                    ) : (
+                      <span className="text-amber-400 inline-flex items-center gap-1">
+                        <AlertTriangle className="w-3 h-3" /> {liquidPctAtGoal.toFixed(0)}% liquid at goal —
+                        {" "}{formatKES(lockedAtGoal)} still in securities at Month {horizonMonths}
+                      </span>
+                    )}
+                  </p>
+                )}
               </div>
             </div>
 
@@ -10090,9 +12896,9 @@ export default function Dashboard() {
         <div>
           <p className="text-xs text-muted-foreground mb-3 flex items-center gap-1.5">
             <Info className="w-3 h-3" />
-            These are the <strong className="text-foreground">projected balances in each bucket at Month {horizonMonths}</strong> — how your money is spread across the four investment instruments at the end of the {horizonYearsLabel}-year plan. These figures are driven by your contribution schedule and interest rates, not your goal amount. To see how different step-up amounts affect your outcome, visit the <Link href="/scenarios"><span className="text-primary hover:underline cursor-pointer">Scenarios</span></Link> page.
+            These are the <strong className="text-foreground">projected balances in each bucket at Month {horizonMonths}</strong> — how your money is spread across your investment instruments at the end of the {horizonYearsLabel}-year plan. These figures are driven by your contribution schedule and interest rates, not your goal amount. To see how different step-up amounts affect your outcome, visit the <Link href="/scenarios"><span className="text-primary hover:underline cursor-pointer">Scenarios</span></Link> page.
           </p>
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className={`grid grid-cols-2 gap-4 ${usesBankInstruments ? "lg:grid-cols-5" : "lg:grid-cols-4"}`}>
             {projLoading ? (
               Array.from({ length: 4 }).map((_, i) => (
                 <Card key={i}><CardContent className="p-5"><Skeleton className="h-20 w-full" /></CardContent></Card>
@@ -10103,6 +12909,7 @@ export default function Dashboard() {
                 { title: "T-Bills", key: "tbillEnd" as const, subtitle: "CBK Treasury Bills", icon: TrendingUp, accent: false, tooltip: `Your total invested in CBK Treasury Bills at Year ${horizonYearsLabel}. T-bills are short-term (91–364 days), very safe government instruments. You earn a discount return (net ~7.5% p.a. after 15% WHT deducted at source).` },
                 { title: "IFB Holdings", key: "ifbEnd" as const, subtitle: "Tax-exempt bonds", icon: Shield, accent: false, tooltip: `Your total invested in Infrastructure Finance Bonds at Year ${horizonYearsLabel}. IFBs pay a semi-annual coupon (e.g. 12.5% p.a.) and are 100% tax-exempt — you keep every shilling of interest earned.` },
                 { title: "FXD Bonds", key: "fxdEnd" as const, subtitle: "Fixed coupon bonds", icon: Landmark, accent: false, tooltip: `Your total invested in Fixed Coupon Bonds at Year ${horizonYearsLabel}. FXDs pay a semi-annual coupon (e.g. 12.35% gross, ~10.5% net after 15% WHT). They provide predictable income but the WHT is deducted before you receive the coupon.` },
+                ...(usesBankInstruments ? [{ title: "Bank Deposits", key: "bankEnd" as const, subtitle: "Call / fixed deposits", icon: Landmark, accent: false, tooltip: `Your recorded bank call and fixed deposits, projected forward at their own rates (net of WHT) at Year ${horizonYearsLabel}. Call deposits are liquid like the MMF; fixed deposits lock for a tenor and forfeit interest if broken early.` }] : []),
               ].map(({ title, key, subtitle, icon, accent, tooltip }) => {
                 const bucketValue = lastData?.[key] ?? 0;
                 const pctOfTarget = targetAmount > 0 ? ((bucketValue / targetAmount) * 100).toFixed(1) : "0.0";
@@ -10244,6 +13051,9 @@ export default function Dashboard() {
                   <Area type="monotone" dataKey="tbill" name="T-Bills" stackId="1" stroke="oklch(0.70 0.12 160)" fill="oklch(0.70 0.12 160 / 0.1)" strokeWidth={1.5} />
                   <Area type="monotone" dataKey="ifb" name="IFB" stackId="1" stroke="oklch(0.78 0.14 85)" fill="url(#totalGrad)" strokeWidth={2} />
                   <Area type="monotone" dataKey="fxd" name="FXD" stackId="1" stroke="oklch(0.65 0.15 280)" fill="oklch(0.65 0.15 280 / 0.1)" strokeWidth={1.5} />
+                  {usesBankInstruments && (
+                    <Area type="monotone" dataKey="bank" name="Bank deposits" stackId="1" stroke="oklch(0.72 0.13 50)" fill="oklch(0.72 0.13 50 / 0.12)" strokeWidth={1.5} />
+                  )}
                 </AreaChart>
               </ResponsiveContainer>
             )}
@@ -10484,7 +13294,7 @@ export default function Dashboard() {
                 </span>
               </div>
             ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                 <div className="rounded-xl bg-emerald-500/10 border border-emerald-500/20 p-4 space-y-1">
                   <p className="text-xs font-medium uppercase tracking-widest text-emerald-400">Total Contributed</p>
                   <p className="text-2xl font-serif font-bold text-foreground kes-amount">
@@ -10533,6 +13343,24 @@ export default function Dashboard() {
                   <p className="text-xs text-emerald-400 mt-1">
                     IFB bonds: fully tax-exempt
                   </p>
+                </div>
+
+                <div className="rounded-xl bg-sky-500/10 border border-sky-500/20 p-4 space-y-1">
+                  <div className="flex items-center gap-1.5">
+                    <TrendingUp className="w-3.5 h-3.5 text-sky-400" />
+                    <p className="text-xs font-medium uppercase tracking-widest text-sky-400">Est. Interest Earned</p>
+                  </div>
+                  <p className="text-2xl font-serif font-bold text-sky-200 kes-amount">
+                    {formatKES(actualsSummary?.estInterestEarned ?? 0)}
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-2">
+                    Net of WHT, accrued from each deposit&rsquo;s date to today at the current fund yield (geometric daily compounding).
+                  </p>
+                  <Link href="/mmf-accrual">
+                    <span className="text-xs text-sky-400 hover:underline cursor-pointer mt-1 inline-flex items-center gap-1">
+                      Day-by-day ledger <ArrowRight className="w-3 h-3" />
+                    </span>
+                  </Link>
                 </div>
               </div>
             )}
@@ -10651,9 +13479,58 @@ export default function Dashboard() {
                   </div>
                 ))}
               </div>
+
+              {/* Rates for the specific instruments this portfolio actually holds */}
+              {(secondaryMmfs.length > 0 || bankHoldings.some((b) => b.isActive)) && (
+                <div className="mt-4 pt-4 border-t border-border">
+                  <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground mb-2">
+                    Your held instruments
+                  </p>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+                    {secondaryMmfs.map((s) => (
+                      <div key={`smmf-${s.id}`} className="bg-muted/50 rounded-lg p-3 text-center">
+                        <p className="text-xs text-muted-foreground mb-1 truncate" title={s.fundName}>{s.fundName}</p>
+                        <p className="text-sm font-bold text-emerald-400">{formatPct(s.ear)}</p>
+                        <p className="text-xs text-muted-foreground/70 mt-0.5">net ~{formatPct(s.ear * 0.85)}</p>
+                      </div>
+                    ))}
+                    {bankHoldings.filter((b) => b.isActive).map((b) => (
+                      <div key={`bank-${b.id}`} className="bg-muted/50 rounded-lg p-3 text-center">
+                        <p className="text-xs text-muted-foreground mb-1 truncate" title={`${b.bankName} ${b.instrumentType}`}>
+                          {b.label || b.bankName}
+                        </p>
+                        <p className="text-sm font-bold text-sky-400">{formatPct(b.interestRate)}</p>
+                        <p className="text-xs text-muted-foreground/70 mt-0.5">
+                          {b.instrumentType === "fixed_deposit" ? "fixed deposit" : "call deposit"}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </CardContent>
           </Card>
         )}
+
+        {/* ── 90-day maturity / liquidity strip (Round 33) ───────────────── */}
+        <MaturityTimeline
+          securities={securities as never}
+          bankHoldings={bankHoldings as never}
+          startISO={portfolio ? String(portfolio.startDate).split("T")[0] : undefined}
+          plan={
+            portfolio
+              ? {
+                  monthIntoPlan: (() => {
+                    const start = new Date(String(portfolio.startDate));
+                    const now = new Date();
+                    const m = (now.getFullYear() - start.getFullYear()) * 12 + (now.getMonth() - start.getMonth()) + 1;
+                    return Math.max(1, m);
+                  })(),
+                  horizonMonths: portfolio.horizonMonths ?? 0,
+                }
+              : undefined
+          }
+        />
 
       </div>
 
@@ -10735,12 +13612,15 @@ export default function Dashboard() {
 import { usePortfolio } from "@/contexts/PortfolioContext";
 import { useSelectedFund } from "@/hooks/useSelectedFund";
 import { useDepositDrawer } from "@/contexts/DepositDrawerContext";
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect, useRef } from "react";
 import { trpc } from "@/lib/trpc";
 import { formatKES } from "@/lib/format";
+import { earlyBreakWhatIf } from "@shared/actuals";
+import { BANK_INSTRUMENT_TYPES, isTermBankInstrument, bankInstrumentLabel, type BankInstrumentType } from "@shared/const";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Slider } from "@/components/ui/slider";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
@@ -10789,6 +13669,8 @@ import {
   Building2,
   PiggyBank,
   Pencil,
+  Zap,
+  AlertTriangle,
 } from "lucide-react";
 
 type Bucket = "mmf" | "tbill" | "ifb" | "fxd";
@@ -10803,12 +13685,15 @@ const EMPTY_BANK = {
   id: null as number | null,
   bankName: "",
   label: "",
-  instrumentType: "call_deposit" as "call_deposit" | "fixed_deposit",
+  instrumentType: "call_deposit" as BankInstrumentType,
   principal: "",
   interestRate: "",
   rateAsOfDate: new Date().toISOString().slice(0, 10),
   isNegotiable: true,
   tenorMonths: "",
+  maturityDate: "",
+  earlyBreakPenaltyPct: "",
+  maturityAction: "redeploy" as "redeploy" | "rollover",
   notes: "",
 };
 
@@ -10822,6 +13707,21 @@ export default function Deposits() {
   const { data: summary } = trpc.deposits.summary.useQuery({ portfolioId: portfolioId! }, { enabled: !!portfolioId });
   const { data: secondaries = [] } = trpc.secondaryMmfs.list.useQuery({ portfolioId: portfolioId! }, { enabled: !!portfolioId });
   const { data: bankHoldings = [] } = trpc.bankHoldings.list.useQuery({ portfolioId: portfolioId! }, { enabled: !!portfolioId });
+
+  // Issuer drill-down: arriving with ?issuer=<bank> (from the Dashboard
+  // concentration warning) highlights and scrolls to that issuer's holdings.
+  const [issuerFilter, setIssuerFilter] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
+    return new URLSearchParams(window.location.search).get("issuer");
+  });
+  const bankSectionRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (issuerFilter && bankHoldings.length > 0 && bankSectionRef.current) {
+      bankSectionRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }, [issuerFilter, bankHoldings.length]);
+  const issuerMatches = (name: string) =>
+    !!issuerFilter && name.trim().toLowerCase() === issuerFilter.trim().toLowerCase();
 
   const liveTarget = portfolio?.targetAmount ?? 0;
 
@@ -10872,17 +13772,91 @@ export default function Deposits() {
   const [bankForm, setBankForm] = useState(EMPTY_BANK);
   const [deleteBankId, setDeleteBankId] = useState<number | null>(null);
 
+  // ─── Per-deposit "Break now" (Round 33) ─────────────────────────────────
+  // Realize a term deposit's early-break what-if as an ACTUAL withdrawal: the
+  // full accrued value (principal + retained interest) is withdrawn today, the
+  // forfeited-interest penalty is recorded, and the emptied holding is closed.
+  const [breakHolding, setBreakHolding] = useState<
+    | {
+        id: number;
+        label: string;
+        principal: number;
+        netNow: number;
+        penalty: number;
+        accrued: number;
+      }
+    | null
+  >(null);
+  // Round 34: amount to break (defaults to full principal; user can break part).
+  const [breakAmount, setBreakAmount] = useState<string>("");
+
+  // Prorated figures for the currently-entered break amount. The row's what-if
+  // (accrued/penalty) is computed for the FULL principal; the broken portion's
+  // figures scale linearly with the fraction broken, matching the server, which
+  // forfeits interest only on `amount`.
+  const breakCalc = useMemo(() => {
+    if (!breakHolding) return null;
+    const principal = breakHolding.principal;
+    const amt = Math.min(Math.max(parseFloat(breakAmount) || 0, 0), principal);
+    const frac = principal > 0 ? amt / principal : 0;
+    const accruedOnPortion = Math.round(breakHolding.accrued * frac * 100) / 100;
+    const penalty = Math.round(breakHolding.penalty * frac * 100) / 100;
+    const netKept = Math.max(0, accruedOnPortion - penalty);
+    const isFull = amt >= principal - 0.005;
+    return { amt, frac, accruedOnPortion, penalty, netKept, isFull, principal };
+  }, [breakHolding, breakAmount]);
+  const breakNow = trpc.withdrawals.add.useMutation({
+    onSuccess: (res) => {
+      utils.bankHoldings.list.invalidate();
+      utils.deposits.summary.invalidate();
+      utils.deposits.list.invalidate();
+      utils.withdrawals.list.invalidate();
+      const forfeited = Number((res as { forfeitedInterest?: number }).forfeitedInterest ?? 0);
+      toast.success(
+        forfeited > 0
+          ? `Deposit broken early — KES ${forfeited.toLocaleString(undefined, { maximumFractionDigits: 0 })} interest forfeited`
+          : "Deposit broken and recorded as a withdrawal",
+      );
+      setBreakHolding(null);
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  function confirmBreakNow() {
+    if (!portfolioId || !breakHolding || !breakCalc) return;
+    if (breakCalc.amt <= 0) {
+      toast.error("Enter an amount greater than zero to break.");
+      return;
+    }
+    const kind = breakCalc.isFull ? "full" : "partial";
+    breakNow.mutate({
+      portfolioId,
+      sourceType: "bank_instrument",
+      bankHoldingId: breakHolding.id,
+      // Withdraw the chosen amount of PRINCIPAL. A full break empties and closes
+      // the holding; a partial break leaves the remaining balance active and
+      // continuing to accrue. The server forfeits interest only on this portion.
+      amount: breakCalc.amt,
+      withdrawalDate: new Date().toISOString().slice(0, 10),
+      reason: "Early break",
+      notes: `${kind === "full" ? "Fully broke" : "Partially broke"} term deposit early via Break now (broke KES ${breakCalc.amt.toLocaleString(undefined, { maximumFractionDigits: 0 })} of KES ${breakHolding.principal.toLocaleString(undefined, { maximumFractionDigits: 0 })}; kept KES ${breakCalc.netKept.toLocaleString(undefined, { maximumFractionDigits: 0 })} interest, forfeited KES ${breakCalc.penalty.toLocaleString(undefined, { maximumFractionDigits: 0 })} penalty)`,
+    });
+  }
+
   function openBankEdit(h: (typeof bankHoldings)[number]) {
     setBankForm({
       id: h.id,
       bankName: h.bankName,
       label: h.label ?? "",
-      instrumentType: h.instrumentType as "call_deposit" | "fixed_deposit",
+      instrumentType: h.instrumentType as BankInstrumentType,
       principal: String(h.principal),
       interestRate: String(h.interestRate),
       rateAsOfDate: h.rateAsOfDate ? new Date(h.rateAsOfDate).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10),
       isNegotiable: h.isNegotiable,
       tenorMonths: h.tenorMonths != null ? String(h.tenorMonths) : "",
+      maturityDate: h.maturityDate ? new Date(h.maturityDate).toISOString().slice(0, 10) : "",
+      earlyBreakPenaltyPct: (h as { earlyBreakPenaltyPct?: number }).earlyBreakPenaltyPct != null ? String((h as { earlyBreakPenaltyPct?: number }).earlyBreakPenaltyPct) : "",
+      maturityAction: ((h as { maturityAction?: "redeploy" | "rollover" }).maturityAction ?? "redeploy"),
       notes: h.notes ?? "",
     });
     setBankDialogOpen(true);
@@ -10893,6 +13867,7 @@ export default function Deposits() {
     if (!bankForm.bankName.trim()) { toast.error("Bank name is required"); return; }
     const principal = parseFloat(bankForm.principal) || 0;
     const interestRate = parseFloat(bankForm.interestRate) || 0;
+    const isTerm = isTermBankInstrument(bankForm.instrumentType);
     const common = {
       portfolioId,
       bankName: bankForm.bankName.trim(),
@@ -10901,7 +13876,11 @@ export default function Deposits() {
       interestRate,
       rateAsOfDate: bankForm.rateAsOfDate || undefined,
       isNegotiable: bankForm.isNegotiable,
-      tenorMonths: bankForm.tenorMonths ? parseInt(bankForm.tenorMonths) : undefined,
+      tenorMonths: isTerm && bankForm.tenorMonths ? parseInt(bankForm.tenorMonths) : undefined,
+      maturityDate: isTerm && bankForm.maturityDate ? bankForm.maturityDate : undefined,
+      payoutFrequency: isTerm ? ("maturity" as const) : ("on_call" as const),
+      earlyBreakPenaltyPct: isTerm && bankForm.earlyBreakPenaltyPct ? parseFloat(bankForm.earlyBreakPenaltyPct) : undefined,
+      maturityAction: isTerm ? bankForm.maturityAction : undefined,
       notes: bankForm.notes.trim() || undefined,
     };
     if (bankForm.id) {
@@ -11036,11 +14015,30 @@ export default function Deposits() {
       </div>
 
       {/* Bank Instruments */}
-      <div className="rounded-xl border border-white/10 bg-white/5 overflow-hidden">
+      <div ref={bankSectionRef} className={`rounded-xl border bg-white/5 overflow-hidden transition-colors ${issuerFilter ? "border-amber-400/40" : "border-white/10"}`}>
+        {issuerFilter ? (
+          <div className="px-5 py-2.5 bg-amber-500/10 border-b border-amber-400/30 flex items-center gap-2 text-xs">
+            <AlertTriangle className="w-3.5 h-3.5 text-amber-300 shrink-0" />
+            <span className="text-amber-100">
+              Showing holdings flagged for concentration at <span className="font-semibold">{issuerFilter}</span>.
+            </span>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-6 px-2 text-xs text-amber-200 hover:text-amber-50 hover:bg-amber-500/20 ml-auto"
+              onClick={() => {
+                setIssuerFilter(null);
+                if (typeof window !== "undefined") window.history.replaceState(null, "", "/deposits");
+              }}
+            >
+              Clear
+            </Button>
+          </div>
+        ) : null}
         <div className="px-5 py-4 border-b border-white/10 flex items-center gap-2">
           <Building2 className="w-4 h-4 text-sky-300" />
           <h2 className="text-sm font-semibold text-foreground">Bank Instruments</h2>
-          <span className="text-xs text-muted-foreground">— call & fixed deposits ({formatKES(bankTotal)})</span>
+          <span className="text-xs text-muted-foreground">— call, fixed, goal, ordinary & tiered savings ({formatKES(bankTotal)})</span>
           <Button
             size="sm"
             variant="outline"
@@ -11054,7 +14052,7 @@ export default function Deposits() {
           <div className="p-8 text-center space-y-2">
             <Building2 className="w-8 h-8 text-muted-foreground mx-auto opacity-30" />
             <p className="text-muted-foreground text-sm">No bank instruments tracked.</p>
-            <p className="text-muted-foreground text-xs">Add a call or fixed deposit to record money held at a commercial bank.</p>
+            <p className="text-muted-foreground text-xs">Add a call, fixed, goal/target, ordinary or tiered savings deposit to record money held at a commercial bank.</p>
           </div>
         ) : (
           <Table>
@@ -11065,19 +14063,34 @@ export default function Deposits() {
                 <TableHead className="text-muted-foreground text-xs text-right">Principal</TableHead>
                 <TableHead className="text-muted-foreground text-xs text-right">Rate</TableHead>
                 <TableHead className="text-muted-foreground text-xs">Rate as-of</TableHead>
+                <TableHead className="text-muted-foreground text-xs">Maturity / action</TableHead>
                 <TableHead className="text-muted-foreground text-xs w-20"></TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {bankHoldings.map((h) => (
-                <TableRow key={h.id} className="border-white/10 hover:bg-white/5">
+              {bankHoldings.map((h) => {
+                const isTerm = isTermBankInstrument(h.instrumentType);
+                const penaltyPct = Number((h as { earlyBreakPenaltyPct?: number }).earlyBreakPenaltyPct ?? 0);
+                const startISO = h.startDate ? new Date(h.startDate).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10);
+                const whatIf = isTerm && penaltyPct > 0
+                  ? earlyBreakWhatIf({
+                      principal: Number(h.principal) || 0,
+                      interestRate: Number(h.interestRate) || 0,
+                      whtRate: Number(h.whtRate ?? 15),
+                      startISO,
+                      earlyBreakPenaltyPct: penaltyPct,
+                    })
+                  : null;
+                const action = (h as { maturityAction?: "redeploy" | "rollover" }).maturityAction ?? "redeploy";
+                return (
+                <TableRow key={h.id} className={`border-white/10 transition-colors ${issuerMatches(h.bankName) ? "bg-amber-500/15 hover:bg-amber-500/20" : "hover:bg-white/5"}`}>
                   <TableCell className="text-sm text-foreground">
                     <div className="font-medium">{h.label || h.bankName}</div>
                     <div className="text-xs text-muted-foreground">{h.bankName}{h.isNegotiable ? " · negotiable" : ""}</div>
                   </TableCell>
                   <TableCell>
                     <Badge className="bg-sky-500/15 text-sky-300 border-sky-500/30 text-xs">
-                      {h.instrumentType === "fixed_deposit" ? "Fixed Deposit" : "Call Deposit"}
+                      {bankInstrumentLabel(h.instrumentType)}
                     </Badge>
                   </TableCell>
                   <TableCell className="text-right font-mono font-semibold text-foreground">{formatKES(h.principal)}</TableCell>
@@ -11085,8 +14098,50 @@ export default function Deposits() {
                   <TableCell className="text-xs text-muted-foreground">
                     {h.rateAsOfDate ? new Date(h.rateAsOfDate).toLocaleDateString("en-KE", { day: "numeric", month: "short", year: "numeric" }) : "—"}
                   </TableCell>
+                  <TableCell className="text-xs">
+                    {isTerm ? (
+                      <div className="space-y-0.5">
+                        <div className="text-foreground">
+                          {h.maturityDate ? new Date(h.maturityDate).toLocaleDateString("en-KE", { day: "numeric", month: "short", year: "numeric" }) : "No maturity set"}
+                        </div>
+                        <Badge variant="outline" className={action === "rollover" ? "text-[10px] border-amber-500/40 text-amber-300" : "text-[10px] border-emerald-500/40 text-emerald-300"}>
+                          {action === "rollover" ? "Auto-rollover" : "Redeploy to best yield"}
+                        </Badge>
+                        {whatIf ? (
+                          <div className="text-[10px] text-muted-foreground leading-tight pt-0.5">
+                            Break now → keep {formatKES(whatIf.netIfBrokenNow)}
+                            <span className="text-red-400"> (−{formatKES(whatIf.penaltyAmount)} penalty)</span>
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : (
+                      <span className="text-muted-foreground">On call · fully liquid</span>
+                    )}
+                  </TableCell>
                   <TableCell>
                     <div className="flex items-center gap-1">
+                      {/* Break now: only for active term deposits before maturity. */}
+                      {h.isActive && isTerm && h.maturityDate && new Date(h.maturityDate) > new Date() ? (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7 text-amber-300 hover:text-amber-200 hover:bg-amber-500/10"
+                          title="Break now — record an early withdrawal"
+                          onClick={() => {
+                            setBreakHolding({
+                              id: h.id,
+                              label: h.label || h.bankName,
+                              principal: Number(h.principal) || 0,
+                              netNow: whatIf ? whatIf.netIfBrokenNow : Number(h.principal) || 0,
+                              penalty: whatIf ? whatIf.penaltyAmount : 0,
+                              accrued: whatIf ? whatIf.accruedInterest : 0,
+                            });
+                            setBreakAmount(String(Number(h.principal) || 0));
+                          }}
+                        >
+                          <Zap className="w-3.5 h-3.5" />
+                        </Button>
+                      ) : null}
                       <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-foreground" onClick={() => openBankEdit(h)}>
                         <Pencil className="w-3.5 h-3.5" />
                       </Button>
@@ -11096,7 +14151,8 @@ export default function Deposits() {
                     </div>
                   </TableCell>
                 </TableRow>
-              ))}
+                );
+              })}
             </TableBody>
           </Table>
         )}
@@ -11189,11 +14245,12 @@ export default function Deposits() {
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label className="text-xs text-muted-foreground">Type</Label>
-                <Select value={bankForm.instrumentType} onValueChange={(v) => setBankForm((f) => ({ ...f, instrumentType: v as "call_deposit" | "fixed_deposit" }))}>
+                <Select value={bankForm.instrumentType} onValueChange={(v) => setBankForm((f) => ({ ...f, instrumentType: v as BankInstrumentType }))}>
                   <SelectTrigger className="bg-white/5 border-white/10 h-9 text-sm"><SelectValue /></SelectTrigger>
                   <SelectContent className="bg-[#0f1117] border-white/10">
-                    <SelectItem value="call_deposit">Call Deposit</SelectItem>
-                    <SelectItem value="fixed_deposit">Fixed Deposit</SelectItem>
+                    {BANK_INSTRUMENT_TYPES.map((t) => (
+                      <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>
@@ -11212,11 +14269,36 @@ export default function Deposits() {
                 <Input type="date" value={bankForm.rateAsOfDate} onChange={(e) => setBankForm((f) => ({ ...f, rateAsOfDate: e.target.value }))} className="bg-white/5 border-white/10 h-9 text-sm" />
               </div>
             </div>
-            {bankForm.instrumentType === "fixed_deposit" && (
-              <div className="space-y-1.5">
-                <Label className="text-xs text-muted-foreground">Tenor (months, optional)</Label>
-                <Input type="number" min="0" value={bankForm.tenorMonths} onChange={(e) => setBankForm((f) => ({ ...f, tenorMonths: e.target.value }))} placeholder="e.g. 12" className="bg-white/5 border-white/10 font-mono h-9 text-sm" />
-              </div>
+            {isTermBankInstrument(bankForm.instrumentType) && (
+              <>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs text-muted-foreground">Tenor (months)</Label>
+                    <Input type="number" min="0" value={bankForm.tenorMonths} onChange={(e) => setBankForm((f) => ({ ...f, tenorMonths: e.target.value }))} placeholder="e.g. 6" className="bg-white/5 border-white/10 font-mono h-9 text-sm" />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs text-muted-foreground">Maturity date</Label>
+                    <Input type="date" value={bankForm.maturityDate} onChange={(e) => setBankForm((f) => ({ ...f, maturityDate: e.target.value }))} className="bg-white/5 border-white/10 h-9 text-sm" />
+                  </div>
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs text-muted-foreground">Early-break penalty (% of interest forfeited if withdrawn early)</Label>
+                  <Input type="number" min="0" max="100" step="0.5" value={bankForm.earlyBreakPenaltyPct} onChange={(e) => setBankForm((f) => ({ ...f, earlyBreakPenaltyPct: e.target.value }))} placeholder="e.g. 25" className="bg-white/5 border-white/10 font-mono h-9 text-sm" />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs text-muted-foreground">At maturity</Label>
+                  <Select value={bankForm.maturityAction} onValueChange={(v) => setBankForm((f) => ({ ...f, maturityAction: v as "redeploy" | "rollover" }))}>
+                    <SelectTrigger className="bg-white/5 border-white/10 h-9 text-sm"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="redeploy">Redeploy to best yield (return to MMF, let the engine reinvest)</SelectItem>
+                      <SelectItem value="rollover">Auto-rollover (renew the same deposit at the same rate)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-[10px] text-muted-foreground leading-tight">
+                    Controls how the projection handles this deposit when it matures: send principal + interest back to the money-market fund for the yield-max allocator to reinvest, or renew it in place.
+                  </p>
+                </div>
+              </>
             )}
             <div className="flex items-center justify-between rounded-lg bg-white/5 border border-white/10 px-3 py-2.5">
               <div>
@@ -11270,6 +14352,102 @@ export default function Deposits() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Break now confirmation (Round 33) */}
+      <AlertDialog open={breakHolding !== null} onOpenChange={(o) => !o && setBreakHolding(null)}>
+        <AlertDialogContent className="bg-[#0d1117] border-white/10 text-foreground">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <Zap className="w-4 h-4 text-amber-300" /> Break “{breakHolding?.label}” now?
+            </AlertDialogTitle>
+            <AlertDialogDescription className="text-muted-foreground">
+              Records an actual early withdrawal today. Break the whole deposit, or just part of it — the remainder keeps accruing. It cannot auto-reverse.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          {breakHolding && breakCalc ? (
+            <div className="space-y-3">
+              {/* Amount to break */}
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <Label className="text-xs text-muted-foreground">Amount to break (KES)</Label>
+                  <div className="flex gap-1">
+                    <button
+                      type="button"
+                      className="text-[10px] px-1.5 py-0.5 rounded border border-white/10 text-muted-foreground hover:text-foreground hover:bg-white/5"
+                      onClick={() => setBreakAmount(String(Math.round(breakHolding.principal / 2)))}
+                    >
+                      Half
+                    </button>
+                    <button
+                      type="button"
+                      className="text-[10px] px-1.5 py-0.5 rounded border border-white/10 text-muted-foreground hover:text-foreground hover:bg-white/5"
+                      onClick={() => setBreakAmount(String(breakHolding.principal))}
+                    >
+                      Full
+                    </button>
+                  </div>
+                </div>
+                <Input
+                  type="number"
+                  min={0}
+                  max={breakHolding.principal}
+                  step={1000}
+                  value={breakAmount}
+                  onChange={(e) => setBreakAmount(e.target.value)}
+                  className="bg-white/5 border-white/10 h-9 text-sm font-mono"
+                />
+                <Slider
+                  value={[Math.min(breakCalc.amt, breakHolding.principal)]}
+                  min={0}
+                  max={breakHolding.principal}
+                  step={Math.max(1, Math.round(breakHolding.principal / 100))}
+                  onValueChange={(v: number[]) => setBreakAmount(String(Math.round(v[0])))}
+                  className="py-1"
+                />
+                <p className="text-[11px] text-muted-foreground">
+                  Breaking <span className="font-mono text-foreground">{formatKES(breakCalc.amt)}</span>{" "}
+                  of <span className="font-mono">{formatKES(breakHolding.principal)}</span>{" "}
+                  ({(breakCalc.frac * 100).toFixed(0)}%).{" "}
+                  {breakCalc.isFull ? (
+                    <span className="text-amber-300">Full break — the deposit will close.</span>
+                  ) : (
+                    <span className="text-emerald-300">{formatKES(breakHolding.principal - breakCalc.amt)} stays invested and keeps accruing.</span>
+                  )}
+                </p>
+              </div>
+
+              <div className="rounded-lg border border-white/10 bg-white/5 p-3 text-sm space-y-1.5">
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Principal freed up</span>
+                  <span className="font-mono font-semibold">{formatKES(breakCalc.amt)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Interest accrued on broken portion</span>
+                  <span className="font-mono">{formatKES(breakCalc.accruedOnPortion)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Early-break penalty</span>
+                  <span className="font-mono text-red-400">−{formatKES(breakCalc.penalty)}</span>
+                </div>
+                <div className="flex justify-between border-t border-white/10 pt-1.5">
+                  <span className="text-foreground">Net interest kept</span>
+                  <span className="font-mono font-semibold text-emerald-300">{formatKES(breakCalc.netKept)}</span>
+                </div>
+                <div className="flex justify-between border-t border-white/10 pt-1.5">
+                  <span className="text-foreground">Cash you receive today</span>
+                  <span className="font-mono font-semibold">{formatKES(breakCalc.amt + breakCalc.netKept)}</span>
+                </div>
+              </div>
+            </div>
+          ) : null}
+          <AlertDialogFooter>
+            <AlertDialogCancel className="border-white/10">Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmBreakNow} disabled={breakNow.isPending || !breakCalc || breakCalc.amt <= 0} className="bg-amber-600 hover:bg-amber-700 text-white">
+              {breakNow.isPending ? "Breaking…" : breakCalc?.isFull ? "Break in full" : "Break this amount"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
@@ -11314,9 +14492,35 @@ const GLOSSARY: { term: string; def: string }[] = [
   { term: "T-Bill", def: "A short-term government security sold at a discount over 91, 182 or 364 days. You earn the difference between the discounted price and the face value at maturity." },
   { term: "IFB (Infrastructure Bond)", def: "A long-dated government bond funding infrastructure. Its coupon is tax-exempt, making its net yield higher than a comparable taxable bond." },
   { term: "FXD (Fixed-Coupon Treasury Bond)", def: "A government bond paying a fixed semi-annual coupon (around 12.35% gross). The 15% WHT is deducted before the coupon reaches you." },
-  { term: "Call deposit", def: "A bank deposit that earns interest while remaining accessible on short notice. Rates are usually negotiable for larger balances." },
-  { term: "Fixed deposit", def: "A bank deposit locked for a set term at an agreed rate; interest is typically paid at maturity." },
+  { term: "Call deposit", def: "A liquid bank deposit that earns interest while remaining accessible on short notice (no fixed maturity). Rates are usually negotiable for larger balances and sit between an ordinary savings account and a fixed deposit." },
+  { term: "Fixed deposit", def: "A bank deposit locked for a set term at an agreed rate; principal plus interest is paid back at maturity. Breaking it early usually forfeits some interest (an early-break penalty)." },
+  { term: "Ordinary / regular savings", def: "An everyday bank savings account that is fully liquid and pays a modest, variable rate. Easy to access but typically the lowest yield of the bank options." },
+  { term: "Target / goal savings", def: "A savings account tied to a goal and a target date. It usually pays more than ordinary savings, but withdrawing before the target date may forfeit some interest." },
+  { term: "Tiered / high-yield savings", def: "A liquid savings account whose interest rate rises as your balance crosses set tiers, so larger balances earn a higher rate while staying accessible." },
+  { term: "Early-break penalty", def: "Interest you forfeit if you withdraw a term deposit (fixed or goal savings) before its maturity date. It is the cost of breaking the lock early, so term deposits should hold money you will not need until maturity." },
+  { term: "Issuer concentration / diversification", def: "How much of your money sits with any single bank or issuer. Spreading deposits across issuers limits credit risk; this tracker caps any one bank at roughly a quarter of the portfolio. Government securities are exempt because they are sovereign-backed." },
+  { term: "Sovereign vs bank credit risk", def: "Government securities (T-bills, bonds) are backed by the state and carry sovereign risk; bank deposits depend on the bank staying solvent. When yields are close, the tracker prefers the government instrument for its stronger backing." },
+  { term: "Redeployment / rollover at maturity", def: "When a deposit or security matures, its principal and interest return to the MMF and are re-invested into the best eligible instrument that still matures before your goal date - or kept in the MMF if nothing fits. The Month Ledger shows each move in plain language." },
+  { term: "Yield-maximising allocation", def: "The rule the engine uses to place each tranche of cash: keep the safety floor liquid, then choose the eligible instrument with the highest net-of-tax yield that matures before your goal, applying a small preference for government backing and a per-bank concentration cap." },
   { term: "Duration", def: "A measure of how sensitive a bond's price is to interest-rate changes. Longer duration means larger price swings when rates move." },
+  { term: "Gross yield", def: "The headline interest rate before any tax is taken out. It looks higher than what you actually keep." },
+  { term: "Net yield", def: "What you actually keep after withholding tax is deducted. Net = gross x (1 - WHT). This is the number that matters for reaching your goal." },
+  { term: "Day-count basis", def: "The convention for counting days in a year when calculating interest (usually Actual/365 in Kenya). It decides how a daily interest figure is derived from an annual rate." },
+  { term: "Daily compounding", def: "Interest is added to your balance every day, so the next day's interest is calculated on a slightly larger balance. Over a year this beats simple (once-a-year) interest." },
+  { term: "MMF (Money Market Fund)", def: "A regulated fund that pools investors' money into safe, short-term instruments. It pays interest daily, is usually withdrawable within 1-3 days, and has no early-exit penalty." },
+  { term: "Savings deposit", def: "An ordinary or instant-access bank account paying a variable, usually lower, interest rate. Easy to access but often the lowest yield." },
+  { term: "Coupon", def: "The interest payment a bond makes to you, usually twice a year, expressed as a percentage of the bond's face value." },
+  { term: "Maturity", def: "The date a security (T-bill, bond or fixed deposit) ends and the principal is returned to you. After maturity the cash is liquid again." },
+  { term: "Tenor", def: "How long a security or deposit runs from start to maturity - e.g. a 182-day T-bill has a 182-day tenor." },
+  { term: "Sweep", def: "Moving surplus cash out of the MMF into a higher-yielding security (such as a T-bill or bond) once you have more than your safety floor. This tracker sweeps automatically in the projection." },
+  { term: "Safety floor", def: "The minimum cash kept liquid in the MMF before any sweep. It is your working buffer so you are never forced to break a locked instrument early." },
+  { term: "Liquidity", def: "How quickly an asset can be turned into spendable cash without loss. MMF and call deposits are highly liquid; fixed deposits and bonds are locked until maturity." },
+  { term: "Phases", def: "The four stages of the plan - Foundation, Growth, De-risking and Final liquidity - that shift the mix from building up, to maximising yield, to locking in gains, to holding cash for the goal date." },
+  { term: "Step-up", def: "A scheduled increase in your monthly contribution (e.g. +KES 5,000 every 6 months) that accelerates progress toward the target." },
+  { term: "Reconciliation", def: "An independent cross-check that the 'today' value of your portfolio agrees across every source - sum of holdings, the projection engine, the dashboard total and the net-worth card. When they disagree, the mismatch is shown so the cause can be traced." },
+  { term: "Blended yield", def: "The single weighted-average yield across all your holdings combined, weighting each instrument by how much money sits in it." },
+  { term: "Tax drag", def: "The amount of yield you lose to withholding tax - the gap between your blended gross yield and your blended net yield. Tax-exempt IFBs reduce tax drag." },
+  { term: "Net worth", def: "The total of everything you actually hold right now - primary MMF, any secondary MMFs, bank deposits, CBK securities and other assets - based on real recorded money, not projections." },
 ];
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -13019,9 +16223,29 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
-import { BookOpen, RefreshCw, Search } from "lucide-react";
-import { useState, useMemo } from "react";
+import { BookOpen, RefreshCw, Search, Info, Download, ChevronDown } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { toast } from "sonner";
+import { toCsv, downloadCsv, slugify } from "@shared/csv";
+
+/** Read the ?focus=<month> query param once on mount (deep-link from the Dashboard timeline). */
+function useFocusMonth(): number | null {
+  return useMemo(() => {
+    if (typeof window === "undefined") return null;
+    const v = new URLSearchParams(window.location.search).get("focus");
+    const n = v ? parseInt(v, 10) : NaN;
+    return Number.isFinite(n) && n >= 1 ? n : null;
+  }, []);
+}
 
 export default function Ledger() {
   const { portfolioId, portfolio } = usePortfolio();
@@ -13035,9 +16259,14 @@ export default function Ledger() {
   });
   const handleSync = () => { if (portfolioId) syncMutation.mutate({ portfolioId }); };
 
+  const focusMonth = useFocusMonth();
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
+  const [highlightMonth, setHighlightMonth] = useState<number | null>(null);
+  const focusRowRef = useRef<HTMLTableRowElement | null>(null);
   const pageSize = 24;
+
+  const startDate = portfolio?.startDate ? String(portfolio.startDate).split("T")[0] : "2026-07-01";
 
   const filtered = useMemo(() => {
     if (!projection) return [];
@@ -13054,7 +16283,107 @@ export default function Ledger() {
   const totalPages = Math.ceil(filtered.length / pageSize);
   const paged = filtered.slice((page - 1) * pageSize, page * pageSize);
 
-  const startDate = portfolio?.startDate ? String(portfolio.startDate).split("T")[0] : "2026-07-01";
+  // Deep-link: when arriving with ?focus=<month>, jump to the page holding that
+  // month (clearing any search filter so the row is reachable) and flash it.
+  useEffect(() => {
+    if (!focusMonth || !projection || projection.length === 0) return;
+    const idx = projection.findIndex((r) => r.monthNumber === focusMonth);
+    if (idx < 0) return;
+    if (search) setSearch("");
+    const targetPage = Math.floor(idx / pageSize) + 1;
+    setPage(targetPage);
+    setHighlightMonth(focusMonth);
+    const t = setTimeout(() => setHighlightMonth(null), 2600);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusMonth, projection]);
+
+  // Scroll the highlighted row into view once it is rendered on the active page.
+  useEffect(() => {
+    if (highlightMonth && focusRowRef.current) {
+      focusRowRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  }, [highlightMonth, page]);
+
+  // Column totals over the CURRENTLY FILTERED set (so they track the search box).
+  // Save and the two cash-in columns are flows, so they sum across months. The
+  // balance columns (MMF/T-Bill/.../Total) are point-in-time, so the meaningful
+  // "total" is the balance at the LAST month in view, not a sum of every month.
+  const totals = useMemo(() => {
+    const sum = (sel: (r: (typeof filtered)[number]) => number) =>
+      filtered.reduce((s, r) => s + (sel(r) || 0), 0);
+    const last = filtered.length > 0 ? filtered[filtered.length - 1] : undefined;
+    return {
+      contribution: sum((r) => r.contribution),
+      cbkCashIn: sum((r) => r.cbkCashIn),
+      bankCashIn: sum((r) => r.bankCashIn),
+      mmfToDhow: sum((r) => r.mmfToDhow),
+      endMmf: last?.mmfEnd ?? 0,
+      endTbill: last?.tbillEnd ?? 0,
+      endIfb: last?.ifbEnd ?? 0,
+      endFxd: last?.fxdEnd ?? 0,
+      endBank: last?.bankEnd ?? 0,
+      endTotal: last?.totalEnd ?? 0,
+      lastMonth: last?.monthNumber ?? 0,
+    };
+  }, [filtered]);
+
+  // CSV export. `scope` chooses the full projection or just the filtered rows.
+  // Raw numeric values (no "KES"/thousands formatting) so it opens cleanly in
+  // spreadsheets, and a trailing TOTAL line mirrors the on-screen footer.
+  const handleExportCsv = (scope: "full" | "filtered") => {
+    const rowsSrc = scope === "filtered" ? filtered : projection ?? [];
+    if (rowsSrc.length === 0) {
+      toast.error("Nothing to export yet");
+      return;
+    }
+    const headers = [
+      "Month", "Basis", "Date", "Save", "CBK In", "Bank In", "MMF->Securities",
+      "Main Action", "MMF End", "T-Bill", "IFB", "FXD", "Bank", "Total", "Phase",
+    ];
+    const rows = rowsSrc.map((r) => [
+      r.monthNumber,
+      r.isActual ? "Actual" : "Projected",
+      getMonthLabel(startDate, r.monthNumber),
+      r.contribution,
+      r.cbkCashIn,
+      r.bankCashIn,
+      r.mmfToDhow,
+      r.mainAction ?? "",
+      r.mmfEnd,
+      r.tbillEnd,
+      r.ifbEnd,
+      r.fxdEnd,
+      r.bankEnd,
+      r.totalEnd,
+      getPhaseName(r.phase),
+    ]);
+    const last = rowsSrc[rowsSrc.length - 1];
+    const flowSum = (sel: (r: (typeof rowsSrc)[number]) => number) =>
+      rowsSrc.reduce((s, r) => s + (sel(r) || 0), 0);
+    const totalRow = [
+      "TOTAL", "", `${rowsSrc.length} months`,
+      flowSum((r) => r.contribution),
+      flowSum((r) => r.cbkCashIn),
+      flowSum((r) => r.bankCashIn),
+      flowSum((r) => r.mmfToDhow),
+      `Ending balances at month ${last.monthNumber}`,
+      last.mmfEnd, last.tbillEnd, last.ifbEnd, last.fxdEnd, last.bankEnd, last.totalEnd,
+      "",
+    ];
+    const csv = toCsv(headers, [...rows, totalRow]);
+    const stamp = new Date().toISOString().split("T")[0];
+    const suffix = scope === "filtered" ? "-filtered" : "";
+    downloadCsv(csv, `ledger-${slugify(portfolio?.name)}${suffix}-${stamp}.csv`);
+    toast.success(`Exported ${rowsSrc.length} months to CSV`);
+  };
+
+  // Where do recorded actuals end and the forward projection begin? The engine
+  // tags every month it seeded from real holdings with isActual=true.
+  const actualMonths = (projection ?? []).filter((r) => r.isActual).length;
+  const lastActualMonth = actualMonths > 0
+    ? Math.max(...(projection ?? []).filter((r) => r.isActual).map((r) => r.monthNumber))
+    : 0;
 
   return (
     <AppShell>
@@ -13065,26 +16394,63 @@ export default function Ledger() {
               Month-by-Month Ledger
             </h1>
             <p className="text-sm text-muted-foreground mt-0.5">
-              Complete 120-month projection of your investment journey
+              {lastActualMonth > 0
+                ? `Months 1–${lastActualMonth} reflect your recorded holdings; later months are a forward projection.`
+                : "Complete forward projection of your investment journey. Record deposits to anchor early months to actuals."}
             </p>
           </div>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleSync}
-            disabled={syncMutation.isPending}
-            className="gap-2"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${syncMutation.isPending ? "animate-spin" : ""}`} />
-            Sync
-          </Button>
+          <div className="flex items-center gap-2">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={!projection || projection.length === 0}
+                  className="gap-2"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  Download CSV
+                  <ChevronDown className="w-3.5 h-3.5" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-56">
+                <DropdownMenuLabel>Export scope</DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={() => handleExportCsv("full")}>
+                  Full projection ({projection?.length ?? 0} months)
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => handleExportCsv("filtered")}
+                  disabled={!search || filtered.length === 0}
+                >
+                  {search
+                    ? `Filtered view (${filtered.length} months)`
+                    : "Filtered view (no filter active)"}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleSync}
+              disabled={syncMutation.isPending}
+              className="gap-2"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${syncMutation.isPending ? "animate-spin" : ""}`} />
+              Sync
+            </Button>
+          </div>
         </div>
 
         <Card>
           <CardHeader className="pb-3">
             <div className="flex items-center gap-3">
               <BookOpen className="w-4 h-4 text-primary" />
-              <CardTitle className="text-sm font-semibold">Transaction Ledger</CardTitle>
+                <CardTitle className="text-sm font-semibold">Transaction Ledger</CardTitle>
+              <div className="hidden sm:flex items-center gap-3 text-[11px] text-muted-foreground">
+                <span className="inline-flex items-center gap-1.5"><span className="inline-block w-2.5 h-2.5 rounded-sm bg-emerald-500/30 border border-emerald-500/50" />Actual</span>
+                <span className="inline-flex items-center gap-1.5"><span className="inline-block w-2.5 h-2.5 rounded-sm bg-muted border border-border" />Projected</span>
+              </div>
               <div className="ml-auto flex items-center gap-2">
                 <div className="relative">
                   <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
@@ -13104,15 +16470,18 @@ export default function Ledger() {
                 <thead>
                   <tr className="border-b border-border bg-muted/30">
                     <th className="text-left px-4 py-3 text-muted-foreground font-medium whitespace-nowrap">Mth</th>
+                    <th className="text-left px-4 py-3 text-muted-foreground font-medium whitespace-nowrap">Basis</th>
                     <th className="text-left px-4 py-3 text-muted-foreground font-medium whitespace-nowrap">Date</th>
                     <th className="text-right px-4 py-3 text-muted-foreground font-medium whitespace-nowrap">Save</th>
                     <th className="text-right px-4 py-3 text-muted-foreground font-medium whitespace-nowrap">CBK In</th>
+                    <th className="text-right px-4 py-3 text-muted-foreground font-medium whitespace-nowrap">Bank In</th>
                     <th className="text-right px-4 py-3 text-muted-foreground font-medium whitespace-nowrap">MMF→Dhow</th>
                     <th className="text-left px-4 py-3 text-muted-foreground font-medium">Main Action</th>
                     <th className="text-right px-4 py-3 text-muted-foreground font-medium whitespace-nowrap">MMF End</th>
                     <th className="text-right px-4 py-3 text-muted-foreground font-medium whitespace-nowrap">T-Bill</th>
                     <th className="text-right px-4 py-3 text-muted-foreground font-medium whitespace-nowrap">IFB</th>
                     <th className="text-right px-4 py-3 text-muted-foreground font-medium whitespace-nowrap">FXD</th>
+                    <th className="text-right px-4 py-3 text-muted-foreground font-medium whitespace-nowrap">Bank</th>
                     <th className="text-right px-4 py-3 text-muted-foreground font-medium whitespace-nowrap">Total</th>
                     <th className="text-left px-4 py-3 text-muted-foreground font-medium whitespace-nowrap">Phase</th>
                   </tr>
@@ -13121,7 +16490,7 @@ export default function Ledger() {
                   {isLoading
                     ? Array.from({ length: 10 }).map((_, i) => (
                         <tr key={i} className="border-b border-border/50">
-                          {Array.from({ length: 12 }).map((_, j) => (
+                          {Array.from({ length: 13 }).map((_, j) => (
                             <td key={j} className="px-4 py-3">
                               <Skeleton className="h-3 w-full" />
                             </td>
@@ -13131,9 +16500,23 @@ export default function Ledger() {
                     : paged.map((r) => (
                         <tr
                           key={r.monthNumber}
-                          className="border-b border-border/40 hover:bg-muted/20 transition-colors"
+                          ref={r.monthNumber === highlightMonth ? focusRowRef : undefined}
+                          className={`border-b border-border/40 transition-colors ${
+                            r.monthNumber === highlightMonth
+                              ? "bg-primary/20 ring-1 ring-primary/50"
+                              : r.isActual
+                              ? "bg-emerald-500/5 hover:bg-emerald-500/10"
+                              : "hover:bg-muted/20"
+                          } ${r.monthNumber === lastActualMonth ? "border-b-2 border-b-emerald-500/40" : ""}`}
                         >
                           <td className="px-4 py-2.5 font-semibold text-foreground">{r.monthNumber}</td>
+                          <td className="px-4 py-2.5">
+                            {r.isActual ? (
+                              <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-emerald-500/40 text-emerald-300">Actual</Badge>
+                            ) : (
+                              <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-border text-muted-foreground">Proj.</Badge>
+                            )}
+                          </td>
                           <td className="px-4 py-2.5 text-muted-foreground whitespace-nowrap">
                             {getMonthLabel(startDate, r.monthNumber)}
                           </td>
@@ -13146,12 +16529,61 @@ export default function Ledger() {
                             ) : "–"}
                           </td>
                           <td className="px-4 py-2.5 text-right kes-amount">
+                            {r.bankCashIn > 0 ? (
+                              <span className="status-on-track font-medium">{formatKES(r.bankCashIn)}</span>
+                            ) : "–"}
+                          </td>
+                          <td className="px-4 py-2.5 text-right kes-amount">
                             {r.mmfToDhow > 0 ? (
                               <span className="text-primary font-medium">{formatKES(r.mmfToDhow)}</span>
                             ) : "–"}
                           </td>
-                          <td className="px-4 py-2.5 text-muted-foreground max-w-xs truncate" title={r.mainAction}>
-                            {r.mainAction}
+                          <td className="px-4 py-2.5 text-muted-foreground max-w-xs">
+                            <div className="flex items-start gap-1.5">
+                              <span className="truncate" title={r.mainAction}>{r.mainAction}</span>
+                              {r.sweepRationale && (
+                                <TooltipProvider delayDuration={150}>
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <button
+                                        type="button"
+                                        className="mt-0.5 shrink-0 text-muted-foreground/70 hover:text-primary transition-colors"
+                                        aria-label="Why this instrument was chosen"
+                                      >
+                                        <Info className="w-3.5 h-3.5" />
+                                      </button>
+                                    </TooltipTrigger>
+                                    <TooltipContent side="top" align="start" className="max-w-sm text-xs space-y-2 p-3">
+                                      <p className="font-semibold text-foreground">
+                                        Why this instrument? — KES {Math.round(r.sweepRationale.amount).toLocaleString()} swept
+                                      </p>
+                                      <p className="leading-relaxed text-muted-foreground">{r.sweepRationale.summary}</p>
+                                      <div className="pt-1">
+                                        <p className="font-medium text-foreground mb-1">Net-of-tax yield ranking</p>
+                                        <div className="space-y-0.5">
+                                          {r.sweepRationale.candidates.map((c) => (
+                                            <div
+                                              key={c.bucket}
+                                              className={`flex items-center justify-between gap-3 ${c.chosen ? "text-foreground font-medium" : "text-muted-foreground"}`}
+                                            >
+                                              <span className="flex items-center gap-1.5">
+                                                <span className="tabular-nums opacity-60">#{c.rank}</span>
+                                                {c.label}
+                                                {c.chosen && <span className="text-emerald-500">✓</span>}
+                                              </span>
+                                              <span className="tabular-nums">
+                                                {c.netPct.toFixed(2)}% net
+                                                <span className="opacity-50"> ({c.taxNote})</span>
+                                              </span>
+                                            </div>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    </TooltipContent>
+                                  </Tooltip>
+                                </TooltipProvider>
+                              )}
+                            </div>
                           </td>
                           <td className="px-4 py-2.5 text-right kes-amount text-foreground font-medium">
                             {formatKES(r.mmfEnd)}
@@ -13164,6 +16596,9 @@ export default function Ledger() {
                           </td>
                           <td className="px-4 py-2.5 text-right kes-amount text-muted-foreground">
                             {r.fxdEnd > 0 ? formatKES(r.fxdEnd) : "–"}
+                          </td>
+                          <td className="px-4 py-2.5 text-right kes-amount text-muted-foreground">
+                            {r.bankEnd > 0 ? formatKES(r.bankEnd) : "–"}
                           </td>
                           <td className="px-4 py-2.5 text-right kes-amount font-bold text-foreground">
                             {formatKES(r.totalEnd)}
@@ -13179,6 +16614,29 @@ export default function Ledger() {
                         </tr>
                       ))}
                 </tbody>
+                {!isLoading && filtered.length > 0 && (
+                  <tfoot>
+                    <tr className="border-t-2 border-border bg-muted/40 font-semibold text-foreground">
+                      <td className="px-4 py-3" colSpan={3}>
+                        Totals ({filtered.length} mo{search ? ", filtered" : ""})
+                      </td>
+                      <td className="px-4 py-3 text-right kes-amount">{formatKES(totals.contribution)}</td>
+                      <td className="px-4 py-3 text-right kes-amount">{totals.cbkCashIn > 0 ? formatKES(totals.cbkCashIn) : "–"}</td>
+                      <td className="px-4 py-3 text-right kes-amount">{totals.bankCashIn > 0 ? formatKES(totals.bankCashIn) : "–"}</td>
+                      <td className="px-4 py-3 text-right kes-amount">{totals.mmfToDhow > 0 ? formatKES(totals.mmfToDhow) : "–"}</td>
+                      <td className="px-4 py-3 text-left text-xs text-muted-foreground font-normal">
+                        Ending balances · month {totals.lastMonth}
+                      </td>
+                      <td className="px-4 py-3 text-right kes-amount">{formatKES(totals.endMmf)}</td>
+                      <td className="px-4 py-3 text-right kes-amount">{totals.endTbill > 0 ? formatKES(totals.endTbill) : "–"}</td>
+                      <td className="px-4 py-3 text-right kes-amount">{totals.endIfb > 0 ? formatKES(totals.endIfb) : "–"}</td>
+                      <td className="px-4 py-3 text-right kes-amount">{totals.endFxd > 0 ? formatKES(totals.endFxd) : "–"}</td>
+                      <td className="px-4 py-3 text-right kes-amount">{totals.endBank > 0 ? formatKES(totals.endBank) : "–"}</td>
+                      <td className="px-4 py-3 text-right kes-amount font-bold">{formatKES(totals.endTotal)}</td>
+                      <td className="px-4 py-3" />
+                    </tr>
+                  </tfoot>
+                )}
               </table>
             </div>
             {/* Pagination */}
@@ -13247,7 +16705,16 @@ import {
   Receipt,
   Layers,
 } from "lucide-react";
-import { simulateAccrual, type DayRow } from "@shared/accrual";
+import { simulateAccrual, oneDayInterest, geometricDailyRate, type DayRow } from "@shared/accrual";
+import {
+  buildSecurityIncome,
+  buildBankIncome,
+  type SecurityIncomeInput,
+  type BankIncomeInput,
+  type IncomeSummary,
+} from "@shared/incomeBreakdown";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Landmark, Building2 } from "lucide-react";
 
 /** Format a number as KES currency. */
 function kes(n: number, dp = 2): string {
@@ -13369,6 +16836,62 @@ export default function MmfAccrual() {
   const days = Math.max(1, Math.min(366, Number(horizon) || 30));
   const isBlended = selection === "blended";
 
+  // Round 34: asset-class tab — MMF (existing behaviour) / Govt securities / Bank instruments.
+  const [assetClass, setAssetClass] = useState<"mmf" | "securities" | "bank">("mmf");
+
+  // Data for the non-MMF breakdowns.
+  const { data: securitiesData = [] } = trpc.securities.list.useQuery(
+    { portfolioId: portfolioId! },
+    { enabled: !!portfolioId },
+  );
+  const { data: bankHoldingsData = [] } = trpc.bankHoldings.list.useQuery(
+    { portfolioId: portfolioId! },
+    { enabled: !!portfolioId },
+  );
+
+  const securityIncome: IncomeSummary = useMemo(
+    () =>
+      buildSecurityIncome(
+        (securitiesData as unknown[]).map((s) => {
+          const r = s as Record<string, unknown>;
+          return {
+            id: Number(r.id),
+            securityType: String(r.securityType) as SecurityIncomeInput["securityType"],
+            faceValue: Number(r.faceValue) || 0,
+            couponRate: Number(r.couponRate) || 0,
+            isTaxExempt: !!r.isTaxExempt,
+            maturityDate: (r.maturityDate as string | null) ?? null,
+            isMatured: !!r.isMatured,
+          } satisfies SecurityIncomeInput;
+        }),
+        days,
+      ),
+    [securitiesData, days],
+  );
+
+  const bankIncome: IncomeSummary = useMemo(
+    () =>
+      buildBankIncome(
+        (bankHoldingsData as unknown[]).map((b) => {
+          const r = b as Record<string, unknown>;
+          return {
+            id: Number(r.id),
+            bankName: String(r.bankName ?? ""),
+            label: (r.label as string | null) ?? null,
+            instrumentType: String(r.instrumentType) as BankIncomeInput["instrumentType"],
+            principal: Number(r.principal) || 0,
+            interestRate: Number(r.interestRate) || 0,
+            whtRate: Number(r.whtRate) || 15,
+            dayCountBasis: Number(r.dayCountBasis) || 365,
+            maturityDate: (r.maturityDate as string | null) ?? null,
+            isActive: r.isActive !== false,
+          } satisfies BankIncomeInput;
+        }),
+        days,
+      ),
+    [bankHoldingsData, days],
+  );
+
   const selectedAccount = useMemo(
     () => accounts.find((a) => a.key === selection) ?? accounts[0],
     [accounts, selection]
@@ -13425,12 +16948,13 @@ export default function MmfAccrual() {
     : effectivePrincipal;
   const finalBalance = rows.length ? rows[rows.length - 1].closingBalance : startingTotal;
 
-  // "If you withdrew today" — one full day across the active scope.
+  // "If you withdrew today" — one full day across the active scope, using the
+  // GEOMETRIC daily rate (consistent with the ledger table above).
   const oneDayGross = isBlended
-    ? perAccountRows.reduce((s, pa) => s + pa.startBal * (pa.account.ear / 100 / pa.account.dayCount), 0)
-    : effectivePrincipal * ((selectedAccount?.ear ?? 0) / 100 / (selectedAccount?.dayCount ?? 365));
+    ? perAccountRows.reduce((s, pa) => s + pa.startBal * geometricDailyRate(pa.account.ear, pa.account.dayCount), 0)
+    : oneDayInterest(effectivePrincipal, selectedAccount?.ear ?? 0, selectedAccount?.dayCount ?? 365, selectedAccount?.whtRate ?? 15).gross;
   const oneDayWht = isBlended
-    ? perAccountRows.reduce((s, pa) => s + pa.startBal * (pa.account.ear / 100 / pa.account.dayCount) * (pa.account.whtRate / 100), 0)
+    ? perAccountRows.reduce((s, pa) => s + pa.startBal * geometricDailyRate(pa.account.ear, pa.account.dayCount) * (pa.account.whtRate / 100), 0)
     : oneDayGross * ((selectedAccount?.whtRate ?? 15) / 100);
   const oneDayNet = oneDayGross - oneDayWht;
 
@@ -13454,7 +16978,7 @@ export default function MmfAccrual() {
           <div className="flex items-center gap-2">
             <CalendarClock className="w-5 h-5 text-primary" />
             <h1 className="text-2xl font-bold" style={{ fontFamily: "'Playfair Display', serif" }}>
-              Daily MMF Accrual Ledger
+              Daily Income & Accrual Ledger
             </h1>
           </div>
           <p className="text-muted-foreground text-sm max-w-3xl">
@@ -13467,6 +16991,17 @@ export default function MmfAccrual() {
           </p>
         </div>
 
+        {/* Round 34: asset-class selector */}
+        <Tabs value={assetClass} onValueChange={(v) => setAssetClass(v as "mmf" | "securities" | "bank")}>
+          <TabsList>
+            <TabsTrigger value="mmf" className="gap-1.5"><Coins className="w-3.5 h-3.5" /> MMF</TabsTrigger>
+            <TabsTrigger value="securities" className="gap-1.5"><Landmark className="w-3.5 h-3.5" /> Govt securities</TabsTrigger>
+            <TabsTrigger value="bank" className="gap-1.5"><Building2 className="w-3.5 h-3.5" /> Bank instruments</TabsTrigger>
+          </TabsList>
+        </Tabs>
+
+        {assetClass === "mmf" && (
+        <>
         {/* Account selector */}
         <Card className="border-primary/30 bg-primary/5">
           <CardContent className="py-4 space-y-4">
@@ -13768,8 +17303,118 @@ export default function MmfAccrual() {
             </p>
           </CardContent>
         </Card>
+        </>
+        )}
+
+        {assetClass === "securities" && (
+          <IncomeBreakdownSection
+            title="Government Securities — interest breakdown"
+            blurb="T-Bills earn a discount and Treasury bonds (FXD) pay a coupon, both taxed at 15% WHT. Infrastructure Bonds (IFB) are tax-exempt in Kenya. Figures are simple pro-rata of the annual gross over the chosen horizon (coupons/discounts do not compound intra-period like an MMF)."
+            summary={securityIncome}
+            days={days}
+            emptyHint="No live government securities in this portfolio. Add T-Bills, IFB, or FXD on the CBK Securities page."
+            baseLabel="Face value"
+          />
+        )}
+
+        {assetClass === "bank" && (
+          <IncomeBreakdownSection
+            title="Bank Instruments — interest breakdown"
+            blurb="Fixed, call, and savings deposits earn simple interest at their quoted rate, taxed at each holding's WHT rate (usually 15%). Figures are pro-rata of the annual gross over the chosen horizon on a 365-day-equivalent basis."
+            summary={bankIncome}
+            days={days}
+            emptyHint="No active bank instruments in this portfolio. Add fixed/call/target deposits on the Record Deposits → Bank page."
+            baseLabel="Principal"
+          />
+        )}
       </div>
     </AppShell>
+  );
+}
+
+/** Round 34: shared breakdown UI for non-MMF income (Govt securities / Bank instruments). */
+function IncomeBreakdownSection({
+  title,
+  blurb,
+  summary,
+  days,
+  emptyHint,
+  baseLabel,
+}: {
+  title: string;
+  blurb: string;
+  summary: IncomeSummary;
+  days: number;
+  emptyHint: string;
+  baseLabel: string;
+}) {
+  const empty = summary.rows.length === 0;
+  return (
+    <div className="space-y-6">
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">{title}</CardTitle>
+          <CardDescription>{blurb}</CardDescription>
+        </CardHeader>
+      </Card>
+
+      {empty ? (
+        <Card>
+          <CardContent className="py-10 text-center text-sm text-muted-foreground">{emptyHint}</CardContent>
+        </Card>
+      ) : (
+        <>
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            <Card><CardContent className="py-4"><div className="flex items-center gap-2 text-muted-foreground text-xs mb-1"><Coins className="w-3.5 h-3.5" /> Gross ({days}d)</div><p className="text-xl font-bold">{kes(summary.grossHorizon)}</p></CardContent></Card>
+            <Card><CardContent className="py-4"><div className="flex items-center gap-2 text-muted-foreground text-xs mb-1"><Receipt className="w-3.5 h-3.5" /> WHT</div><p className="text-xl font-bold text-red-500">−{kes(summary.whtHorizon)}</p></CardContent></Card>
+            <Card><CardContent className="py-4"><div className="flex items-center gap-2 text-muted-foreground text-xs mb-1"><TrendingUp className="w-3.5 h-3.5" /> Net ({days}d)</div><p className="text-xl font-bold text-primary">{kes(summary.netHorizon)}</p></CardContent></Card>
+            <Card><CardContent className="py-4"><div className="flex items-center gap-2 text-muted-foreground text-xs mb-1"><Percent className="w-3.5 h-3.5" /> Net / yr</div><p className="text-xl font-bold">{kes(summary.netAnnual)}</p></CardContent></Card>
+          </div>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Per-holding interest ({days}-day horizon)</CardTitle>
+              <CardDescription>Each row earns on its own {baseLabel.toLowerCase()} and rate. Totals above are the sum of these rows.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="rounded-md border overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Holding</TableHead>
+                      <TableHead>Kind</TableHead>
+                      <TableHead className="text-right">{baseLabel}</TableHead>
+                      <TableHead className="text-right">Rate</TableHead>
+                      <TableHead className="text-right">Gross ({days}d)</TableHead>
+                      <TableHead className="text-right">WHT</TableHead>
+                      <TableHead className="text-right">Net ({days}d)</TableHead>
+                      <TableHead className="text-right">Gross / yr</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {summary.rows.map((r) => (
+                      <TableRow key={r.id}>
+                        <TableCell className="font-medium">{r.label}</TableCell>
+                        <TableCell className="text-xs text-muted-foreground">
+                          {r.kind}
+                          {r.taxExempt && <Badge variant="secondary" className="ml-2">Tax-exempt</Badge>}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">{kes(r.base)}</TableCell>
+                        <TableCell className="text-right tabular-nums">{r.ratePct.toFixed(2)}%</TableCell>
+                        <TableCell className="text-right tabular-nums">{kes(r.grossHorizon)}</TableCell>
+                        <TableCell className="text-right tabular-nums text-red-500">{r.whtHorizon > 0 ? `−${kes(r.whtHorizon)}` : "—"}</TableCell>
+                        <TableCell className="text-right tabular-nums text-primary">{kes(r.netHorizon)}</TableCell>
+                        <TableCell className="text-right tabular-nums">{kes(r.grossAnnual)}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </CardContent>
+          </Card>
+        </>
+      )}
+    </div>
   );
 }
 ```
@@ -15812,6 +19457,8 @@ import { useMemo } from "react";
 import { AppShell } from "@/components/AppShell";
 import { usePortfolio } from "@/contexts/PortfolioContext";
 import { useSelectedFund } from "@/hooks/useSelectedFund";
+import { bankHoldingValue, buildAllocation, blendedYield } from "@shared/actuals";
+import { bankInstrumentLabel } from "@shared/const";
 import { trpc } from "@/lib/trpc";
 import {
   Card,
@@ -15839,7 +19486,9 @@ import {
   History,
   Target,
   Gauge,
+  Download,
 } from "lucide-react";
+import { toCsv, downloadCsv, slugify } from "@shared/csv";
 
 function kes(n: number, dp = 0): string {
   return n.toLocaleString("en-KE", {
@@ -15899,59 +19548,39 @@ export default function PortfolioReview() {
     { portfolioId: portfolioId! },
     { enabled: !!portfolioId }
   );
+  const { data: bankHoldings } = trpc.bankHoldings.list.useQuery(
+    { portfolioId: portfolioId! },
+    { enabled: !!portfolioId }
+  );
   const { data: audit } = trpc.audit.list.useQuery(
     { portfolioId: portfolioId!, limit: 25 },
     { enabled: !!portfolioId }
   );
-
-  // ─── Net worth allocation ───────────────────────────────────────────────
-  // MMF bucket = primary-MMF deposit rows only. Bank- and secondary-MMF
-  // deposits are represented by their own balances (secondaryTotal / holdings),
-  // and government securities are valued from the REGISTER (source of truth),
-  // so those deposit rows are excluded here to avoid double-counting.
-  const buckets = useMemo(() => {
-    const acc = { mmf: 0, tbill: 0, ifb: 0, fxd: 0 };
-    (deposits ?? []).forEach((d) => {
-      const inst = (d as { institutionType?: string | null }).institutionType;
-      if (inst === "government_security" || inst === "bank_instrument") return;
-      if (d.bucket === "mmf") acc.mmf += Number(d.amount);
-    });
-    (securities ?? []).forEach((s) => {
-      if (s.isMatured) return;
-      const face = Number(s.faceValue);
-      if (s.securityType.startsWith("tbill")) acc.tbill += face;
-      else if (s.securityType === "ifb") acc.ifb += face;
-      else acc.fxd += face;
-    });
-    return acc;
-  }, [deposits, securities]);
-
-  const secondaryTotal = useMemo(
-    () =>
-      (secondary ?? []).reduce(
-        (s: number, m: { currentBalance: number }) => s + Number(m.currentBalance ?? 0),
-        0
-      ),
-    [secondary]
+  const { data: pSettings } = trpc.settings.get.useQuery(
+    { portfolioId: portfolioId! },
+    { enabled: !!portfolioId }
   );
 
-  const allocation = useMemo(() => {
-    const items: { label: string; value: number }[] = [];
-    const fixedIncome =
-      buckets.mmf + buckets.tbill + buckets.ifb + buckets.fxd + secondaryTotal;
-    if (fixedIncome > 0)
-      items.push({ label: "Fixed Income (MMF + CBK)", value: fixedIncome });
-    const byClass: Record<string, number> = {};
-    (holdings ?? []).forEach((h) => {
-      byClass[h.assetClass] = (byClass[h.assetClass] ?? 0) + h.currentValue;
-    });
-    Object.entries(byClass).forEach(([k, v]) =>
-      items.push({ label: ASSET_LABELS[k] ?? k, value: v })
-    );
-    return items.sort((a, b) => b.value - a.value);
-  }, [buckets, holdings, secondaryTotal]);
-
-  const netWorth = allocation.reduce((s, a) => s + a.value, 0);
+  // ─── Net worth allocation (Round 32: single shared path) ────────────────
+  // `buildAllocation` is the ONE net-worth builder shared with Reconciliation.
+  // It excludes secondary-MMF and bank/government deposit ROWS from the
+  // primary-MMF bucket, fixing the prior double-count of secondary deposits.
+  const alloc = useMemo(
+    () =>
+      buildAllocation({
+        deposits: (deposits ?? []) as never,
+        securities: (securities ?? []) as never,
+        secondaryMmfs: (secondary ?? []) as never,
+        bankHoldings: (bankHoldings ?? []) as never,
+        otherHoldings: (holdings ?? []) as never,
+        assetLabels: ASSET_LABELS,
+        primaryFundId: fund.fundId,
+      }),
+    [deposits, securities, secondary, bankHoldings, holdings, fund.fundId]
+  );
+  const buckets = { mmf: alloc.primaryMmf, tbill: alloc.tbill, ifb: alloc.ifb, fxd: alloc.fxd };
+  const allocation = alloc.items;
+  const netWorth = alloc.netWorth;
 
   // ─── Benchmark comparison ───────────────────────────────────────────────
   const bench = useMemo(() => {
@@ -15962,9 +19591,40 @@ export default function PortfolioReview() {
     return map;
   }, [benchmarks]);
 
-  const yourYield = fund.fundEar;
+  // ─── Blended portfolio yield ────────────────────────────────────────────
+  // Balance-weighted gross yield across every tracked interest-bearing asset:
+  // primary MMF, secondary MMFs, bank instruments and CBK securities. This is
+  // the actual portfolio yield, not just the primary fund's quoted rate.
+  const blended = useMemo(() => {
+    const result = blendedYield({
+      primaryMmf: buckets.mmf,
+      primaryMmfRate: fund.fundEar,
+      secondaryMmfs: (secondary ?? []).map((s) => ({ balance: Number(s.currentBalance ?? 0), rate: Number(s.ear ?? 0) })),
+      bankHoldings: (bankHoldings ?? [])
+        .filter((b) => b.isActive)
+        .map((b) => ({ value: bankHoldingValue({ principal: Number(b.principal ?? 0), interestRate: Number(b.interestRate ?? 0), isActive: b.isActive, currentValue: Number(b.currentValue ?? 0) }), rate: Number(b.interestRate ?? 0) })),
+      securities: (securities ?? [])
+        .filter((s) => !s.isMatured && Number(s.faceValue ?? 0) > 0)
+        .map((s) => {
+          let rate: number;
+          if (s.securityType === "ifb") rate = bench["ifb_coupon"]?.value ?? 12.5;
+          else if (s.securityType === "fxd") rate = bench["fxd_coupon"]?.value ?? 12.35;
+          else rate = bench["tbill_91"]?.value ?? 8.82;
+          return { value: Number(s.faceValue ?? 0), rate, taxExempt: s.securityType === "ifb" };
+        }),
+      whtRate: pSettings?.withholdingTax ?? 15,
+    });
+    const partCount =
+      (buckets.mmf > 0 ? 1 : 0) +
+      (secondary ?? []).filter((s) => Number(s.currentBalance ?? 0) > 0).length +
+      (bankHoldings ?? []).filter((b) => b.isActive && Number(b.principal ?? 0) > 0).length +
+      (securities ?? []).filter((s) => !s.isMatured && Number(s.faceValue ?? 0) > 0).length;
+    return { yield: result.base > 0 ? result.grossYield : fund.fundEar, netYield: result.netYield, totalBal: result.base, partCount };
+  }, [buckets.mmf, secondary, bankHoldings, securities, fund.fundEar, bench, pSettings?.withholdingTax]);
+
+  const yourYield = blended.yield;
   const benchRows = [
-    { key: "your", label: `Your Fund (${fund.fundLabel})`, value: yourYield, highlight: true },
+    { key: "your", label: blended.partCount > 1 ? "Your Portfolio (blended)" : `Your Fund (${fund.fundLabel})`, value: yourYield, highlight: true },
     bench["mmf_market_avg"] && { key: "mmf_market_avg", ...bench["mmf_market_avg"], highlight: false },
     bench["mmf_leaders_avg"] && { key: "mmf_leaders_avg", ...bench["mmf_leaders_avg"], highlight: false },
     bench["deposit_rate_avg"] && { key: "deposit_rate_avg", ...bench["deposit_rate_avg"], highlight: false },
@@ -15978,17 +19638,115 @@ export default function PortfolioReview() {
   const realYield = yourYield - inflation;
 
   // ─── Liquidity calendar ─────────────────────────────────────────────────
+  // Every upcoming maturity that turns into available cash: CBK securities
+  // (T-bill/IFB/FXD) AND bank fixed deposits with a maturity date.
   const upcoming = useMemo(() => {
-    return (securities ?? [])
-      .filter((s) => !s.isMatured)
+    type LiquidityEvent = {
+      id: string;
+      label: string;
+      kind: string;
+      value: number;
+      maturityDate: string | Date | null;
+      days: number;
+      liquid: boolean; // true = already liquid / on-notice (no fixed maturity)
+    };
+    const fromSecurities: LiquidityEvent[] = (securities ?? [])
+      .filter((s) => !s.isMatured && s.maturityDate)
       .map((s) => ({
-        ...s,
+        id: `sec-${s.id}`,
+        label: s.securityType.replace("_", "-").toUpperCase(),
+        kind: "CBK security",
+        value: Number(s.faceValue),
+        maturityDate: s.maturityDate as string | Date,
         days: daysUntil(s.maturityDate),
+        liquid: false,
+      }));
+    const activeBank = (bankHoldings ?? []).filter((b) => b.isActive);
+    // Round 30 fix: value EVERY bank instrument from its accrued value (max of
+    // currentValue and principal). currentValue defaults to 0 in the DB, so the
+    // old `currentValue ?? principal` showed KES 0 because 0 is not nullish.
+    const bankVal = (b: { principal?: unknown; interestRate?: unknown; isActive?: boolean; currentValue?: unknown }) =>
+      bankHoldingValue({
+        principal: Number(b.principal ?? 0),
+        interestRate: Number(b.interestRate ?? 0),
+        isActive: b.isActive,
+        currentValue: Number(b.currentValue ?? 0),
+      });
+    // TERM deposits (fixed + target/goal savings) lock until their maturity date —
+    // that is the free-up date listed on the calendar.
+    const isTermKind = (t: string) => t === "fixed_deposit" || t === "target_savings";
+    const fromFixedDeposits: LiquidityEvent[] = activeBank
+      .filter((b) => isTermKind(b.instrumentType) && b.maturityDate)
+      .map((b) => ({
+        id: `bank-${b.id}`,
+        label: `${b.label || b.bankName} (${b.instrumentType === "target_savings" ? "goal" : "FD"})`,
+        kind: b.instrumentType === "target_savings" ? "Goal/target savings" : "Fixed deposit",
+        value: bankVal(b),
+        maturityDate: b.maturityDate as string | Date,
+        days: daysUntil(b.maturityDate as string | Date),
+        liquid: false,
+      }));
+    // Liquid deposits (call / ordinary / tiered savings, or any term deposit
+    // without a maturity date) are accessible on short notice — listed as liquid.
+    const fromCallDeposits: LiquidityEvent[] = activeBank
+      .filter((b) => !isTermKind(b.instrumentType) || !b.maturityDate)
+      .map((b) => ({
+        id: `bank-${b.id}`,
+        label: `${b.label || b.bankName}`,
+        kind: bankInstrumentLabel(b.instrumentType),
+        value: bankVal(b),
+        maturityDate: null,
+        days: 0,
+        liquid: true,
       }))
+      .filter((b) => b.value > 0);
+    const dated = [...fromSecurities, ...fromFixedDeposits]
       .filter((s) => s.days >= 0)
-      .sort((a, b) => a.days - b.days)
-      .slice(0, 12);
-  }, [securities]);
+      .sort((a, b) => a.days - b.days);
+    // Liquid bank deposits first (available now), then dated maturities by soonest.
+    return [...fromCallDeposits, ...dated].slice(0, 30);
+  }, [securities, bankHoldings]);
+
+  // CSV export: net-worth allocation, benchmark comparison and the liquidity
+  // calendar, written as labelled sections in one file. Raw numbers so it opens
+  // cleanly in spreadsheets.
+  const handleExportCsv = () => {
+    const sections: (string | number)[][] = [];
+    sections.push(["Portfolio Review", portfolio?.name ?? ""]);
+    sections.push(["Generated", new Date().toISOString()]);
+    sections.push(["Net worth", Math.round(netWorth)]);
+    sections.push([]);
+    sections.push(["NET-WORTH ALLOCATION"]);
+    sections.push(["Bucket", "Value (KES)", "Share %"]);
+    allocation.forEach((a) =>
+      sections.push([
+        a.label,
+        Math.round(a.value),
+        netWorth > 0 ? Number(((a.value / netWorth) * 100).toFixed(2)) : 0,
+      ])
+    );
+    sections.push([]);
+    sections.push(["BENCHMARK COMPARISON"]);
+    sections.push(["Metric", "Yield/Rate %"]);
+    benchRows.forEach((b) => sections.push([b.label, Number(b.value.toFixed(2))]));
+    sections.push(["Real yield (after inflation) %", Number(realYield.toFixed(2))]);
+    sections.push([]);
+    sections.push(["LIQUIDITY CALENDAR"]);
+    sections.push(["Instrument", "Kind", "Value (KES)", "Maturity", "Days to free-up", "Status"]);
+    upcoming.forEach((u) =>
+      sections.push([
+        u.label,
+        u.kind,
+        Math.round(u.value),
+        u.maturityDate ? new Date(u.maturityDate).toISOString().split("T")[0] : "",
+        u.liquid ? "" : u.days,
+        u.liquid ? "Liquid / on-notice" : "Locked until maturity",
+      ])
+    );
+    const csv = toCsv(sections[0], sections.slice(1));
+    const stamp = new Date().toISOString().split("T")[0];
+    downloadCsv(csv, `portfolio-review-${slugify(portfolio?.name)}-${stamp}.csv`);
+  };
 
   return (
     <AppShell>
@@ -16012,13 +19770,22 @@ export default function PortfolioReview() {
               upcoming liquidity events, and a full change history.
             </p>
           </div>
-          <Button
-            variant="outline"
-            className="shrink-0 print:hidden bg-background"
-            onClick={() => window.print()}
-          >
-            <Printer className="w-4 h-4 mr-2" /> Print / Save as PDF
-          </Button>
+          <div className="flex items-center gap-2 shrink-0 print:hidden">
+            <Button
+              variant="outline"
+              className="bg-background"
+              onClick={handleExportCsv}
+            >
+              <Download className="w-4 h-4 mr-2" /> Download CSV
+            </Button>
+            <Button
+              variant="outline"
+              className="bg-background"
+              onClick={() => window.print()}
+            >
+              <Printer className="w-4 h-4 mr-2" /> Print / Save as PDF
+            </Button>
+          </div>
         </div>
 
         {/* Net worth */}
@@ -16132,24 +19899,26 @@ export default function PortfolioReview() {
               <CalendarClock className="w-4 h-4 text-primary" /> Liquidity Calendar
             </CardTitle>
             <CardDescription>
-              Upcoming CBK security maturities — cash becoming available for
-              reinvestment or withdrawal. (MMF balances are liquid within 1–3
-              days and are not listed here.)
+              When your cash frees up — CBK security maturities and bank fixed
+              deposits show their free-up date, while call deposits are accessible
+              on short notice. (MMF balances are liquid within 1–3 days and are
+              not listed here.)
             </CardDescription>
           </CardHeader>
           <CardContent>
             {upcoming.length === 0 ? (
               <p className="text-sm text-muted-foreground py-4 text-center">
-                No upcoming maturities. Add CBK securities to see your liquidity
-                schedule.
+                No upcoming maturities. Add CBK securities or bank deposits to see
+                your liquidity schedule.
               </p>
             ) : (
               <div className="rounded-md border overflow-x-auto">
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>Security</TableHead>
-                      <TableHead className="text-right">Face Value</TableHead>
+                      <TableHead>Instrument</TableHead>
+                      <TableHead>Type</TableHead>
+                      <TableHead className="text-right">Value</TableHead>
                       <TableHead>Matures</TableHead>
                       <TableHead className="text-right">In</TableHead>
                     </TableRow>
@@ -16157,22 +19926,33 @@ export default function PortfolioReview() {
                   <TableBody>
                     {upcoming.map((s) => (
                       <TableRow key={s.id}>
-                        <TableCell className="font-medium uppercase">
-                          {s.securityType.replace("_", "-")}
+                        <TableCell className="font-medium">
+                          {s.label}
+                        </TableCell>
+                        <TableCell className="text-muted-foreground text-xs">
+                          {s.kind}
                         </TableCell>
                         <TableCell className="text-right tabular-nums">
-                          {kes(Number(s.faceValue))}
+                          {kes(s.value)}
                         </TableCell>
                         <TableCell>
-                          {new Date(s.maturityDate).toLocaleDateString("en-KE")}
+                          {s.liquid || !s.maturityDate
+                            ? "On call / short notice"
+                            : new Date(s.maturityDate).toLocaleDateString("en-KE")}
                         </TableCell>
                         <TableCell className="text-right">
-                          <Badge
-                            variant={s.days <= 30 ? "default" : "secondary"}
-                            className="text-[10px]"
-                          >
-                            {s.days} {s.days === 1 ? "day" : "days"}
-                          </Badge>
+                          {s.liquid ? (
+                            <Badge variant="default" className="text-[10px] bg-emerald-600 hover:bg-emerald-600">
+                              Liquid
+                            </Badge>
+                          ) : (
+                            <Badge
+                              variant={s.days <= 30 ? "default" : "secondary"}
+                              className="text-[10px]"
+                            >
+                              {s.days} {s.days === 1 ? "day" : "days"}
+                            </Badge>
+                          )}
                         </TableCell>
                       </TableRow>
                     ))}
@@ -16249,6 +20029,255 @@ function Pencil2() {
       <path d="M12 20h9" />
       <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z" />
     </svg>
+  );
+}
+```
+
+### `client/src/pages/Reconciliation.tsx`
+
+```tsx
+import { AppShell } from "@/components/AppShell";
+import { usePortfolio } from "@/contexts/PortfolioContext";
+import { trpc } from "@/lib/trpc";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Scale, CheckCircle2, AlertTriangle, Info } from "lucide-react";
+import { formatKES } from "@/lib/format";
+
+export default function Reconciliation() {
+  const { portfolioId, portfolio } = usePortfolio();
+
+  const { data, isLoading } = trpc.projection.reconciliation.useQuery(
+    { portfolioId: portfolioId! },
+    { enabled: !!portfolioId },
+  );
+
+  const full = data?.full;
+  const mmf = data?.mmf;
+  const reconciled = !!full?.reconciled && !!mmf?.ok;
+
+  return (
+    <AppShell>
+      <div className="space-y-6">
+        {/* Header */}
+        <div className="flex flex-col gap-2">
+          <div className="flex items-center gap-2">
+            <Scale className="w-5 h-5 text-primary" />
+            <h1
+              className="text-2xl font-bold"
+              style={{ fontFamily: "'Playfair Display', serif" }}
+            >
+              Reconciliation
+            </h1>
+          </div>
+          <p className="text-muted-foreground text-sm max-w-3xl">
+            An independent cross-check that the &ldquo;today&rdquo; value of{" "}
+            <strong>{portfolio?.name ?? "your portfolio"}</strong> agrees across
+            every subsystem &mdash; the sum of individual holdings, the
+            projection engine, the Dashboard actuals total, the daily-accrual
+            base, and the headline net-worth card. When these disagree, the
+            mismatch is shown here so the cause can be traced.
+          </p>
+        </div>
+
+        {isLoading || !full || !mmf ? (
+          <Skeleton className="h-64 w-full" />
+        ) : (
+          <>
+            {/* Verdict banner */}
+            <Card
+              className={
+                reconciled
+                  ? "border-emerald-500/40 bg-emerald-500/5"
+                  : "border-amber-500/40 bg-amber-500/5"
+              }
+            >
+              <CardContent className="flex items-start gap-3 py-5">
+                {reconciled ? (
+                  <CheckCircle2 className="w-6 h-6 text-emerald-500 shrink-0 mt-0.5" />
+                ) : (
+                  <AlertTriangle className="w-6 h-6 text-amber-500 shrink-0 mt-0.5" />
+                )}
+                <div className="space-y-1">
+                  <p className="font-semibold">
+                    {reconciled
+                      ? "All sources reconcile"
+                      : "Sources disagree"}
+                  </p>
+                  <p className="text-sm text-muted-foreground">
+                    {reconciled ? (
+                      <>
+                        Every valuation path agrees within{" "}
+                        {formatKES(full.maxDiff, 2)} (tolerance is KES 5). The
+                        portfolio&rsquo;s recorded holdings, the engine&rsquo;s
+                        &ldquo;today&rdquo; figure, and the dashboard totals are
+                        consistent.
+                      </>
+                    ) : (
+                      <>
+                        The largest gap is {formatKES(full.maxDiff, 2)} against
+                        the &ldquo;sum of holdings&rdquo; reference of{" "}
+                        {formatKES(full.reference, 2)}. See the breakdown below.
+                      </>
+                    )}
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Full-portfolio sources */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">
+                  Whole-portfolio &ldquo;today&rdquo; value, by source
+                </CardTitle>
+                <CardDescription>
+                  Each row is computed from its own data path and compared to the
+                  sum-of-holdings reference.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="rounded-md border">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Source</TableHead>
+                        <TableHead className="text-right">Value</TableHead>
+                        <TableHead className="text-right">
+                          Δ vs reference
+                        </TableHead>
+                        <TableHead className="text-right">Status</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {full.sources
+                        .filter((s) => s.key !== "accrual")
+                        .map((s) => {
+                          const diff = Math.round((s.value - full.reference) * 100) / 100;
+                          const ok = Math.abs(diff) <= 5;
+                          return (
+                            <TableRow key={s.key}>
+                              <TableCell>
+                                <div className="font-medium">{s.label}</div>
+                                <div className="text-xs text-muted-foreground">
+                                  {s.detail}
+                                </div>
+                              </TableCell>
+                              <TableCell className="text-right tabular-nums">
+                                {formatKES(s.value, 2)}
+                              </TableCell>
+                              <TableCell className="text-right tabular-nums">
+                                {diff === 0
+                                  ? "—"
+                                  : `${diff > 0 ? "+" : ""}${formatKES(diff, 2)}`}
+                              </TableCell>
+                              <TableCell className="text-right">
+                                {ok ? (
+                                  <Badge className="bg-emerald-500/15 text-emerald-600 hover:bg-emerald-500/15 border-0">
+                                    Match
+                                  </Badge>
+                                ) : (
+                                  <Badge variant="destructive">Mismatch</Badge>
+                                )}
+                              </TableCell>
+                            </TableRow>
+                          );
+                        })}
+                    </TableBody>
+                  </Table>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* MMF-only check */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">
+                  MMF base check (daily-accrual ledger)
+                </CardTitle>
+                <CardDescription>
+                  The daily-accrual ledger starts from the MMF balance. It must
+                  equal the primary MMF plus all secondary-MMF balances.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="grid gap-4 sm:grid-cols-3">
+                  <div className="rounded-md border p-4">
+                    <p className="text-xs text-muted-foreground">
+                      MMF subtotal (primary + secondaries)
+                    </p>
+                    <p className="text-lg font-semibold tabular-nums">
+                      {formatKES(mmf.mmfSubtotal, 2)}
+                    </p>
+                  </div>
+                  <div className="rounded-md border p-4">
+                    <p className="text-xs text-muted-foreground">
+                      Accrual ledger base
+                    </p>
+                    <p className="text-lg font-semibold tabular-nums">
+                      {formatKES(mmf.accrual, 2)}
+                    </p>
+                  </div>
+                  <div
+                    className={`rounded-md border p-4 ${
+                      mmf.ok ? "border-emerald-500/40" : "border-destructive/40"
+                    }`}
+                  >
+                    <p className="text-xs text-muted-foreground">Difference</p>
+                    <p className="text-lg font-semibold tabular-nums">
+                      {formatKES(mmf.diff, 2)}{" "}
+                      {mmf.ok ? (
+                        <span className="text-emerald-600 text-sm">✓</span>
+                      ) : (
+                        <span className="text-destructive text-sm">✗</span>
+                      )}
+                    </p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* How this is computed */}
+            <Card className="border-sky-500/30 bg-sky-500/5">
+              <CardContent className="flex items-start gap-3 py-5">
+                <Info className="w-5 h-5 text-sky-500 shrink-0 mt-0.5" />
+                <div className="space-y-2 text-sm text-muted-foreground">
+                  <p className="font-medium text-foreground">
+                    How the &ldquo;today&rdquo; value is reconciled
+                  </p>
+                  <p>
+                    The sum-of-holdings figure adds the primary MMF balance, every
+                    secondary MMF, all active bank deposits and all un-matured CBK
+                    register securities (valued at face). The projection
+                    engine&rsquo;s &ldquo;today&rdquo; figure is the value of the
+                    most recent actual-seeded month; before any month has elapsed
+                    it equals the sum of holdings. The dashboard total and
+                    net-worth card both read the same actuals aggregation, so any
+                    drift between them points at a double-count or a missing
+                    holding rather than a rounding artefact.
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
+          </>
+        )}
+      </div>
+    </AppShell>
   );
 }
 ```
@@ -16414,8 +20443,28 @@ export default function Scenarios() {
           </CardContent>
         </Card>
 
-        {/* ── How to reach your target (solver-driven) ── */}
-        {!everythingLoading && solver && (
+        {/* ── Target already met: say so plainly instead of a confusing "how to reach" solver ── */}
+        {!everythingLoading && currentHits && (
+          <Card className="border-emerald-500/25">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                You're on track to reach {formatKES(targetAmount)}
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="p-5 pt-0">
+              <p className="text-sm text-foreground leading-relaxed">
+                Your current settings already project to <strong>{formatKES(currentEndingValue)}</strong> at Month {horizonMonths} —
+                a surplus of <strong className="text-emerald-400">{formatKES(currentGap)}</strong> above target. No change is required.
+                If you want a bigger cushion or a faster finish, the table below shows how higher step-ups move the ending value;
+                you can also lower the target or shorten the horizon on the Rate Settings page.
+              </p>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* ── How to reach your target (solver-driven) — only when the current plan falls short ── */}
+        {!everythingLoading && !currentHits && solver && (
           <Card className="border-primary/20">
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-semibold flex items-center gap-2">
@@ -17625,6 +21674,7 @@ interface PlanForm {
   stepUpAmount: number;
   stepUpMonths: number;
   safetyFloor: number;
+  concentrationCapPct: number;
 }
 
 function RateField({ label, name, register, description }: {
@@ -17714,7 +21764,7 @@ function RateHistorySection({ portfolioId }: { portfolioId: number }) {
 
 export default function Settings() {
   const { portfolioId, portfolio, refetch: refetchPortfolios } = usePortfolio();
-  const { fundLabel: selectedFundLabel, fundEar: selectedFundEar } = useSelectedFund();
+  const { fundLabel: selectedFundLabel, fundEar: selectedFundEar, hasFund } = useSelectedFund();
   const utils = trpc.useUtils();
 
   // ─── Rate form ──────────────────────────────────────────────────────────────
@@ -17766,6 +21816,10 @@ export default function Settings() {
     saveRatesMutation.mutate({ portfolioId, ...data });
   }
 
+  // Single coherent WHT chain shared by every rate label on this page.
+  const whtPct = Number(rateForm.watch("withholdingTax")) || 15;
+  const whtFrac = whtPct / 100;
+
   // ─── Plan form ──────────────────────────────────────────────────────────────
   const planForm = useForm<PlanForm>({
     defaultValues: {
@@ -17778,6 +21832,7 @@ export default function Settings() {
       stepUpAmount: 3000,
       stepUpMonths: 6,
       safetyFloor: 50000,
+      concentrationCapPct: 25,
     },
   });
 
@@ -17793,6 +21848,7 @@ export default function Settings() {
         stepUpAmount: portfolio.stepUpAmount,
         stepUpMonths: portfolio.stepUpMonths,
         safetyFloor: portfolio.safetyFloor,
+        concentrationCapPct: (portfolio as { concentrationCapPct?: number }).concentrationCapPct ?? 25,
       });
     }
   }, [portfolio]);
@@ -17912,6 +21968,11 @@ export default function Settings() {
                   </div>
                 )}
               </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs font-medium">Per-Issuer Concentration Cap (%)</Label>
+                <Input type="number" step="1" min="5" max="100" {...planForm.register("concentrationCapPct", { valueAsNumber: true })} />
+                <p className="text-xs text-muted-foreground">No single bank/issuer should exceed this share of net worth before the Dashboard warns. Government securities are exempt (sovereign). Default 25%.</p>
+              </div>
             </CardContent>
           </Card>
           <Button type="submit" variant="outline" className="w-full sm:w-auto" disabled={updatePortfolioMutation.isPending}>
@@ -17934,10 +21995,25 @@ export default function Settings() {
                 <SettingsIcon className="w-4 h-4 text-primary" />
                 {selectedFundLabel} Yield
               </CardTitle>
-              <p className="text-xs text-muted-foreground mt-1">Enter the gross effective annual yield shown by {selectedFundLabel}. Current fund EAR: {selectedFundEar.toFixed(2)}%.</p>
+              <p className="text-xs text-muted-foreground mt-1">
+                {hasFund
+                  ? `The projection uses ${selectedFundLabel}'s effective annual yield (gross). Change it on the MMF Strategy page by switching funds — this field is informational while a fund is selected.`
+                  : "No MMF fund selected — the projection uses this manual gross yield as a fallback. Select a fund on the MMF Strategy page to drive it from the fund's published EAR."}
+              </p>
             </CardHeader>
             <CardContent className="p-4 pt-0 grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <RateField label={`${selectedFundLabel} Annual Yield (Gross)`} name="mmfYield" register={rateForm.register} description={`Current EAR: ${selectedFundEar.toFixed(2)}% → net ≈ ${(selectedFundEar * 0.85).toFixed(2)}%`} />
+              {hasFund ? (
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-medium">{selectedFundLabel} Annual Yield (Gross) — authoritative</Label>
+                  <div className="flex items-baseline gap-2 rounded-md border border-border bg-muted/40 px-3 py-2">
+                    <span className="text-lg font-semibold text-foreground">{selectedFundEar.toFixed(2)}%</span>
+                    <span className="text-xs text-muted-foreground">gross → net ≈ {(selectedFundEar * (1 - whtFrac)).toFixed(2)}% after {whtPct.toFixed(0)}% WHT</span>
+                  </div>
+                  <p className="text-xs text-muted-foreground">Driven by the selected fund; the manual MMF yield below is ignored while a fund is active.</p>
+                </div>
+              ) : (
+                <RateField label="MMF Annual Yield (Gross, fallback)" name="mmfYield" register={rateForm.register} description={`Used only when no fund is selected. Net ≈ ${(Number(rateForm.watch("mmfYield") || 0) * (1 - whtFrac)).toFixed(2)}% after ${whtPct.toFixed(0)}% WHT`} />
+              )}
             </CardContent>
           </Card>
 
@@ -17960,7 +22036,7 @@ export default function Settings() {
             </CardHeader>
             <CardContent className="p-4 pt-0 grid grid-cols-1 sm:grid-cols-3 gap-4">
               <RateField label="IFB Coupon Rate (Gross = Net)" name="ifbCouponRate" register={rateForm.register} description="Tax-exempt. Default: 12.5%" />
-              <RateField label="FXD Coupon Rate (Gross)" name="fxdCouponRate" register={rateForm.register} description="Default: 12.35% → net ≈ 10.5%" />
+              <RateField label="FXD Coupon Rate (Gross)" name="fxdCouponRate" register={rateForm.register} description={`Default 12.35%. Net ≈ ${(Number(rateForm.watch("fxdCouponRate") || 0) * (1 - whtFrac)).toFixed(2)}% after ${whtPct.toFixed(0)}% WHT`} />
               <RateField label="Withholding Tax Rate" name="withholdingTax" register={rateForm.register} description="Default: 15%" />
             </CardContent>
           </Card>
@@ -17992,6 +22068,7 @@ import { useMemo } from "react";
 import { AppShell } from "@/components/AppShell";
 import { usePortfolio } from "@/contexts/PortfolioContext";
 import { useSelectedFund } from "@/hooks/useSelectedFund";
+import { bankHoldingValue, blendedYield, buildAllocation } from "@shared/actuals";
 import { trpc } from "@/lib/trpc";
 import {
   Card,
@@ -18009,7 +22086,9 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Receipt, Percent, ShieldCheck, TrendingDown, Info } from "lucide-react";
+import { Receipt, Percent, ShieldCheck, TrendingDown, Info, Download, Printer } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { toCsv, downloadCsv, slugify } from "@shared/csv";
 
 function kes(n: number, dp = 0): string {
   return n.toLocaleString("en-KE", {
@@ -18031,7 +22110,7 @@ interface TaxLine {
 }
 
 export default function TaxSummary() {
-  const { portfolioId } = usePortfolio();
+  const { portfolioId, portfolio } = usePortfolio();
   const fund = useSelectedFund();
 
   const { data: deposits } = trpc.deposits.list.useQuery(
@@ -18054,6 +22133,21 @@ export default function TaxSummary() {
     { portfolioId: portfolioId! },
     { enabled: !!portfolioId }
   );
+  const { data: bankHoldings = [] } = trpc.bankHoldings.list.useQuery(
+    { portfolioId: portfolioId! },
+    { enabled: !!portfolioId }
+  );
+  const { data: projection } = trpc.projection.run.useQuery(
+    { portfolioId: portfolioId! },
+    { enabled: !!portfolioId }
+  );
+
+  // Full-period projected WHT across the entire horizon (engine per-month tax).
+  const projectedTotalTax = useMemo(
+    () => (projection ?? []).reduce((s, m) => s + Number(m.whtThisMonth ?? 0), 0),
+    [projection]
+  );
+  const projectionMonths = projection?.length ?? 0;
 
   // Bucket balances.
   // MMF bucket = primary-MMF deposit rows only (gov-security, bank, and
@@ -18061,27 +22155,28 @@ export default function TaxSummary() {
   // excluded here to avoid double-counting). T-bill / IFB / FXD buckets come
   // from the SECURITIES REGISTER — the single source of truth — using unmatured
   // face values, so this page reconciles with the Dashboard's Live Net Worth.
+  // Round 33: derive bucket balances from the SAME shared `buildAllocation`
+  // helper the Portfolio Review and Reconciliation pages use. Passing
+  // `primaryFundId` guarantees a secondary-MMF deposit (an `mmf_fund` row into a
+  // non-primary fund) is excluded from the primary-MMF bucket, fixing the
+  // page-level +KES 2,500 double-count. The prior inline reducer only skipped
+  // gov-security/bank rows and silently leaked secondary deposits into `mmf`.
   const buckets = useMemo(() => {
-    const acc = { mmf: 0, tbill: 0, ifb: 0, fxd: 0 };
-    (deposits ?? []).forEach((d) => {
-      const inst = (d as { institutionType?: string | null }).institutionType;
-      if (inst === "government_security" || inst === "bank_instrument") return;
-      if (d.bucket === "mmf") acc.mmf += Number(d.amount);
+    const a = buildAllocation({
+      deposits: (deposits ?? []) as never,
+      securities: (securities ?? []) as never,
+      secondaryMmfs: (secondaryMmfs ?? []) as never,
+      bankHoldings: (bankHoldings ?? []) as never,
+      otherHoldings: (holdings ?? []) as never,
+      primaryFundId: fund.fundId,
     });
-    (securities ?? []).forEach((s) => {
-      if (s.isMatured) return;
-      const face = Number(s.faceValue);
-      if (s.securityType.startsWith("tbill")) acc.tbill += face;
-      else if (s.securityType === "ifb") acc.ifb += face;
-      else acc.fxd += face;
-    });
-    return acc;
-  }, [deposits, securities]);
+    return { mmf: a.primaryMmf, tbill: a.tbill, ifb: a.ifb, fxd: a.fxd };
+  }, [deposits, securities, secondaryMmfs, bankHoldings, holdings, fund.fundId]);
 
   const whtRate = settings?.withholdingTax ?? 15;
-  const mmfYield = fund.fundEar || settings?.mmfYield || 8.78;
-  // Total balance + gross income across ALL tracked MMF accounts (primary + secondary).
-  const secondaryMmfBalance = secondaryMmfs.reduce((s, m) => s + m.currentBalance, 0);
+  // Authoritative: when a fund is selected the engine uses its EAR; otherwise the
+  // manual saved mmfYield is the fallback (matches dbToEngine on the server).
+  const mmfYield = fund.hasFund ? fund.fundEar : (settings?.mmfYield ?? fund.fundEar);
   const tbillRate = settings?.tbill364Rate ?? 8.97;
   const ifbRate = settings?.ifbCouponRate ?? 12.5;
   const fxdRate = settings?.fxdCouponRate ?? 12.35;
@@ -18165,6 +22260,25 @@ export default function TaxSummary() {
       });
     }
 
+    // Bank-instrument interest (call/fixed deposits) — 15% WHT, final.
+    (bankHoldings ?? [])
+      .filter((b) => b.isActive && Number(b.principal ?? 0) > 0)
+      .forEach((b) => {
+        const rate = Number(b.interestRate ?? 0);
+        if (rate <= 0) return;
+        const basis = Number(b.principal) * (rate / 100);
+        const tax = basis * (whtRate / 100);
+        result.push({
+          source: `${b.label || b.bankName} ${b.instrumentType === "fixed_deposit" ? "(fixed deposit)" : "(call deposit)"}`,
+          basis,
+          rate: whtRate,
+          tax,
+          net: basis - tax,
+          exempt: false,
+          note: "Bank-deposit interest: 15% WHT (final tax), same as MMF interest.",
+        });
+      });
+
     // Equity dividends — 5% WHT, final (estimate using assumedReturnBase as dividend yield proxy if present)
     (holdings ?? [])
       .filter((h) => h.assetClass === "equity")
@@ -18186,58 +22300,93 @@ export default function TaxSummary() {
       });
 
     return result;
-  }, [buckets, mmfYield, tbillRate, ifbRate, fxdRate, whtRate, fund.fundLabel, holdings, secondaryMmfs]);
-
-  // Gross annual MMF income across all accounts (for blended yield weighting).
-  const secondaryMmfGross = secondaryMmfs.reduce((s, m) => s + m.currentBalance * (m.ear / 100), 0);
+  }, [buckets, mmfYield, tbillRate, ifbRate, fxdRate, whtRate, fund.fundLabel, holdings, secondaryMmfs, bankHoldings]);
 
   const totalGross = lines.reduce((s, l) => s + l.basis, 0);
   const totalTax = lines.reduce((s, l) => s + l.tax, 0);
   const totalNet = lines.reduce((s, l) => s + l.net, 0);
   const effectiveTaxRate = totalGross > 0 ? (totalTax / totalGross) * 100 : 0;
 
-  const fixedIncomeTotal =
-    buckets.mmf + secondaryMmfBalance + buckets.tbill + buckets.ifb + buckets.fxd;
-  const grossYieldBlended =
-    fixedIncomeTotal > 0
-      ? ((buckets.mmf * mmfYield +
-          secondaryMmfGross * 100 +
-          buckets.tbill * tbillRate +
-          buckets.ifb * ifbRate +
-          buckets.fxd * fxdRate) /
-          fixedIncomeTotal)
-      : 0;
-  const netYieldBlended =
-    fixedIncomeTotal > 0
-      ? (lines
-          .filter((l) =>
-            ["interest", "discount", "coupon"].some((k) => l.source.toLowerCase().includes(k))
-          )
-          .reduce((s, l) => s + l.net, 0) /
-          fixedIncomeTotal) *
-        100
-      : 0;
+  // Round 32: blended yield via the ONE shared helper. Net yield is computed on
+  // the SAME base as gross (each component's gross minus WHT, IFB exempt), so a
+  // bank-deposit line can no longer be dropped from the numerator while staying
+  // in the denominator (the cause of the prior impossible ~3.56% net yield).
+  const blended = blendedYield({
+    primaryMmf: buckets.mmf,
+    primaryMmfRate: mmfYield,
+    secondaryMmfs: secondaryMmfs.map((m) => ({ balance: m.currentBalance, rate: m.ear })),
+    bankHoldings: (bankHoldings ?? [])
+      .filter((b) => b.isActive)
+      .map((b) => ({
+        value: bankHoldingValue({ principal: Number(b.principal ?? 0), interestRate: Number(b.interestRate ?? 0), isActive: b.isActive, currentValue: Number(b.currentValue ?? 0) }),
+        rate: Number(b.interestRate ?? 0),
+      })),
+    securities: [
+      { value: buckets.tbill, rate: tbillRate, taxExempt: false },
+      { value: buckets.ifb, rate: ifbRate, taxExempt: true },
+      { value: buckets.fxd, rate: fxdRate, taxExempt: false },
+    ],
+    whtRate,
+  });
+  const fixedIncomeTotal = blended.base;
+  const grossYieldBlended = blended.grossYield;
+  const netYieldBlended = blended.netYield;
+
+  // CSV export: the per-source tax lines plus the totals + yield reconciliation,
+  // as raw numbers for spreadsheets.
+  const handleExportCsv = () => {
+    const headers = ["Income Source", "Gross/yr (KES)", "WHT Rate %", "Tax (KES)", "Net/yr (KES)", "Exempt", "Note"];
+    const rows: (string | number)[][] = lines.map((l) => [
+      l.source,
+      Math.round(l.basis),
+      l.exempt ? 0 : Number(l.rate.toFixed(0)),
+      Math.round(l.tax),
+      Math.round(l.net),
+      l.exempt ? "Yes" : "No",
+      l.note,
+    ]);
+    rows.push(["TOTAL", Math.round(totalGross), "", Math.round(totalTax), Math.round(totalNet), "", `Effective tax rate ${effectiveTaxRate.toFixed(1)}%`]);
+    rows.push([]);
+    rows.push(["YIELD RECONCILIATION", "", "", "", "", "", ""]);
+    rows.push(["Fixed-income base (KES)", Math.round(fixedIncomeTotal), "", "", "", "", ""]);
+    rows.push(["Gross blended yield %", Number(grossYieldBlended.toFixed(2)), "", "", "", "", ""]);
+    rows.push(["Net blended yield %", Number(netYieldBlended.toFixed(2)), "", "", "", "", ""]);
+    rows.push(["Projected total WHT over horizon (KES)", Math.round(projectedTotalTax), "", "", "", "", `${projectionMonths} months`]);
+    const csv = toCsv(headers, rows);
+    const stamp = new Date().toISOString().split("T")[0];
+    downloadCsv(csv, `tax-summary-${slugify(portfolio?.name)}-${stamp}.csv`);
+  };
 
   return (
     <AppShell>
       <div className="space-y-6">
         {/* Header */}
-        <div className="flex flex-col gap-2">
-          <div className="flex items-center gap-2">
-            <Receipt className="w-5 h-5 text-primary" />
-            <h1
-              className="text-2xl font-bold"
-              style={{ fontFamily: "'Playfair Display', serif" }}
-            >
-              Tax Summary &amp; Yield Reconciliation
-            </h1>
+        <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-3">
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center gap-2">
+              <Receipt className="w-5 h-5 text-primary" />
+              <h1
+                className="text-2xl font-bold"
+                style={{ fontFamily: "'Playfair Display', serif" }}
+              >
+                Tax Summary &amp; Yield Reconciliation
+              </h1>
+            </div>
+            <p className="text-muted-foreground text-sm max-w-3xl">
+              An annualised, whole-portfolio view of the withholding tax (WHT)
+              applied to each income source at current balances and rates, and a
+              reconciliation of your <strong>gross</strong> quoted yield against
+              the <strong>net-of-tax</strong> return you actually keep.
+            </p>
           </div>
-          <p className="text-muted-foreground text-sm max-w-3xl">
-            An annualised, whole-portfolio view of the withholding tax (WHT)
-            applied to each income source at current balances and rates, and a
-            reconciliation of your <strong>gross</strong> quoted yield against
-            the <strong>net-of-tax</strong> return you actually keep.
-          </p>
+          <div className="flex items-center gap-2 shrink-0 print:hidden">
+            <Button variant="outline" className="bg-background" onClick={handleExportCsv}>
+              <Download className="w-4 h-4 mr-2" /> Download CSV
+            </Button>
+            <Button variant="outline" className="bg-background" onClick={() => window.print()}>
+              <Printer className="w-4 h-4 mr-2" /> Print / Save as PDF
+            </Button>
+          </div>
         </div>
 
         {/* Summary cards */}
@@ -18396,6 +22545,51 @@ export default function TaxSummary() {
           </CardContent>
         </Card>
 
+        {/* Full-period projected tax */}
+        {projectionMonths > 0 && (
+          <Card className="border-amber-500/25">
+            <CardHeader>
+              <CardTitle className="text-base">Projected Tax Over the Full Plan</CardTitle>
+              <CardDescription>
+                Total withholding tax the projection engine expects you to pay across the entire
+                {" "}{projectionMonths}-month horizon — computed month by month as balances grow, on MMF
+                (primary + secondary), bank deposits, T-bills and FXD coupons (IFB coupons are exempt).
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="rounded-lg bg-muted/30 p-4">
+                  <p className="text-xs text-muted-foreground">Full-period projected WHT</p>
+                  <p className="text-2xl font-bold text-red-500">−{kes(projectedTotalTax)}</p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Sum of monthly WHT over {projectionMonths} months.
+                  </p>
+                </div>
+                <div className="rounded-lg bg-muted/30 p-4">
+                  <p className="text-xs text-muted-foreground">Avg WHT / month</p>
+                  <p className="text-2xl font-bold">
+                    {kes(projectionMonths > 0 ? projectedTotalTax / projectionMonths : 0)}
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-1">Deducted at source as it accrues.</p>
+                </div>
+                <div className="rounded-lg bg-muted/30 p-4">
+                  <p className="text-xs text-muted-foreground">Annualised snapshot (above)</p>
+                  <p className="text-2xl font-bold">−{kes(totalTax)}</p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Current balances only — grows as the plan builds.
+                  </p>
+                </div>
+              </div>
+              <p className="text-xs text-muted-foreground mt-4 flex items-start gap-2">
+                <Info className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                The annualised snapshot taxes only what you hold today; the full-period figure tracks tax
+                on the growing balance across every month of the plan, so it is the more complete picture
+                of the tax you will actually pay on the journey to your goal.
+              </p>
+            </CardContent>
+          </Card>
+        )}
+
         {/* Disclaimer */}
         <Card>
           <CardContent className="py-4">
@@ -18410,6 +22604,481 @@ export default function TaxSummary() {
         </Card>
       </div>
     </AppShell>
+  );
+}
+```
+
+### `client/src/pages/Withdrawals.tsx`
+
+```tsx
+import { useMemo, useState } from "react";
+import { usePortfolio } from "@/contexts/PortfolioContext";
+import { useSelectedFund } from "@/hooks/useSelectedFund";
+import { trpc } from "@/lib/trpc";
+import { formatKES } from "@/lib/format";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Card } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Separator } from "@/components/ui/separator";
+import { toast } from "sonner";
+import {
+  ArrowUpCircle,
+  Wallet,
+  PiggyBank,
+  Building2,
+  TrendingUp,
+  ShieldCheck,
+  Landmark,
+  Trash2,
+  AlertTriangle,
+  Info,
+  PlusCircle,
+} from "lucide-react";
+
+/** A concrete place real money can be withdrawn FROM. */
+type Source = {
+  value: string;
+  label: string;
+  sublabel?: string;
+  group: "MMF funds" | "Bank instruments" | "Government securities";
+  icon: React.ReactNode;
+  color: string;
+  available: number;
+  isFixedDeposit?: boolean;
+  maturityDate?: string | null;
+  payload: {
+    sourceType: "mmf_fund" | "bank_instrument" | "government_security";
+    mmfFundId?: number;
+    bankHoldingId?: number;
+    securityId?: number;
+  };
+};
+
+const GOV_META = {
+  tbill: { label: "CBK T-Bills", icon: <TrendingUp className="w-4 h-4" />, color: "text-blue-400" },
+  ifb: { label: "IFB Bonds", icon: <ShieldCheck className="w-4 h-4" />, color: "text-violet-400" },
+  fxd: { label: "FXD Bonds", icon: <Landmark className="w-4 h-4" />, color: "text-orange-400" },
+} as const;
+
+export default function Withdrawals() {
+  const { portfolioId, portfolio } = usePortfolio();
+  const { fundName, fundEar } = useSelectedFund();
+  const utils = trpc.useUtils();
+
+  const { data: summary } = trpc.deposits.summary.useQuery(
+    { portfolioId: portfolioId! },
+    { enabled: !!portfolioId }
+  );
+  const { data: withdrawals = [], isLoading } = trpc.withdrawals.list.useQuery(
+    { portfolioId: portfolioId! },
+    { enabled: !!portfolioId }
+  );
+  const { data: secondaries = [] } = trpc.secondaryMmfs.list.useQuery(
+    { portfolioId: portfolioId! },
+    { enabled: !!portfolioId }
+  );
+  const { data: bankHoldings = [] } = trpc.bankHoldings.list.useQuery(
+    { portfolioId: portfolioId! },
+    { enabled: !!portfolioId }
+  );
+  const { data: securities = [] } = trpc.securities.list.useQuery(
+    { portfolioId: portfolioId! },
+    { enabled: !!portfolioId }
+  );
+
+  const invalidateAll = () => {
+    utils.withdrawals.list.invalidate();
+    utils.deposits.summary.invalidate();
+    utils.deposits.list.invalidate();
+    utils.secondaryMmfs.list.invalidate();
+    utils.bankHoldings.list.invalidate();
+    utils.securities.list.invalidate();
+    utils.projection.run.invalidate();
+    utils.projection.reconciliation.invalidate();
+  };
+
+  const addMutation = trpc.withdrawals.add.useMutation({
+    onSuccess: (res) => {
+      invalidateAll();
+      if (res.isEarlyWithdrawal && res.forfeitedInterest > 0) {
+        toast.warning(
+          `Early fixed-deposit break — forfeited ${formatKES(res.forfeitedInterest)} of accrued interest.`,
+          { duration: 6000 }
+        );
+      } else {
+        toast.success("Withdrawal recorded");
+      }
+      setFormOpen(false);
+      resetForm();
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  const deleteMutation = trpc.withdrawals.delete.useMutation({
+    onSuccess: () => {
+      invalidateAll();
+      toast.success("Withdrawal removed");
+      setDeleteId(null);
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  // Available balances by source from the live actuals summary.
+  const primaryAvail = summary?.depositsContributed ?? 0;
+  const bankAvail = summary?.bankBalance ?? 0;
+  const byBucket = summary?.byBucket ?? { mmf: 0, tbill: 0, ifb: 0, fxd: 0 };
+  const govAvail = (byBucket.tbill ?? 0) + (byBucket.ifb ?? 0) + (byBucket.fxd ?? 0);
+
+  const sources = useMemo<Source[]>(() => {
+    const list: Source[] = [];
+    const primaryFundId = portfolio?.mmfFundId ?? undefined;
+
+    if (primaryFundId && primaryAvail > 0) {
+      list.push({
+        value: `mmf:${primaryFundId}`,
+        label: fundName,
+        sublabel: `Primary fund · ${fundEar.toFixed(2)}% p.a.`,
+        group: "MMF funds",
+        icon: <Wallet className="w-4 h-4" />,
+        color: "text-emerald-400",
+        available: primaryAvail,
+        payload: { sourceType: "mmf_fund", mmfFundId: primaryFundId },
+      });
+    }
+    for (const s of secondaries) {
+      const avail = s.currentBalance ?? 0;
+      if (avail <= 0) continue;
+      list.push({
+        value: `smmf:${s.id}`,
+        label: s.label || s.fundName,
+        sublabel: `${s.company} · ${s.ear.toFixed(2)}% p.a.`,
+        group: "MMF funds",
+        icon: <PiggyBank className="w-4 h-4" />,
+        color: "text-emerald-300",
+        available: avail,
+        payload: { sourceType: "mmf_fund", mmfFundId: s.mmfFundId },
+      });
+    }
+    for (const h of bankHoldings) {
+      const avail = h.principal ?? 0;
+      if (avail <= 0) continue;
+      const isFd = h.instrumentType === "fixed_deposit";
+      list.push({
+        value: `bank:${h.id}`,
+        label: h.label || `${h.bankName} ${isFd ? "Fixed Deposit" : "Call Deposit"}`,
+        sublabel: `${h.bankName} · ${h.interestRate.toFixed(2)}% p.a.${isFd && h.maturityDate ? ` · matures ${new Date(h.maturityDate).toLocaleDateString()}` : ""}`,
+        group: "Bank instruments",
+        icon: <Building2 className="w-4 h-4" />,
+        color: "text-sky-300",
+        available: avail,
+        isFixedDeposit: isFd,
+        maturityDate: h.maturityDate,
+        payload: { sourceType: "bank_instrument", bankHoldingId: h.id },
+      });
+    }
+    for (const sec of securities) {
+      if (sec.isMatured) continue;
+      const face = parseFloat(String(sec.faceValue)) || 0;
+      const meta = sec.securityType.startsWith("tbill") ? GOV_META.tbill : sec.securityType === "ifb" ? GOV_META.ifb : GOV_META.fxd;
+      list.push({
+        value: `gov:${sec.id}`,
+        label: `${meta.label} · ${formatKES(face)}`,
+        sublabel: `Matures ${new Date(sec.maturityDate).toLocaleDateString()}`,
+        group: "Government securities",
+        icon: meta.icon,
+        color: meta.color,
+        available: face,
+        payload: { sourceType: "government_security", securityId: sec.id },
+      });
+    }
+    return list;
+  }, [portfolio?.mmfFundId, fundName, fundEar, primaryAvail, secondaries, bankHoldings, securities]);
+
+  const [formOpen, setFormOpen] = useState(false);
+  const [deleteId, setDeleteId] = useState<number | null>(null);
+  const [form, setForm] = useState({
+    source: "",
+    amount: "",
+    withdrawalDate: new Date().toISOString().slice(0, 10),
+    reason: "",
+  });
+
+  const selectedSource = sources.find((s) => s.value === form.source);
+  const amountNum = parseFloat(form.amount) || 0;
+  const overdraw = selectedSource ? amountNum > selectedSource.available + 0.005 : false;
+  const earlyBreakWarning =
+    selectedSource?.isFixedDeposit &&
+    selectedSource.maturityDate &&
+    new Date(form.withdrawalDate) < new Date(selectedSource.maturityDate);
+
+  function resetForm() {
+    setForm({ source: "", amount: "", withdrawalDate: new Date().toISOString().slice(0, 10), reason: "" });
+  }
+
+  function handleSubmit() {
+    if (!portfolioId) return;
+    if (!selectedSource) { toast.error("Choose where the money came from"); return; }
+    if (!amountNum || amountNum <= 0) { toast.error("Enter a valid amount"); return; }
+    if (overdraw) { toast.error("Amount exceeds the available balance in this source"); return; }
+    addMutation.mutate({
+      portfolioId,
+      amount: amountNum,
+      withdrawalDate: form.withdrawalDate,
+      reason: form.reason || undefined,
+      ...selectedSource.payload,
+    });
+  }
+
+  function sourceLabelFor(w: { sourceType: string; mmfFundId?: number | null; bankHoldingId?: number | null; securityId?: number | null }) {
+    if (w.sourceType === "bank_instrument") {
+      const h = bankHoldings.find((x) => x.id === w.bankHoldingId);
+      return { label: h ? (h.label || `${h.bankName} deposit`) : "Bank deposit", icon: <Building2 className="w-4 h-4" />, color: "text-sky-300" };
+    }
+    if (w.sourceType === "government_security") {
+      return { label: "CBK security", icon: <Landmark className="w-4 h-4" />, color: "text-blue-400" };
+    }
+    if (w.mmfFundId && portfolio?.mmfFundId !== w.mmfFundId) {
+      const s = secondaries.find((x) => x.mmfFundId === w.mmfFundId);
+      return { label: s ? (s.label || s.fundName) : "Secondary MMF", icon: <PiggyBank className="w-4 h-4" />, color: "text-emerald-300" };
+    }
+    return { label: fundName, icon: <Wallet className="w-4 h-4" />, color: "text-emerald-400" };
+  }
+
+  const totalWithdrawn = summary?.totalWithdrawn ?? 0;
+  const netWorth = summary?.totalContributed ?? 0;
+
+  return (
+    <div className="container max-w-5xl py-8 space-y-6">
+      <div>
+        <h1 className="text-2xl font-bold text-foreground" style={{ fontFamily: "'Playfair Display', serif" }}>
+          Withdrawals
+        </h1>
+        <p className="text-sm text-muted-foreground mt-1">
+          Record real money taken OUT of any account. Withdrawals reduce your tracked net worth, feed the projection's
+          "today" value, and reconcile across every report. Breaking a fixed deposit early forfeits its accrued interest.
+        </p>
+      </div>
+
+      {/* Summary strip */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <Card className="p-4 bg-card border-border">
+          <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Net Worth Now</p>
+          <p className="text-xl font-bold text-foreground kes-amount">{formatKES(netWorth)}</p>
+        </Card>
+        <Card className="p-4 bg-card border-border">
+          <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Total Withdrawn</p>
+          <p className="text-xl font-bold text-foreground kes-amount">{formatKES(totalWithdrawn)}</p>
+        </Card>
+        <Card className="p-4 bg-card border-border">
+          <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Liquid (MMF)</p>
+          <p className="text-xl font-bold text-emerald-400 kes-amount">{formatKES(primaryAvail + (summary?.secondaryMmfBalance ?? 0))}</p>
+        </Card>
+        <Card className="p-4 bg-card border-border">
+          <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">In Bank + CBK</p>
+          <p className="text-xl font-bold text-sky-300 kes-amount">{formatKES(bankAvail + govAvail)}</p>
+        </Card>
+      </div>
+
+      {/* Record form */}
+      {!formOpen ? (
+        <Button onClick={() => setFormOpen(true)} className="gap-2">
+          <PlusCircle className="w-4 h-4" />
+          Record a Withdrawal
+        </Button>
+      ) : (
+        <Card className="p-5 bg-card border-border space-y-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <ArrowUpCircle className="w-4 h-4 text-primary" />
+              <p className="text-sm font-semibold text-foreground">New Withdrawal</p>
+            </div>
+            <button onClick={() => { setFormOpen(false); resetForm(); }} className="text-xs text-muted-foreground hover:text-foreground">
+              Cancel
+            </button>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label className="text-xs text-muted-foreground">Where did the money come from?</Label>
+            <Select value={form.source} onValueChange={(v) => setForm((f) => ({ ...f, source: v }))}>
+              <SelectTrigger className="h-9 text-sm">
+                <SelectValue placeholder="Choose an account or instrument" />
+              </SelectTrigger>
+              <SelectContent className="max-h-72">
+                {(["MMF funds", "Bank instruments", "Government securities"] as const).map((group) => {
+                  const items = sources.filter((s) => s.group === group);
+                  if (items.length === 0) return null;
+                  return (
+                    <SelectGroup key={group}>
+                      <SelectLabel className="text-xs text-muted-foreground">{group}</SelectLabel>
+                      {items.map((s) => (
+                        <SelectItem key={s.value} value={s.value}>
+                          <span className="flex items-center gap-2">
+                            <span className={s.color}>{s.icon}</span>
+                            <span>{s.label}</span>
+                            <span className="text-xs text-muted-foreground">· {formatKES(s.available)} available</span>
+                          </span>
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  );
+                })}
+              </SelectContent>
+            </Select>
+            {sources.length === 0 && (
+              <p className="text-xs text-muted-foreground">No funded accounts yet — record a deposit first.</p>
+            )}
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label className="text-xs text-muted-foreground">Amount (KES)</Label>
+              <Input
+                type="number"
+                value={form.amount}
+                onChange={(e) => setForm((f) => ({ ...f, amount: e.target.value }))}
+                placeholder="0"
+                className="h-9 text-sm"
+              />
+              {selectedSource && (
+                <p className={`text-xs ${overdraw ? "text-red-400" : "text-muted-foreground"}`}>
+                  {formatKES(selectedSource.available)} available
+                </p>
+              )}
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs text-muted-foreground">Date</Label>
+              <Input
+                type="date"
+                value={form.withdrawalDate}
+                onChange={(e) => setForm((f) => ({ ...f, withdrawalDate: e.target.value }))}
+                className="h-9 text-sm"
+              />
+            </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label className="text-xs text-muted-foreground">Reason (optional)</Label>
+            <Textarea
+              value={form.reason}
+              onChange={(e) => setForm((f) => ({ ...f, reason: e.target.value }))}
+              placeholder="e.g. Paid car deposit, emergency expense…"
+              className="text-sm min-h-[60px]"
+            />
+          </div>
+
+          {earlyBreakWarning && (
+            <div className="rounded-lg bg-amber-500/10 border border-amber-500/30 p-3 flex items-start gap-2">
+              <AlertTriangle className="w-4 h-4 text-amber-400 mt-0.5 shrink-0" />
+              <p className="text-xs text-amber-200">
+                This fixed deposit has not matured. Breaking it early typically <strong>forfeits all accrued interest</strong> on
+                the withdrawn amount. The exact forfeiture will be computed and recorded.
+              </p>
+            </div>
+          )}
+
+          <div className="flex gap-2">
+            <Button onClick={handleSubmit} disabled={addMutation.isPending || overdraw || !selectedSource} className="flex-1">
+              {addMutation.isPending ? "Recording…" : "Record Withdrawal"}
+            </Button>
+          </div>
+        </Card>
+      )}
+
+      <Separator />
+
+      {/* History */}
+      <div>
+        <div className="flex items-center gap-2 mb-3">
+          <Info className="w-4 h-4 text-muted-foreground" />
+          <h2 className="text-sm font-semibold text-foreground">History ({withdrawals.length})</h2>
+        </div>
+        {isLoading ? (
+          <p className="text-sm text-muted-foreground">Loading…</p>
+        ) : withdrawals.length === 0 ? (
+          <Card className="p-8 bg-card border-border text-center">
+            <ArrowUpCircle className="w-8 h-8 text-muted-foreground/40 mx-auto mb-2" />
+            <p className="text-sm text-muted-foreground">No withdrawals recorded yet.</p>
+          </Card>
+        ) : (
+          <div className="space-y-2">
+            {withdrawals.map((w) => {
+              const meta = sourceLabelFor(w);
+              const amt = parseFloat(String(w.amount)) || 0;
+              const forfeit = parseFloat(String(w.forfeitedInterest)) || 0;
+              return (
+                <Card key={w.id} className="p-4 bg-card border-border flex items-center gap-3">
+                  <span className={meta.color}>{meta.icon}</span>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <p className="text-sm font-semibold text-foreground kes-amount">−{formatKES(amt)}</p>
+                      {w.isEarlyWithdrawal && (
+                        <Badge variant="outline" className="text-amber-400 border-amber-500/40 text-xs">
+                          Early FD break
+                        </Badge>
+                      )}
+                    </div>
+                    <p className="text-xs text-muted-foreground truncate">
+                      {meta.label} · {new Date(w.withdrawalDate).toLocaleDateString()}
+                      {w.reason ? ` · ${w.reason}` : ""}
+                      {forfeit > 0 ? ` · forfeited ${formatKES(forfeit)}` : ""}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setDeleteId(w.id)}
+                    className="p-1.5 rounded-lg text-muted-foreground hover:text-red-400 hover:bg-red-500/10 transition-colors"
+                    aria-label="Delete withdrawal"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </Card>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      <AlertDialog open={deleteId !== null} onOpenChange={(o) => !o && setDeleteId(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove this withdrawal?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will restore the withdrawn amount back to your tracked balances. Note: it does not automatically reverse a
+              real-world fixed-deposit break — it only corrects your tracking record.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => deleteId && portfolioId && deleteMutation.mutate({ portfolioId, id: deleteId })}
+            >
+              Remove
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
   );
 }
 ```

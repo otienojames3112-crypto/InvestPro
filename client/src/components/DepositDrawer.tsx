@@ -4,6 +4,15 @@ import { useSelectedFund } from "@/hooks/useSelectedFund";
 import { trpc } from "@/lib/trpc";
 import { formatKES } from "@/lib/format";
 import { BANK_INSTRUMENT_TYPES, isTermBankInstrument, bankInstrumentLabel, type BankInstrumentType } from "@shared/const";
+import {
+  computeMaturityDate,
+  whtRateForSecurity,
+  IFB_TENORS,
+  FXD_TENORS,
+  DEFAULT_IFB_TENOR_YEARS,
+  DEFAULT_FXD_TENOR_YEARS,
+  type SecurityType,
+} from "@shared/securityTenor";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -218,13 +227,40 @@ export function DepositDrawer({ open, onClose }: DepositDrawerProps) {
     interestRate: "",
     tenorMonths: "12",
   });
+  // Round 39: precise government-security details. When a gov bucket is chosen we
+  // capture the exact T-bill tenor (91/182/364) or bond tenor (years) so the
+  // auto-created register row carries the correct maturity + WHT.
+  const [govDetail, setGovDetail] = useState({
+    tbillTenorDays: 364 as 91 | 182 | 364,
+    bondTenorYears: DEFAULT_FXD_TENOR_YEARS as number,
+  });
 
   const selectedDest = destinations.find((d) => d.value === form.destination);
   const isNewBank = form.destination === "bank:new";
+  const govBucket = selectedDest?.payload.institutionType === "government_security"
+    ? selectedDest.payload.bucket
+    : undefined;
+  const isGovTbill = govBucket === "tbill";
+  const isGovBond = govBucket === "ifb" || govBucket === "fxd";
+  // Resolve the precise security type from the bucket + chosen tenor.
+  const govSecurityType: SecurityType | undefined = isGovTbill
+    ? (`tbill_${govDetail.tbillTenorDays}` as SecurityType)
+    : govBucket === "ifb"
+      ? "ifb"
+      : govBucket === "fxd"
+        ? "fxd"
+        : undefined;
+  const govMaturity = govSecurityType
+    ? computeMaturityDate(govSecurityType, form.depositDate, isGovBond ? govDetail.bondTenorYears : null)
+    : "";
+  const govWht = govSecurityType
+    ? whtRateForSecurity(govSecurityType, isGovBond ? govDetail.bondTenorYears : null)
+    : 0;
 
   function resetForm() {
     setForm({ destination: "", amount: "", depositDate: new Date().toISOString().slice(0, 10), notes: "" });
     setNewBank({ bankName: "", instrumentType: "fixed_deposit" as BankInstrumentType, interestRate: "", tenorMonths: "12" });
+    setGovDetail({ tbillTenorDays: 364, bondTenorYears: DEFAULT_FXD_TENOR_YEARS });
   }
 
   async function handleSubmit() {
@@ -286,6 +322,10 @@ export function DepositDrawer({ open, onClose }: DepositDrawerProps) {
       depositDate: form.depositDate,
       notes: form.notes || undefined,
       ...selectedDest.payload,
+      // Round 39: precise gov-security type + bond tenor so the auto-created
+      // register row gets the right maturity + WHT.
+      ...(govSecurityType ? { govSecurityType } : {}),
+      ...(isGovBond ? { bondTenorYears: govDetail.bondTenorYears } : {}),
     });
   }
 
@@ -445,16 +485,65 @@ export function DepositDrawer({ open, onClose }: DepositDrawerProps) {
                     Choose where the money landed. To open a new bank call/fixed deposit, pick “+ New bank deposit”. Extra MMF funds are added on the MMF Funds page.
                   </p>
                 )}
-                {selectedDest?.payload.bucket === "fxd" && (
-                  <div className="flex items-start gap-2 rounded-lg bg-red-500/10 border border-red-500/20 p-2.5 text-xs text-red-300">
-                    <Info className="w-3 h-3 mt-0.5 shrink-0" />
-                    <span>FXD coupon income is subject to 15% WHT — reflected in your tax estimate.</span>
-                  </div>
-                )}
-                {selectedDest?.payload.bucket === "ifb" && (
-                  <div className="flex items-start gap-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20 p-2.5 text-xs text-emerald-300">
-                    <ShieldCheck className="w-3 h-3 mt-0.5 shrink-0" />
-                    <span>IFB bond coupons are fully tax-exempt.</span>
+                {/* Round 39: precise gov-security tenor sub-form */}
+                {govBucket && (
+                  <div className="space-y-3 rounded-lg border border-white/10 bg-white/5 p-3">
+                    {isGovTbill && (
+                      <div className="space-y-1.5">
+                        <Label className="text-xs text-muted-foreground">T-Bill tenor</Label>
+                        <Select
+                          value={String(govDetail.tbillTenorDays)}
+                          onValueChange={(v) => setGovDetail((g) => ({ ...g, tbillTenorDays: parseInt(v, 10) as 91 | 182 | 364 }))}
+                        >
+                          <SelectTrigger className="bg-white/5 border-white/10 h-9 text-sm"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="91">91-day T-Bill</SelectItem>
+                            <SelectItem value="182">182-day T-Bill</SelectItem>
+                            <SelectItem value="364">364-day T-Bill</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    )}
+                    {isGovBond && (
+                      <div className="space-y-1.5">
+                        <Label className="text-xs text-muted-foreground">{govBucket === "ifb" ? "IFB tenor" : "FXD tenor"}</Label>
+                        <Select
+                          value={String(govDetail.bondTenorYears)}
+                          onValueChange={(v) => setGovDetail((g) => ({ ...g, bondTenorYears: parseFloat(v) }))}
+                        >
+                          <SelectTrigger className="bg-white/5 border-white/10 h-9 text-sm"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            {(govBucket === "ifb" ? IFB_TENORS : FXD_TENORS).map((o) => (
+                              <SelectItem key={o.years} value={String(o.years)}>
+                                {o.label}{o.band ? ` · ${o.band}` : ""}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    )}
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-muted-foreground">Matures</span>
+                      <span className="font-semibold text-foreground">
+                        {govMaturity ? new Date(`${govMaturity}T12:00:00Z`).toLocaleDateString("en-KE", { day: "numeric", month: "short", year: "numeric" }) : "—"}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-muted-foreground">Withholding tax</span>
+                      {govWht === 0 ? (
+                        <Badge variant="outline" className="border-emerald-500/40 text-emerald-400">Tax-exempt</Badge>
+                      ) : (
+                        <Badge variant="outline" className="border-amber-500/40 text-amber-400">{govWht}% WHT</Badge>
+                      )}
+                    </div>
+                    {govBucket === "fxd" && (
+                      <p className="text-[11px] text-muted-foreground">
+                        {govDetail.bondTenorYears >= 10 ? "10-year-plus FXD → 10% WHT on coupons." : "FXD under 10 years → 15% WHT on coupons."}
+                      </p>
+                    )}
+                    {govBucket === "ifb" && (
+                      <p className="text-[11px] text-emerald-300/80">IFB coupons are tax-exempt (subject to legislative change).</p>
+                    )}
                   </div>
                 )}
               </div>

@@ -149,6 +149,12 @@ export const securities = mysqlTable("securities", {
   issueDate: date("issueDate").notNull(),
   maturityDate: date("maturityDate").notNull(),
   couponRate: decimal("couponRate", { precision: 8, scale: 4 }).notNull().default("0.0000"),
+  /**
+   * Round 39: bond tenor in years (e.g. 8.5, 10, 17). Null for T-bills (whose
+   * tenor is fixed by type). Drives the maturity date and the tiered FXD WHT
+   * rule (15% under 10y, 10% at/over 10y).
+   */
+  tenorYears: decimal("tenorYears", { precision: 5, scale: 2 }),
   isTaxExempt: boolean("isTaxExempt").notNull().default(false),
   isMatured: boolean("isMatured").notNull().default(false),
   /** When this lot was recycled via re-buy/split, points at the replacement security's id (audit trail). */

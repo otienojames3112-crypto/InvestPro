@@ -224,7 +224,13 @@ export interface MonthResult {
   mainAction: string;
   mmfEnd: number;
   tbillEnd: number;
+  /** Round 39: T-bill balance split by tenor so the ledger can show 91/182/364. */
+  tbill91End: number;
+  tbill182End: number;
+  tbill364End: number;
   ifbEnd: number;
+  /** Round 39: dominant IFB tenor band (years) held at month-end, 0 when none. */
+  ifbTenorYears: number;
   fxdEnd: number;
   totalEnd: number;
   /** Combined projected balance of all secondary MMF accounts this month. */
@@ -1431,8 +1437,14 @@ export function runProjection(
     }
 
     let tbillEnd = 0;
+    let tbill91End = 0;
+    let tbill182End = 0;
+    let tbill364End = 0;
     let ifbEnd = 0;
     let fxdEnd = 0;
+    // Round 39: track the largest IFB lot's tenor so the ledger shows the band.
+    let ifbDominantFace = 0;
+    let ifbTenorYears = 0;
     for (const lot of lots) {
       if (lot.bucket === "tbill") {
         const age = m - lot.issueMonth;
@@ -1443,9 +1455,18 @@ export function runProjection(
         // "today" snapshot reconciles with recorded principal; accrue the discount
         // only across the forward horizon (Fix #5 — unified basis).
         const accruedDiscount = !isActualMonth && age > 0 ? netDiscount * (age / lot.tenorMonths) : 0;
-        tbillEnd += lot.faceValue + accruedDiscount;
+        const lotValue = lot.faceValue + accruedDiscount;
+        tbillEnd += lotValue;
+        // Bucket by nearest standard tenor (91d≈3m, 182d≈6m, 364d≈12m).
+        if (lot.tenorMonths <= 4) tbill91End += lotValue;
+        else if (lot.tenorMonths <= 9) tbill182End += lotValue;
+        else tbill364End += lotValue;
       } else if (lot.bucket === "ifb") {
         ifbEnd += lot.faceValue;
+        if (lot.faceValue > ifbDominantFace) {
+          ifbDominantFace = lot.faceValue;
+          ifbTenorYears = Math.round((lot.tenorMonths / 12) * 10) / 10;
+        }
       } else if (lot.bucket === "fxd") {
         fxdEnd += lot.faceValue;
       }
@@ -1512,7 +1533,11 @@ export function runProjection(
       mainAction,
       mmfEnd:   Math.round(mmf     * 100) / 100,
       tbillEnd: Math.round(tbillEnd * 100) / 100,
+      tbill91End:  Math.round(tbill91End  * 100) / 100,
+      tbill182End: Math.round(tbill182End * 100) / 100,
+      tbill364End: Math.round(tbill364End * 100) / 100,
       ifbEnd:   Math.round(ifbEnd   * 100) / 100,
+      ifbTenorYears,
       fxdEnd:   Math.round(fxdEnd   * 100) / 100,
       totalEnd: Math.round(total    * 100) / 100,
       secondaryMmfEnd: Math.round(secondaryMmfEnd * 100) / 100,

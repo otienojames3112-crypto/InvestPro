@@ -1,6 +1,7 @@
 import { useMemo } from "react";
-import { CalendarClock, TrendingUp, ShieldCheck, Landmark, Building2 } from "lucide-react";
+import { CalendarClock, TrendingUp, ShieldCheck, Landmark, Building2, ArrowRightLeft } from "lucide-react";
 import { formatKES } from "@/lib/format";
+import { suggestReinvestBucket, type ReinvestHint } from "@shared/incomeBreakdown";
 
 /**
  * Dashboard 90-day maturity / liquidity strip (Round 33).
@@ -112,17 +113,51 @@ export function buildMaturityEvents(
   return events.sort((a, b) => a.days - b.days);
 }
 
+/**
+ * Plan context used to suggest where each freed-up tranche should be reinvested,
+ * based on the active glide-path phase. Optional: when omitted, hints are hidden.
+ */
+export interface PlanContext {
+  /** Months elapsed since the plan start (1-indexed month into plan). */
+  monthIntoPlan: number;
+  horizonMonths: number;
+  foundationFrac?: number;
+  growthFrac?: number;
+  deRiskingFrac?: number;
+}
+
+const PHASE_LABEL: Record<ReinvestHint["phase"], string> = {
+  foundation: "Foundation",
+  growth: "Growth",
+  "de-risking": "De-risking",
+  "final-liquidity": "Final liquidity",
+};
+
 export function MaturityTimeline({
   securities,
   bankHoldings,
+  plan,
 }: {
   securities: SecurityLike[];
   bankHoldings: BankHoldingLike[];
+  plan?: PlanContext;
 }) {
   const events = useMemo(
     () => buildMaturityEvents(securities, bankHoldings),
     [securities, bankHoldings],
   );
+
+  // Reinvest hint for cash freeing up now: based on the active phase. Events all
+  // fall within ~3 months, so a single current-phase recommendation applies.
+  const hint = useMemo<ReinvestHint | null>(() => {
+    if (!plan || !(plan.horizonMonths > 0)) return null;
+    const fractions =
+      plan.foundationFrac != null && plan.growthFrac != null && plan.deRiskingFrac != null
+        ? { foundationFrac: plan.foundationFrac, growthFrac: plan.growthFrac, deRiskingFrac: plan.deRiskingFrac }
+        : undefined;
+    const isShort = plan.horizonMonths <= 12;
+    return suggestReinvestBucket(plan.monthIntoPlan, plan.horizonMonths, isShort, fractions);
+  }, [plan]);
 
   const totalFreeingUp = events.reduce((s, e) => s + e.amount, 0);
 
@@ -139,6 +174,17 @@ export function MaturityTimeline({
           </span>
         ) : null}
       </div>
+
+      {hint && events.length > 0 ? (
+        <div className="mb-4 flex items-start gap-2 rounded-lg border border-[#c9a84c]/25 bg-[#c9a84c]/[0.06] px-3 py-2">
+          <ArrowRightLeft className="w-4 h-4 text-[#c9a84c] shrink-0 mt-0.5" />
+          <p className="text-[11px] text-muted-foreground leading-snug">
+            <span className="text-foreground font-medium">{PHASE_LABEL[hint.phase]} phase.</span>{" "}
+            Suggested home for freed-up cash: <span className="text-foreground font-semibold">{hint.bucketLabel}</span>.{" "}
+            {hint.rationale}
+          </p>
+        </div>
+      ) : null}
 
       {events.length === 0 ? (
         <div className="py-6 text-center">
@@ -199,8 +245,13 @@ export function MaturityTimeline({
                       {e.days === 0 ? "today" : `in ${e.days} day${e.days === 1 ? "" : "s"}`}
                     </div>
                   </div>
-                  <div className="font-mono text-sm font-semibold text-foreground shrink-0">
-                    {formatKES(e.amount)}
+                  <div className="flex flex-col items-end shrink-0">
+                    <span className="font-mono text-sm font-semibold text-foreground">{formatKES(e.amount)}</span>
+                    {hint ? (
+                      <span className="text-[10px] text-[#c9a84c] flex items-center gap-0.5">
+                        <ArrowRightLeft className="w-2.5 h-2.5" /> → {hint.bucketLabel}
+                      </span>
+                    ) : null}
                   </div>
                 </div>
               );

@@ -38,6 +38,15 @@ import {
   Layers,
 } from "lucide-react";
 import { simulateAccrual, oneDayInterest, geometricDailyRate, type DayRow } from "@shared/accrual";
+import {
+  buildSecurityIncome,
+  buildBankIncome,
+  type SecurityIncomeInput,
+  type BankIncomeInput,
+  type IncomeSummary,
+} from "@shared/incomeBreakdown";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Landmark, Building2 } from "lucide-react";
 
 /** Format a number as KES currency. */
 function kes(n: number, dp = 2): string {
@@ -159,6 +168,62 @@ export default function MmfAccrual() {
   const days = Math.max(1, Math.min(366, Number(horizon) || 30));
   const isBlended = selection === "blended";
 
+  // Round 34: asset-class tab — MMF (existing behaviour) / Govt securities / Bank instruments.
+  const [assetClass, setAssetClass] = useState<"mmf" | "securities" | "bank">("mmf");
+
+  // Data for the non-MMF breakdowns.
+  const { data: securitiesData = [] } = trpc.securities.list.useQuery(
+    { portfolioId: portfolioId! },
+    { enabled: !!portfolioId },
+  );
+  const { data: bankHoldingsData = [] } = trpc.bankHoldings.list.useQuery(
+    { portfolioId: portfolioId! },
+    { enabled: !!portfolioId },
+  );
+
+  const securityIncome: IncomeSummary = useMemo(
+    () =>
+      buildSecurityIncome(
+        (securitiesData as unknown[]).map((s) => {
+          const r = s as Record<string, unknown>;
+          return {
+            id: Number(r.id),
+            securityType: String(r.securityType) as SecurityIncomeInput["securityType"],
+            faceValue: Number(r.faceValue) || 0,
+            couponRate: Number(r.couponRate) || 0,
+            isTaxExempt: !!r.isTaxExempt,
+            maturityDate: (r.maturityDate as string | null) ?? null,
+            isMatured: !!r.isMatured,
+          } satisfies SecurityIncomeInput;
+        }),
+        days,
+      ),
+    [securitiesData, days],
+  );
+
+  const bankIncome: IncomeSummary = useMemo(
+    () =>
+      buildBankIncome(
+        (bankHoldingsData as unknown[]).map((b) => {
+          const r = b as Record<string, unknown>;
+          return {
+            id: Number(r.id),
+            bankName: String(r.bankName ?? ""),
+            label: (r.label as string | null) ?? null,
+            instrumentType: String(r.instrumentType) as BankIncomeInput["instrumentType"],
+            principal: Number(r.principal) || 0,
+            interestRate: Number(r.interestRate) || 0,
+            whtRate: Number(r.whtRate) || 15,
+            dayCountBasis: Number(r.dayCountBasis) || 365,
+            maturityDate: (r.maturityDate as string | null) ?? null,
+            isActive: r.isActive !== false,
+          } satisfies BankIncomeInput;
+        }),
+        days,
+      ),
+    [bankHoldingsData, days],
+  );
+
   const selectedAccount = useMemo(
     () => accounts.find((a) => a.key === selection) ?? accounts[0],
     [accounts, selection]
@@ -245,7 +310,7 @@ export default function MmfAccrual() {
           <div className="flex items-center gap-2">
             <CalendarClock className="w-5 h-5 text-primary" />
             <h1 className="text-2xl font-bold" style={{ fontFamily: "'Playfair Display', serif" }}>
-              Daily MMF Accrual Ledger
+              Daily Income & Accrual Ledger
             </h1>
           </div>
           <p className="text-muted-foreground text-sm max-w-3xl">
@@ -258,6 +323,17 @@ export default function MmfAccrual() {
           </p>
         </div>
 
+        {/* Round 34: asset-class selector */}
+        <Tabs value={assetClass} onValueChange={(v) => setAssetClass(v as "mmf" | "securities" | "bank")}>
+          <TabsList>
+            <TabsTrigger value="mmf" className="gap-1.5"><Coins className="w-3.5 h-3.5" /> MMF</TabsTrigger>
+            <TabsTrigger value="securities" className="gap-1.5"><Landmark className="w-3.5 h-3.5" /> Govt securities</TabsTrigger>
+            <TabsTrigger value="bank" className="gap-1.5"><Building2 className="w-3.5 h-3.5" /> Bank instruments</TabsTrigger>
+          </TabsList>
+        </Tabs>
+
+        {assetClass === "mmf" && (
+        <>
         {/* Account selector */}
         <Card className="border-primary/30 bg-primary/5">
           <CardContent className="py-4 space-y-4">
@@ -559,7 +635,117 @@ export default function MmfAccrual() {
             </p>
           </CardContent>
         </Card>
+        </>
+        )}
+
+        {assetClass === "securities" && (
+          <IncomeBreakdownSection
+            title="Government Securities — interest breakdown"
+            blurb="T-Bills earn a discount and Treasury bonds (FXD) pay a coupon, both taxed at 15% WHT. Infrastructure Bonds (IFB) are tax-exempt in Kenya. Figures are simple pro-rata of the annual gross over the chosen horizon (coupons/discounts do not compound intra-period like an MMF)."
+            summary={securityIncome}
+            days={days}
+            emptyHint="No live government securities in this portfolio. Add T-Bills, IFB, or FXD on the CBK Securities page."
+            baseLabel="Face value"
+          />
+        )}
+
+        {assetClass === "bank" && (
+          <IncomeBreakdownSection
+            title="Bank Instruments — interest breakdown"
+            blurb="Fixed, call, and savings deposits earn simple interest at their quoted rate, taxed at each holding's WHT rate (usually 15%). Figures are pro-rata of the annual gross over the chosen horizon on a 365-day-equivalent basis."
+            summary={bankIncome}
+            days={days}
+            emptyHint="No active bank instruments in this portfolio. Add fixed/call/target deposits on the Record Deposits → Bank page."
+            baseLabel="Principal"
+          />
+        )}
       </div>
     </AppShell>
+  );
+}
+
+/** Round 34: shared breakdown UI for non-MMF income (Govt securities / Bank instruments). */
+function IncomeBreakdownSection({
+  title,
+  blurb,
+  summary,
+  days,
+  emptyHint,
+  baseLabel,
+}: {
+  title: string;
+  blurb: string;
+  summary: IncomeSummary;
+  days: number;
+  emptyHint: string;
+  baseLabel: string;
+}) {
+  const empty = summary.rows.length === 0;
+  return (
+    <div className="space-y-6">
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">{title}</CardTitle>
+          <CardDescription>{blurb}</CardDescription>
+        </CardHeader>
+      </Card>
+
+      {empty ? (
+        <Card>
+          <CardContent className="py-10 text-center text-sm text-muted-foreground">{emptyHint}</CardContent>
+        </Card>
+      ) : (
+        <>
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            <Card><CardContent className="py-4"><div className="flex items-center gap-2 text-muted-foreground text-xs mb-1"><Coins className="w-3.5 h-3.5" /> Gross ({days}d)</div><p className="text-xl font-bold">{kes(summary.grossHorizon)}</p></CardContent></Card>
+            <Card><CardContent className="py-4"><div className="flex items-center gap-2 text-muted-foreground text-xs mb-1"><Receipt className="w-3.5 h-3.5" /> WHT</div><p className="text-xl font-bold text-red-500">−{kes(summary.whtHorizon)}</p></CardContent></Card>
+            <Card><CardContent className="py-4"><div className="flex items-center gap-2 text-muted-foreground text-xs mb-1"><TrendingUp className="w-3.5 h-3.5" /> Net ({days}d)</div><p className="text-xl font-bold text-primary">{kes(summary.netHorizon)}</p></CardContent></Card>
+            <Card><CardContent className="py-4"><div className="flex items-center gap-2 text-muted-foreground text-xs mb-1"><Percent className="w-3.5 h-3.5" /> Net / yr</div><p className="text-xl font-bold">{kes(summary.netAnnual)}</p></CardContent></Card>
+          </div>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Per-holding interest ({days}-day horizon)</CardTitle>
+              <CardDescription>Each row earns on its own {baseLabel.toLowerCase()} and rate. Totals above are the sum of these rows.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="rounded-md border overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Holding</TableHead>
+                      <TableHead>Kind</TableHead>
+                      <TableHead className="text-right">{baseLabel}</TableHead>
+                      <TableHead className="text-right">Rate</TableHead>
+                      <TableHead className="text-right">Gross ({days}d)</TableHead>
+                      <TableHead className="text-right">WHT</TableHead>
+                      <TableHead className="text-right">Net ({days}d)</TableHead>
+                      <TableHead className="text-right">Gross / yr</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {summary.rows.map((r) => (
+                      <TableRow key={r.id}>
+                        <TableCell className="font-medium">{r.label}</TableCell>
+                        <TableCell className="text-xs text-muted-foreground">
+                          {r.kind}
+                          {r.taxExempt && <Badge variant="secondary" className="ml-2">Tax-exempt</Badge>}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">{kes(r.base)}</TableCell>
+                        <TableCell className="text-right tabular-nums">{r.ratePct.toFixed(2)}%</TableCell>
+                        <TableCell className="text-right tabular-nums">{kes(r.grossHorizon)}</TableCell>
+                        <TableCell className="text-right tabular-nums text-red-500">{r.whtHorizon > 0 ? `−${kes(r.whtHorizon)}` : "—"}</TableCell>
+                        <TableCell className="text-right tabular-nums text-primary">{kes(r.netHorizon)}</TableCell>
+                        <TableCell className="text-right tabular-nums">{kes(r.grossAnnual)}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </CardContent>
+          </Card>
+        </>
+      )}
+    </div>
   );
 }

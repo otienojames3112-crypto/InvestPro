@@ -497,3 +497,10 @@
 - [x] R33.4 Per-deposit "Break now" action button on each term-deposit holding card → records the early-break what-if as an actual withdrawal entry
 - [x] R33.5 Dashboard 90-day maturity-timeline strip: next 90 days of CBK maturities + bank fixed-deposit free-up dates
 - [x] R33.6 Run full suite, checkpoint, regenerate source bundle, deliver source ZIP/bundle + checkpoint
+
+## Round 34 — Accrual breakdowns + concentration cap + partial break + reinvest hints
+- [x] R34.1 Daily Accrual page: currently only tracks the one MMF. Add interest-accrual breakdown for Govt securities (T-Bills/IFB/FXD) and Bank instruments (fixed/call/target deposits)
+- [x] R34.2 Editable issuer concentration cap: replace hardcoded 25% with a per-portfolio setting (default 25%); concentration check + UI read it
+- [x] R34.3 Partial "Break now": let the user break only part of a term deposit's principal instead of the full amount
+- [x] R34.4 Timeline reinvest hint: on each maturity event, show the suggested next bucket given the active phase allocation
+- [x] R34.5 Run full suite, checkpoint, regenerate source ZIP, deliver

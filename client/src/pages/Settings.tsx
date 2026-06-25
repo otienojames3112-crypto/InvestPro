@@ -37,6 +37,7 @@ interface PlanForm {
   stepUpAmount: number;
   stepUpMonths: number;
   safetyFloor: number;
+  concentrationCapPct: number;
 }
 
 function RateField({ label, name, register, description }: {
@@ -194,6 +195,7 @@ export default function Settings() {
       stepUpAmount: 3000,
       stepUpMonths: 6,
       safetyFloor: 50000,
+      concentrationCapPct: 25,
     },
   });
 
@@ -209,6 +211,7 @@ export default function Settings() {
         stepUpAmount: portfolio.stepUpAmount,
         stepUpMonths: portfolio.stepUpMonths,
         safetyFloor: portfolio.safetyFloor,
+        concentrationCapPct: (portfolio as { concentrationCapPct?: number }).concentrationCapPct ?? 25,
       });
     }
   }, [portfolio]);
@@ -327,6 +330,11 @@ export default function Settings() {
                     </button>
                   </div>
                 )}
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs font-medium">Per-Issuer Concentration Cap (%)</Label>
+                <Input type="number" step="1" min="5" max="100" {...planForm.register("concentrationCapPct", { valueAsNumber: true })} />
+                <p className="text-xs text-muted-foreground">No single bank/issuer should exceed this share of net worth before the Dashboard warns. Government securities are exempt (sovereign). Default 25%.</p>
               </div>
             </CardContent>
           </Card>

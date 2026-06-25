@@ -59,6 +59,12 @@ export const portfolios = mysqlTable("portfolios", {
   foundationFrac: decimal("foundationFrac", { precision: 5, scale: 4 }).notNull().default("0.2000"),
   growthFrac: decimal("growthFrac", { precision: 5, scale: 4 }).notNull().default("0.5000"),
   deRiskingFrac: decimal("deRiskingFrac", { precision: 5, scale: 4 }).notNull().default("0.1500"),
+  /**
+   * Round 34: editable per-issuer concentration cap (%). No single bank/issuer
+   * may exceed this share of net worth before the Dashboard banner warns.
+   * Government securities are sovereign and exempt. Default 25%.
+   */
+  concentrationCapPct: decimal("concentrationCapPct", { precision: 5, scale: 2 }).notNull().default("25.00"),
   // finalLiquidityFrac is implied: 1 - foundationFrac - growthFrac - deRiskingFrac
   /** Editable source URL for CBK T-Bills rates page */
   cbkSourceUrl: varchar("cbkSourceUrl", { length: 500 }).notNull().default("https://www.centralbank.go.ke/bills-bonds/treasury-bills/"),

@@ -1163,6 +1163,19 @@ export default function Dashboard() {
         <MaturityTimeline
           securities={securities as never}
           bankHoldings={bankHoldings as never}
+          plan={
+            portfolio
+              ? {
+                  monthIntoPlan: (() => {
+                    const start = new Date(String(portfolio.startDate));
+                    const now = new Date();
+                    const m = (now.getFullYear() - start.getFullYear()) * 12 + (now.getMonth() - start.getMonth()) + 1;
+                    return Math.max(1, m);
+                  })(),
+                  horizonMonths: portfolio.horizonMonths ?? 0,
+                }
+              : undefined
+          }
         />
 
       </div>

@@ -292,6 +292,8 @@ const portfolioCreateInput = z.object({
   foundationFrac: z.number().min(0.05).max(0.5).optional(),
   growthFrac: z.number().min(0.1).max(0.7).optional(),
   deRiskingFrac: z.number().min(0.05).max(0.4).optional(),
+  // Round 34: editable per-issuer concentration cap (%). 5–100.
+  concentrationCapPct: z.number().min(5).max(100).optional(),
 });
 
 const rateOnlyInput = z.object({
@@ -343,6 +345,7 @@ export const appRouter = router({
           foundationFrac: parseFloat(String(p.foundationFrac)),
           growthFrac: parseFloat(String(p.growthFrac)),
           deRiskingFrac: parseFloat(String(p.deRiskingFrac)),
+          concentrationCapPct: parseFloat(String((p as { concentrationCapPct?: string }).concentrationCapPct ?? "25")),
           cbkSourceUrl: p.cbkSourceUrl,
           sanlamSourceUrl: p.sanlamSourceUrl,
           ratesLastUpdatedAt: p.ratesLastUpdatedAt ?? null,
@@ -370,6 +373,7 @@ export const appRouter = router({
         foundationFrac: parseFloat(String(p.foundationFrac)),
         growthFrac: parseFloat(String(p.growthFrac)),
         deRiskingFrac: parseFloat(String(p.deRiskingFrac)),
+        concentrationCapPct: parseFloat(String((p as { concentrationCapPct?: string }).concentrationCapPct ?? "25")),
         cbkSourceUrl: p.cbkSourceUrl,
         sanlamSourceUrl: p.sanlamSourceUrl,
         ratesLastUpdatedAt: p.ratesLastUpdatedAt ?? null,
@@ -398,6 +402,7 @@ export const appRouter = router({
         foundationFrac: String(input.foundationFrac ?? 0.20),
         growthFrac: String(input.growthFrac ?? 0.50),
         deRiskingFrac: String(input.deRiskingFrac ?? 0.15),
+        concentrationCapPct: String(input.concentrationCapPct ?? 25),
       });
       if (!p) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Failed to create portfolio." });
       // Ensure a rate_settings row exists
@@ -423,6 +428,7 @@ export const appRouter = router({
           foundationFrac: String(input.foundationFrac ?? 0.20),
           growthFrac: String(input.growthFrac ?? 0.50),
           deRiskingFrac: String(input.deRiskingFrac ?? 0.15),
+          ...(input.concentrationCapPct != null ? { concentrationCapPct: String(input.concentrationCapPct) } : {}),
         });
         return { success: true };
       }),
@@ -2085,9 +2091,11 @@ export const appRouter = router({
             // Use the larger of current value vs principal (mirrors net-worth basis).
             value: Math.max(Number(r.currentValue) || 0, Number(r.principal) || 0),
           }));
-        const breaches = detectIssuerConcentration(issuerValues, netWorth);
+        const capPct = parseFloat(String((p as { concentrationCapPct?: string }).concentrationCapPct ?? "25"));
+        const cap = (Number.isFinite(capPct) && capPct > 0 ? capPct : 25) / 100;
+        const breaches = detectIssuerConcentration(issuerValues, netWorth, cap);
         return {
-          cap: ISSUER_CONCENTRATION_CAP,
+          cap,
           netWorth: Math.round(netWorth * 100) / 100,
           breaches: breaches.map((b) => ({
             issuer: b.issuer,

@@ -207,3 +207,47 @@ export function currentSecurityValue(s: CurrentValueSecurity, today: Date = new 
   const accruedCoupon = face * (couponPct / 100) * (elapsedDays / 365);
   return face + Math.max(0, accruedCoupon);
 }
+
+/**
+ * Round 49: How far a DISCOUNT lot has moved from its purchase price toward face.
+ *
+ * Returns a fraction in [0, 1] suitable for an accretion-progress bar:
+ *   0   → just bought (current value == purchase price)
+ *   1   → fully accreted / matured (current value == face)
+ *
+ * For coupon bonds (FXD/IFB) the concept doesn't apply (they sit at par), so we
+ * return null and the UI should hide the bar.
+ *
+ * The fraction is computed from VALUE, not time, so it stays consistent with the
+ * `currentSecurityValue` figure shown next to it:
+ *   progress = (current − price) / (face − price)
+ * When face == price (no discount) we fall back to elapsed-time fraction so a
+ * zero-discount lot still shows sensible progress.
+ */
+export function accretionProgress(
+  s: CurrentValueSecurity,
+  today: Date = new Date(),
+): number | null {
+  if (!isDiscountType(s.securityType)) return null;
+
+  const face = Number(s.faceValue) || 0;
+  const price = Number(s.purchasePrice);
+  if (face <= 0) return null;
+  if (!Number.isFinite(price) || price <= 0) return null;
+
+  if (s.isMatured) return 1;
+
+  const maturity = toTime(s.maturityDate);
+  if (Number.isFinite(maturity) && today.getTime() >= maturity) return 1;
+
+  const current = currentSecurityValue(s, today);
+  const spread = face - price;
+  if (spread <= 0) {
+    // No discount (price == face). Fall back to elapsed-time fraction.
+    const issue = toTime(s.issueDate);
+    const span = maturity - issue;
+    const frac = span > 0 ? (today.getTime() - issue) / span : 0;
+    return Math.min(1, Math.max(0, frac));
+  }
+  return Math.min(1, Math.max(0, (current - price) / spread));
+}

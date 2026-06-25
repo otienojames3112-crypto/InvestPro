@@ -31,7 +31,7 @@ import {
   isDiscountInstrument,
   type SecurityType,
 } from "@shared/securityTenor";
-import { discountPriceForSecurity } from "@shared/discount";
+import { discountPriceForSecurity, currentSecurityValue, accretionProgress, type CurrentValueSecurity } from "@shared/discount";
 import { SecurityTenorFields } from "@/components/SecurityTenorFields";
 
 interface SecurityForm {
@@ -584,6 +584,7 @@ export default function Securities() {
                       <th className="text-right px-4 py-3 text-muted-foreground font-medium">Face Value</th>
                       <th className="text-right px-4 py-3 text-muted-foreground font-medium">Purchase Price</th>
                       <th className="text-right px-4 py-3 text-muted-foreground font-medium">Discount</th>
+                      <th className="text-right px-4 py-3 text-muted-foreground font-medium">Current Value</th>
                       <th className="text-left px-4 py-3 text-muted-foreground font-medium">Issue Date</th>
                       <th className="text-left px-4 py-3 text-muted-foreground font-medium">Maturity Date</th>
                       <th className="text-right px-4 py-3 text-muted-foreground font-medium">Days Left</th>
@@ -616,6 +617,25 @@ export default function Securities() {
                             : NaN
                         : NaN;
                       const rowDiscount = Number.isFinite(rowPrice) ? face - rowPrice : NaN;
+                      // R49 — mark-to-model current value + accretion progress for this lot.
+                      const cvLot: CurrentValueSecurity = {
+                        securityType: s.securityType,
+                        faceValue: face,
+                        purchasePrice: Number.isFinite(rowPrice) ? rowPrice : null,
+                        couponRate: s.couponRate != null ? parseFloat(String(s.couponRate)) : 0,
+                        issueDate: s.issueDate,
+                        maturityDate: s.maturityDate,
+                        isMatured: s.isMatured,
+                      };
+                      const currentValue = currentSecurityValue(cvLot);
+                      const progress = accretionProgress(cvLot);
+                      // For discount lots the meaningful gain is current − purchase price
+                      // (it accretes UP toward face); for coupon bonds it's the accrued
+                      // coupon above par (current − face).
+                      const gainSinceBuy =
+                        progress != null && Number.isFinite(rowPrice)
+                          ? currentValue - rowPrice
+                          : currentValue - face;
                       return (
                         <tr key={s.id} className="border-b border-border/40 hover:bg-muted/20 transition-colors">
                           <td className="px-4 py-3">
@@ -642,6 +662,30 @@ export default function Securities() {
                             ) : (
                               <span className="text-muted-foreground">–</span>
                             )}
+                          </td>
+                          <td className="px-4 py-3 text-right kes-amount min-w-[140px]">
+                            <div className="flex flex-col items-end gap-1">
+                              <span className="font-semibold text-sky-300">{formatKES(currentValue)}</span>
+                              {Math.abs(gainSinceBuy) >= 1 && (
+                                <span className="text-[10px] text-emerald-400/80">
+                                  +{formatKES(gainSinceBuy)} {progress != null ? "accreted" : "accrued"}
+                                </span>
+                              )}
+                              {progress != null && (
+                                <div
+                                  className="w-full h-1.5 rounded-full bg-muted/50 overflow-hidden"
+                                  title={`${Math.round(progress * 100)}% of the way from purchase price to face`}
+                                >
+                                  <div
+                                    className="h-full rounded-full bg-gradient-to-r from-sky-500 to-emerald-400 transition-[width] duration-500"
+                                    style={{ width: `${Math.max(2, Math.round(progress * 100))}%` }}
+                                  />
+                                </div>
+                              )}
+                              {progress != null && (
+                                <span className="text-[10px] text-muted-foreground tabular-nums">{Math.round(progress * 100)}% to face</span>
+                              )}
+                            </div>
                           </td>
                           <td className="px-4 py-3 text-muted-foreground">
                             {new Date(s.issueDate).toLocaleDateString("en-KE", { day: "numeric", month: "short", year: "numeric" })}

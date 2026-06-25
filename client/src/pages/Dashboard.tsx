@@ -239,6 +239,8 @@ export default function Dashboard() {
   // R48: Holdings-by-Instrument card can show face value or current (accreted /
   // par + accrued) value of active securities.
   const [holdingsBasis, setHoldingsBasis] = useState<"face" | "current">("face");
+  // R49 — Maturity Calendar time-window filter (days, or "all").
+  const [maturityWindow, setMaturityWindow] = useState<30 | 90 | 365 | "all">("all");
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -1261,7 +1263,7 @@ export default function Dashboard() {
               };
               const now = new Date();
               const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-              const upcoming = rows
+              const allUpcoming = rows
                 .filter((s) => !s?.isMatured && s?.maturityDate)
                 .map((s) => {
                   const mt = new Date(String(s.maturityDate)).getTime();
@@ -1275,18 +1277,49 @@ export default function Dashboard() {
                   };
                 })
                 .filter((e) => Number.isFinite(e.maturity) && e.days >= 0 && e.face > 0)
-                .sort((a, b) => a.maturity - b.maturity)
-                .slice(0, 8);
-              if (upcoming.length === 0) return null;
+                .sort((a, b) => a.maturity - b.maturity);
+              if (allUpcoming.length === 0) return null;
+              // R49 — apply the selected time window, then cap the list length.
+              const windowed =
+                maturityWindow === "all"
+                  ? allUpcoming
+                  : allUpcoming.filter((e) => e.days <= maturityWindow);
+              const upcoming = windowed.slice(0, 12);
+              const WINDOWS: Array<30 | 90 | 365 | "all"> = [30, 90, 365, "all"];
+              const windowedFace = windowed.reduce((sum, e) => sum + e.face, 0);
               return (
                 <div className="mt-4 rounded-xl border border-white/10 bg-white/[0.02] p-4 space-y-3">
-                  <div className="flex items-center gap-2">
-                    <CalendarClock className="w-4 h-4 text-primary shrink-0" />
-                    <div>
-                      <p className="text-xs font-medium uppercase tracking-widest text-muted-foreground">Maturity Calendar</p>
-                      <p className="text-xs text-muted-foreground">Upcoming security redemptions, soonest first. Plan your re-investments around these dates.</p>
+                  <div className="flex items-start justify-between gap-2 flex-wrap">
+                    <div className="flex items-center gap-2">
+                      <CalendarClock className="w-4 h-4 text-primary shrink-0" />
+                      <div>
+                        <p className="text-xs font-medium uppercase tracking-widest text-muted-foreground">Maturity Calendar</p>
+                        <p className="text-xs text-muted-foreground">Upcoming security redemptions, soonest first. Plan your re-investments around these dates.</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center rounded-lg bg-muted/40 p-0.5">
+                      {WINDOWS.map((w) => (
+                        <button
+                          key={String(w)}
+                          type="button"
+                          onClick={() => setMaturityWindow(w)}
+                          className={cn(
+                            "rounded-md px-2.5 py-1 text-[11px] font-medium tabular-nums transition-colors",
+                            maturityWindow === w
+                              ? "bg-card text-foreground shadow-sm"
+                              : "text-muted-foreground hover:text-foreground",
+                          )}
+                        >
+                          {w === "all" ? "All" : w === 365 ? "1y" : `${w}d`}
+                        </button>
+                      ))}
                     </div>
                   </div>
+                  {upcoming.length === 0 ? (
+                    <p className="text-xs text-muted-foreground py-3 text-center">
+                      No maturities within {maturityWindow === "all" ? "this range" : maturityWindow === 365 ? "1 year" : `${maturityWindow} days`}. Try a wider window.
+                    </p>
+                  ) : (
                   <div className="divide-y divide-white/5">
                     {upcoming.map((e, i) => {
                       const imminent = e.days <= 30;
@@ -1325,9 +1358,18 @@ export default function Dashboard() {
                       );
                     })}
                   </div>
-                  <p className="text-[11px] text-muted-foreground/70">
-                    Red dots mature within 30 days, amber within 90. Click a row to jump to that month in the ledger.
-                  </p>
+                  )}
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <p className="text-[11px] text-muted-foreground/70">
+                      Red dots mature within 30 days, amber within 90. Click a row to jump to that month in the ledger.
+                    </p>
+                    {windowed.length > 0 && (
+                      <p className="text-[11px] text-muted-foreground tabular-nums">
+                        {windowed.length} {windowed.length === 1 ? "lot" : "lots"} · {formatKESCompact(windowedFace)} face
+                        {windowed.length > upcoming.length ? ` (showing ${upcoming.length})` : ""}
+                      </p>
+                    )}
+                  </div>
                 </div>
               );
             })()}

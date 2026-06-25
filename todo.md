@@ -618,3 +618,11 @@
 - [x] R48.1 Holdings-by-Instrument card: toggle between Face value and Current (market/accreted) value, computed from a shared current-value helper.
 - [x] R48.2 Add a Maturity Calendar widget on the Dashboard listing upcoming (non-matured) security maturities in date order with days-to-maturity + face.
 - [x] R48.3 Tests for current-value helper + maturity ordering; full suite green (414), tsc clean, UI verified, checkpoint, deliver.
+
+## Round 49 (register current-value column + maturity filter + accretion bar)
+
+- [x] R49.1 CBK Securities register table: add a Current Value column showing each lot's accreted/par+accrued value (via shared currentSecurityValue).
+- [x] R49.2 Per discount lot (T-bill/zero-coupon): add an accretion-progress bar showing how far it has moved from purchase price toward face.
+- [x] R49.3 Maturity Calendar widget: add a time-window filter (30 / 90 / 365 days / all) for portfolios with many lots.
+- [x] R49.4 Tests for accretion-progress fraction helper; full suite green (422), tsc clean, UI verified, checkpoint.
+- [ ] R49.5 Package the full project as a downloadable ZIP and deliver.

@@ -556,9 +556,10 @@ export const appRouter = router({
       const rateHistoryRows = await getRateHistory(input.portfolioId);
       const rh = mapRateHistory(rateHistoryRows);
       const secondaryMmfs = mapSecondaryMmfs(await getSecondaryMmfs(input.portfolioId));
+      const bankHoldings = mapActualBankHoldings(await getBankInstrumentHoldings(input.portfolioId));
       const currentStepUp = Number(p?.stepUpAmount ?? 0);
       const stepUps = deriveStepUps(currentStepUp);
-      return runScenarios(settings, stepUps, rh, secondaryMmfs);
+      return runScenarios(settings, stepUps, rh, secondaryMmfs, bankHoldings, p.mmfFundId ?? null);
     }),
 
     milestones: protectedProcedure.input(portfolioIdInput).query(async ({ ctx, input }) => {
@@ -915,7 +916,23 @@ export const appRouter = router({
       }));
       const rateHistoryRows = await getRateHistory(input.portfolioId);
       const rh = mapRateHistory(rateHistoryRows);
-      const results = runProjection(settings, mappedOverrides, rh);
+      const actualDeposits = [
+        ...mapActualDeposits(await getDepositEntries(input.portfolioId)),
+        ...mapPrimaryMmfWithdrawalsAsDeposits(await getWithdrawalEntries(input.portfolioId), p.mmfFundId ?? null),
+      ];
+      const actualSecurities = mapActualSecurities(await getSecurities(input.portfolioId));
+      const secondaryMmfs = mapSecondaryMmfs(await getSecondaryMmfs(input.portfolioId));
+      const bankHoldings = mapActualBankHoldings(await getBankInstrumentHoldings(input.portfolioId));
+      const results = runProjection(
+        settings,
+        mappedOverrides,
+        rh,
+        actualDeposits,
+        actualSecurities,
+        secondaryMmfs,
+        bankHoldings,
+        p.mmfFundId ?? null,
+      );
 
       const startDate = new Date(`${settings.startDate}T12:00:00.000Z`);
       const entries = results.map((r) => {

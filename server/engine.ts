@@ -231,6 +231,8 @@ export interface MonthResult {
   secondaryMmfEnd: number;
   /** Combined projected balance of all bank instrument holdings this month. */
   bankEnd: number;
+  /** Cash returned to the MMF this month by a maturing bank term deposit. */
+  bankCashIn: number;
   phase: "foundation" | "growth" | "de-risking" | "final-liquidity";
   sweepTarget: "tbill" | "ifb" | "fxd" | null;
   /** Total WHT withheld this month (MMF + T-Bill + FXD). */
@@ -1107,11 +1109,31 @@ export function runProjection(
     let bankEnd = 0;
     let bankMaturedCashIn = 0;
     const bankMaturityActions: string[] = [];
+    const bankPlacementActions: string[] = [];
     for (const b of bankState) {
       if (b.matured) continue;
       if (b.balance === 0) continue;
       const bWhtPct = b.whtRate ?? rates.withholdingTax;
       const bWht = bWhtPct / 100;
+
+      // Placement narration: in the FORWARD month the deposit first appears
+      // (its startMonth, or month 1 for an opening holding), state where the
+      // principal came from so a layperson can trace every shilling.
+      if (!isActualMonth && m === b.startMonth) {
+        const placeKind =
+          b.kind === "fixed_deposit" ? "fixed deposit"
+          : b.kind === "target_savings" ? "goal/target savings"
+          : b.kind === "call_deposit" ? "call deposit"
+          : "savings deposit";
+        const whoPlace = b.label ? `${b.label} ${placeKind}` : `a ${placeKind}`;
+        const tenorPart =
+          !b.isLiquid && b.maturityMonth != null
+            ? `, maturing ${(() => { const d = new Date(startDate); d.setMonth(d.getMonth() + (b.maturityMonth - 1)); return d.toLocaleDateString("en-GB", { month: "short", year: "numeric" }); })()}`
+            : "";
+        bankPlacementActions.push(
+          `Placed KES ${Math.round(b.principal).toLocaleString()} in ${whoPlace} at ${b.interestRate}%${tenorPart}`
+        );
+      }
 
       // Accrue this month's net interest on the forward path.
       if (!isActualMonth && m >= b.startMonth) {
@@ -1472,6 +1494,11 @@ export function runProjection(
     } else {
       mainAction = "Add this month's saving to the MMF; nothing swept into securities this month";
     }
+    // Prepend any bank-deposit placement narration so the investor sees where a
+    // newly-appearing bank balance came from (Round 35).
+    if (bankPlacementActions.length > 0) {
+      mainAction = `${capitalise(bankPlacementActions.join("; "))}. ${mainAction}`;
+    }
     // Silence unused-variable lints when no maturity occurred.
     void maturedCashThisMonth;
 
@@ -1490,6 +1517,7 @@ export function runProjection(
       totalEnd: Math.round(total    * 100) / 100,
       secondaryMmfEnd: Math.round(secondaryMmfEnd * 100) / 100,
       bankEnd: Math.round(bankEnd * 100) / 100,
+      bankCashIn: Math.round(bankMaturedCashIn * 100) / 100,
       phase,
       sweepTarget,
       whtThisMonth: Math.round(whtThisMonth * 100) / 100,
@@ -1508,12 +1536,14 @@ export function runScenarios(
   baseSettings: EngineSettings,
   stepUps: number[] = SCENARIO_STEPUPS,
   rateHistory: RateSnapshot[] = [],
-  secondaryMmfs: SecondaryMmfInput[] = []
+  secondaryMmfs: SecondaryMmfInput[] = [],
+  bankHoldings: ActualBankHolding[] = [],
+  primaryFundId: number | null = null
 ): ScenarioResult[] {
   const horizonMonths = baseSettings.horizonMonths ?? 120;
   return stepUps.map((stepUp) => {
     const settings = { ...baseSettings, stepUpAmount: stepUp };
-    const results = runProjection(settings, [], rateHistory, [], [], secondaryMmfs);
+    const results = runProjection(settings, [], rateHistory, [], [], secondaryMmfs, bankHoldings, primaryFundId);
     const last = results[results.length - 1];
 
     let totalContributed = 0;

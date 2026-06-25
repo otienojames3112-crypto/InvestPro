@@ -504,3 +504,12 @@
 - [x] R34.3 Partial "Break now": let the user break only part of a term deposit's principal instead of the full amount
 - [x] R34.4 Timeline reinvest hint: on each maturity event, show the suggested next bucket given the active phase allocation
 - [x] R34.5 Run full suite, checkpoint, regenerate source ZIP, deliver
+
+## Round 35 — Bank instruments in the Month Ledger
+- [x] R35.1 Add a "Bank" column to the Ledger UI rendering r.bankEnd (like the T-Bill column)
+- [x] R35.2 Ensure projection.run passes the portfolio's bank holdings into runProjection.bankHoldings (same chain dashboard uses)
+- [x] R35.3 Surface the FD maturity event in mainAction at the correct projected month; show returning cash as a number (Bank In / CBK-In style)
+- [x] R35.4 Narrate the bank deposit placement at its placement month (or month 1 if opening holding)
+- [x] R35.5 runScenarios must also pass bank holdings (engine.ts ~9834)
+- [x] R35.6 Integration test: a term bank deposit maturing mid-horizon yields a ledger row with maturity narration and bankEnd dropping to 0 that month
+- [x] R35.7 Run full suite, checkpoint, regenerate source ZIP, deliver

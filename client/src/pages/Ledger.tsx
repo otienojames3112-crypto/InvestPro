@@ -110,12 +110,14 @@ export default function Ledger() {
                     <th className="text-left px-4 py-3 text-muted-foreground font-medium whitespace-nowrap">Date</th>
                     <th className="text-right px-4 py-3 text-muted-foreground font-medium whitespace-nowrap">Save</th>
                     <th className="text-right px-4 py-3 text-muted-foreground font-medium whitespace-nowrap">CBK In</th>
+                    <th className="text-right px-4 py-3 text-muted-foreground font-medium whitespace-nowrap">Bank In</th>
                     <th className="text-right px-4 py-3 text-muted-foreground font-medium whitespace-nowrap">MMF→Dhow</th>
                     <th className="text-left px-4 py-3 text-muted-foreground font-medium">Main Action</th>
                     <th className="text-right px-4 py-3 text-muted-foreground font-medium whitespace-nowrap">MMF End</th>
                     <th className="text-right px-4 py-3 text-muted-foreground font-medium whitespace-nowrap">T-Bill</th>
                     <th className="text-right px-4 py-3 text-muted-foreground font-medium whitespace-nowrap">IFB</th>
                     <th className="text-right px-4 py-3 text-muted-foreground font-medium whitespace-nowrap">FXD</th>
+                    <th className="text-right px-4 py-3 text-muted-foreground font-medium whitespace-nowrap">Bank</th>
                     <th className="text-right px-4 py-3 text-muted-foreground font-medium whitespace-nowrap">Total</th>
                     <th className="text-left px-4 py-3 text-muted-foreground font-medium whitespace-nowrap">Phase</th>
                   </tr>
@@ -157,6 +159,11 @@ export default function Ledger() {
                           <td className="px-4 py-2.5 text-right kes-amount">
                             {r.cbkCashIn > 0 ? (
                               <span className="status-on-track font-medium">{formatKES(r.cbkCashIn)}</span>
+                            ) : "–"}
+                          </td>
+                          <td className="px-4 py-2.5 text-right kes-amount">
+                            {r.bankCashIn > 0 ? (
+                              <span className="status-on-track font-medium">{formatKES(r.bankCashIn)}</span>
                             ) : "–"}
                           </td>
                           <td className="px-4 py-2.5 text-right kes-amount">
@@ -222,6 +229,9 @@ export default function Ledger() {
                           </td>
                           <td className="px-4 py-2.5 text-right kes-amount text-muted-foreground">
                             {r.fxdEnd > 0 ? formatKES(r.fxdEnd) : "–"}
+                          </td>
+                          <td className="px-4 py-2.5 text-right kes-amount text-muted-foreground">
+                            {r.bankEnd > 0 ? formatKES(r.bankEnd) : "–"}
                           </td>
                           <td className="px-4 py-2.5 text-right kes-amount font-bold text-foreground">
                             {formatKES(r.totalEnd)}

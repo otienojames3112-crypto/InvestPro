@@ -662,6 +662,16 @@ export interface AnnualTaxInput {
   secondaryMmfs: { label: string; balance: number; rate: number; whtRate?: number | null }[];
   /** Each active bank deposit with its own rate + WHT. */
   bankHoldings: { label: string; principal: number; rate: number; whtRate?: number | null }[];
+  /**
+   * Round 43 (Fix #4) — per-security discount detail for T-bills / zero-coupons.
+   * When supplied, the T-bill tax LINE is computed on the ACTUAL discount
+   * (face − purchasePrice) summed across these rows — the SAME basis
+   * computeActualsTotals uses — so the Tax Summary total ties to the Dashboard's
+   * "Est. Annual Tax" to the shilling. Rows without a price fall back to
+   * face × tbillRate (legacy behaviour). When omitted entirely, the engine keeps
+   * the original bucket × rate approximation for backward compatibility.
+   */
+  tbillSecurities?: { faceValue: number; purchasePrice?: number | null }[];
 }
 
 function r2(n: number): number {
@@ -712,8 +722,27 @@ export function estimateAnnualTaxLines(input: AnnualTaxInput): AnnualTaxResult {
   });
 
   // T-bill discount income — 15% WHT.
+  // Round 43 (Fix #4): when per-security discount detail is supplied, the BASIS is
+  // the ACTUAL discount (face − purchase price) summed across the recorded bills —
+  // identical to computeActualsTotals — so this line ties to the Dashboard's tax to
+  // the shilling. Rows without a price fall back to face × tbillRate; if no detail
+  // is supplied at all we keep the original bucket × rate approximation.
   if (input.buckets.tbill > 0) {
-    const basis = input.buckets.tbill * (input.tbillRate / 100);
+    let basis: number;
+    let note: string;
+    if (input.tbillSecurities && input.tbillSecurities.length > 0) {
+      basis = input.tbillSecurities.reduce((sum, s) => {
+        const price = s.purchasePrice != null && Number(s.purchasePrice) > 0 ? Number(s.purchasePrice) : null;
+        const discount = price != null && price < s.faceValue
+          ? s.faceValue - price
+          : s.faceValue * (input.tbillRate / 100);
+        return sum + discount;
+      }, 0);
+      note = "15% WHT on the actual T-bill discount (face − purchase price).";
+    } else {
+      basis = input.buckets.tbill * (input.tbillRate / 100);
+      note = "15% WHT on T-bill interest (discount).";
+    }
     const tax = whtOn(basis, govWht);
     lines.push({
       key: "tbill",
@@ -723,7 +752,7 @@ export function estimateAnnualTaxLines(input: AnnualTaxInput): AnnualTaxResult {
       tax,
       net: basis - tax,
       exempt: false,
-      note: "15% WHT on T-bill interest (discount).",
+      note,
     });
   }
 

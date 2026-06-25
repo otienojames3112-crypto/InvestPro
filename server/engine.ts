@@ -871,6 +871,17 @@ export function tbillRateForTenor(
 }
 
 /**
+ * Standard day-count for a T-bill tenor band (91 / 182 / 364 days). Used to price
+ * swept T-bill lots with the same tbillPrice() helper the recorded path uses, so a
+ * swept and a recorded bill of the same tenor are modelled identically (Round 43).
+ */
+export function tbillDaysForTenor(tenorMonths: number): number {
+  if (tenorMonths <= 3) return 91;
+  if (tenorMonths <= 6) return 182;
+  return 364;
+}
+
+/**
  * 1-based month offset of a given ISO date relative to the plan start date.
  * Month 1 = the start month. Returns null when the date is missing/invalid.
  * A date before the start date clamps to 1; the caller decides further clamping.
@@ -1454,12 +1465,29 @@ export function runProjection(
           remaining = 0;
         }
 
+        // ── DISCOUNT-AWARE SWEEP COST (Round 43, Fix #1) ───────────────────
+        // A T-bill is BOUGHT BELOW FACE: the buyer pays a price < 50,000 and is
+        // repaid the 50,000 face at maturity — the discount IS the return. So the
+        // MMF must be debited the PRICE of each T-bill lot, not its face. Bonds
+        // (IFB / FXD) are bought at par, so they still cost their full face.
+        // We price each T-bill lot with the SAME tbillPrice() helper the recorded
+        // path uses (engine line ~1084) so a swept and a recorded bill of the
+        // same tenor are modelled identically.
+        const tbillLotTenor = Math.min(tenorFor("tbill", phase, isShortHorizon), tbillTenorThisMonth || 3);
+        const tbillLotPrice = tbillPrice(
+          SWEEP_LOT_SIZE,
+          tbillRateForTenor(tbillLotTenor, rates),
+          tbillDaysForTenor(tbillLotTenor),
+        );
         const totalLots = sweepBuy.tbill + sweepBuy.ifb + sweepBuy.fxd;
-        const totalSweep = totalLots * SWEEP_LOT_SIZE;
+        // Cash actually leaving the MMF: T-bills at discount price, bonds at par.
+        const totalSweepCost =
+          sweepBuy.tbill * tbillLotPrice +
+          (sweepBuy.ifb + sweepBuy.fxd) * SWEEP_LOT_SIZE;
 
-        if (totalLots > 0 && mmf - totalSweep >= settings.safetyFloor) {
-          mmf -= totalSweep;
-          mmfToDhow = totalSweep;
+        if (totalLots > 0 && mmf - totalSweepCost >= settings.safetyFloor) {
+          mmf -= totalSweepCost;
+          mmfToDhow = totalSweepCost;
           // Representative target for any single-target consumers (largest buy).
           sweepTarget = (["ifb", "fxd", "tbill"] as const).reduce(
             (a, b) => (sweepBuy[b] > sweepBuy[a] ? b : a),
@@ -1473,7 +1501,7 @@ export function runProjection(
               // tenor (only reached when allowLongBonds was true).
               const lotTenor =
                 b === "tbill"
-                  ? Math.min(tenorFor(b, phase, isShortHorizon), tbillTenorThisMonth || 3)
+                  ? tbillLotTenor
                   : tenorFor(b, phase, isShortHorizon);
               lots.push({
                 id: `sim-${m}-${lotIdCounter++}`,
@@ -1488,6 +1516,9 @@ export function runProjection(
                     ? (tenorRateFromMap(settings.fxdTenorRates, lotTenor / 12) ?? rates.fxdCouponRate)
                     : 0,
                 isTaxExempt: b === "ifb",
+                // T-bills carry the discount price so maturity credits face − WHT
+                // on the discount (the SAME discount path recorded bills use).
+                ...(b === "tbill" ? { purchasePrice: tbillLotPrice } : {}),
               });
             }
           }
@@ -1607,7 +1638,10 @@ export function runProjection(
       buyParts.push(`${sweepBuy.fxd === 1 ? "a" : sweepBuy.fxd + "×"} ${tenorLabel("fxd", t)} maturing ${monthName(t)}`);
     }
     if (sweepBuy.tbill > 0) {
-      buyParts.push(`${sweepBuy.tbill === 1 ? "a" : sweepBuy.tbill + "×"} ${tenorLabel("tbill", sweptTbillTenor)} maturing ${monthName(sweptTbillTenor)}`);
+      // T-bills are bought below face — note the face acquired so the investor sees
+      // what matures, while the headline KES figure below is the cash actually paid.
+      const faceAcquired = sweepBuy.tbill * SWEEP_LOT_SIZE;
+      buyParts.push(`${sweepBuy.tbill === 1 ? "a" : sweepBuy.tbill + "×"} ${tenorLabel("tbill", sweptTbillTenor)} (KES ${faceAcquired.toLocaleString()} face) maturing ${monthName(sweptTbillTenor)}`);
     }
     const sweepDesc = mmfToDhow > 0
       ? `Move KES ${Math.round(mmfToDhow).toLocaleString()} from the MMF into ${joinWithAnd(buyParts)}`

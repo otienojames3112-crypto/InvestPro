@@ -548,6 +548,15 @@ export function DepositDrawer({ open, onClose }: DepositDrawerProps) {
                     {govBucket === "ifb" && (
                       <p className="text-[11px] text-emerald-300/80">IFB coupons are tax-exempt (subject to legislative change).</p>
                     )}
+                    {isGovTbill && (
+                      <p className="text-[11px] text-muted-foreground/80 border-t border-white/10 pt-2">
+                        Buying a <span className="text-foreground">zero-coupon</span> or{" "}
+                        <span className="text-foreground">floating-rate</span> bond instead? Those are
+                        entered on the <span className="text-foreground">Securities register</span>, which
+                        captures their tenor and (for floaters) the benchmark + margin. This quick-deposit
+                        panel covers the routine 91/182/364-day T-bill auctions.
+                      </p>
+                    )}
                   </div>
                 )}
               </div>

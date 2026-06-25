@@ -43,6 +43,32 @@ export default function Reconciliation() {
     (govAccrual?.ok ?? true) &&
     (bankAccrual?.ok ?? true);
 
+  // Round 43 (Fix #3): the banner's "largest gap" must span EVERY check, not just
+  // the six whole-portfolio sources. Previously it read only full.maxDiff, so a
+  // 50,000 gap in the government-securities sub-check showed as "disagree / gap
+  // KES 0.00" — a self-contradiction that trains users to distrust the page.
+  // Here we gather the absolute diff of each check (whole-portfolio + every
+  // sub-check) and surface the worst one with its name.
+  const gapCandidates: Array<{ label: string; diff: number }> = [];
+  if (full) gapCandidates.push({ label: "Whole-portfolio sources", diff: Math.abs(full.maxDiff) });
+  if (mmf) gapCandidates.push({ label: "MMF accrual-base check", diff: Math.abs(mmf.diff) });
+  if (gov) gapCandidates.push({ label: "Government securities check", diff: Math.abs(gov.diff) });
+  if (bank) gapCandidates.push({ label: "Bank instruments check", diff: Math.abs(bank.diff) });
+  if (govAccrual)
+    gapCandidates.push({
+      label: "Government accrued-interest check",
+      diff: Math.max(Math.abs(govAccrual.grossDiff), Math.abs(govAccrual.whtDiff)),
+    });
+  if (bankAccrual)
+    gapCandidates.push({
+      label: "Bank accrued-interest check",
+      diff: Math.max(Math.abs(bankAccrual.grossDiff), Math.abs(bankAccrual.whtDiff)),
+    });
+  const worstGap = gapCandidates.reduce(
+    (worst, c) => (c.diff > worst.diff ? c : worst),
+    { label: "Whole-portfolio sources", diff: 0 },
+  );
+
   return (
     <AppShell>
       <div className="space-y-6">
@@ -94,17 +120,18 @@ export default function Reconciliation() {
                   <p className="text-sm text-muted-foreground">
                     {reconciled ? (
                       <>
-                        Every valuation path agrees within{" "}
-                        {formatKES(full.maxDiff, 2)} (tolerance is KES 5). The
+                        Every valuation path and sub-check agrees within{" "}
+                        {formatKES(worstGap.diff, 2)} (tolerance is KES 5). The
                         portfolio&rsquo;s recorded holdings, the engine&rsquo;s
-                        &ldquo;today&rdquo; figure, and the dashboard totals are
-                        consistent.
+                        &ldquo;today&rdquo; figure, the dashboard totals, and the
+                        gov/bank/accrual sub-checks are all consistent.
                       </>
                     ) : (
                       <>
-                        The largest gap is {formatKES(full.maxDiff, 2)} against
-                        the &ldquo;sum of holdings&rdquo; reference of{" "}
-                        {formatKES(full.reference, 2)}. See the breakdown below.
+                        The largest gap is {formatKES(worstGap.diff, 2)} &mdash;{" "}
+                        <strong>{worstGap.label}</strong>. See the breakdown below
+                        to trace it (sum-of-holdings reference is{" "}
+                        {formatKES(full.reference, 2)}).
                       </>
                     )}
                   </p>

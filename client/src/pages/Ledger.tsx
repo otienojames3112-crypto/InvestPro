@@ -265,7 +265,7 @@ export default function Ledger() {
                     <th className="text-right px-4 py-3 text-muted-foreground font-medium whitespace-nowrap">Save</th>
                     <th className="text-right px-4 py-3 text-muted-foreground font-medium whitespace-nowrap">CBK In</th>
                     <th className="text-right px-4 py-3 text-muted-foreground font-medium whitespace-nowrap">Bank In</th>
-                    <th className="text-right px-4 py-3 text-muted-foreground font-medium whitespace-nowrap">MMF→Dhow</th>
+                    <th className="text-right px-4 py-3 text-muted-foreground font-medium whitespace-nowrap">Swept&nbsp;&rarr;&nbsp;Securities</th>
                     <th className="text-left px-4 py-3 text-muted-foreground font-medium">Main Action</th>
                     <th className="text-right px-4 py-3 text-muted-foreground font-medium whitespace-nowrap">MMF End</th>
                     <th className="text-right px-4 py-3 text-muted-foreground font-medium whitespace-nowrap">T-Bill 91d</th>

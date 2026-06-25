@@ -285,7 +285,19 @@ export async function updateSecurity(id: number, data: Partial<InsertSecurity>) 
 export async function deleteSecurity(id: number) {
   const db = await getDb();
   if (!db) return;
+  // Symmetric cascade (Round 43, Fix #2): a gov-security register row may be linked
+  // to the deposit entry that created it (depositEntries.securityId). Deleting the
+  // security must also remove that deposit so it cannot become an orphan that still
+  // shows in the contribution history while its register holding is gone. Without
+  // this, the two sides drift and reconcileGov reports a phantom gap.
+  const linkedDeposits = await db
+    .select()
+    .from(depositEntries)
+    .where(eq(depositEntries.securityId, id));
   await db.delete(securities).where(eq(securities.id, id));
+  if (linkedDeposits.length > 0) {
+    await db.delete(depositEntries).where(eq(depositEntries.securityId, id));
+  }
 }
 
 // ─── Contribution Overrides ─────────────────────────────────────────────────────

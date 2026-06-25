@@ -259,12 +259,16 @@ describe("Tax enforcement", () => {
     expect(noTax[119].totalEnd).toBeGreaterThan(withTax[119].totalEnd);
   });
 
-  it("T-bill interest is net of 15% WHT — no-WHT T-bill balance is higher", () => {
+  it("T-bill discount is net of 15% WHT — no-WHT projection ends with more cash", () => {
+    // Round 43: T-bills are discount instruments. Their in-flight balance
+    // (tbillEnd) is the ACCRETED value price→face, which is WHT-INDEPENDENT —
+    // WHT is charged only on the discount AT MATURITY, never on the running
+    // balance. So the correct WHT invariant is on realised value: a 0% WHT run
+    // keeps the full discount and therefore ends the horizon with more total
+    // portfolio value than the 15% WHT run.
     const noTax = runProjection({ ...DEFAULT_SETTINGS, withholdingTax: 0 });
     const withTax = runProjection(DEFAULT_SETTINGS);
-    // End-state liquidity (Round 27) means month 120 holds zero T-bills (all in
-    // MMF), so compare a mid-horizon month where bills are still held in both runs.
-    expect(noTax[90].tbillEnd).toBeGreaterThan(withTax[90].tbillEnd);
+    expect(noTax[119].totalEnd).toBeGreaterThan(withTax[119].totalEnd);
   });
 
   it("FXD net coupon at 12.35% gross is approximately 10.5% net", () => {

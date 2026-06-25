@@ -146,6 +146,19 @@ export default function TaxSummary() {
           rate: Number(b.interestRate ?? 0),
           whtRate: whtRate,
         })),
+      // Round 43 (Fix #4): feed the SAME non-matured T-bill / zero-coupon rows the
+      // Dashboard's computeActualsTotals taxes, so the discount basis (face − price)
+      // is identical and the two pages' tax totals tie to the shilling.
+      tbillSecurities: (securities ?? [])
+        .filter(
+          (s) =>
+            !s.isMatured &&
+            (String(s.securityType).startsWith("tbill") || s.securityType === "zero_coupon"),
+        )
+        .map((s) => ({
+          faceValue: Number(s.faceValue ?? 0),
+          purchasePrice: s.purchasePrice != null ? Number(s.purchasePrice) : null,
+        })),
     });
     const result: TaxLine[] = engine.lines.map((l) => ({
       source: l.source,
@@ -178,7 +191,7 @@ export default function TaxSummary() {
       });
 
     return result;
-  }, [buckets, mmfYield, tbillRate, ifbRate, fxdRate, whtRate, fund.fundLabel, holdings, secondaryMmfs, bankHoldings]);
+  }, [buckets, mmfYield, tbillRate, ifbRate, fxdRate, whtRate, fund.fundLabel, holdings, secondaryMmfs, bankHoldings, securities]);
 
   const totalGross = lines.reduce((s, l) => s + l.basis, 0);
   const totalTax = lines.reduce((s, l) => s + l.tax, 0);

@@ -33,10 +33,17 @@ const bankHoldings: BankHoldingActual[] = [
   { principal: 500_000, interestRate: 8, whtRate: 15, isActive: true },
 ];
 const securities: SecurityActual[] = [
-  { securityType: "tbill_364", faceValue: 400_000, couponRate: 9, isTaxExempt: false },
+  // Round 43: a recorded T-bill now carries a real purchase price, so its tax is
+  // charged on the ACTUAL discount (400,000 − 368,000 = 32,000), not face×rate.
+  { securityType: "tbill_364", faceValue: 400_000, couponRate: 9, isTaxExempt: false, purchasePrice: 368_000 },
   { securityType: "ifb", faceValue: 600_000, couponRate: 13, isTaxExempt: true },
   { securityType: "fxd", faceValue: 700_000, couponRate: 12, isTaxExempt: false },
 ];
+
+/** The non-matured T-bill/zero-coupon rows the Tax Summary feeds the engine. */
+const tbillSecurities = securities
+  .filter((s) => !s.isMatured && (s.securityType.startsWith("tbill") || s.securityType === "zero_coupon"))
+  .map((s) => ({ faceValue: s.faceValue, purchasePrice: s.purchasePrice ?? null }));
 
 function dashboardTax() {
   return computeActualsTotals(deposits, secondaries, bankHoldings, rates, securities, []);
@@ -63,6 +70,8 @@ function taxSummaryEngine(buckets: { mmf: number; tbill: number; ifb: number; fx
       rate: b.interestRate,
       whtRate: b.whtRate,
     })),
+    // Round 43: feed the same priced T-bill rows so the discount basis matches.
+    tbillSecurities,
   });
 }
 
@@ -98,6 +107,20 @@ describe("R40.7 — Dashboard vs Tax Summary annual-tax cross-check", () => {
     expect(get("fxd")).toBeCloseTo(dash.taxBreakdown.fxd, 1);
     expect(get("secondaryMmf:0")).toBeCloseTo(dash.taxBreakdown.secondaryMmf, 1);
     expect(get("bank:0")).toBeCloseTo(dash.taxBreakdown.bank, 1);
+  });
+
+  it("R43: the T-bill tax line is charged on the ACTUAL discount, not face×rate", () => {
+    const dash = dashboardTax();
+    const summary = taxSummaryEngine(dash.byBucket);
+    const tbillLine = summary.lines.find((l) => l.key === "tbill");
+    // Discount basis = 400,000 − 368,000 = 32,000 → WHT @15% = 4,800.
+    expect(tbillLine?.basis).toBeCloseTo(32_000, 1);
+    expect(tbillLine?.tax).toBeCloseTo(4_800, 1);
+    // And it must equal the Dashboard's T-bill tax pocket to the shilling.
+    expect(tbillLine?.tax).toBeCloseTo(dash.taxBreakdown.tbill, 1);
+    // Sanity: the legacy face×rate basis (400,000×9% = 36,000) would have over-
+    // taxed by ~600; prove we are NOT on that path.
+    expect(tbillLine?.basis).not.toBeCloseTo(36_000, 1);
   });
 
   it("RED: a divergent Tax Summary rate breaks the cross-check", () => {

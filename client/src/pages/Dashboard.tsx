@@ -1006,9 +1006,12 @@ export default function Dashboard() {
                   <p className="text-2xl font-serif font-bold text-red-300 kes-amount">
                     {formatKES(actualsSummary?.taxLiability ?? 0)}
                   </p>
+                  <p className="text-[11px] font-medium text-red-300/80">
+                    Forward 12-month estimate on today&rsquo;s balances
+                  </p>
                   <p className="text-xs text-muted-foreground mt-2">
                     15% <GlossaryTerm id="wht">WHT</GlossaryTerm> on MMF, T-Bill &amp; FXD income, plus the correct{" "}
-                    <GlossaryTerm id="tiered-wht">tiered WHT</GlossaryTerm> on Treasury bonds. Deducted at source — you never pay this separately.
+                    <GlossaryTerm id="tiered-wht">tiered WHT</GlossaryTerm> on Treasury bonds. Deducted at source — you never pay this separately. T-bill WHT is charged on the discount (face − purchase price), not the face.
                   </p>
                   <p className="text-xs text-emerald-400 mt-1">
                     <GlossaryTerm id="ifb">IFB</GlossaryTerm> bonds: fully tax-exempt
@@ -1022,6 +1025,9 @@ export default function Dashboard() {
                   </div>
                   <p className="text-2xl font-serif font-bold text-sky-200 kes-amount">
                     {formatKES(actualsSummary?.estInterestEarned ?? 0)}
+                  </p>
+                  <p className="text-[11px] font-medium text-sky-300/80">
+                    Accrued to today (not annualised)
                   </p>
                   <p className="text-xs text-muted-foreground mt-2">
                     <GlossaryTerm id="net-yield">Net of WHT</GlossaryTerm>,{" "}

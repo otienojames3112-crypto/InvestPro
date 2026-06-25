@@ -9,6 +9,7 @@ import {
   decimal,
   boolean,
   date,
+  json,
 } from "drizzle-orm/mysql-core";
 
 export const users = mysqlTable("users", {
@@ -106,6 +107,12 @@ export const rateSettings = mysqlTable("rate_settings", {
   ifbCouponRate: decimal("ifbCouponRate", { precision: 8, scale: 4 }).notNull().default("12.5000"),
   fxdCouponRate: decimal("fxdCouponRate", { precision: 8, scale: 4 }).notNull().default("12.3500"),
   withholdingTax: decimal("withholdingTax", { precision: 8, scale: 4 }).notNull().default("15.0000"),
+  // Round 40: optional per-tenor rate maps for IFB/FXD bonds, keyed by tenor
+  // years as string (e.g. {"8.5": 14.2, "17": 15.8}). When a tenor has no entry
+  // the form/engine falls back to the flat ifbCouponRate / fxdCouponRate above,
+  // so existing portfolios keep working unchanged.
+  ifbTenorRates: json("ifbTenorRates").$type<Record<string, number>>(),
+  fxdTenorRates: json("fxdTenorRates").$type<Record<string, number>>(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
 

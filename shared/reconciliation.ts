@@ -226,3 +226,88 @@ export function reconcileBank(
     ok: Math.abs(diff) <= RECON_TOLERANCE_KES,
   };
 }
+
+/**
+ * Round 40 (R40.6) — accrued-interest + WHT reconciliation sub-checks.
+ *
+ * The Daily Accrual page renders a day-by-day schedule (built by
+ * buildSecurityDailySchedule / buildBankDailySchedule) and the Tax Summary page
+ * estimates WHT. These two must agree with an INDEPENDENT closed-form expectation
+ * computed straight from the instrument parameters (annual gross × days ÷ 365,
+ * with the right WHT tier). If the schedule engine ever drifts from the simple
+ * expectation — a rate misread, a wrong WHT tier, a double-count — the relevant
+ * row turns red instead of silently mis-stating tax owed.
+ *
+ * Each input row carries its base, gross rate %, WHT rate % and whether it is
+ * tax-exempt; we compute expected gross/WHT over the window and diff against the
+ * schedule totals the page actually displays.
+ */
+
+export interface AccrualReconItem {
+  /** Face value (gov) or principal (bank) the interest is earned on. */
+  base: number;
+  /** Annual gross rate, %. */
+  ratePct: number;
+  /** WHT rate, % (0 for IFB / tax-exempt). */
+  whtPct: number;
+  /** For bank instruments on a 360-day basis; defaults to 365. */
+  dayCountBasis?: number;
+}
+
+export interface AccrualReconResult {
+  expectedGross: number;
+  expectedWht: number;
+  scheduleGross: number;
+  scheduleWht: number;
+  grossDiff: number;
+  whtDiff: number;
+  ok: boolean;
+}
+
+/**
+ * Independent closed-form accrued gross + WHT over `days` for a set of items.
+ * Gov securities use a flat 365 basis; bank instruments may use 360.
+ */
+export function expectedAccrual(
+  items: AccrualReconItem[],
+  days: number,
+): { gross: number; wht: number } {
+  const n = Math.max(0, days);
+  let gross = 0;
+  let wht = 0;
+  for (const it of items) {
+    const base = Math.max(0, it.base);
+    const ratePct = Math.max(0, it.ratePct);
+    const dayCount = it.dayCountBasis && it.dayCountBasis > 0 ? it.dayCountBasis : 365;
+    const grossAnnual = base * (ratePct / 100) * (365 / dayCount);
+    const whtAnnual = grossAnnual * (Math.max(0, it.whtPct) / 100);
+    gross += (grossAnnual * n) / 365;
+    wht += (whtAnnual * n) / 365;
+  }
+  return { gross: round2(gross), wht: round2(wht) };
+}
+
+/**
+ * Compare a day-by-day schedule's totals against the independent expectation.
+ * `scheduleGross` / `scheduleWht` come from buildSecurityDailySchedule or
+ * buildBankDailySchedule. A drift beyond tolerance flips `ok` to false.
+ */
+export function reconcileAccrual(
+  items: AccrualReconItem[],
+  days: number,
+  scheduleGross: number,
+  scheduleWht: number,
+): AccrualReconResult {
+  const exp = expectedAccrual(items, days);
+  const grossDiff = round2(scheduleGross - exp.gross);
+  const whtDiff = round2(scheduleWht - exp.wht);
+  return {
+    expectedGross: exp.gross,
+    expectedWht: exp.wht,
+    scheduleGross: round2(scheduleGross),
+    scheduleWht: round2(scheduleWht),
+    grossDiff,
+    whtDiff,
+    ok: Math.abs(grossDiff) <= RECON_TOLERANCE_KES && Math.abs(whtDiff) <= RECON_TOLERANCE_KES,
+  };
+}

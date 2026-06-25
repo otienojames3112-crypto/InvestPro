@@ -597,3 +597,173 @@ export function blendedYield(input: BlendedYieldInput): BlendedYieldResult {
   const netYield = (netIncome / base) * 100;
   return { base, grossYield, netYield, taxDrag: grossYield - netYield };
 }
+
+// ─── Round 40 (R40.7): unified annual-tax line engine ───────────────────────
+//
+// The Dashboard's "Est. Annual Tax" reads `computeActualsTotals().taxLiability`.
+// The Tax Summary page historically rebuilt the same tax arithmetic inline,
+// which let the two drift. This engine produces the per-source investment-income
+// tax lines AND a `taxLiability` total from the SAME buckets and the SAME
+// `whtOn` / `WHT_RATES` authority that `computeActualsTotals` uses, so:
+//
+//   sum(line.tax)  ===  computeActualsTotals(...).taxLiability
+//
+// by construction (both consume the post-withdrawal `byBucket` + per-account
+// rows). The Tax Summary page builds its displayed investment lines from this
+// engine; non-investment items (e.g. equity dividends) remain page-level
+// addenda layered on top, clearly outside the reconciled investment total.
+
+export interface AnnualTaxLine {
+  /** Stable key for cross-referencing (mmf, secondaryMmf:<i>, tbill, ifb, fxd, bank:<i>). */
+  key: string;
+  source: string;
+  /** Annual gross income before tax. */
+  basis: number;
+  /** WHT rate applied (%). 0 for tax-exempt. */
+  rate: number;
+  tax: number;
+  net: number;
+  exempt: boolean;
+  note: string;
+}
+
+export interface AnnualTaxResult {
+  lines: AnnualTaxLine[];
+  /** Sum of all line taxes — equals computeActualsTotals().taxLiability. */
+  taxLiability: number;
+  totalGross: number;
+  totalNet: number;
+}
+
+export interface AnnualTaxInput {
+  /** Post-withdrawal bucket balances (use computeActualsTotals().byBucket). */
+  buckets: { mmf: number; tbill: number; ifb: number; fxd: number };
+  primaryMmfRate: number; // % gross
+  tbillRate: number; // % gross
+  ifbRate: number; // % gross (display only; IFB is exempt)
+  fxdRate: number; // % gross
+  withholdingTax: number; // % WHT for gov + primary MMF
+  primaryMmfLabel?: string;
+  /** Each tracked secondary MMF (post any scaling) with its own rate + WHT. */
+  secondaryMmfs: { label: string; balance: number; rate: number; whtRate?: number | null }[];
+  /** Each active bank deposit with its own rate + WHT. */
+  bankHoldings: { label: string; principal: number; rate: number; whtRate?: number | null }[];
+}
+
+function r2(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
+/**
+ * Build the unified per-source annual-tax lines. The arithmetic mirrors
+ * `computeActualsTotals` exactly so the totals reconcile across pages.
+ */
+export function estimateAnnualTaxLines(input: AnnualTaxInput): AnnualTaxResult {
+  const lines: AnnualTaxLine[] = [];
+  const govWht = input.withholdingTax || WHT_RATES.tbill;
+  const mmfWht = input.withholdingTax || WHT_RATES.mmfInterest;
+
+  // Primary MMF interest — 15% WHT, final.
+  if (input.buckets.mmf > 0) {
+    const basis = input.buckets.mmf * (input.primaryMmfRate / 100);
+    const tax = whtOn(basis, mmfWht);
+    lines.push({
+      key: "mmf",
+      source: `${input.primaryMmfLabel ?? "MMF"} interest (primary)`,
+      basis,
+      rate: mmfWht,
+      tax,
+      net: basis - tax,
+      exempt: false,
+      note: "Withheld at source by fund manager; final tax.",
+    });
+  }
+
+  // Secondary MMF accounts, each at its own yield/WHT.
+  input.secondaryMmfs.forEach((m, i) => {
+    if (!(m.balance > 0)) return;
+    const wht = m.whtRate ?? WHT_RATES.mmfInterest;
+    const basis = m.balance * (m.rate / 100);
+    const tax = whtOn(basis, wht);
+    lines.push({
+      key: `secondaryMmf:${i}`,
+      source: `${m.label} interest`,
+      basis,
+      rate: wht,
+      tax,
+      net: basis - tax,
+      exempt: false,
+      note: "Additional tracked MMF account; WHT withheld at source by fund manager.",
+    });
+  });
+
+  // T-bill discount income — 15% WHT.
+  if (input.buckets.tbill > 0) {
+    const basis = input.buckets.tbill * (input.tbillRate / 100);
+    const tax = whtOn(basis, govWht);
+    lines.push({
+      key: "tbill",
+      source: "Treasury Bill discount income",
+      basis,
+      rate: govWht,
+      tax,
+      net: basis - tax,
+      exempt: false,
+      note: "15% WHT on T-bill interest (discount).",
+    });
+  }
+
+  // IFB coupon — tax-exempt.
+  if (input.buckets.ifb > 0) {
+    const basis = input.buckets.ifb * (input.ifbRate / 100);
+    lines.push({
+      key: "ifb",
+      source: "Infrastructure Bond (IFB) coupon",
+      basis,
+      rate: 0,
+      tax: 0,
+      net: basis,
+      exempt: true,
+      note: "Infrastructure bonds are tax-exempt under the Income Tax Act.",
+    });
+  }
+
+  // FXD coupon — 15% WHT (10% for 10y+ tenor; user adjusts via WHT rate).
+  if (input.buckets.fxd > 0) {
+    const basis = input.buckets.fxd * (input.fxdRate / 100);
+    const tax = whtOn(basis, govWht);
+    lines.push({
+      key: "fxd",
+      source: "Fixed-Coupon Treasury Bond (FXD) coupon",
+      basis,
+      rate: govWht,
+      tax,
+      net: basis - tax,
+      exempt: false,
+      note: "15% WHT (10% applies to bonds of 10+ year tenor).",
+    });
+  }
+
+  // Bank-instrument interest — each at its own rate/WHT, final tax.
+  input.bankHoldings.forEach((b, i) => {
+    if (!(b.principal > 0) || !(b.rate > 0)) return;
+    const wht = b.whtRate ?? WHT_RATES.bankInterest;
+    const basis = b.principal * (b.rate / 100);
+    const tax = whtOn(basis, wht);
+    lines.push({
+      key: `bank:${i}`,
+      source: b.label,
+      basis,
+      rate: wht,
+      tax,
+      net: basis - tax,
+      exempt: false,
+      note: "Bank-deposit interest: 15% WHT (final tax), same as MMF interest.",
+    });
+  });
+
+  const taxLiability = r2(lines.reduce((s, l) => s + l.tax, 0));
+  const totalGross = r2(lines.reduce((s, l) => s + l.basis, 0));
+  const totalNet = r2(lines.reduce((s, l) => s + l.net, 0));
+  return { lines, taxLiability, totalGross, totalNet };
+}

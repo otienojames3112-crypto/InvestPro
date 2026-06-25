@@ -1,3 +1,4 @@
+import { tenorRateFromMap } from "../shared/securityTenor";
 /**
  * KES Investment Compounding Engine — v3
  *
@@ -87,6 +88,14 @@ export interface EngineSettings {
   horizonMonths?: number;
   /** Phase fractions. Defaults: foundation 0.20, growth 0.50, deRisking 0.15. */
   phaseFractions?: PhaseFractions;
+  /**
+   * Round 40: optional per-tenor bond rate maps keyed by tenor-years string.
+   * When a swept lot's tenor matches a key, that rate is used for its coupon;
+   * otherwise the flat ifbCouponRate/fxdCouponRate applies (no behavior change
+   * for portfolios that never set these maps).
+   */
+  ifbTenorRates?: Record<string, number> | null;
+  fxdTenorRates?: Record<string, number> | null;
 }
 
 /** An individual security lot held in the DhowCSD portfolio. */
@@ -986,39 +995,46 @@ export function runProjection(
         actualMmfByMonth.set(placeMonth, (actualMmfByMonth.get(placeMonth) ?? 0) + d.amount);
       }
     }
+  }
 
-    // Government securities are sourced EXCLUSIVELY from the securities register
-    // (the single source of truth). A government-security deposit auto-creates a
-    // register row (see deposits.add in routers.ts), so we deliberately do NOT
-    // build a lot from the deposit itself — that would double-count the holding.
-    // Build every gov-security lot from the register below.
-    for (const sec of actualSecurities) {
-      if (sec.isMatured) continue;
-      const issueDate = new Date(sec.issueDate + "T12:00:00Z");
-      const matDate = new Date(sec.maturityDate + "T12:00:00Z");
-      const issueMonthOffset = Math.floor(
-        (issueDate.getFullYear() - startDate.getFullYear()) * 12 +
-        (issueDate.getMonth() - startDate.getMonth())
-      );
-      const issueMonth = issueMonthOffset + 1;
-      const tenorMonths = Math.round(
-        (matDate.getFullYear() - issueDate.getFullYear()) * 12 +
-        (matDate.getMonth() - issueDate.getMonth())
-      );
-      const bucket: "tbill" | "ifb" | "fxd" =
-        sec.securityType.startsWith("tbill") ? "tbill"
-        : sec.securityType === "ifb" ? "ifb"
-        : "fxd";
-      lots.push({
-        id: `actual-${lotIdCounter++}`,
-        bucket,
-        faceValue: sec.faceValue,
-        issueMonth,
-        tenorMonths,
-        couponRate: sec.couponRate,
-        isTaxExempt: sec.isTaxExempt,
-      });
-    }
+  // ── Government-security lot seeding (Round 40 critical fix) ──
+  // Government securities are sourced EXCLUSIVELY from the securities register
+  // (the single source of truth). A government-security deposit auto-creates a
+  // register row (see deposits.add in routers.ts), so we deliberately do NOT
+  // build a lot from the deposit itself — that would double-count the holding.
+  //
+  // CRITICAL: this loop MUST run whenever there are recorded securities, even when
+  // the plan starts in the current/future month (currentMonth === 0). A recorded
+  // T-bill/IFB/FXD is a REAL holding that must be projected forward immediately —
+  // it has to appear in the ledger from month 1, accrue, and mature on schedule.
+  // It was previously nested under `hasActuals && currentMonth > 0`, which silently
+  // dropped every register holding for a brand-new plan.
+  for (const sec of actualSecurities) {
+    if (sec.isMatured) continue;
+    const issueDate = new Date(sec.issueDate + "T12:00:00Z");
+    const matDate = new Date(sec.maturityDate + "T12:00:00Z");
+    const issueMonthOffset = Math.floor(
+      (issueDate.getFullYear() - startDate.getFullYear()) * 12 +
+      (issueDate.getMonth() - startDate.getMonth())
+    );
+    const issueMonth = issueMonthOffset + 1;
+    const tenorMonths = Math.round(
+      (matDate.getFullYear() - issueDate.getFullYear()) * 12 +
+      (matDate.getMonth() - issueDate.getMonth())
+    );
+    const bucket: "tbill" | "ifb" | "fxd" =
+      sec.securityType.startsWith("tbill") ? "tbill"
+      : sec.securityType === "ifb" ? "ifb"
+      : "fxd";
+    lots.push({
+      id: `actual-${lotIdCounter++}`,
+      bucket,
+      faceValue: sec.faceValue,
+      issueMonth,
+      tenorMonths,
+      couponRate: sec.couponRate,
+      isTaxExempt: sec.isTaxExempt,
+    });
   }
 
   // Determine the last month at which new long bonds are allowed.
@@ -1384,7 +1400,11 @@ export function runProjection(
                 issueMonth: m,
                 tenorMonths: lotTenor,
                 couponRate:
-                  b === "ifb" ? rates.ifbCouponRate : b === "fxd" ? rates.fxdCouponRate : 0,
+                  b === "ifb"
+                    ? (tenorRateFromMap(settings.ifbTenorRates, lotTenor / 12) ?? rates.ifbCouponRate)
+                    : b === "fxd"
+                    ? (tenorRateFromMap(settings.fxdTenorRates, lotTenor / 12) ?? rates.fxdCouponRate)
+                    : 0,
                 isTaxExempt: b === "ifb",
               });
             }

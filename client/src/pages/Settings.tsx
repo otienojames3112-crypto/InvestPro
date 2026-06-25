@@ -8,7 +8,8 @@ import { Settings as SettingsIcon, RefreshCw, Info, Pencil } from "lucide-react"
 import { UpdateRatesPanel } from "@/components/UpdateRatesPanel";
 import { toast } from "sonner";
 import { useForm } from "react-hook-form";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
+import { TenorRateGrid, type TenorRateMap } from "@/components/TenorRateGrid";
 import { History, TrendingUp } from "lucide-react";
 import { usePortfolio } from "@/contexts/PortfolioContext";
 import { useSelectedFund } from "@/hooks/useSelectedFund";
@@ -176,8 +177,24 @@ export default function Settings() {
 
   function onSaveRates(data: RateForm) {
     if (!portfolioId) return;
-    saveRatesMutation.mutate({ portfolioId, ...data });
+    saveRatesMutation.mutate({
+      portfolioId,
+      ...data,
+      ifbTenorRates: Object.keys(ifbTenorRates).length ? ifbTenorRates : null,
+      fxdTenorRates: Object.keys(fxdTenorRates).length ? fxdTenorRates : null,
+    });
   }
+
+  // Round 40: per-tenor bond rate maps (local state, merged into the save payload).
+  const [ifbTenorRates, setIfbTenorRates] = useState<TenorRateMap>({});
+  const [fxdTenorRates, setFxdTenorRates] = useState<TenorRateMap>({});
+
+  useEffect(() => {
+    if (rateSettings) {
+      setIfbTenorRates(rateSettings.ifbTenorRates ?? {});
+      setFxdTenorRates(rateSettings.fxdTenorRates ?? {});
+    }
+  }, [rateSettings]);
 
   // Single coherent WHT chain shared by every rate label on this page.
   const whtPct = Number(rateForm.watch("withholdingTax")) || 15;
@@ -401,6 +418,25 @@ export default function Settings() {
               <RateField label="IFB Coupon Rate (Gross = Net)" name="ifbCouponRate" register={rateForm.register} description="Tax-exempt. Default: 12.5%" />
               <RateField label="FXD Coupon Rate (Gross)" name="fxdCouponRate" register={rateForm.register} description={`Default 12.35%. Net ≈ ${(Number(rateForm.watch("fxdCouponRate") || 0) * (1 - whtFrac)).toFixed(2)}% after ${whtPct.toFixed(0)}% WHT`} />
               <RateField label="Withholding Tax Rate" name="withholdingTax" register={rateForm.register} description="Default: 15%" />
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-sm font-semibold">Per-Tenor Bond Rates (optional)</CardTitle>
+              <p className="text-xs text-muted-foreground mt-1">
+                Set a distinct gross coupon for each IFB / FXD tenor band. Blank cells fall back to the flat coupon above. These rates auto-populate when you pick a tenor on the Securities or Record Deposit forms.
+              </p>
+            </CardHeader>
+            <CardContent className="p-4 pt-0 space-y-5">
+              <div>
+                <p className="text-xs font-semibold text-foreground mb-2">IFB tenors (tax-exempt)</p>
+                <TenorRateGrid kind="ifb" value={ifbTenorRates} onChange={setIfbTenorRates} />
+              </div>
+              <div>
+                <p className="text-xs font-semibold text-foreground mb-2">FXD tenors (15% WHT &lt; 10y, 10% ≥ 10y)</p>
+                <TenorRateGrid kind="fxd" value={fxdTenorRates} onChange={setFxdTenorRates} />
+              </div>
             </CardContent>
           </Card>
 

@@ -30,6 +30,7 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
+import { isSecurityImmatureOn } from "@shared/securityTenor";
 import {
   ArrowUpCircle,
   Wallet,
@@ -197,6 +198,7 @@ export default function Withdrawals() {
         icon: meta.icon,
         color: meta.color,
         available: face,
+        maturityDate: String(sec.maturityDate),
         payload: { sourceType: "government_security", securityId: sec.id },
       });
     }
@@ -219,9 +221,20 @@ export default function Withdrawals() {
     selectedSource?.isFixedDeposit &&
     selectedSource.maturityDate &&
     new Date(form.withdrawalDate) < new Date(selectedSource.maturityDate);
+  // R40.5: government securities cannot be redeemed early at par — only sold on
+  // the secondary market. Warn (and require an explicit acknowledgement) when an
+  // immature gov security is the chosen source.
+  const isGovSource = selectedSource?.payload.sourceType === "government_security";
+  const govImmature = isGovSource
+    ? isSecurityImmatureOn(selectedSource?.maturityDate ?? null, form.withdrawalDate)
+    : { isImmature: false, daysToMaturity: 0 };
+  const immatureGovWarning = isGovSource && govImmature.isImmature;
+
+  const [acknowledgedSecondary, setAcknowledgedSecondary] = useState(false);
 
   function resetForm() {
     setForm({ source: "", amount: "", withdrawalDate: new Date().toISOString().slice(0, 10), reason: "" });
+    setAcknowledgedSecondary(false);
   }
 
   function handleSubmit() {
@@ -229,6 +242,10 @@ export default function Withdrawals() {
     if (!selectedSource) { toast.error("Choose where the money came from"); return; }
     if (!amountNum || amountNum <= 0) { toast.error("Enter a valid amount"); return; }
     if (overdraw) { toast.error("Amount exceeds the available balance in this source"); return; }
+    if (immatureGovWarning && !acknowledgedSecondary) {
+      toast.error("This government security has not matured. Confirm you understand it must be sold on the secondary market.");
+      return;
+    }
     addMutation.mutate({
       portfolioId,
       amount: amountNum,
@@ -385,8 +402,33 @@ export default function Withdrawals() {
             </div>
           )}
 
+          {immatureGovWarning && (
+            <div className="rounded-lg bg-orange-500/10 border border-orange-500/40 p-3 space-y-2">
+              <div className="flex items-start gap-2">
+                <AlertTriangle className="w-4 h-4 text-orange-400 mt-0.5 shrink-0" />
+                <p className="text-xs text-orange-200">
+                  This government security has <strong>not matured</strong> ({govImmature.daysToMaturity} day
+                  {govImmature.daysToMaturity === 1 ? "" : "s"} to maturity). Unlike a bank fixed deposit, CBK bonds and
+                  T-bills <strong>cannot be redeemed early at face value</strong>. To exit before maturity you must
+                  <strong> sell it on the secondary market (a rediscount)</strong>, where the price is set by prevailing
+                  market yields and may be above or below face value. Record this withdrawal only if you have actually
+                  executed (or will execute) a secondary-market sale.
+                </p>
+              </div>
+              <label className="flex items-center gap-2 text-xs text-orange-200 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={acknowledgedSecondary}
+                  onChange={(e) => setAcknowledgedSecondary(e.target.checked)}
+                  className="h-3.5 w-3.5 rounded border-orange-400/50 bg-transparent"
+                />
+                I understand this is a secondary-market sale, not an early redemption at par.
+              </label>
+            </div>
+          )}
+
           <div className="flex gap-2">
-            <Button onClick={handleSubmit} disabled={addMutation.isPending || overdraw || !selectedSource} className="flex-1">
+            <Button onClick={handleSubmit} disabled={addMutation.isPending || overdraw || !selectedSource || (immatureGovWarning && !acknowledgedSecondary)} className="flex-1">
               {addMutation.isPending ? "Recording…" : "Record Withdrawal"}
             </Button>
           </div>

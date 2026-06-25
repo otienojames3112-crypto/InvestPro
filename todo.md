@@ -542,3 +542,14 @@
 - [x] R39.7 Make ledger fully reactive to off-schedule actual deposits (actual-month rows seeded from recorded deposits; projection re-bases forward); test off-schedule deposit re-bases ledger + reconciles
 - [x] R39.8 Full-system consistency sweep: maturity dates, rates, tiered WHT, ledger columns all tie out via shared functions; report residual drift
 - [x] R39.9 Tests green, UI verified, checkpoint, regenerate source bundle/ZIP, deliver
+
+## Round 40 — Ledger crucible: critical security-seeding bug + sourcing/sync/UX fixes
+- [x] R40.1 CRITICAL: hoist security-lot seeding loop OUT of `if (hasActuals && currentMonth>0)` so recorded securities project from month 1 even when currentMonth=0; keep MMF per-month placement under the guard. Integration test: currentMonth=0 T-bill maturing before horizon shows in T-bill column from m1, maturity row narration+CBK-In, continuous totalEnd
+- [x] R40.2 Align "Next 90 days" deep-link maturity month with engine maturity month (issueMonth+tenorMonths); verify not off-by-one; confirm elapsed-month maturity (line ~1201) not double-counted
+- [x] R40.3 Per-tenor IFB/FXD rates in Rate Settings (rate map keyed by IFB_TENORS/FXD_TENORS); defaultRateForSecurity selects by tenor; forms auto-fill coupon by tenor class; sweep buys at selected tenor's rate; seed 2026 levels editable; keep tiered WHT
+- [x] R40.4 Bank-instrument rate auto-fills from bank_instruments.indicativeRate when recording a bank deposit (manual override kept)
+- [x] R40.5 Withdrawals: block/warn on immature gov securities (maturity after withdrawal date); keep FD early-break
+- [x] R40.6 Reconciliation: add accrued-interest + WHT checks for (a) gov securities and (b) bank instruments across daily-accrual/Tax Summary/engine; red-testable
+- [x] R40.7 Dashboard Est. Annual Tax + Est. Interest Earned read from shared Tax Summary + Daily Accrual engines; cross-page assertion Dashboard==Accrual==TaxSummary
+- [x] R40.8 Glossary additions (rediscounting/secondary sale, coupon class/tenor, FXD vs IFB, tiered WHT, accrued interest, indicative vs negotiated rate, maturity redeployment)
+- [ ] R40.9 Full suite green, UI verified, checkpoint, deliver

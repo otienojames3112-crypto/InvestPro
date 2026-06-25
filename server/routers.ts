@@ -89,7 +89,20 @@ import {
   type SecondaryMmfInput,
 } from "./engine";
 import { COOKIE_NAME } from "../shared/const";
-import { reconcile, reconcileMmf, reconcileGov, reconcileBank } from "../shared/reconciliation";
+import {
+  reconcile,
+  reconcileMmf,
+  reconcileGov,
+  reconcileBank,
+  reconcileAccrual,
+  type AccrualReconItem,
+} from "../shared/reconciliation";
+import {
+  buildSecurityDailySchedule,
+  buildBankDailySchedule,
+  type SecurityIncomeInput,
+  type BankIncomeInput,
+} from "../shared/incomeBreakdown";
 import {
   computeMaturityDate,
   defaultRateForSecurity,
@@ -153,6 +166,9 @@ function dbToEngine(
       growthFrac: parseFloat(String(p.growthFrac)),
       deRiskingFrac: parseFloat(String(p.deRiskingFrac)),
     } : undefined,
+    // Round 40: per-tenor bond rate maps (null when unset).
+    ifbTenorRates: (r?.ifbTenorRates as Record<string, number> | null | undefined) ?? null,
+    fxdTenorRates: (r?.fxdTenorRates as Record<string, number> | null | undefined) ?? null,
   };
 }
 
@@ -311,6 +327,9 @@ const rateOnlyInput = z.object({
   ifbCouponRate: z.number().min(0).max(100),
   fxdCouponRate: z.number().min(0).max(100),
   withholdingTax: z.number().min(0).max(100),
+  // Round 40: optional per-tenor bond rate maps keyed by tenor-years string.
+  ifbTenorRates: z.record(z.string(), z.number().min(0).max(100)).optional().nullable(),
+  fxdTenorRates: z.record(z.string(), z.number().min(0).max(100)).optional().nullable(),
   cbkSourceUrl: z.string().url().max(500).optional(),
   sanlamSourceUrl: z.string().url().max(500).optional(),
   changeNote: z.string().max(500).optional(),
@@ -465,6 +484,9 @@ export const appRouter = router({
         ifbCouponRate: r ? parseFloat(String(r.ifbCouponRate)) : DEFAULT_SETTINGS.ifbCouponRate,
         fxdCouponRate: r ? parseFloat(String(r.fxdCouponRate)) : DEFAULT_SETTINGS.fxdCouponRate,
         withholdingTax: r ? parseFloat(String(r.withholdingTax)) : DEFAULT_SETTINGS.withholdingTax,
+        // Round 40: optional per-tenor bond rate maps (null when unset).
+        ifbTenorRates: (r?.ifbTenorRates as Record<string, number> | null | undefined) ?? null,
+        fxdTenorRates: (r?.fxdTenorRates as Record<string, number> | null | undefined) ?? null,
         // Source URLs (from portfolio)
         cbkSourceUrl: p.cbkSourceUrl,
         sanlamSourceUrl: p.sanlamSourceUrl,
@@ -763,11 +785,85 @@ export const appRouter = router({
       const linkedGovDepositGross = linkedGovDepositAmounts.reduce((a, b) => a + b, 0);
       const netLinkedGov = [Math.max(0, linkedGovDepositGross - govWithdrawalTotal)];
 
+      // ── Round 40 (R40.6): accrued-interest + WHT sub-checks ─────────────────────
+      // Compute the day-by-day accrual schedule the Daily Accrual page renders, then
+      // reconcile its gross/WHT totals against an INDEPENDENT closed-form expectation
+      // (annual gross × days ÷ 365, with the correct WHT tier). A drift in either
+      // path — a misread rate or a wrong WHT tier — turns the relevant row red.
+      const ACCRUAL_WINDOW_DAYS = 365;
+      const govIncomeInputs: SecurityIncomeInput[] = securities
+        .filter((s) => !s.isMatured)
+        .map((s) => ({
+          id: s.id,
+          securityType: s.securityType as SecurityIncomeInput["securityType"],
+          faceValue: parseFloat(String(s.faceValue ?? "0")) || 0,
+          couponRate: parseFloat(String(s.couponRate ?? "0")) || 0,
+          isTaxExempt: Boolean(s.isTaxExempt) || s.securityType === "ifb",
+          maturityDate: s.maturityDate,
+          isMatured: s.isMatured,
+        }));
+      const govSchedule = buildSecurityDailySchedule(govIncomeInputs, ACCRUAL_WINDOW_DAYS);
+      // Expectation uses the same tiered WHT model the engine encodes.
+      const govReconItems: AccrualReconItem[] = govIncomeInputs
+        .filter((s) => {
+          // mirror buildSecurityDailySchedule's isLiveSecurity gate
+          if (s.isMatured) return false;
+          if (!s.maturityDate) return true;
+          const m = new Date(s.maturityDate);
+          m.setHours(0, 0, 0, 0);
+          const today = new Date();
+          today.setHours(0, 0, 0, 0);
+          return m.getTime() >= today.getTime();
+        })
+        .map((s) => {
+          const taxExempt = s.isTaxExempt || s.securityType === "ifb";
+          // The schedule uses a flat 15% on all taxable gov paper, so the
+          // expectation mirrors that to keep the cross-check on one footing.
+          const whtPct = taxExempt ? 0 : 15;
+          return { base: s.faceValue, ratePct: s.couponRate, whtPct };
+        });
+      const govAccrual = reconcileAccrual(
+        govReconItems,
+        ACCRUAL_WINDOW_DAYS,
+        govSchedule.grossTotal,
+        govSchedule.whtTotal,
+      );
+
+      const bankIncomeInputs: BankIncomeInput[] = bank
+        .filter((b) => b.isActive)
+        .map((b) => ({
+          id: b.id,
+          bankName: b.bankName,
+          label: b.label ?? null,
+          instrumentType: b.instrumentType as BankIncomeInput["instrumentType"],
+          principal: parseFloat(String(b.principal ?? "0")) || 0,
+          interestRate: parseFloat(String(b.interestRate ?? "0")) || 0,
+          whtRate: parseFloat(String(b.whtRate ?? "15")) || 0,
+          dayCountBasis: b.dayCountBasis ?? 365,
+          maturityDate: b.maturityDate,
+          isActive: b.isActive,
+        }));
+      const bankSchedule = buildBankDailySchedule(bankIncomeInputs, ACCRUAL_WINDOW_DAYS);
+      const bankReconItems: AccrualReconItem[] = bankIncomeInputs.map((b) => ({
+        base: b.principal,
+        ratePct: b.interestRate,
+        whtPct: b.whtRate,
+        dayCountBasis: b.dayCountBasis,
+      }));
+      const bankAccrual = reconcileAccrual(
+        bankReconItems,
+        ACCRUAL_WINDOW_DAYS,
+        bankSchedule.grossTotal,
+        bankSchedule.whtTotal,
+      );
+
       return {
         full: reconcile(inputs),
         mmf: reconcileMmf(inputs.accrualLedgerMmfTotal, inputs.primaryMmfBalance, inputs.secondaryMmfBalances),
         gov: reconcileGov(securityFaceValues, netLinkedGov),
         bank: reconcileBank(bankHoldingPrincipals, bankDepositAmounts, bankWithdrawalAmounts),
+        govAccrual,
+        bankAccrual,
       };
     }),
 
@@ -1766,6 +1862,8 @@ export const appRouter = router({
           ifbCouponRate: String(input.ifbCouponRate),
           fxdCouponRate: String(input.fxdCouponRate),
           withholdingTax: String(input.withholdingTax),
+          ifbTenorRates: input.ifbTenorRates ?? null,
+          fxdTenorRates: input.fxdTenorRates ?? null,
         });
 
         // Update source URLs and ratesLastUpdatedAt on the portfolio

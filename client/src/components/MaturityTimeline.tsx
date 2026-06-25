@@ -51,9 +51,18 @@ interface TimelineEvent {
  */
 export function ledgerMonthForDate(date: Date, startISO?: string | null): number | null {
   if (!startISO) return null;
-  const start = new Date(startISO);
+  // Parse the plan start at UTC noon so a bare "YYYY-MM-DD" can't roll back a
+  // day/month in negative-offset timezones. The engine derives a security's
+  // maturity month from whole-month date differences (issueMonth + tenorMonths,
+  // both month-field based), so this deep-link must compare on the SAME basis to
+  // stay aligned (Round 40 #2). We therefore use UTC month/year components on
+  // both sides rather than the host timezone's local components.
+  const startBase = startISO.length === 10 ? startISO + "T12:00:00Z" : startISO;
+  const start = new Date(startBase);
   if (Number.isNaN(start.getTime())) return null;
-  const months = (date.getFullYear() - start.getFullYear()) * 12 + (date.getMonth() - start.getMonth());
+  const months =
+    (date.getUTCFullYear() - start.getUTCFullYear()) * 12 +
+    (date.getUTCMonth() - start.getUTCMonth());
   const m = months + 1;
   return m >= 1 ? m : null;
 }

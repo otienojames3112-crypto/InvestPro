@@ -33,8 +33,15 @@ export default function Reconciliation() {
   const mmf = data?.mmf;
   const gov = data?.gov;
   const bank = data?.bank;
+  const govAccrual = data?.govAccrual;
+  const bankAccrual = data?.bankAccrual;
   const reconciled =
-    !!full?.reconciled && !!mmf?.ok && (gov?.ok ?? true) && (bank?.ok ?? true);
+    !!full?.reconciled &&
+    !!mmf?.ok &&
+    (gov?.ok ?? true) &&
+    (bank?.ok ?? true) &&
+    (govAccrual?.ok ?? true) &&
+    (bankAccrual?.ok ?? true);
 
   return (
     <AppShell>
@@ -60,7 +67,7 @@ export default function Reconciliation() {
           </p>
         </div>
 
-        {isLoading || !full || !mmf || !gov || !bank ? (
+        {isLoading || !full || !mmf || !gov || !bank || !govAccrual || !bankAccrual ? (
           <Skeleton className="h-64 w-full" />
         ) : (
           <>
@@ -304,6 +311,93 @@ export default function Reconciliation() {
                     <p className="text-lg font-semibold tabular-nums">
                       {formatKES(bank.diff, 2)}{" "}
                       {bank.ok ? (
+                        <span className="text-emerald-600 text-sm">✓</span>
+                      ) : (
+                        <span className="text-destructive text-sm">✗</span>
+                      )}
+                    </p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Round 40: government-securities accrued-interest + WHT check */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">
+                  Government securities &mdash; accrued interest &amp; WHT (1-year window)
+                </CardTitle>
+                <CardDescription>
+                  The day-by-day accrual schedule for CBK securities must match an
+                  independent closed-form expectation (annual gross &times; days &divide;
+                  365, with 15% WHT on T-Bills/FXD coupons and 0% on IFBs). A drift in
+                  either path turns this red.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                  <div className="rounded-md border p-4">
+                    <p className="text-xs text-muted-foreground">Expected gross</p>
+                    <p className="text-lg font-semibold tabular-nums">{formatKES(govAccrual.expectedGross, 2)}</p>
+                  </div>
+                  <div className="rounded-md border p-4">
+                    <p className="text-xs text-muted-foreground">Schedule gross</p>
+                    <p className="text-lg font-semibold tabular-nums">{formatKES(govAccrual.scheduleGross, 2)}</p>
+                  </div>
+                  <div className="rounded-md border p-4">
+                    <p className="text-xs text-muted-foreground">Expected WHT</p>
+                    <p className="text-lg font-semibold tabular-nums">{formatKES(govAccrual.expectedWht, 2)}</p>
+                  </div>
+                  <div
+                    className={`rounded-md border p-4 ${govAccrual.ok ? "border-emerald-500/40" : "border-destructive/40"}`}
+                  >
+                    <p className="text-xs text-muted-foreground">Gross / WHT drift</p>
+                    <p className="text-lg font-semibold tabular-nums">
+                      {formatKES(govAccrual.grossDiff, 2)} / {formatKES(govAccrual.whtDiff, 2)}{" "}
+                      {govAccrual.ok ? (
+                        <span className="text-emerald-600 text-sm">✓</span>
+                      ) : (
+                        <span className="text-destructive text-sm">✗</span>
+                      )}
+                    </p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Round 40: bank-instruments accrued-interest + WHT check */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">
+                  Bank instruments &mdash; accrued interest &amp; WHT (1-year window)
+                </CardTitle>
+                <CardDescription>
+                  The simple daily-interest schedule for bank deposits must match an
+                  independent closed-form expectation at each holding&rsquo;s own rate,
+                  WHT and day-count basis. A drift turns this red.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                  <div className="rounded-md border p-4">
+                    <p className="text-xs text-muted-foreground">Expected gross</p>
+                    <p className="text-lg font-semibold tabular-nums">{formatKES(bankAccrual.expectedGross, 2)}</p>
+                  </div>
+                  <div className="rounded-md border p-4">
+                    <p className="text-xs text-muted-foreground">Schedule gross</p>
+                    <p className="text-lg font-semibold tabular-nums">{formatKES(bankAccrual.scheduleGross, 2)}</p>
+                  </div>
+                  <div className="rounded-md border p-4">
+                    <p className="text-xs text-muted-foreground">Expected WHT</p>
+                    <p className="text-lg font-semibold tabular-nums">{formatKES(bankAccrual.expectedWht, 2)}</p>
+                  </div>
+                  <div
+                    className={`rounded-md border p-4 ${bankAccrual.ok ? "border-emerald-500/40" : "border-destructive/40"}`}
+                  >
+                    <p className="text-xs text-muted-foreground">Gross / WHT drift</p>
+                    <p className="text-lg font-semibold tabular-nums">
+                      {formatKES(bankAccrual.grossDiff, 2)} / {formatKES(bankAccrual.whtDiff, 2)}{" "}
+                      {bankAccrual.ok ? (
                         <span className="text-emerald-600 text-sm">✓</span>
                       ) : (
                         <span className="text-destructive text-sm">✗</span>

@@ -208,6 +208,37 @@ export interface RateSettingsLike {
   tbill364Rate?: string | number | null;
   ifbCouponRate?: string | number | null;
   fxdCouponRate?: string | number | null;
+  /** Round 40: optional per-tenor rate maps keyed by tenor-years string. */
+  ifbTenorRates?: Record<string, number> | null;
+  fxdTenorRates?: Record<string, number> | null;
+}
+
+/**
+ * Look up a bond's per-tenor rate from a tenor-rate map, with snap-to-key
+ * tolerance (so 8.5 matches "8.5" and "8.50"). Returns null when no map or no
+ * close key exists, so the caller can fall back to the flat coupon rate.
+ */
+export function tenorRateFromMap(
+  map: Record<string, number> | null | undefined,
+  tenorYears: number | null | undefined,
+): number | null {
+  if (!map || typeof tenorYears !== "number" || !(tenorYears > 0)) return null;
+  // Exact key first.
+  const exact = map[String(tenorYears)];
+  if (typeof exact === "number" && Number.isFinite(exact) && exact > 0) return exact;
+  // Otherwise snap to the numerically closest key within 0.25y.
+  let best: number | null = null;
+  let bestGap = Infinity;
+  for (const [k, v] of Object.entries(map)) {
+    const ky = parseFloat(k);
+    if (!Number.isFinite(ky) || typeof v !== "number" || !(v > 0)) continue;
+    const gap = Math.abs(ky - tenorYears);
+    if (gap < bestGap) {
+      bestGap = gap;
+      best = v;
+    }
+  }
+  return bestGap <= 0.25 ? best : null;
 }
 
 function num(v: string | number | null | undefined): number {
@@ -225,6 +256,7 @@ function num(v: string | number | null | undefined): number {
 export function defaultRateForSecurity(
   securityType: SecurityType,
   rates: RateSettingsLike | null | undefined,
+  tenorYears?: number | null,
 ): number {
   if (!rates) return 0;
   switch (securityType) {
@@ -234,10 +266,15 @@ export function defaultRateForSecurity(
       return num(rates.tbill182Rate);
     case "tbill_364":
       return num(rates.tbill364Rate);
-    case "ifb":
-      return num(rates.ifbCouponRate);
-    case "fxd":
-      return num(rates.fxdCouponRate);
+    case "ifb": {
+      // Prefer the per-tenor map; fall back to the flat IFB coupon.
+      const t = tenorRateFromMap(rates.ifbTenorRates, tenorYears ?? null);
+      return t ?? num(rates.ifbCouponRate);
+    }
+    case "fxd": {
+      const t = tenorRateFromMap(rates.fxdTenorRates, tenorYears ?? null);
+      return t ?? num(rates.fxdCouponRate);
+    }
     default:
       return 0;
   }
@@ -254,4 +291,31 @@ export function securityTenorBadge(
   const y = tenorYearsForSecurity(securityType, bondTenorYears);
   const label = Number.isInteger(y) ? `${y}y` : `${y}y`;
   return securityType === "ifb" ? `IFB ${label}` : `FXD ${label}`;
+}
+
+/**
+ * Round 40 (R40.5): decide whether a government security is still IMMATURE
+ * relative to a proposed withdrawal/redemption date.
+ *
+ * Unlike a bank fixed deposit (which can be "broken" early at the bank for a
+ * forfeiture), a CBK government security cannot simply be redeemed early at par.
+ * The only way to get out before maturity is to SELL it on the secondary market
+ * (a rediscount), where the price is set by prevailing market yields and may be
+ * above OR below face value. So we WARN (not silently allow a par redemption)
+ * when the maturity date is after the withdrawal date.
+ *
+ * Returns:
+ *   isImmature  — true when maturityDate is strictly after withdrawalDate
+ *   daysToMaturity — whole days remaining (>=0 when immature, may be negative)
+ */
+export function isSecurityImmatureOn(
+  maturityDate: string | Date | null | undefined,
+  withdrawalDate: string | Date | null | undefined,
+): { isImmature: boolean; daysToMaturity: number } {
+  const mat = parseIssueDate(maturityDate ?? null);
+  const wd = parseIssueDate(withdrawalDate ?? null);
+  if (!mat || !wd) return { isImmature: false, daysToMaturity: 0 };
+  const msPerDay = 24 * 3600 * 1000;
+  const days = Math.round((mat.getTime() - wd.getTime()) / msPerDay);
+  return { isImmature: days > 0, daysToMaturity: days };
 }

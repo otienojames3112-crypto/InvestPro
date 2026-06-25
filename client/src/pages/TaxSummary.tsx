@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import { AppShell } from "@/components/AppShell";
 import { usePortfolio } from "@/contexts/PortfolioContext";
 import { useSelectedFund } from "@/hooks/useSelectedFund";
-import { bankHoldingValue, blendedYield, buildAllocation } from "@shared/actuals";
+import { bankHoldingValue, blendedYield, buildAllocation, estimateAnnualTaxLines } from "@shared/actuals";
 import { trpc } from "@/lib/trpc";
 import {
   Card,
@@ -115,103 +115,46 @@ export default function TaxSummary() {
   const ifbRate = settings?.ifbCouponRate ?? 12.5;
   const fxdRate = settings?.fxdCouponRate ?? 12.35;
 
-  // Build tax lines (annualised, based on current balances)
+  // Build tax lines (annualised, based on current balances).
+  // Round 40 (R40.7): the INVESTMENT-income lines (MMF, secondary MMF, T-bill,
+  // IFB, FXD, bank) now come from the SHARED `estimateAnnualTaxLines` engine —
+  // the same arithmetic + WHT authority behind the Dashboard's Est. Annual Tax —
+  // so the two pages can no longer drift. Equity dividends remain a page-level
+  // addendum layered on top (they are not part of the reconciled investment
+  // total the Dashboard tracks).
   const lines: TaxLine[] = useMemo(() => {
-    const result: TaxLine[] = [];
-
-    // MMF interest — primary fund (15% WHT, final).
-    if (buckets.mmf > 0) {
-      const basis = buckets.mmf * (mmfYield / 100);
-      const tax = basis * (whtRate / 100);
-      result.push({
-        source: `${fund.fundLabel} interest (primary)`,
-        basis,
-        rate: whtRate,
-        tax,
-        net: basis - tax,
-        exempt: false,
-        note: "Withheld at source by fund manager; final tax.",
-      });
-    }
-
-    // MMF interest — each tracked secondary account, at its own yield/WHT.
-    secondaryMmfs.forEach((m) => {
-      if (m.currentBalance <= 0) return;
-      const basis = m.currentBalance * (m.ear / 100);
-      const tax = basis * (whtRate / 100);
-      result.push({
-        source: `${m.label?.trim() ? `${m.label} — ` : ""}${m.fundName} interest`,
-        basis,
-        rate: whtRate,
-        tax,
-        net: basis - tax,
-        exempt: false,
-        note: "Additional tracked MMF account; WHT withheld at source by fund manager.",
-      });
+    const engine = estimateAnnualTaxLines({
+      buckets,
+      primaryMmfRate: mmfYield,
+      tbillRate,
+      ifbRate,
+      fxdRate,
+      withholdingTax: whtRate,
+      primaryMmfLabel: fund.fundLabel,
+      secondaryMmfs: (secondaryMmfs ?? []).map((m) => ({
+        label: `${m.label?.trim() ? `${m.label} — ` : ""}${m.fundName}`,
+        balance: Number(m.currentBalance ?? 0),
+        rate: Number(m.ear ?? 0),
+        whtRate: whtRate,
+      })),
+      bankHoldings: (bankHoldings ?? [])
+        .filter((b) => b.isActive)
+        .map((b) => ({
+          label: `${b.label || b.bankName} ${b.instrumentType === "fixed_deposit" ? "(fixed deposit)" : "(call deposit)"}`,
+          principal: Number(b.principal ?? 0),
+          rate: Number(b.interestRate ?? 0),
+          whtRate: whtRate,
+        })),
     });
-
-    // T-bill discount income — 15% WHT
-    if (buckets.tbill > 0) {
-      const basis = buckets.tbill * (tbillRate / 100);
-      const tax = basis * (whtRate / 100);
-      result.push({
-        source: "Treasury Bill discount income",
-        basis,
-        rate: whtRate,
-        tax,
-        net: basis - tax,
-        exempt: false,
-        note: "15% WHT on T-bill interest (discount).",
-      });
-    }
-
-    // IFB coupon — exempt
-    if (buckets.ifb > 0) {
-      const basis = buckets.ifb * (ifbRate / 100);
-      result.push({
-        source: "Infrastructure Bond (IFB) coupon",
-        basis,
-        rate: 0,
-        tax: 0,
-        net: basis,
-        exempt: true,
-        note: "Infrastructure bonds are tax-exempt under the Income Tax Act.",
-      });
-    }
-
-    // FXD coupon — 15% WHT (10% if tenor >= 10 years; user can adjust)
-    if (buckets.fxd > 0) {
-      const basis = buckets.fxd * (fxdRate / 100);
-      const tax = basis * (whtRate / 100);
-      result.push({
-        source: "Fixed-Coupon Treasury Bond (FXD) coupon",
-        basis,
-        rate: whtRate,
-        tax,
-        net: basis - tax,
-        exempt: false,
-        note: "15% WHT (10% applies to bonds of 10+ year tenor).",
-      });
-    }
-
-    // Bank-instrument interest (call/fixed deposits) — 15% WHT, final.
-    (bankHoldings ?? [])
-      .filter((b) => b.isActive && Number(b.principal ?? 0) > 0)
-      .forEach((b) => {
-        const rate = Number(b.interestRate ?? 0);
-        if (rate <= 0) return;
-        const basis = Number(b.principal) * (rate / 100);
-        const tax = basis * (whtRate / 100);
-        result.push({
-          source: `${b.label || b.bankName} ${b.instrumentType === "fixed_deposit" ? "(fixed deposit)" : "(call deposit)"}`,
-          basis,
-          rate: whtRate,
-          tax,
-          net: basis - tax,
-          exempt: false,
-          note: "Bank-deposit interest: 15% WHT (final tax), same as MMF interest.",
-        });
-      });
+    const result: TaxLine[] = engine.lines.map((l) => ({
+      source: l.source,
+      basis: l.basis,
+      rate: l.rate,
+      tax: l.tax,
+      net: l.net,
+      exempt: l.exempt,
+      note: l.note,
+    }));
 
     // Equity dividends — 5% WHT, final (estimate using assumedReturnBase as dividend yield proxy if present)
     (holdings ?? [])

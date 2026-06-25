@@ -109,6 +109,7 @@ export function DepositDrawer({ open, onClose }: DepositDrawerProps) {
     { portfolioId: portfolioId! },
     { enabled: !!portfolioId }
   );
+  const { data: bankInstrumentRefs = [] } = trpc.bankInstruments.list.useQuery();
 
   const liveTarget = portfolio?.targetAmount ?? 0;
 
@@ -227,6 +228,8 @@ export function DepositDrawer({ open, onClose }: DepositDrawerProps) {
     interestRate: "",
     tenorMonths: "12",
   });
+  // Round 40: which reference-rate row (if any) was used to quick-fill the new bank deposit.
+  const [selectedBankRef, setSelectedBankRef] = useState("");
   // Round 39: precise government-security details. When a gov bucket is chosen we
   // capture the exact T-bill tenor (91/182/364) or bond tenor (years) so the
   // auto-created register row carries the correct maturity + WHT.
@@ -260,6 +263,7 @@ export function DepositDrawer({ open, onClose }: DepositDrawerProps) {
   function resetForm() {
     setForm({ destination: "", amount: "", depositDate: new Date().toISOString().slice(0, 10), notes: "" });
     setNewBank({ bankName: "", instrumentType: "fixed_deposit" as BankInstrumentType, interestRate: "", tenorMonths: "12" });
+    setSelectedBankRef("");
     setGovDetail({ tbillTenorDays: 364, bondTenorYears: DEFAULT_FXD_TENOR_YEARS });
   }
 
@@ -555,6 +559,42 @@ export function DepositDrawer({ open, onClose }: DepositDrawerProps) {
                     <Building2 className="w-3.5 h-3.5 text-sky-300" />
                     <p className="text-xs font-semibold text-sky-300">New bank deposit details</p>
                   </div>
+                  {bankInstrumentRefs.length > 0 && (
+                    <div className="space-y-1.5">
+                      <Label className="text-xs text-muted-foreground">Quick-fill from reference rates (optional)</Label>
+                      <Select
+                        value={selectedBankRef}
+                        onValueChange={(v) => {
+                          setSelectedBankRef(v);
+                          const ref = bankInstrumentRefs.find((r) => String(r.id) === v);
+                          if (!ref) return;
+                          const isTerm = isTermBankInstrument(ref.instrumentType as BankInstrumentType);
+                          const tenorMatch = ref.typicalTenor ? ref.typicalTenor.match(/\d+/) : null;
+                          setNewBank((b) => ({
+                            ...b,
+                            bankName: ref.bankName,
+                            instrumentType: ref.instrumentType as BankInstrumentType,
+                            interestRate: ref.indicativeRate !== null ? String(ref.indicativeRate) : b.interestRate,
+                            tenorMonths: isTerm && tenorMatch ? tenorMatch[0] : b.tenorMonths,
+                          }));
+                        }}
+                      >
+                        <SelectTrigger className="bg-white/5 border-white/10 h-9 text-sm">
+                          <SelectValue placeholder="Pick a bank product to auto-fill…" />
+                        </SelectTrigger>
+                        <SelectContent className="bg-[#0d1117] border-white/10 max-h-72">
+                          {bankInstrumentRefs.map((r) => (
+                            <SelectItem key={r.id} value={String(r.id)}>
+                              {r.bankName} · {bankInstrumentLabel(r.instrumentType as BankInstrumentType)}
+                              {r.indicativeRate !== null ? ` · ${r.indicativeRate.toFixed(2)}%` : ""}
+                              {r.isNegotiable ? " (negotiable)" : ""}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <p className="text-xs text-muted-foreground">Indicative published rates — you can edit any field below. Bank rates are usually negotiable.</p>
+                    </div>
+                  )}
                   <div className="space-y-1.5">
                     <Label className="text-xs text-muted-foreground">Bank name</Label>
                     <Input

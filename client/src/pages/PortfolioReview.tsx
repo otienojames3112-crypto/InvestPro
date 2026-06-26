@@ -617,15 +617,25 @@ export default function PortfolioReview() {
                         <strong>{kes(Math.round(shiftToUnderCap))}</strong>{" "}
                         out of <strong>{concentration.topLabel}</strong> (into other instruments or MMF)
                         to bring it to the {typeCapPct.toFixed(0)}% cap.
-                        {" "}
-                        {/* R60 — one-click diversify: pre-fills a new liquid T-bill
-                            entry for the suggested shift amount. */}
-                        <Link
-                          href={buildDiversifyLink(shiftToUnderCap)}
-                          className="font-medium text-primary underline underline-offset-2 hover:opacity-80 print:hidden"
-                        >
-                          Diversify →
-                        </Link>
+                        {/* R61 — Diversify now offers a quick target choice: a liquid
+                            364-day T-bill (booked in the register) or a money-market
+                            top-up (recorded as a lump-sum contribution). Both deep-link
+                            with the suggested shift amount pre-filled. */}
+                        <span className="mt-1 inline-flex flex-wrap items-center gap-x-3 gap-y-1 print:hidden">
+                          <span className="text-xs text-muted-foreground">Diversify into:</span>
+                          <Link
+                            href={buildDiversifyLink(shiftToUnderCap, "tbill_364")}
+                            className="font-medium text-primary underline underline-offset-2 hover:opacity-80"
+                          >
+                            364-day T-bill →
+                          </Link>
+                          <Link
+                            href={buildDiversifyLink(shiftToUnderCap, "mmf")}
+                            className="font-medium text-primary underline underline-offset-2 hover:opacity-80"
+                          >
+                            Money Market Fund →
+                          </Link>
+                        </span>
                       </span>
                     </div>
                   )}

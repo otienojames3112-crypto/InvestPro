@@ -600,8 +600,19 @@ export default function Dashboard() {
                       <div className="flex items-center gap-2 text-muted-foreground">
                         <CalendarClock className={cn("w-4 h-4 shrink-0", riskMeta.iconColor)} />
                         <p className="text-[11px] font-medium uppercase tracking-widest">Avg. Maturity</p>
+                        {/* R61 — surface the snoozed state at the top of the dashboard,
+                            not only in the Risk-limits panel, so a muted warning is
+                            never silently forgotten. */}
+                        {concentrationSnoozed && (
+                          <span
+                            className="inline-flex items-center gap-0.5 rounded-full border border-border bg-muted/40 px-1.5 py-0.5 text-[9px] font-medium text-muted-foreground"
+                            title={snoozeUntil != null ? `Concentration warnings snoozed until ${new Date(snoozeUntil).toLocaleDateString()}` : "Concentration warnings snoozed"}
+                          >
+                            <BellOff className="w-2.5 h-2.5" /> Snoozed
+                          </span>
+                        )}
                         {isElevated && (
-                          <ArrowUpRight className="w-3.5 h-3.5 ml-auto text-muted-foreground/50 transition-colors group-hover:text-foreground" />
+                          <ArrowUpRight className={cn("w-3.5 h-3.5 text-muted-foreground/50 transition-colors group-hover:text-foreground", concentrationSnoozed ? "" : "ml-auto")} />
                         )}
                       </div>
                       <p className={cn("mt-2 text-2xl font-bold kes-amount", riskMeta.value)}>{dtmLabel}</p>

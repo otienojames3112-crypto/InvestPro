@@ -704,3 +704,11 @@
 - [x] R60.3 Risk Limits panel cards: thin progress bar (current share vs cap) for at-a-glance read.
 - [x] R60.4 Mute/snooze a specific concentration warning for a chosen period so acknowledged risks stop nagging.
 - [x] R60 tests: engine final-coupon-at-maturity unit tests (FXD net of WHT, IFB tax-exempt, paid once); snooze helper tests.
+
+
+## Round 61 (ledger final-coupon line + snoozed badge + diversify instrument choice)
+
+- [x] R61.1 Month Ledger: at a coupon-bond maturity, show the final coupon as a distinct line (principal vs final coupon) for transparency.
+- [x] R61.2 Dashboard: add a "snoozed" badge near the Avg. Maturity tile so the muted concentration-warning state is visible from the top, not only the Risk Limits panel.
+- [x] R61.3 Diversify action: offer a quick choice of target instrument (MMF vs 364-day T-bill) before opening the prefilled add form.
+- [x] R61 tests: helper tests for any new shared logic (e.g. diversify target options / link builder for MMF vs T-bill).

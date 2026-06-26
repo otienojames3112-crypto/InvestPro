@@ -462,6 +462,14 @@ export function buildDiversifyLink(
   addType: string = "tbill_364",
 ): string {
   const face = Math.round(shiftAmount);
+  // Round 61 — the "mmf" target routes to the Contributions page and opens the
+  // lump-sum override dialog prefilled, since a money-market top-up is recorded
+  // as a one-off lump sum (not a CBK security). All other targets are CBK
+  // securities booked through the register's add dialog.
+  if (addType === "mmf") {
+    if (!(face > 0)) return `/contributions?addLump=1`;
+    return `/contributions?addLump=1&amount=${face}`;
+  }
   if (!(face > 0)) return `/securities?add=1&addType=${encodeURIComponent(addType)}`;
   return `/securities?add=1&addType=${encodeURIComponent(addType)}&face=${face}`;
 }

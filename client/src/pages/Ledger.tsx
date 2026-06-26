@@ -366,7 +366,60 @@ export default function Ledger() {
                           </td>
                           <td className="px-4 py-2.5 text-right kes-amount">
                             {r.cbkCashIn > 0 ? (
-                              <span className="status-on-track font-medium">{formatKES(r.cbkCashIn)}</span>
+                              <div className="flex items-center justify-end gap-1.5">
+                                <span className="status-on-track font-medium">{formatKES(r.cbkCashIn)}</span>
+                                {r.maturityBreakdown && r.maturityBreakdown.length > 0 && (
+                                  <TooltipProvider delayDuration={150}>
+                                    <Tooltip>
+                                      <TooltipTrigger asChild>
+                                        <button
+                                          type="button"
+                                          className="shrink-0 text-muted-foreground/70 hover:text-primary transition-colors"
+                                          aria-label="Maturity breakdown"
+                                        >
+                                          <Info className="w-3.5 h-3.5" />
+                                        </button>
+                                      </TooltipTrigger>
+                                      <TooltipContent side="left" align="start" className="max-w-xs text-xs space-y-2 p-3">
+                                        <p className="font-semibold text-foreground">What matured this month</p>
+                                        <div className="space-y-2.5">
+                                          {r.maturityBreakdown.map((mb, i) => (
+                                            <div key={i} className="space-y-0.5">
+                                              <p className="font-medium text-foreground">{mb.label}</p>
+                                              <div className="flex items-center justify-between gap-4 text-muted-foreground">
+                                                <span>{mb.kind === "bank" ? "Principal" : "Principal (face)"}</span>
+                                                <span className="tabular-nums text-foreground">{formatKES(mb.principal)}</span>
+                                              </div>
+                                              {mb.finalCoupon > 0 && (
+                                                <div className="flex items-center justify-between gap-4 text-muted-foreground">
+                                                  <span>Final coupon <span className="opacity-60">({mb.taxNote})</span></span>
+                                                  <span className="tabular-nums text-emerald-400">+{formatKES(mb.finalCoupon)}</span>
+                                                </div>
+                                              )}
+                                              {mb.discount > 0 && (
+                                                <div className="flex items-center justify-between gap-4 text-muted-foreground">
+                                                  <span>Net discount <span className="opacity-60">({mb.taxNote})</span></span>
+                                                  <span className="tabular-nums text-emerald-400">+{formatKES(mb.discount)}</span>
+                                                </div>
+                                              )}
+                                              {mb.interest > 0 && (
+                                                <div className="flex items-center justify-between gap-4 text-muted-foreground">
+                                                  <span>Net interest <span className="opacity-60">({mb.taxNote})</span></span>
+                                                  <span className="tabular-nums text-emerald-400">+{formatKES(mb.interest)}</span>
+                                                </div>
+                                              )}
+                                              <div className="flex items-center justify-between gap-4 border-t border-border/50 pt-0.5 mt-0.5">
+                                                <span className="font-medium text-foreground">To the MMF</span>
+                                                <span className="tabular-nums font-semibold text-foreground">{formatKES(mb.total)}</span>
+                                              </div>
+                                            </div>
+                                          ))}
+                                        </div>
+                                      </TooltipContent>
+                                    </Tooltip>
+                                  </TooltipProvider>
+                                )}
+                              </div>
                             ) : "–"}
                           </td>
                           <td className="px-4 py-2.5 text-right kes-amount">

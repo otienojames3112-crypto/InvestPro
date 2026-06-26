@@ -10,7 +10,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { TrendingUp, Plus, Pencil, Trash2 } from "lucide-react";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { toast } from "sonner";
 import { useForm } from "react-hook-form";
 
@@ -54,6 +54,28 @@ export default function Contributions() {
   const { register, handleSubmit, reset, setValue } = useForm<OverrideForm>({
     defaultValues: { monthNumber: 1, overrideAmount: 0, lumpSum: 0, reason: "" },
   });
+
+  // R61 — Diversify → "Money Market Fund" deep-link. When the URL carries
+  // ?addLump=1, open the override dialog prefilled with the suggested shift as a
+  // one-off lump sum (a money-market top-up), then clean the query so a refresh
+  // doesn't re-open it. Runs once on mount.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const sp = new URLSearchParams(window.location.search);
+    if (sp.get("addLump") !== "1") return;
+    const amt = Number(sp.get("amount"));
+    reset({
+      monthNumber: 1,
+      overrideAmount: 0,
+      lumpSum: Number.isFinite(amt) && amt > 0 ? Math.round(amt) : 0,
+      reason: "Diversification top-up",
+    });
+    setOpen(true);
+    const url = new URL(window.location.href);
+    ["addLump", "amount"].forEach((k) => url.searchParams.delete(k));
+    window.history.replaceState({}, "", url.toString());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const startDate = portfolio?.startDate ? String(portfolio.startDate).split("T")[0] : "2026-07-01";
 

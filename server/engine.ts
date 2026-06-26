@@ -257,6 +257,30 @@ export interface ActualSecurity {
   resetMonths?: number | null;
 }
 
+/**
+ * Round 61: structured per-event maturity breakdown so the Ledger can render
+ * principal vs final coupon (or discount) as distinct lines, instead of parsing
+ * the narration string. One entry per security/deposit that matured this month.
+ */
+export interface MaturityBreakdown {
+  /** Instrument family that matured. */
+  kind: "tbill" | "ifb" | "fxd" | "bank";
+  /** Human-readable label, e.g. "24-month FXD" or a bank deposit name. */
+  label: string;
+  /** Principal / face value returned (KES). */
+  principal: number;
+  /** Final coupon paid at maturity, net of any tax (KES). 0 for discount/bank. */
+  finalCoupon: number;
+  /** Net discount earned (KES) for discount instruments (T-bills). 0 otherwise. */
+  discount: number;
+  /** Net interest returned (KES) for bank term deposits / legacy lots. 0 otherwise. */
+  interest: number;
+  /** Total cash returned to the MMF (KES). */
+  total: number;
+  /** Tax note, e.g. "tax-exempt" or "net of 15% tax". */
+  taxNote: string;
+}
+
 export interface MonthResult {
   monthNumber: number;
   contribution: number;
@@ -294,6 +318,12 @@ export interface MonthResult {
    * months with no sweep. Drives the Ledger "why this instrument" tooltip.
    */
   sweepRationale: SweepRationale | null;
+  /**
+   * Round 61: structured breakdown of every maturity this month (principal vs
+   * final coupon / discount / interest). Empty when nothing matured. Drives the
+   * Ledger "CBK In" maturity-detail popover.
+   */
+  maturityBreakdown: MaturityBreakdown[];
 }
 
 export interface SweepRationaleCandidate {
@@ -1205,6 +1235,7 @@ export function runProjection(
     let bankEnd = 0;
     let bankMaturedCashIn = 0;
     const bankMaturityActions: string[] = [];
+    const bankMaturityBreakdown: MaturityBreakdown[] = [];
     const bankPlacementActions: string[] = [];
     for (const b of bankState) {
       if (b.matured) continue;
@@ -1270,6 +1301,16 @@ export function runProjection(
         bankMaturityActions.push(
           `${who} matured, returning KES ${Math.round(payout).toLocaleString()} to the MMF (KES ${Math.round(b.principal).toLocaleString()} principal + KES ${Math.round(interestPortion).toLocaleString()} net interest)`
         );
+        bankMaturityBreakdown.push({
+          kind: "bank",
+          label: who,
+          principal: Math.round(b.principal * 100) / 100,
+          finalCoupon: 0,
+          discount: 0,
+          interest: Math.round(interestPortion * 100) / 100,
+          total: Math.round(payout * 100) / 100,
+          taxNote: "net of tax",
+        });
         continue; // do not add to bankEnd; the cash is now in the MMF
       }
 
@@ -1278,6 +1319,7 @@ export function runProjection(
 
     let cbkCashIn = 0;
     const cbkActions: string[] = [];
+    const maturityBreakdown: MaturityBreakdown[] = [];
     const survivingLots: SecurityLot[] = [];
 
     for (const lot of lots) {
@@ -1304,6 +1346,16 @@ export function runProjection(
             cbkActions.push(
               `a ${tenorLabel(lot.bucket, lot.tenorMonths)} matures at its KES ${Math.round(lot.faceValue).toLocaleString()} face value, returning KES ${Math.round(proceeds).toLocaleString()} to the MMF (KES ${Math.round(netGain).toLocaleString()} net discount earned after ${rates.withholdingTax}% tax on the discount)`
             );
+            maturityBreakdown.push({
+              kind: "tbill",
+              label: tenorLabel(lot.bucket, lot.tenorMonths),
+              principal: Math.round(lot.purchasePrice * 100) / 100,
+              finalCoupon: 0,
+              discount: Math.round(netGain * 100) / 100,
+              interest: 0,
+              total: Math.round(proceeds * 100) / 100,
+              taxNote: `net of ${rates.withholdingTax}% tax on the discount`,
+            });
           } else {
             // Legacy lot without a recorded price: keep the previous behaviour
             // (face + separately-computed net discount) so older projections and
@@ -1317,6 +1369,16 @@ export function runProjection(
             cbkActions.push(
               `a ${tenorLabel(lot.bucket, lot.tenorMonths)} matures, returning KES ${Math.round(lot.faceValue + netInterest).toLocaleString()} to the MMF (KES ${Math.round(netInterest).toLocaleString()} net interest after ${rates.withholdingTax}% tax)`
             );
+            maturityBreakdown.push({
+              kind: "tbill",
+              label: tenorLabel(lot.bucket, lot.tenorMonths),
+              principal: Math.round(lot.faceValue * 100) / 100,
+              finalCoupon: 0,
+              discount: 0,
+              interest: Math.round(netInterest * 100) / 100,
+              total: Math.round((lot.faceValue + netInterest) * 100) / 100,
+              taxNote: `net of ${rates.withholdingTax}% tax`,
+            });
           }
         } else {
           // ── COUPON-BOND MATURITY (Round 60) ──────────────────────────────
@@ -1339,6 +1401,16 @@ export function runProjection(
           cbkActions.push(
             `a ${tenorLabel(lot.bucket, lot.tenorMonths)} matures, returning KES ${Math.round(lot.faceValue).toLocaleString()} principal + KES ${Math.round(netFinalCoupon).toLocaleString()} final coupon (${taxNote}) = KES ${Math.round(total).toLocaleString()} to the MMF`
           );
+          maturityBreakdown.push({
+            kind: lot.bucket === "ifb" ? "ifb" : "fxd",
+            label: tenorLabel(lot.bucket, lot.tenorMonths),
+            principal: Math.round(lot.faceValue * 100) / 100,
+            finalCoupon: Math.round(netFinalCoupon * 100) / 100,
+            discount: 0,
+            interest: 0,
+            total: Math.round(total * 100) / 100,
+            taxNote,
+          });
         }
         continue;
       }
@@ -1712,6 +1784,7 @@ export function runProjection(
       isActual: isActualMonth,
       isShortHorizon,
       sweepRationale,
+      maturityBreakdown: [...maturityBreakdown, ...bankMaturityBreakdown],
     });
   }
 

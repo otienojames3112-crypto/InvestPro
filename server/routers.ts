@@ -504,6 +504,8 @@ export const appRouter = router({
         // Round 40: optional per-tenor bond rate maps (null when unset).
         ifbTenorRates: (r?.ifbTenorRates as Record<string, number> | null | undefined) ?? null,
         fxdTenorRates: (r?.fxdTenorRates as Record<string, number> | null | undefined) ?? null,
+        // Round 53: investor liquidity horizon (days) driving the duration-risk hint.
+        liquidityHorizonDays: r?.liquidityHorizonDays ?? 365,
         // Source URLs (from portfolio)
         cbkSourceUrl: p.cbkSourceUrl,
         sanlamSourceUrl: p.sanlamSourceUrl,
@@ -515,6 +517,25 @@ export const appRouter = router({
         selectedFundEar: selectedFundEar,
       };
     }),
+
+    /**
+     * Round 53: update the investor's liquidity horizon (days) used by the
+     * Dashboard duration-risk hint. Upserts the rate_settings row so a portfolio
+     * that has never saved rates still persists the preference.
+     */
+    updateLiquidityHorizon: protectedProcedure
+      .input(z.object({
+        portfolioId: z.number().int().positive(),
+        liquidityHorizonDays: z.number().int().min(7).max(3650),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        await requirePortfolio(input.portfolioId, ctx.user.id);
+        await upsertRateSettings({
+          portfolioId: input.portfolioId,
+          liquidityHorizonDays: input.liquidityHorizonDays,
+        } as Parameters<typeof upsertRateSettings>[0]);
+        return { success: true, liquidityHorizonDays: input.liquidityHorizonDays };
+      }),
 
     /**
      * Auto-derived MMF safety floor for this portfolio, computed from its current

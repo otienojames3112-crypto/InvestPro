@@ -187,6 +187,18 @@ export default function Securities() {
       return key;
     });
   };
+  // Reset to the default (grouped, unsorted) order and forget the persisted
+  // choice + any ?sort= deep-link so a refresh stays reset.
+  const resetSort = () => {
+    setSortKey("none");
+    setSortDir("desc");
+    try { localStorage.removeItem(SORT_STORAGE_KEY); } catch { /* ignore */ }
+    if (typeof window !== "undefined" && window.location.search.includes("sort=")) {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("sort");
+      window.history.replaceState({}, "", url.toString());
+    }
+  };
 
   // Deposits list lets us flag which register rows have a linked deposit that
   // will be synced automatically when the security is edited.
@@ -398,20 +410,28 @@ export default function Securities() {
     return cv - cost;
   };
 
-  // Group by type, then apply the active column sort.
-  const activeUnsorted = securities?.filter((s) => !s.isMatured) ?? [];
-  const active = (() => {
-    if (sortKey === "none") return activeUnsorted;
+  // Shared column sorter used by both the active and matured tables. For matured
+  // lots a "gain" sort is meaningless (they're realized at face), so it falls
+  // back to face value there.
+  const applySort = (
+    rows: NonNullable<typeof securities>,
+    allowGain: boolean,
+  ): NonNullable<typeof securities> => {
+    if (sortKey === "none") return rows;
     const dir = sortDir === "asc" ? 1 : -1;
     const valueOf = (s: NonNullable<typeof securities>[number]): number => {
-      if (sortKey === "gain") return lotGain(s);
+      if (sortKey === "gain") return allowGain ? lotGain(s) : (parseFloat(String(s.faceValue)) || 0);
       if (sortKey === "face") return parseFloat(String(s.faceValue)) || 0;
       // maturity
       return new Date(String(s.maturityDate)).getTime();
     };
-    return [...activeUnsorted].sort((a, b) => (valueOf(a) - valueOf(b)) * dir);
-  })();
-  const matured = securities?.filter((s) => s.isMatured) ?? [];
+    return [...rows].sort((a, b) => (valueOf(a) - valueOf(b)) * dir);
+  };
+
+  // Group by type, then apply the active column sort.
+  const activeUnsorted = securities?.filter((s) => !s.isMatured) ?? [];
+  const active = applySort(activeUnsorted, true);
+  const matured = applySort(securities?.filter((s) => s.isMatured) ?? [], false);
 
   const totalFaceValue = active.reduce((sum, s) => sum + parseFloat(String(s.faceValue)), 0);
 
@@ -646,18 +666,21 @@ export default function Securities() {
               <Landmark className="w-4 h-4 text-primary" />
               Active Holdings
               {sortKey !== "none" && (
-                <Badge variant="secondary" className="ml-2 gap-1 font-normal">
-                  Sorted by {sortKey === "gain" ? "gain" : sortKey === "face" ? "face value" : "maturity"}
-                  {" "}({sortDir === "asc" ? "asc" : "desc"})
+                <>
+                  <Badge variant="secondary" className="ml-2 gap-1 font-normal">
+                    Sorted by {sortKey === "gain" ? "gain" : sortKey === "face" ? "face value" : "maturity"}
+                    {" "}({sortDir === "asc" ? "asc" : "desc"})
+                  </Badge>
                   <button
                     type="button"
-                    onClick={() => { setSortKey("none"); }}
-                    className="ml-1 text-muted-foreground hover:text-foreground"
-                    title="Clear sort"
+                    onClick={resetSort}
+                    className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                    title="Reset to default order"
                   >
-                    ×
+                    <RotateCcw className="w-3 h-3" />
+                    Reset to default sort
                   </button>
-                </Badge>
+                </>
               )}
             </CardTitle>
           </CardHeader>
@@ -892,6 +915,11 @@ export default function Securities() {
               <CardTitle className="text-sm font-semibold flex items-center gap-2">
                 <CheckCircle2 className="w-4 h-4 text-muted-foreground" />
                 Matured / Closed
+                {sortKey !== "none" && sortKey !== "gain" && (
+                  <Badge variant="secondary" className="ml-2 gap-1 font-normal">
+                    Sorted by {sortKey === "face" ? "face value" : "maturity"} ({sortDir})
+                  </Badge>
+                )}
               </CardTitle>
             </CardHeader>
             <CardContent className="p-0">
@@ -900,8 +928,18 @@ export default function Securities() {
                   <thead>
                     <tr className="border-b border-border bg-muted/30">
                       <th className="text-left px-4 py-3 text-muted-foreground font-medium">Type</th>
-                      <th className="text-right px-4 py-3 text-muted-foreground font-medium">Face Value</th>
-                      <th className="text-left px-4 py-3 text-muted-foreground font-medium">Maturity Date</th>
+                      <th className="text-right px-4 py-3 text-muted-foreground font-medium">
+                        <button type="button" onClick={() => toggleSort("face")} className="inline-flex items-center gap-1 ml-auto hover:text-foreground transition-colors">
+                          Face Value
+                          {sortKey === "face" ? (sortDir === "asc" ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />) : <ArrowUpDown className="w-3 h-3 opacity-40" />}
+                        </button>
+                      </th>
+                      <th className="text-left px-4 py-3 text-muted-foreground font-medium">
+                        <button type="button" onClick={() => toggleSort("maturity")} className="inline-flex items-center gap-1 hover:text-foreground transition-colors">
+                          Maturity Date
+                          {sortKey === "maturity" ? (sortDir === "asc" ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />) : <ArrowUpDown className="w-3 h-3 opacity-40" />}
+                        </button>
+                      </th>
                       <th className="text-right px-4 py-3 text-muted-foreground font-medium">Coupon Rate</th>
                       <th className="text-right px-4 py-3 text-muted-foreground font-medium">Action</th>
                     </tr>

@@ -494,11 +494,13 @@ export default function Dashboard() {
             d >= 365 ? `${(d / 365).toFixed(1)} yr` : d >= 30 ? `${Math.round(d / 30)} mo` : `${d} d`;
           // R52 — duration-risk hint: colour-code the Avg. Maturity tile when the
           // value-weighted DTM approaches / exceeds the liquidity horizon (1 yr).
-          const risk = classifyDurationRisk(v.wAvgDays, DEFAULT_LIQUIDITY_HORIZON_DAYS);
+          const horizonDays = settings?.liquidityHorizonDays ?? DEFAULT_LIQUIDITY_HORIZON_DAYS;
+          const risk = classifyDurationRisk(v.wAvgDays, horizonDays);
+          const horizonLabel = horizonDays % 365 === 0 ? `${horizonDays / 365}yr` : horizonDays % 30 === 0 ? `${horizonDays / 30}mo` : `${horizonDays}d`;
           const riskMeta = {
             low: { label: "Low duration risk", icon: ShieldCheck, color: "text-emerald-400", value: "text-foreground", iconColor: "text-emerald-400" },
             moderate: { label: "Moderate duration risk", icon: Shield, color: "text-amber-400", value: "text-amber-300", iconColor: "text-amber-400" },
-            elevated: { label: "Elevated — locked beyond 1yr horizon", icon: AlertTriangle, color: "text-red-400", value: "text-red-400", iconColor: "text-red-400" },
+            elevated: { label: `Elevated — locked beyond ${horizonLabel} horizon`, icon: AlertTriangle, color: "text-red-400", value: "text-red-400", iconColor: "text-red-400" },
           }[risk];
           const RiskIcon = riskMeta.icon;
           // R52 — "as of" timestamp so the mark-to-model figures are clearly dated.

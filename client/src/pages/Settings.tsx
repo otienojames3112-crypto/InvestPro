@@ -189,6 +189,20 @@ export default function Settings() {
   const [ifbTenorRates, setIfbTenorRates] = useState<TenorRateMap>({});
   const [fxdTenorRates, setFxdTenorRates] = useState<TenorRateMap>({});
 
+  // ─── R53: liquidity horizon (days) for the Dashboard duration-risk hint ──
+  const [horizonDays, setHorizonDays] = useState<number>(365);
+  useEffect(() => {
+    if (rateSettings) setHorizonDays(rateSettings.liquidityHorizonDays ?? 365);
+  }, [rateSettings]);
+  const saveHorizonMutation = trpc.settings.updateLiquidityHorizon.useMutation({
+    onSuccess: () => {
+      toast.success("Liquidity horizon saved — duration-risk hint updated");
+      utils.settings.get.invalidate({ portfolioId: portfolioId! });
+    },
+    onError: () => toast.error("Failed to save liquidity horizon"),
+  });
+  const horizonDirty = rateSettings != null && horizonDays !== (rateSettings.liquidityHorizonDays ?? 365);
+
   useEffect(() => {
     if (rateSettings) {
       setIfbTenorRates(rateSettings.ifbTenorRates ?? {});
@@ -412,6 +426,48 @@ export default function Settings() {
                 <Label className="text-xs font-medium">Per-Issuer Concentration Cap (%)</Label>
                 <Input type="number" step="1" min="5" max="100" {...planForm.register("concentrationCapPct", { valueAsNumber: true })} />
                 <p className="text-xs text-muted-foreground">No single bank/issuer should exceed this share of net worth before the Dashboard warns. Government securities are exempt (sovereign). Default 25%.</p>
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs font-medium">Liquidity Horizon (days)</Label>
+                <div className="flex gap-2">
+                  <Input
+                    type="number"
+                    step="1"
+                    min="7"
+                    max="3650"
+                    value={horizonDays}
+                    onChange={(e) => setHorizonDays(Number(e.target.value))}
+                    className="text-sm"
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={!horizonDirty || !portfolioId || saveHorizonMutation.isPending}
+                    onClick={() => portfolioId && saveHorizonMutation.mutate({ portfolioId, liquidityHorizonDays: horizonDays })}
+                  >
+                    {saveHorizonMutation.isPending ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : "Save"}
+                  </Button>
+                </div>
+                <div className="flex flex-wrap gap-1.5 pt-0.5">
+                  {[
+                    { label: "90d", days: 90 },
+                    { label: "180d", days: 180 },
+                    { label: "1yr", days: 365 },
+                    { label: "2yr", days: 730 },
+                    { label: "3yr", days: 1095 },
+                  ].map((p) => (
+                    <button
+                      key={p.days}
+                      type="button"
+                      onClick={() => setHorizonDays(p.days)}
+                      className={`text-xs px-2 py-0.5 rounded-md border transition-colors ${horizonDays === p.days ? "border-primary text-primary bg-primary/10" : "border-border text-muted-foreground hover:text-foreground"}`}
+                    >
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
+                <p className="text-xs text-muted-foreground">When your value-weighted average days-to-maturity approaches or exceeds this horizon, the Dashboard's Avg. Maturity tile escalates from green to amber to red. Set it to the point beyond which locking up cash would strain your liquidity. Default 365 days.</p>
               </div>
             </CardContent>
           </Card>

@@ -4,6 +4,12 @@ import { usePortfolio } from "@/contexts/PortfolioContext";
 import { useSelectedFund } from "@/hooks/useSelectedFund";
 import { bankHoldingValue, buildAllocation, blendedYield } from "@shared/actuals";
 import { bankInstrumentLabel } from "@shared/const";
+import {
+  currentSecurityValue,
+  classifyDurationRisk,
+  DEFAULT_LIQUIDITY_HORIZON_DAYS,
+  type CurrentValueSecurity,
+} from "@shared/discount";
 import { trpc } from "@/lib/trpc";
 import {
   Card,
@@ -32,6 +38,9 @@ import {
   Target,
   Gauge,
   Download,
+  ShieldCheck,
+  Shield,
+  AlertTriangle,
 } from "lucide-react";
 import { toCsv, downloadCsv, slugify } from "@shared/csv";
 
@@ -252,6 +261,30 @@ export default function PortfolioReview() {
     return [...fromCallDeposits, ...dated].slice(0, 30);
   }, [securities, bankHoldings]);
 
+  // R53: portfolio duration-risk one-liner — value-weighted average
+  // days-to-maturity across active CBK securities, classified against the
+  // investor's configured liquidity horizon (Rate Settings).
+  const durationRisk = useMemo(() => {
+    const horizonDays = pSettings?.liquidityHorizonDays ?? DEFAULT_LIQUIDITY_HORIZON_DAYS;
+    const now = new Date();
+    const lots = (securities ?? []).filter(
+      (s) => !s.isMatured && Number(s.faceValue ?? 0) > 0 && s.maturityDate,
+    );
+    if (lots.length === 0) return null;
+    let weightSum = 0;
+    let weightedDaySum = 0;
+    for (const s of lots) {
+      const cv = currentSecurityValue(s as unknown as CurrentValueSecurity, now);
+      const days = Math.max(0, daysUntil(s.maturityDate as string | Date));
+      weightSum += cv;
+      weightedDaySum += cv * days;
+    }
+    if (weightSum <= 0) return null;
+    const wAvgDays = weightedDaySum / weightSum;
+    const level = classifyDurationRisk(wAvgDays, horizonDays);
+    return { wAvgDays, horizonDays, level, lots: lots.length };
+  }, [securities, pSettings?.liquidityHorizonDays]);
+
   // CSV export: net-worth allocation, benchmark comparison and the liquidity
   // calendar, written as labelled sections in one file. Raw numbers so it opens
   // cleanly in spreadsheets.
@@ -451,6 +484,32 @@ export default function PortfolioReview() {
             </CardDescription>
           </CardHeader>
           <CardContent>
+            {durationRisk && (() => {
+              const horizonLabel =
+                durationRisk.horizonDays % 365 === 0 ? `${durationRisk.horizonDays / 365}yr`
+                : durationRisk.horizonDays % 30 === 0 ? `${durationRisk.horizonDays / 30}mo`
+                : `${durationRisk.horizonDays}d`;
+              const dtm = durationRisk.wAvgDays;
+              const dtmLabel = dtm >= 365 ? `${(dtm / 365).toFixed(1)} yr` : dtm >= 30 ? `${Math.round(dtm / 30)} mo` : `${Math.round(dtm)} d`;
+              const meta = {
+                low: { Icon: ShieldCheck, cls: "text-emerald-600 dark:text-emerald-400", bg: "bg-emerald-500/10 border-emerald-500/30", word: "Low" },
+                moderate: { Icon: Shield, cls: "text-amber-600 dark:text-amber-400", bg: "bg-amber-500/10 border-amber-500/30", word: "Moderate" },
+                elevated: { Icon: AlertTriangle, cls: "text-red-600 dark:text-red-400", bg: "bg-red-500/10 border-red-500/30", word: "Elevated" },
+              }[durationRisk.level];
+              const RiskIcon = meta.Icon;
+              return (
+                <div className={`mb-4 flex items-center gap-2.5 rounded-lg border px-3.5 py-2.5 text-sm ${meta.bg}`}>
+                  <RiskIcon className={`w-4 h-4 shrink-0 ${meta.cls}`} />
+                  <span className="text-foreground">
+                    <strong className={meta.cls}>{meta.word} duration risk</strong>
+                    {" — "}
+                    value-weighted average maturity of <strong>{dtmLabel}</strong>
+                    {" "}across {durationRisk.lots} active {durationRisk.lots === 1 ? "lot" : "lots"}, against a{" "}
+                    {horizonLabel} liquidity horizon.
+                  </span>
+                </div>
+              );
+            })()}
             {upcoming.length === 0 ? (
               <p className="text-sm text-muted-foreground py-4 text-center">
                 No upcoming maturities. Add CBK securities or bank deposits to see

@@ -113,6 +113,10 @@ export const rateSettings = mysqlTable("rate_settings", {
   // so existing portfolios keep working unchanged.
   ifbTenorRates: json("ifbTenorRates").$type<Record<string, number>>(),
   fxdTenorRates: json("fxdTenorRates").$type<Record<string, number>>(),
+  // Round 53: investor's liquidity horizon in days (default 365). Drives the
+  // Dashboard duration-risk hint — when the value-weighted average
+  // days-to-maturity approaches/exceeds this, the Avg. Maturity tile escalates.
+  liquidityHorizonDays: int("liquidityHorizonDays").notNull().default(365),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
 

@@ -645,3 +645,10 @@
 - [x] R52.2 Register: clickable column headers to sort by gain / maturity / face, with sort choice persisted (localStorage) and synced with ?sort= deep-link.
 - [x] R52.3 Add a small "as of" timestamp to the summary card so mark-to-model values are clearly dated.
 - [x] R52.4 Tests for duration-risk classification; full suite green (437), tsc clean, UI verified, checkpoint, deliver.
+
+## Round 53 (configurable liquidity horizon, reset/matured sort, portfolio-review risk line)
+
+- [x] R53.1 Make the liquidity-horizon threshold user-configurable in Rate Settings (persisted server-side); duration-risk hint reads it.
+- [x] R53.2 Add a "Reset to default sort" affordance on the register and apply the same sort controls to the matured-holdings table.
+- [x] R53.3 Surface the duration-risk level as a one-line summary on the Portfolio Review page alongside concentration metrics.
+- [x] R53.4 Tests for configurable-horizon behavior; full suite green (442), tsc clean, UI verified, checkpoint, deliver.

@@ -11,7 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Landmark, Plus, Trash2, CheckCircle2, Clock, Pencil, Link2, Info, RefreshCw, Wallet, RotateCcw, AlertTriangle, SplitSquareHorizontal, ArrowRightLeft, ArrowUp, ArrowDown, ArrowUpDown } from "lucide-react";
+import { Landmark, Plus, Trash2, CheckCircle2, Clock, Pencil, Link2, Info, RefreshCw, Wallet, RotateCcw, AlertTriangle, SplitSquareHorizontal, ArrowRightLeft, ArrowUp, ArrowDown, ArrowUpDown, ChevronDown, ChevronRight } from "lucide-react";
 import { useState, useMemo, useEffect } from "react";
 import { useMaturingWindow, MATURING_WINDOW_OPTIONS, MATURING_WINDOW_ALL, maturingWindowLabel } from "@/hooks/useMaturingWindow";
 import { toast } from "sonner";
@@ -140,6 +140,10 @@ export default function Securities() {
 
   // ── Maturity-recycling prompt state ────────────────────────────────────
   const [recycleFor, setRecycleFor] = useState<NonNullable<typeof securities>[number] | null>(null);
+  // R56.2 — per-bucket collapse state for the maturing-soon horizon buckets.
+  const [collapsedBuckets, setCollapsedBuckets] = useState<Record<string, boolean>>({});
+  const toggleBucket = (key: string) =>
+    setCollapsedBuckets((prev) => ({ ...prev, [key]: !prev[key] }));
 
   // ── R52: register column sort (persisted + seeded from ?sort= deep-link) ──
   type SortKey = "none" | "gain" | "maturity" | "face";
@@ -689,17 +693,28 @@ export default function Securities() {
                     (sum, { s }) => sum + parseFloat(String(s.faceValue)),
                     0
                   );
+                  const collapsed = collapsedBuckets[bucket.key] ?? false;
                   return (
                     <div key={bucket.key} className="space-y-1.5">
-                      <div className="flex items-center justify-between px-0.5">
-                        <span className="text-[11px] font-semibold uppercase tracking-wider text-amber-600 dark:text-amber-400">
+                      <button
+                        type="button"
+                        onClick={() => toggleBucket(bucket.key)}
+                        aria-expanded={!collapsed}
+                        className="flex w-full items-center justify-between gap-2 rounded-md px-0.5 py-1 text-left transition-colors hover:bg-amber-500/5"
+                      >
+                        <span className="flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wider text-amber-600 dark:text-amber-400">
+                          {collapsed ? (
+                            <ChevronRight className="w-3 h-3" />
+                          ) : (
+                            <ChevronDown className="w-3 h-3" />
+                          )}
                           {bucket.label}
                         </span>
                         <span className="text-[11px] text-muted-foreground tabular-nums">
                           {bucket.lots.length} {bucket.lots.length === 1 ? "lot" : "lots"} · {formatKES(bucketFace)}
                         </span>
-                      </div>
-                      {bucket.lots.map(({ s, days }) => renderMaturingLot(s, days))}
+                      </button>
+                      {!collapsed && bucket.lots.map(({ s, days }) => renderMaturingLot(s, days))}
                     </div>
                   );
                 })}

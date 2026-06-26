@@ -17,6 +17,7 @@ import {
 import {
   Tooltip,
   TooltipContent,
+  TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import {
@@ -450,6 +451,7 @@ export default function Dashboard() {
 
   return (
     <AppShell>
+      <TooltipProvider delayDuration={150}>
       <div className="p-6 lg:p-8 space-y-6">
 
         {/* ── Header ─────────────────────────────────────────────────────── */}
@@ -1742,6 +1744,7 @@ export default function Dashboard() {
         </DialogContent>
       </Dialog>
 
+      </TooltipProvider>
     </AppShell>
   );
 }

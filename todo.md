@@ -665,3 +665,9 @@
 - [x] R55.2 Add the chosen window label to the Portfolio Review liquidity calendar so both views read consistently.
 - [x] R55.3 Month-by-Month Ledger: add a hover tooltip to every column header explaining what it means (Save, CBK In, Bank In, Swept→Securities, MMF End, T-Bill 91d/182d/364d, IFB, FXD, Bank, Total, Phase).
 - [x] R55.4 Tests + tsc, screenshot-verify, checkpoint, deliver. Full suite green (451), tsc clean.
+
+## Round 56 (dashboard card tooltips + collapsible buckets)
+
+- [x] R56.1 Add hover tooltips to the Dashboard instrument cards (MMF Balance, T-Bills, IFB Holdings, FXD Bonds) explaining what each instrument is, consistent with the Ledger column tooltips.
+- [x] R56.2 Make the maturing-soon bucket subheaders (≤90d/≤1yr/≤2yr/beyond) collapsible, each showing a per-bucket face-value subtotal and lot count.
+- [x] R56.3 Tests + tsc, screenshot-verify, checkpoint, deliver. Full suite green (451), tsc clean.

@@ -187,6 +187,9 @@ export default function Dashboard() {
     { id: string; label: string; current: number } | null
   >(null);
   const [reconcileValue, setReconcileValue] = useState("");
+  // R65 — "Reconcile all" quick-entry: a map of homeId → input value string.
+  const [reconcileAllOpen, setReconcileAllOpen] = useState(false);
+  const [reconcileAllValues, setReconcileAllValues] = useState<Record<string, string>>({});
   const setLiquidBalanceMutation = trpc.bankHoldings.setLiquidBalance.useMutation({
     onSuccess: () => {
       toast.success("Balance recorded");
@@ -202,6 +205,17 @@ export default function Dashboard() {
       setReconcileHome(null);
     },
     onError: (e) => toast.error(e.message || "Could not clear balance"),
+  });
+  const setLiquidBalancesBulkMutation = trpc.bankHoldings.setLiquidBalancesBulk.useMutation({
+    onSuccess: (r) => {
+      toast.success(`Reconciled ${r.count} home${r.count === 1 ? "" : "s"}`);
+      utils.bankHoldings.liquidAllocation.invalidate({ portfolioId: portfolioId! });
+      setReconcileAllOpen(false);
+    },
+    onError: (e) => toast.error(e.message || "Could not save balances"),
+  });
+  const recordAppliedTransfersMutation = trpc.bankHoldings.recordAppliedTransfers.useMutation({
+    onError: (e) => toast.error(e.message || "Could not log transfers"),
   });
   const updatePortfolioMutation = trpc.portfolios.update.useMutation({
     onSuccess: () => {
@@ -944,6 +958,56 @@ export default function Dashboard() {
                   {liquidAlloc.state === "too_small" && "Too small yet"}
                 </span>
               </div>
+              {(() => {
+                const totalDrift = liquidAlloc.slices.reduce(
+                  (sum, s) => sum + Math.abs(s.drift ?? 0),
+                  0,
+                );
+                const anyReconciled = liquidAlloc.slices.some((s) => s.reconciled);
+                return (
+                  <div className="mb-3 flex items-center justify-between gap-2 rounded-lg border border-border bg-muted/30 px-3 py-2">
+                    <div className="min-w-0">
+                      <p className="text-[11px] font-medium text-muted-foreground">Total drift from target</p>
+                      <p
+                        className={cn(
+                          "text-sm font-semibold kes-amount",
+                          !anyReconciled
+                            ? "text-muted-foreground"
+                            : totalDrift > 0.5
+                              ? "text-amber-300"
+                              : "text-emerald-300",
+                        )}
+                      >
+                        {anyReconciled ? formatKES(totalDrift) : "—"}
+                        {anyReconciled && totalDrift <= 0.5 && (
+                          <span className="ml-1.5 text-[11px] font-normal text-emerald-300/80">on target</span>
+                        )}
+                      </p>
+                      <p className="text-[10px] text-muted-foreground/70">
+                        {anyReconciled
+                          ? "Sum of |actual − target| across reconciled homes."
+                          : "Reconcile your homes to see real drift vs the recommended split."}
+                      </p>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="shrink-0 border-sky-500/40 bg-sky-500/10 text-sky-200 hover:bg-sky-500/20"
+                      onClick={() => {
+                        const init: Record<string, string> = {};
+                        for (const s of liquidAlloc.slices) {
+                          init[s.id] = String(Math.round((s.currentBalance ?? 0) * 100) / 100);
+                        }
+                        setReconcileAllValues(init);
+                        setReconcileAllOpen(true);
+                      }}
+                    >
+                      <Scale className="w-3.5 h-3.5 mr-1.5" />
+                      Reconcile all
+                    </Button>
+                  </div>
+                );
+              })()}
               <div className="space-y-2">
                 {liquidAlloc.slices.map((s) => {
                   const pct = Math.round(s.targetShare * 100);
@@ -1129,7 +1193,27 @@ export default function Dashboard() {
                 <Copy className="w-3.5 h-3.5 mr-1.5" />
                 Copy plan
               </Button>
-              <Button size="sm" onClick={() => setSplitOpen(false)}>Done</Button>
+              <Button
+                size="sm"
+                onClick={() => {
+                  const done = transferPlan.filter((_, i) =>
+                    doneTransfers.has(`${transferPlan[i].fromId}-${transferPlan[i].toId}-${i}`),
+                  );
+                  if (done.length > 0 && portfolioId) {
+                    recordAppliedTransfersMutation.mutate({
+                      portfolioId,
+                      transfers: done.map((t) => ({
+                        from: t.fromLabel,
+                        to: t.toLabel,
+                        amount: t.amount,
+                      })),
+                    });
+                  }
+                  setSplitOpen(false);
+                }}
+              >
+                {doneTransfers.size > 0 ? `Done (log ${doneTransfers.size})` : "Done"}
+              </Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>
@@ -1169,7 +1253,7 @@ export default function Dashboard() {
                 size="sm"
                 onClick={() => {
                   if (reconcileHome && portfolioId) {
-                    clearLiquidBalanceMutation.mutate({ portfolioId, homeId: reconcileHome.id });
+                    clearLiquidBalanceMutation.mutate({ portfolioId, homeId: reconcileHome.id, homeLabel: reconcileHome.label });
                   }
                 }}
                 disabled={clearLiquidBalanceMutation.isPending}
@@ -1185,11 +1269,83 @@ export default function Dashboard() {
                     toast.error("Enter a valid balance");
                     return;
                   }
-                  setLiquidBalanceMutation.mutate({ portfolioId, homeId: reconcileHome.id, actualBalance: v });
+                  setLiquidBalanceMutation.mutate({ portfolioId, homeId: reconcileHome.id, homeLabel: reconcileHome.label, actualBalance: v });
                 }}
                 disabled={setLiquidBalanceMutation.isPending}
               >
                 Save balance
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* R65 — Reconcile-all quick-entry dialog */}
+        <Dialog open={reconcileAllOpen} onOpenChange={setReconcileAllOpen}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <Scale className="w-4 h-4 text-sky-400" />
+                Reconcile all liquid balances
+              </DialogTitle>
+            </DialogHeader>
+            <div className="space-y-3">
+              <p className="text-sm text-muted-foreground">
+                Enter the actual balance currently resting in each liquid home. Saving updates
+                them all at once and recomputes the recommended split and drift.
+              </p>
+              <div className="space-y-2 max-h-[50vh] overflow-y-auto pr-1">
+                {liquidAlloc?.slices.map((s) => (
+                  <div key={s.id} className="flex items-center gap-2">
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-xs font-medium text-foreground">{s.label}</p>
+                      <p className="text-[10px] text-muted-foreground">
+                        Target {formatKES(s.targetBalance)}
+                      </p>
+                    </div>
+                    <Input
+                      type="number"
+                      min={0}
+                      step="0.01"
+                      inputMode="decimal"
+                      className="w-36 shrink-0"
+                      value={reconcileAllValues[s.id] ?? ""}
+                      onChange={(e) =>
+                        setReconcileAllValues((prev) => ({ ...prev, [s.id]: e.target.value }))
+                      }
+                      placeholder="0.00"
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+            <DialogFooter className="gap-2 sm:gap-2">
+              <Button variant="outline" size="sm" onClick={() => setReconcileAllOpen(false)}>
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                disabled={setLiquidBalancesBulkMutation.isPending}
+                onClick={() => {
+                  if (!portfolioId || !liquidAlloc) return;
+                  const balances: { homeId: string; homeLabel: string; actualBalance: number }[] = [];
+                  for (const s of liquidAlloc.slices) {
+                    const raw = reconcileAllValues[s.id];
+                    if (raw === undefined || raw === "") continue;
+                    const v = parseFloat(raw);
+                    if (!Number.isFinite(v) || v < 0) {
+                      toast.error(`Enter a valid balance for ${s.label}`);
+                      return;
+                    }
+                    balances.push({ homeId: s.id, homeLabel: s.label, actualBalance: v });
+                  }
+                  if (balances.length === 0) {
+                    toast.error("Enter at least one balance");
+                    return;
+                  }
+                  setLiquidBalancesBulkMutation.mutate({ portfolioId, balances });
+                }}
+              >
+                Save all
               </Button>
             </DialogFooter>
           </DialogContent>

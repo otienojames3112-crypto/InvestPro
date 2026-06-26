@@ -2809,17 +2809,29 @@ export const appRouter = router({
       }),
     // R64 — record/clear the ACTUAL balance resting in a liquid home so the split
     // shows real drift (actual vs target) and survives reloads.
+    // R65 — each change is written to Change History for auditability.
     setLiquidBalance: protectedProcedure
       .input(
         z.object({
           portfolioId: z.number().int().positive(),
           homeId: z.string().min(1).max(64),
+          homeLabel: z.string().max(200).optional(),
           actualBalance: z.number().min(0),
         }),
       )
       .mutation(async ({ ctx, input }) => {
         await requirePortfolio(input.portfolioId, ctx.user.id);
         await upsertLiquidHomeBalance(input.portfolioId, input.homeId, input.actualBalance);
+        await addAuditLog({
+          portfolioId: input.portfolioId,
+          entity: "liquid_home_balance",
+          action: "update",
+          field: input.homeId,
+          newValue: String(Math.round(input.actualBalance)),
+          changedByOpenId: ctx.user.openId,
+          changedByName: ctx.user.name ?? null,
+          summary: `Reconciled liquid balance: ${input.homeLabel ?? input.homeId} → KES ${Math.round(input.actualBalance).toLocaleString()}`,
+        });
         return { ok: true };
       }),
     clearLiquidBalance: protectedProcedure
@@ -2827,12 +2839,93 @@ export const appRouter = router({
         z.object({
           portfolioId: z.number().int().positive(),
           homeId: z.string().min(1).max(64),
+          homeLabel: z.string().max(200).optional(),
         }),
       )
       .mutation(async ({ ctx, input }) => {
         await requirePortfolio(input.portfolioId, ctx.user.id);
         await clearLiquidHomeBalance(input.portfolioId, input.homeId);
+        await addAuditLog({
+          portfolioId: input.portfolioId,
+          entity: "liquid_home_balance",
+          action: "delete",
+          field: input.homeId,
+          changedByOpenId: ctx.user.openId,
+          changedByName: ctx.user.name ?? null,
+          summary: `Reverted liquid balance to estimate: ${input.homeLabel ?? input.homeId}`,
+        });
         return { ok: true };
+      }),
+    // R65 — Reconcile-all: set every liquid home's actual balance in one action,
+    // writing a single batch entry to Change History.
+    setLiquidBalancesBulk: protectedProcedure
+      .input(
+        z.object({
+          portfolioId: z.number().int().positive(),
+          balances: z
+            .array(
+              z.object({
+                homeId: z.string().min(1).max(64),
+                homeLabel: z.string().max(200).optional(),
+                actualBalance: z.number().min(0),
+              }),
+            )
+            .min(1)
+            .max(64),
+        }),
+      )
+      .mutation(async ({ ctx, input }) => {
+        await requirePortfolio(input.portfolioId, ctx.user.id);
+        for (const b of input.balances) {
+          await upsertLiquidHomeBalance(input.portfolioId, b.homeId, b.actualBalance);
+        }
+        const total = input.balances.reduce((s, b) => s + b.actualBalance, 0);
+        await addAuditLog({
+          portfolioId: input.portfolioId,
+          entity: "liquid_home_balance",
+          action: "update",
+          field: "reconcile_all",
+          newValue: String(Math.round(total)),
+          changedByOpenId: ctx.user.openId,
+          changedByName: ctx.user.name ?? null,
+          summary: `Reconciled all liquid balances (${input.balances.length} home${input.balances.length === 1 ? "" : "s"}, total KES ${Math.round(total).toLocaleString()})`,
+        });
+        return { ok: true, count: input.balances.length };
+      }),
+    // R65 — log an applied transfer plan to Change History (audit trail of moves).
+    recordAppliedTransfers: protectedProcedure
+      .input(
+        z.object({
+          portfolioId: z.number().int().positive(),
+          transfers: z
+            .array(
+              z.object({
+                from: z.string().max(200),
+                to: z.string().max(200),
+                amount: z.number().min(0),
+              }),
+            )
+            .min(1)
+            .max(64),
+        }),
+      )
+      .mutation(async ({ ctx, input }) => {
+        await requirePortfolio(input.portfolioId, ctx.user.id);
+        const total = input.transfers.reduce((s, t) => s + t.amount, 0);
+        const lines = input.transfers
+          .map((t) => `${t.from} → ${t.to}: KES ${Math.round(t.amount).toLocaleString()}`)
+          .join("; ");
+        await addAuditLog({
+          portfolioId: input.portfolioId,
+          entity: "liquid_transfer",
+          action: "create",
+          field: "apply_split",
+          newValue: String(Math.round(total)),
+          changedByOpenId: ctx.user.openId,
+          changedByName: ctx.user.name ?? null,
+          summary: `Applied liquid split (${input.transfers.length} transfer${input.transfers.length === 1 ? "" : "s"}, total KES ${Math.round(total).toLocaleString()}): ${lines}`,
+        });
+        return { ok: true, count: input.transfers.length };
       }),
     add: protectedProcedure
       .input(z.object({

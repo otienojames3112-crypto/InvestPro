@@ -741,3 +741,11 @@
 - [x] R64.2 Quick per-home balance reconcile: let users enter the actual balance now resting in each liquid home so the split shows real drift (actual vs target) instead of guidance-only. Persist actuals so they survive reloads.
 - [x] R64.3 Portfolio Review export: include the Risk & Allocation summary (allocation policy, per-issuer cap, per-type cap, current breaches) in the CSV so it travels with the printed/exported report.
 - [x] R64 tests: full suite green (532) + tsc clean; add/extend tests for any new shared helper logic.
+
+
+## Round 65 (reconcile-all + change-history logging + total-drift badge)
+
+- [x] R65.1 "Reconcile all" quick-entry: a single screen/dialog listing every liquid home with an editable actual-balance field, save-all in one action; invalidates the liquid split.
+- [x] R65.2 Change History logging: record each reconcile (set/clear of a home balance) and each applied transfer into the existing Change History so balance updates are auditable.
+- [x] R65.3 Total-drift badge: portfolio-level badge on the liquid card summarizing total absolute drift (sum of |actual − target|) vs the recommended split.
+- [x] R65 tests: full suite green (535) + tsc clean; add/extend tests for any new shared helper logic (total-drift computation).

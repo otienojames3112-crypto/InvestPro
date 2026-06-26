@@ -436,3 +436,32 @@ export function amountToShiftUnderCap(
   const x = (topValue - cap * totalValue) / (1 - cap);
   return x > 0 ? x : 0;
 }
+
+/**
+ * Round 60 — concentration-warning snooze predicate. Returns true when the given
+ * snooze timestamp (Unix-ms, UTC) is set and still in the future relative to
+ * `now`. Null/undefined/0 or a past timestamp means "not snoozed".
+ *
+ * Centralised here so the Dashboard UI and tests share one definition.
+ */
+export function isConcentrationSnoozed(
+  snoozeUntil: number | null | undefined,
+  now: number = Date.now(),
+): boolean {
+  return snoozeUntil != null && snoozeUntil > now;
+}
+
+/**
+ * Round 60 — builds the "Diversify" deep-link into the CBK Securities register
+ * that opens the add-security dialog pre-filled with a liquid instrument and the
+ * suggested shift amount as the face value. Amount is rounded to a whole shilling
+ * and clamped to a positive integer; non-positive amounts yield a plain add link.
+ */
+export function buildDiversifyLink(
+  shiftAmount: number,
+  addType: string = "tbill_364",
+): string {
+  const face = Math.round(shiftAmount);
+  if (!(face > 0)) return `/securities?add=1&addType=${encodeURIComponent(addType)}`;
+  return `/securities?add=1&addType=${encodeURIComponent(addType)}&face=${face}`;
+}

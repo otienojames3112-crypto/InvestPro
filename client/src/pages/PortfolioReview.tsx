@@ -11,6 +11,7 @@ import {
   largestConcentration,
   classifyConcentration,
   amountToShiftUnderCap,
+  buildDiversifyLink,
   DEFAULT_LIQUIDITY_HORIZON_DAYS,
   type CurrentValueSecurity,
 } from "@shared/discount";
@@ -616,6 +617,15 @@ export default function PortfolioReview() {
                         <strong>{kes(Math.round(shiftToUnderCap))}</strong>{" "}
                         out of <strong>{concentration.topLabel}</strong> (into other instruments or MMF)
                         to bring it to the {typeCapPct.toFixed(0)}% cap.
+                        {" "}
+                        {/* R60 — one-click diversify: pre-fills a new liquid T-bill
+                            entry for the suggested shift amount. */}
+                        <Link
+                          href={buildDiversifyLink(shiftToUnderCap)}
+                          className="font-medium text-primary underline underline-offset-2 hover:opacity-80 print:hidden"
+                        >
+                          Diversify →
+                        </Link>
                       </span>
                     </div>
                   )}

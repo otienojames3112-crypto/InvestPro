@@ -363,6 +363,29 @@ export default function Securities() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [secType]);
 
+  // R60 — one-click "Diversify" deep-link from Portfolio Review. When the URL
+  // carries ?add=1, open the add dialog and prefill the instrument type + face
+  // value (the suggested shift amount) so the user can book the reallocation in
+  // one step. Runs once on mount.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const sp = new URLSearchParams(window.location.search);
+    if (sp.get("add") !== "1") return;
+    const VALID: SecurityType[] = [
+      "tbill_91", "tbill_182", "tbill_364", "ifb", "fxd", "zero_coupon", "floating_rate",
+    ];
+    const t = sp.get("addType");
+    if (t && (VALID as string[]).includes(t)) setValue("securityType", t as SecurityType);
+    const face = Number(sp.get("face"));
+    if (Number.isFinite(face) && face > 0) setValue("faceValue", Math.round(face));
+    setOpen(true);
+    // Clean the query so a refresh doesn't re-open the dialog.
+    const url = new URL(window.location.href);
+    ["add", "addType", "face"].forEach((k) => url.searchParams.delete(k));
+    window.history.replaceState({}, "", url.toString());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // For discount instruments, auto-suggest the purchase price from face + discount
   // rate + tenor so the user immediately sees what they would pay.
   useEffect(() => {

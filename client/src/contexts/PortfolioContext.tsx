@@ -18,6 +18,7 @@ interface Portfolio {
   deRiskingFrac: number;
   concentrationCapPct?: number;
   typeConcentrationCapPct?: number;
+  concentrationSnoozeUntil?: number | null;
   mmfFundId: number | null;
   cbkSourceUrl: string | null;
   sanlamSourceUrl: string | null;

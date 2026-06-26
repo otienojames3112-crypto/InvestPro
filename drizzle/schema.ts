@@ -10,6 +10,7 @@ import {
   boolean,
   date,
   json,
+  bigint,
 } from "drizzle-orm/mysql-core";
 
 export const users = mysqlTable("users", {
@@ -74,6 +75,13 @@ export const portfolios = mysqlTable("portfolios", {
    * diversification warning on the Portfolio Review risk snapshot. Default 60%.
    */
   typeConcentrationCapPct: decimal("typeConcentrationCapPct", { precision: 5, scale: 2 }).notNull().default("60.00"),
+  /**
+   * Round 60: optional snooze for concentration warnings. When set to a future
+   * Unix-ms timestamp, the Dashboard concentration banner is muted and the Risk
+   * limits cards show a "snoozed until" note until that time passes. Null means
+   * not snoozed. Stored as milliseconds since epoch (UTC).
+   */
+  concentrationSnoozeUntil: bigint("concentrationSnoozeUntil", { mode: "number" }),
   // finalLiquidityFrac is implied: 1 - foundationFrac - growthFrac - deRiskingFrac
   /** Editable source URL for CBK T-Bills rates page */
   cbkSourceUrl: varchar("cbkSourceUrl", { length: 500 }).notNull().default("https://www.centralbank.go.ke/bills-bonds/treasury-bills/"),

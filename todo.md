@@ -695,3 +695,12 @@
 - [x] R59.2 Diversification suggestion line: when the top type breaches the per-type cap, compute and show how much current value to shift out of it to get back under the cap.
 - [x] R59.3 Dashboard "Risk limits" mini-panel surfacing per-issuer (KDIC) and per-type caps together with current vs cap status.
 - [x] R59 tests: diversification "amount to shift" helper unit tests.
+
+
+## Round 60 (final-coupon-at-maturity fix + diversify action + risk-limit bars + snooze)
+
+- [x] R60.1 Engine: at coupon-bond maturity, pay the final coupon AND principal exactly once (net of WHT for FXD/floating, tax-exempt for IFB). Prevent double-pay from the periodic coupon block in the maturity month. Narration: "a 24-month FXD matures, returning KES X principal + KES Y final coupon = KES Z to the MMF." Covers IFB + floating too.
+- [x] R60.2 One-click "diversify" action on the Portfolio Review suggestion line that pre-fills a new MMF/T-bill entry for the shift amount.
+- [x] R60.3 Risk Limits panel cards: thin progress bar (current share vs cap) for at-a-glance read.
+- [x] R60.4 Mute/snooze a specific concentration warning for a chosen period so acknowledged risks stop nagging.
+- [x] R60 tests: engine final-coupon-at-maturity unit tests (FXD net of WHT, IFB tax-exempt, paid once); snooze helper tests.

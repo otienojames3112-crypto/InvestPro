@@ -59,8 +59,14 @@ import { Plus, Compass, ArrowUpRight } from "lucide-react";
 import { useMemo, useState, useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { rateStaleness } from "@/lib/rateStaleness";
-import { currentSecurityValue, classifyDurationRisk, largestConcentration, classifyConcentration, DEFAULT_LIQUIDITY_HORIZON_DAYS, type CurrentValueSecurity } from "@shared/discount";
-import { Layers, TrendingDown } from "lucide-react";
+import { currentSecurityValue, classifyDurationRisk, largestConcentration, classifyConcentration, isConcentrationSnoozed, DEFAULT_LIQUIDITY_HORIZON_DAYS, type CurrentValueSecurity } from "@shared/discount";
+import { Layers, TrendingDown, BellOff, Bell } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 
 function StatCard({
@@ -423,6 +429,24 @@ export default function Dashboard() {
     ? classifyConcentration(typeConcentration.topShare, typeCapPct) === "breached"
     : false;
 
+  // R60 — concentration-warning snooze. When the portfolio carries a future
+  // snooze timestamp, the per-issuer warning banner is muted and the Risk-limits
+  // cards show an "un-snooze" affordance. Re-evaluated each render against now.
+  const snoozeUntil = portfolio?.concentrationSnoozeUntil ?? null;
+  const concentrationSnoozed = isConcentrationSnoozed(snoozeUntil);
+  const snoozeMutation = trpc.portfolios.snoozeConcentration.useMutation({
+    onSuccess: () => {
+      utils.portfolios.list.invalidate();
+      if (portfolioId) utils.portfolios.get.invalidate({ portfolioId });
+    },
+  });
+  const applySnooze = (days: number | null) => {
+    if (!portfolioId) return;
+    const until = days == null ? null : Date.now() + days * 24 * 60 * 60 * 1000;
+    snoozeMutation.mutate({ portfolioId, until });
+    toast.success(days == null ? "Concentration warnings un-snoozed" : `Concentration warnings snoozed for ${days} days`);
+  };
+
   // ── Onboarding empty state: authenticated but no portfolios yet ──────────
   if (!portfoliosLoading && portfolios.length === 0) {
     return (
@@ -650,10 +674,38 @@ export default function Dashboard() {
         {(concentration || typeConcentration) && (
           <Card>
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-semibold flex items-center gap-2">
-                <ShieldCheck className="w-4 h-4 text-primary" />
-                Risk limits
-              </CardTitle>
+              <div className="flex items-center justify-between gap-2">
+                <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                  <ShieldCheck className="w-4 h-4 text-primary" />
+                  Risk limits
+                </CardTitle>
+                {/* R60: snooze / un-snooze concentration warnings. */}
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <button
+                      type="button"
+                      className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[11px] text-muted-foreground hover:bg-muted/50 transition-colors"
+                      title={concentrationSnoozed ? "Warnings are snoozed" : "Snooze concentration warnings"}
+                    >
+                      {concentrationSnoozed ? <BellOff className="w-3 h-3" /> : <Bell className="w-3 h-3" />}
+                      {concentrationSnoozed ? "Snoozed" : "Snooze"}
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuItem onClick={() => applySnooze(7)}>Snooze 7 days</DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => applySnooze(30)}>Snooze 30 days</DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => applySnooze(90)}>Snooze 90 days</DropdownMenuItem>
+                    {concentrationSnoozed && (
+                      <DropdownMenuItem onClick={() => applySnooze(null)}>Un-snooze now</DropdownMenuItem>
+                    )}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
+              {concentrationSnoozed && snoozeUntil != null && (
+                <p className="mt-1 text-[11px] text-muted-foreground">
+                  Warnings snoozed until {new Date(snoozeUntil).toLocaleDateString()}.
+                </p>
+              )}
             </CardHeader>
             <CardContent className="grid gap-3 sm:grid-cols-2">
               {/* Per-issuer (KDIC) limit */}
@@ -674,6 +726,21 @@ export default function Dashboard() {
                         ? `${concentration!.breaches.length} ${concentration!.breaches.length === 1 ? "issuer" : "issuers"} over cap`
                         : "Within cap"}
                     </p>
+                    {/* R60: share-vs-cap progress bar. Width = share as a % of
+                        net worth; the cap tick marks the {issuerCapPct}% limit. */}
+                    <div className="mt-2 relative h-1.5 w-full rounded-full bg-muted overflow-hidden">
+                      <div
+                        className={`h-full rounded-full transition-[width] duration-300 ${issuerBreached ? "bg-red-500" : "bg-primary"}`}
+                        style={{ width: `${Math.min(100, Math.round((concentration?.topShare ?? 0) * 100))}%` }}
+                      />
+                    </div>
+                    <div className="relative h-2">
+                      <span
+                        className="absolute top-0 -translate-x-1/2 h-2 w-px bg-foreground/40"
+                        style={{ left: `${Math.min(100, issuerCapPct)}%` }}
+                        aria-hidden
+                      />
+                    </div>
                     <p className="mt-0.5 text-[11px] text-muted-foreground">
                       No single bank above {issuerCapPct}% of net worth.
                     </p>
@@ -697,6 +764,20 @@ export default function Dashboard() {
                         ? `${topPct}% in ${typeConcentration.topLabel}${typeConcentrationBreached ? " — over cap" : ""}`
                         : "No securities yet"}
                     </p>
+                    {/* R60: share-vs-cap progress bar for the per-type limit. */}
+                    <div className="mt-2 relative h-1.5 w-full rounded-full bg-muted overflow-hidden">
+                      <div
+                        className={`h-full rounded-full transition-[width] duration-300 ${typeConcentrationBreached ? "bg-red-500" : "bg-primary"}`}
+                        style={{ width: `${Math.min(100, topPct)}%` }}
+                      />
+                    </div>
+                    <div className="relative h-2">
+                      <span
+                        className="absolute top-0 -translate-x-1/2 h-2 w-px bg-foreground/40"
+                        style={{ left: `${Math.min(100, typeCapPct)}%` }}
+                        aria-hidden
+                      />
+                    </div>
                     <p className="mt-0.5 text-[11px] text-muted-foreground">
                       Largest instrument type vs the {typeCapPct.toFixed(0)}% limit.
                     </p>
@@ -708,7 +789,8 @@ export default function Dashboard() {
         )}
 
         {/* ── Per-issuer concentration warning (Round 31) ──────────────── */}
-        {concentration && concentration.breaches.length > 0 && (
+        {/* R60: suppressed while concentration warnings are snoozed. */}
+        {concentration && concentration.breaches.length > 0 && !concentrationSnoozed && (
           <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 flex gap-3">
             <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
             <div className="text-xs text-amber-200/90 leading-relaxed space-y-1">

@@ -391,6 +391,7 @@ export const appRouter = router({
           deRiskingFrac: parseFloat(String(p.deRiskingFrac)),
           concentrationCapPct: parseFloat(String((p as { concentrationCapPct?: string }).concentrationCapPct ?? "25")),
           typeConcentrationCapPct: parseFloat(String((p as { typeConcentrationCapPct?: string }).typeConcentrationCapPct ?? "60")),
+          concentrationSnoozeUntil: (p as { concentrationSnoozeUntil?: number | null }).concentrationSnoozeUntil ?? null,
           cbkSourceUrl: p.cbkSourceUrl,
           sanlamSourceUrl: p.sanlamSourceUrl,
           ratesLastUpdatedAt: p.ratesLastUpdatedAt ?? null,
@@ -420,6 +421,7 @@ export const appRouter = router({
         deRiskingFrac: parseFloat(String(p.deRiskingFrac)),
         concentrationCapPct: parseFloat(String((p as { concentrationCapPct?: string }).concentrationCapPct ?? "25")),
         typeConcentrationCapPct: parseFloat(String((p as { typeConcentrationCapPct?: string }).typeConcentrationCapPct ?? "60")),
+        concentrationSnoozeUntil: (p as { concentrationSnoozeUntil?: number | null }).concentrationSnoozeUntil ?? null,
         cbkSourceUrl: p.cbkSourceUrl,
         sanlamSourceUrl: p.sanlamSourceUrl,
         ratesLastUpdatedAt: p.ratesLastUpdatedAt ?? null,
@@ -428,6 +430,21 @@ export const appRouter = router({
         createdAt: p.createdAt,
       };
     }),
+
+    /**
+     * Round 60: snooze (mute) concentration warnings until a chosen time, or
+     * clear the snooze. `until` is a Unix-ms timestamp (UTC); pass null to
+     * un-snooze immediately.
+     */
+    snoozeConcentration: protectedProcedure
+      .input(z.object({ portfolioId: z.number().int().positive(), until: z.number().int().positive().nullable() }))
+      .mutation(async ({ ctx, input }) => {
+        await requirePortfolio(input.portfolioId, ctx.user.id);
+        await updatePortfolio(input.portfolioId, ctx.user.id, {
+          concentrationSnoozeUntil: input.until,
+        } as Record<string, unknown>);
+        return { success: true, until: input.until };
+      }),
 
     /** Create a new portfolio. Also creates a default rate_settings row for it. */
     create: protectedProcedure
@@ -2553,9 +2570,19 @@ export const appRouter = router({
         const capPct = parseFloat(String((p as { concentrationCapPct?: string }).concentrationCapPct ?? "25"));
         const cap = (Number.isFinite(capPct) && capPct > 0 ? capPct : 25) / 100;
         const breaches = detectIssuerConcentration(issuerValues, netWorth, cap);
+        // R60: largest single-issuer share (even when within cap) so the Dashboard
+        // Risk-limits progress bar can render in BOTH the within-cap and breached
+        // states. Aggregate by issuer name first.
+        const byIssuer: Record<string, number> = {};
+        for (const iv of issuerValues) {
+          byIssuer[iv.issuer] = (byIssuer[iv.issuer] ?? 0) + iv.value;
+        }
+        const maxIssuerValue = Object.values(byIssuer).reduce((mx, v) => (v > mx ? v : mx), 0);
+        const topShare = netWorth > 0 ? Math.round((maxIssuerValue / netWorth) * 10000) / 10000 : 0;
         return {
           cap,
           netWorth: Math.round(netWorth * 100) / 100,
+          topShare,
           breaches: breaches.map((b) => ({
             issuer: b.issuer,
             value: Math.round(b.value * 100) / 100,

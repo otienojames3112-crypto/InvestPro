@@ -1319,9 +1319,25 @@ export function runProjection(
             );
           }
         } else {
-          cbkCashIn += lot.faceValue;
+          // ── COUPON-BOND MATURITY (Round 60) ──────────────────────────────
+          // A coupon bond (IFB / FXD / floating-rate) returns its FACE value as
+          // principal AND pays its FINAL coupon on the same date. By construction
+          // the maturity month is always a coupon date (tenor is a multiple of the
+          // 6-month coupon cadence), so the final coupon must be paid here. The
+          // `continue` below guarantees the periodic coupon block does NOT also
+          // fire this month, so the final coupon is paid exactly once.
+          //   - IFB:            coupon is tax-exempt (gross = net).
+          //   - FXD / floating: coupon is net of WHT.
+          const grossFinalCoupon = (lot.couponRate / 100 / 2) * lot.faceValue;
+          const netFinalCoupon = lot.isTaxExempt
+            ? grossFinalCoupon
+            : grossFinalCoupon * (1 - wht);
+          if (!lot.isTaxExempt) whtThisMonth += grossFinalCoupon * wht;
+          cbkCashIn += lot.faceValue + netFinalCoupon;
+          const total = lot.faceValue + netFinalCoupon;
+          const taxNote = lot.isTaxExempt ? "tax-exempt" : `net of ${rates.withholdingTax}% tax`;
           cbkActions.push(
-            `a ${tenorLabel(lot.bucket, lot.tenorMonths)} matures, returning KES ${Math.round(lot.faceValue).toLocaleString()} to the MMF`
+            `a ${tenorLabel(lot.bucket, lot.tenorMonths)} matures, returning KES ${Math.round(lot.faceValue).toLocaleString()} principal + KES ${Math.round(netFinalCoupon).toLocaleString()} final coupon (${taxNote}) = KES ${Math.round(total).toLocaleString()} to the MMF`
           );
         }
         continue;

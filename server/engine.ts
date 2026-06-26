@@ -102,6 +102,21 @@ export interface EngineSettings {
    */
   ifbTenorRates?: Record<string, number> | null;
   fxdTenorRates?: Record<string, number> | null;
+  /**
+   * Round 62 — per-portfolio concentration caps (fractions, 0..1). These replace
+   * the old hardcoded ISSUER_CONCENTRATION_CAP (0.25) and the sweep's
+   * FAMILY_CONCENTRATION_CAP (0.6). Defaults preserve previous behaviour.
+   *   issuerCapFrac — max share of net worth in any one issuer/institution.
+   *   typeCapFrac   — max share of net worth in any one instrument family.
+   */
+  issuerCapFrac?: number;
+  typeCapFrac?: number;
+  /**
+   * Round 62 — allocation policy. "balanced" (default) respects the caps and
+   * diversifies liquid cash; "yield_first" relaxes the caps toward 100% and
+   * concentrates in the highest net-yield home; "custom" uses the user-set caps.
+   */
+  allocationPolicy?: "balanced" | "yield_first" | "custom";
 }
 
 /** An individual security lot held in the DhowCSD portfolio. */
@@ -960,6 +975,19 @@ export function runProjection(
   const isShortHorizon = horizonMonths < SHORT_HORIZON_THRESHOLD;
   const fractions = settings.phaseFractions;
 
+  // ── Round 62: effective concentration caps + allocation policy ──
+  // The per-family sweep cap (typeCapFrac) replaces the old hardcoded 0.6, and
+  // the per-issuer cap replaces the old hardcoded 0.25. In "yield_first" mode we
+  // relax the family cap toward 100% so the engine concentrates in the highest
+  // net-yield family, per the user's acknowledged policy.
+  const allocationPolicy = settings.allocationPolicy ?? "balanced";
+  const baseTypeCapFrac =
+    typeof settings.typeCapFrac === "number" && settings.typeCapFrac > 0
+      ? settings.typeCapFrac
+      : 0.6;
+  const effectiveFamilyCapFrac =
+    allocationPolicy === "yield_first" ? 1 : baseTypeCapFrac;
+
   const overrideMap = new Map<number, MonthlyContributionOverride>();
   for (const o of overrides) overrideMap.set(o.monthNumber, o);
 
@@ -1528,9 +1556,10 @@ export function runProjection(
           longBondTenorMonths: 24,
         });
         rankedThisMonth = ranked;
-        // Concentration cap: at most this share of the whole portfolio in one family.
-        const FAMILY_CONCENTRATION_CAP = 0.6;
-        const capKES = (mmf + held.tbill + held.ifb + held.fxd) * FAMILY_CONCENTRATION_CAP;
+        // Concentration cap (Round 62): at most this share of the whole portfolio
+        // in one family. Driven by the per-portfolio typeCapFrac setting, relaxed
+        // to 100% under the Yield-first allocation policy.
+        const capKES = (mmf + held.tbill + held.ifb + held.fxd) * effectiveFamilyCapFrac;
         let remaining = maxLots;
         // Order the three families by their net-yield rank for this month.
         const order = ranked.map((r) => r.bucket).filter((b) => gap[b] > 0);

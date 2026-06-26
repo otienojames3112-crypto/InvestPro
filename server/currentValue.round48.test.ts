@@ -102,7 +102,11 @@ describe("currentSecurityValue — coupon bonds (par + accrued)", () => {
     expect(v).toBeLessThan(200_100);
   });
 
-  it("an FXD bond one year in has accrued ~one year of coupon over face", () => {
+  it("an FXD bond one year in accrues only since the LAST coupon date (net of WHT), capped at one period", () => {
+    // R62: coupon bonds no longer pile a full year of accrual onto face. Coupons
+    // are semi-annual (every ~182.5 days from issue), so one year in we are very
+    // close to a coupon date (365 / 182.5 = 2.0 periods) → accrued resets near 0.
+    // Value should be essentially face, NOT face + 12k.
     const today = new Date();
     const s: CurrentValueSecurity = {
       securityType: "fxd",
@@ -113,9 +117,44 @@ describe("currentSecurityValue — coupon bonds (par + accrued)", () => {
       isMatured: false,
     };
     const v = currentSecurityValue(s, today);
-    // ~12% of 100k accrued = ~12,000 over face.
-    expect(v).toBeGreaterThan(111_000);
-    expect(v).toBeLessThan(113_000);
+    // Just after the 2nd coupon date: accrued resets, so value ~ face.
+    expect(v).toBeGreaterThanOrEqual(100_000);
+    expect(v).toBeLessThan(100_200);
+  });
+
+  it("an FXD bond a quarter past a coupon date accrues ~half a half-year coupon, net of WHT", () => {
+    // R62: ~91 days past issue is half-way through the first semi-annual period,
+    // so accrued ≈ (face × 12% / 2) × 0.5 = 3,000 GROSS; net of 15% WHT ≈ 2,550.
+    const today = new Date();
+    const s: CurrentValueSecurity = {
+      securityType: "fxd",
+      faceValue: 100_000,
+      couponRate: 12,
+      issueDate: ISO(daysAgo(91)),
+      maturityDate: ISO(daysAhead(365 * 9)),
+      isMatured: false,
+      whtRatePct: 15,
+    };
+    const v = currentSecurityValue(s, today);
+    expect(v).toBeGreaterThan(102_300);
+    expect(v).toBeLessThan(102_800);
+  });
+
+  it("an IFB bond (tax-exempt) accrues coupon GROSS since the last coupon date", () => {
+    // R62: IFB coupons are tax-exempt, so no WHT haircut. ~91 days in:
+    // accrued ≈ (face × 12% / 2) × 0.5 = 3,000 with no WHT → ~face + 3,000.
+    const today = new Date();
+    const s: CurrentValueSecurity = {
+      securityType: "ifb",
+      faceValue: 100_000,
+      couponRate: 12,
+      issueDate: ISO(daysAgo(91)),
+      maturityDate: ISO(daysAhead(365 * 9)),
+      isMatured: false,
+    };
+    const v = currentSecurityValue(s, today);
+    expect(v).toBeGreaterThan(102_800);
+    expect(v).toBeLessThan(103_200);
   });
 
   it("an IFB with zero coupon stays at face", () => {

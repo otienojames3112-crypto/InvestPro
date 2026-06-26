@@ -60,7 +60,8 @@ import { useMemo, useState, useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { rateStaleness } from "@/lib/rateStaleness";
 import { currentSecurityValue, classifyDurationRisk, largestConcentration, classifyConcentration, isConcentrationSnoozed, DEFAULT_LIQUIDITY_HORIZON_DAYS, type CurrentValueSecurity } from "@shared/discount";
-import { Layers, TrendingDown, BellOff, Bell } from "lucide-react";
+import { whtRateForSecurity } from "@shared/securityTenor";
+import { Layers, TrendingDown, BellOff, Bell, Scale } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -166,6 +167,12 @@ export default function Dashboard() {
     { enabled: !!portfolioId }
   );
   const { data: securities = [] } = trpc.securities.list.useQuery(
+    { portfolioId: portfolioId! },
+    { enabled: !!portfolioId }
+  );
+  // Round 62: liquid-reserve diversification split (primary MMF + secondary MMFs
+  // + liquid bank instruments), spread to keep each issuer under its cap.
+  const { data: liquidAlloc } = trpc.bankHoldings.liquidAllocation.useQuery(
     { portfolioId: portfolioId! },
     { enabled: !!portfolioId }
   );
@@ -372,6 +379,10 @@ export default function Dashboard() {
           issueDate: String(s.issueDate),
           maturityDate: String(s.maturityDate),
           isMatured: Boolean(s?.isMatured),
+          whtRatePct: whtRateForSecurity(
+            t as never,
+            parseFloat(String(s?.tenorYears ?? "")) || null,
+          ),
         });
       }
       // Cost basis: discount lots use their purchase price; coupon bonds bought
@@ -445,6 +456,31 @@ export default function Dashboard() {
     const until = days == null ? null : Date.now() + days * 24 * 60 * 60 * 1000;
     snoozeMutation.mutate({ portfolioId, until });
     toast.success(days == null ? "Concentration warnings un-snoozed" : `Concentration warnings snoozed for ${days} days`);
+  };
+
+  // ── Round 62: acknowledge an ACTUAL (real-money) per-issuer cap breach ──────
+  // Logs the acceptance to Change History, then snoozes the banner so it stops
+  // nagging until a NEW breach appears or the snooze is cleared. This only ever
+  // surfaces for recorded holdings (the concentration query is built from real
+  // bank holdings), never from projected sweeps.
+  const recordBreachAckMutation = trpc.portfolios.recordBreachAck.useMutation();
+  const acknowledgeIssuerBreach = async () => {
+    if (!portfolioId || !concentration || concentration.breaches.length === 0) return;
+    const top = concentration.breaches.reduce((a, b) => (b.share > a.share ? b : a));
+    try {
+      await recordBreachAckMutation.mutateAsync({
+        portfolioId,
+        capKind: "issuer",
+        label: top.issuer,
+        sharePct: top.share * 100,
+        capPct: concentration.cap * 100,
+      });
+      // Snooze for a long window (1 year) — the user has accepted this breach.
+      snoozeMutation.mutate({ portfolioId, until: Date.now() + 365 * 24 * 60 * 60 * 1000 });
+      toast.success("Breach acknowledged and logged to Change History");
+    } catch {
+      toast.error("Could not record acknowledgment");
+    }
   };
 
   // ── Onboarding empty state: authenticated but no portfolios yet ──────────
@@ -808,7 +844,7 @@ export default function Dashboard() {
               <p>
                 <strong className="text-amber-100">Concentration warning —</strong>{" "}
                 {concentration.breaches.length === 1 ? "one issuer holds" : `${concentration.breaches.length} issuers each hold`}{" "}
-                more than {(concentration.cap * 100).toFixed(0)}% of your net worth. Kenyan deposit insurance (KDIC) only covers
+                more than {(concentration.cap * 100).toFixed(0)}% of your net worth. Kenyan deposit insurance (<GlossaryTerm id="kdic-insurance">KDIC</GlossaryTerm>) only covers
                 up to KES 500,000 per bank, so spreading large balances across institutions reduces single-bank risk.
               </p>
               <ul className="space-y-0.5">
@@ -827,8 +863,82 @@ export default function Dashboard() {
                 ))}
               </ul>
               <p className="text-[11px] text-amber-200/60">Click an issuer to see its holdings.</p>
+              <div className="pt-1">
+                <button
+                  type="button"
+                  onClick={acknowledgeIssuerBreach}
+                  disabled={recordBreachAckMutation.isPending || snoozeMutation.isPending}
+                  className="inline-flex items-center gap-1 rounded-md border border-amber-400/40 bg-amber-500/10 px-2.5 py-1 text-[11px] font-medium text-amber-100 hover:bg-amber-500/20 transition-colors disabled:opacity-50"
+                  title="Record that you accept this concentration and stop the warning"
+                >
+                  {recordBreachAckMutation.isPending ? "Recording…" : "Acknowledge this breach"}
+                </button>
+                <span className="ml-2 text-[10px] text-amber-200/50">Logs your acceptance to Change History and mutes this warning.</span>
+              </div>
             </div>
           </div>
+        )}
+
+        {/* ── Round 62: Liquid Cash Diversification ──────────────────────── */}
+        {liquidAlloc && liquidAlloc.slices.length > 0 && liquidAlloc.liquidPot > 0 && (
+          <Card className="border-sky-500/20">
+            <CardContent className="p-4 sm:p-5">
+              <div className="flex items-start gap-2 mb-3">
+                <Scale className="w-4 h-4 text-sky-400 shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-sm font-semibold text-foreground">
+                    <GlossaryTerm id="liquid-reserve-diversification">Liquid cash diversification</GlossaryTerm>
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-0.5">{liquidAlloc.message}</p>
+                </div>
+                <span
+                  className={cn(
+                    "ml-auto shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium border",
+                    liquidAlloc.state === "diversified" && "border-emerald-500/30 bg-emerald-500/10 text-emerald-300",
+                    liquidAlloc.state === "concentrated_by_policy" && "border-amber-500/30 bg-amber-500/10 text-amber-300",
+                    liquidAlloc.state === "single_home" && "border-amber-500/30 bg-amber-500/10 text-amber-300",
+                    liquidAlloc.state === "too_small" && "border-border bg-muted/40 text-muted-foreground",
+                  )}
+                >
+                  {liquidAlloc.state === "diversified" && "Diversified"}
+                  {liquidAlloc.state === "concentrated_by_policy" && "Yield-first"}
+                  {liquidAlloc.state === "single_home" && "Single home"}
+                  {liquidAlloc.state === "too_small" && "Too small yet"}
+                </span>
+              </div>
+              <div className="space-y-2">
+                {liquidAlloc.slices.map((s) => {
+                  const pct = Math.round(s.targetShare * 100);
+                  const needsMove = s.rebalance && Math.abs(s.delta) > 0.5;
+                  return (
+                    <div key={s.id} className="space-y-1">
+                      <div className="flex items-center gap-2 text-xs">
+                        <span className="font-medium text-foreground truncate">{s.label}</span>
+                        <span className="text-muted-foreground">· {s.netYieldPct.toFixed(2)}% net</span>
+                        <span className="ml-auto font-semibold text-foreground kes-amount shrink-0">{formatKES(s.targetBalance)}</span>
+                        <span className="text-muted-foreground tabular-nums w-10 text-right shrink-0">{pct}%</span>
+                      </div>
+                      <div className="h-1.5 w-full rounded-full bg-muted/40 overflow-hidden">
+                        <div
+                          className="h-full rounded-full bg-sky-500/70 transition-[width] duration-300"
+                          style={{ width: `${Math.min(100, pct)}%` }}
+                        />
+                      </div>
+                      {needsMove && (
+                        <p className="text-[11px] text-amber-300/80">
+                          {s.delta > 0 ? "Move in" : "Move out"} {formatKES(Math.abs(s.delta))} to reach this target.
+                        </p>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+              <p className="text-[11px] text-muted-foreground/70 mt-3">
+                Targets keep each issuer at or under {Math.round(liquidAlloc.effectiveIssuerCapFrac * 100)}% of net worth.
+                Only liquid homes (MMFs, call/savings deposits) are shown — fixed deposits and government securities are excluded.
+              </p>
+            </CardContent>
+          </Card>
         )}
 
         {/* ── What the engine projection means ───────────────────────────── */}
@@ -1516,6 +1626,7 @@ export default function Dashboard() {
                 issueDate?: unknown;
                 maturityDate?: unknown;
                 isMatured?: boolean;
+                tenorYears?: unknown;
               };
               const rows = (securities as SecRow[]) ?? [];
               const groups: Record<string, { face: number; current: number }> = {};
@@ -1545,6 +1656,10 @@ export default function Dashboard() {
                     issueDate: String(s.issueDate),
                     maturityDate: String(s.maturityDate),
                     isMatured: s?.isMatured ?? false,
+                    whtRatePct: whtRateForSecurity(
+                      t as never,
+                      parseFloat(String(s?.tenorYears ?? "")) || null,
+                    ),
                   });
                 }
                 const g = groups[key] ?? { face: 0, current: 0 };

@@ -15,6 +15,7 @@ import {
   DEFAULT_LIQUIDITY_HORIZON_DAYS,
   type CurrentValueSecurity,
 } from "@shared/discount";
+import { whtRateForSecurity } from "@shared/securityTenor";
 import {
   useMaturingWindow,
   MATURING_WINDOW_ALL,
@@ -289,7 +290,16 @@ export default function PortfolioReview() {
     let weightSum = 0;
     let weightedDaySum = 0;
     for (const s of lots) {
-      const cv = currentSecurityValue(s as unknown as CurrentValueSecurity, now);
+      const cv = currentSecurityValue(
+        {
+          ...(s as unknown as CurrentValueSecurity),
+          whtRatePct: whtRateForSecurity(
+            String(s.securityType) as never,
+            s.tenorYears != null ? parseFloat(String(s.tenorYears)) : null,
+          ),
+        },
+        now,
+      );
       const days = Math.max(0, daysUntil(s.maturityDate as string | Date));
       weightSum += cv;
       weightedDaySum += cv * days;

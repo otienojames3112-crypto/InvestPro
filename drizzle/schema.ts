@@ -82,6 +82,25 @@ export const portfolios = mysqlTable("portfolios", {
    * not snoozed. Stored as milliseconds since epoch (UTC).
    */
   concentrationSnoozeUntil: bigint("concentrationSnoozeUntil", { mode: "number" }),
+  /**
+   * Round 62: per-portfolio ALLOCATION POLICY governing how the projection sweep,
+   * the liquid-reserve allocator, and the concentration warnings behave.
+   *   - balanced (default): respect concentrationCapPct (issuer) and
+   *     typeConcentrationCapPct (instrument family); diversify liquid cash.
+   *   - yield_first: relax caps toward the user's relaxed ceiling and keep money
+   *     in the highest net-yield eligible home; requires a logged risk
+   *     acknowledgment (yieldFirstAckAt). Concentration is shown but marked
+   *     "within your chosen policy" rather than "over cap".
+   *   - custom: user sets their own issuer/type caps (same two columns).
+   */
+  allocationPolicy: mysqlEnum("allocationPolicy", ["balanced", "yield_first", "custom"]).notNull().default("balanced"),
+  /**
+   * Round 62: Unix-ms timestamp when the user acknowledged the Yield-first risk
+   * ("I understand this concentrates my money in one institution and gives up
+   * KDIC diversification"). Null until acknowledged; the acknowledgment is also
+   * written to the audit_log (Change History).
+   */
+  yieldFirstAckAt: bigint("yieldFirstAckAt", { mode: "number" }),
   // finalLiquidityFrac is implied: 1 - foundationFrac - growthFrac - deRiskingFrac
   /** Editable source URL for CBK T-Bills rates page */
   cbkSourceUrl: varchar("cbkSourceUrl", { length: 500 }).notNull().default("https://www.centralbank.go.ke/bills-bonds/treasury-bills/"),

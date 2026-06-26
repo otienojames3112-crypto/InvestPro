@@ -458,6 +458,10 @@ export default function Securities() {
       issueDate: s.issueDate,
       maturityDate: s.maturityDate,
       isMatured: s.isMatured,
+      whtRatePct: whtRateForSecurity(
+        s.securityType as SecurityType,
+        s.tenorYears != null ? parseFloat(String(s.tenorYears)) : null,
+      ),
     });
     const cost = hasPrice ? price : face;
     return cv - cost;
@@ -893,6 +897,10 @@ export default function Securities() {
                         issueDate: s.issueDate,
                         maturityDate: s.maturityDate,
                         isMatured: s.isMatured,
+                        whtRatePct: whtRateForSecurity(
+                          s.securityType as SecurityType,
+                          s.tenorYears != null ? parseFloat(String(s.tenorYears)) : null,
+                        ),
                       };
                       const currentValue = currentSecurityValue(cvLot);
                       const progress = accretionProgress(cvLot);

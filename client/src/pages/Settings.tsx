@@ -4,8 +4,25 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Settings as SettingsIcon, RefreshCw, Info, Pencil, Sparkles } from "lucide-react";
+import { Settings as SettingsIcon, RefreshCw, Info, Pencil, Sparkles, ShieldAlert } from "lucide-react";
 import { UpdateRatesPanel } from "@/components/UpdateRatesPanel";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { toast } from "sonner";
 import { useForm } from "react-hook-form";
 import { useEffect, useState } from "react";
@@ -13,6 +30,7 @@ import { TenorRateGrid, type TenorRateMap } from "@/components/TenorRateGrid";
 import { History, TrendingUp } from "lucide-react";
 import { usePortfolio } from "@/contexts/PortfolioContext";
 import { useSelectedFund } from "@/hooks/useSelectedFund";
+import { GlossaryTerm } from "@/components/GlossaryTerm";
 
 // ─── Rate-only form ────────────────────────────────────────────────────────────
 
@@ -40,6 +58,7 @@ interface PlanForm {
   safetyFloor: number;
   concentrationCapPct: number;
   typeConcentrationCapPct: number;
+  allocationPolicy: "balanced" | "yield_first" | "custom";
 }
 
 function RateField({ label, name, register, description }: {
@@ -229,6 +248,7 @@ export default function Settings() {
       safetyFloor: 50000,
       concentrationCapPct: 25,
       typeConcentrationCapPct: 60,
+      allocationPolicy: "balanced",
     },
   });
 
@@ -246,6 +266,8 @@ export default function Settings() {
         safetyFloor: portfolio.safetyFloor,
         concentrationCapPct: (portfolio as { concentrationCapPct?: number }).concentrationCapPct ?? 25,
         typeConcentrationCapPct: (portfolio as { typeConcentrationCapPct?: number }).typeConcentrationCapPct ?? 60,
+        allocationPolicy:
+          (portfolio as { allocationPolicy?: "balanced" | "yield_first" | "custom" }).allocationPolicy ?? "balanced",
       });
     }
   }, [portfolio]);
@@ -262,9 +284,36 @@ export default function Settings() {
     onError: () => toast.error("Failed to update portfolio"),
   });
 
+  // ── Round 62: Yield-first acknowledgment gate ──────────────────────────────
+  // Switching the Allocation Policy to "yield_first" deliberately relaxes the
+  // concentration caps, so we require an explicit, recorded acknowledgment of
+  // the added concentration risk before saving.
+  const [pendingPlan, setPendingPlan] = useState<PlanForm | null>(null);
+  const acknowledgeYieldFirst = trpc.portfolios.acknowledgeYieldFirst.useMutation();
+
+  const alreadyAckedYieldFirst =
+    !!(portfolio as { yieldFirstAckAt?: number | null } | undefined)?.yieldFirstAckAt;
+
   function onSavePlan(data: PlanForm) {
     if (!portfolioId) return;
+    const switchingToYieldFirst =
+      data.allocationPolicy === "yield_first" && !alreadyAckedYieldFirst;
+    if (switchingToYieldFirst) {
+      // Hold the save until the user acknowledges the concentration risk.
+      setPendingPlan(data);
+      return;
+    }
     updatePortfolioMutation.mutate({ portfolioId, ...data });
+  }
+
+  async function confirmYieldFirst() {
+    if (!portfolioId || !pendingPlan) return;
+    try {
+      await acknowledgeYieldFirst.mutateAsync({ portfolioId });
+      updatePortfolioMutation.mutate({ portfolioId, ...pendingPlan });
+    } finally {
+      setPendingPlan(null);
+    }
   }
 
   // Auto-derived MMF safety floor recommendation, recomputed live from the
@@ -426,7 +475,9 @@ export default function Settings() {
                 )}
               </div>
               <div className="space-y-1.5">
-                <Label className="text-xs font-medium">Per-Issuer Concentration Cap (%)</Label>
+                <Label className="text-xs font-medium">
+                  <GlossaryTerm id="per-issuer-vs-per-type-cap">Per-Issuer Concentration Cap (%)</GlossaryTerm>
+                </Label>
                 <Input type="number" step="1" min="5" max="100" {...planForm.register("concentrationCapPct", { valueAsNumber: true })} />
                 <p className="text-xs text-muted-foreground">No single bank/issuer should exceed this share of net worth before the Dashboard warns. Government securities are exempt (sovereign). Default 25%.</p>
               </div>
@@ -434,6 +485,34 @@ export default function Settings() {
                 <Label className="text-xs font-medium">Per-Type Concentration Cap (%)</Label>
                 <Input type="number" step="1" min="10" max="100" {...planForm.register("typeConcentrationCapPct", { valueAsNumber: true })} />
                 <p className="text-xs text-muted-foreground">When a single CBK instrument TYPE (T-Bills / IFB / FXD) exceeds this share of your current portfolio value, the Portfolio Review concentration line and Dashboard maturity tile flip to a warning colour. Default 60%.</p>
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs font-medium">
+                  <GlossaryTerm id="allocation-policy">Allocation Policy</GlossaryTerm>
+                </Label>
+                <Select
+                  value={planForm.watch("allocationPolicy")}
+                  onValueChange={(v) =>
+                    planForm.setValue("allocationPolicy", v as PlanForm["allocationPolicy"], { shouldDirty: true })
+                  }
+                >
+                  <SelectTrigger className="text-sm">
+                    <SelectValue placeholder="Choose a policy" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="balanced">Balanced — diversify, respect caps (default)</SelectItem>
+                    <SelectItem value="yield_first">Yield-first — chase the highest net yield</SelectItem>
+                    <SelectItem value="custom">Custom — use my caps as-is</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  <strong>Balanced</strong> spreads liquid cash across eligible homes so no issuer breaches its cap.{" "}
+                  <strong>Yield-first</strong> relaxes the per-type cap toward 100% and concentrates in the highest net-of-tax home — higher return, higher concentration risk (requires acknowledgment).{" "}
+                  <strong>Custom</strong> keeps your caps exactly as entered.
+                  {alreadyAckedYieldFirst && (
+                    <span className="block mt-1 text-[11px] text-muted-foreground/80">Yield-first risk already acknowledged for this portfolio.</span>
+                  )}
+                </p>
               </div>
               <div className="space-y-1.5">
                 <Label className="text-xs font-medium">Liquidity Horizon (days)</Label>
@@ -579,6 +658,42 @@ export default function Settings() {
         <UpdateRatesPanel portfolioId={portfolioId} />
         <RateHistorySection portfolioId={portfolioId} />
       </div>
+
+      <AlertDialog open={!!pendingPlan} onOpenChange={(open) => { if (!open) setPendingPlan(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <ShieldAlert className="w-5 h-5 text-amber-500" />
+              Switch to Yield-first allocation?
+            </AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-2 text-sm">
+                <p>
+                  Yield-first deliberately relaxes your per-type concentration cap toward 100% and
+                  concentrates liquid cash in the single highest net-of-tax home. This can raise returns
+                  but increases <strong>concentration risk</strong> — more of your money rests with one issuer/type.
+                </p>
+                <p>
+                  Government securities remain sovereign-exempt, but bank and MMF concentration warnings
+                  will be evaluated <strong>within this chosen policy</strong>. You can switch back to Balanced at any time.
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  We&rsquo;ll record this acknowledgment with a timestamp in your change log.
+                </p>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => { e.preventDefault(); confirmYieldFirst(); }}
+              disabled={acknowledgeYieldFirst.isPending || updatePortfolioMutation.isPending}
+            >
+              {acknowledgeYieldFirst.isPending ? "Acknowledging…" : "I understand — enable Yield-first"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </AppShell>
   );
 }

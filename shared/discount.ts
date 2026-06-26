@@ -164,6 +164,17 @@ export interface CurrentValueSecurity {
   issueDate: string | Date;
   maturityDate: string | Date;
   isMatured?: boolean | null;
+  /**
+   * Round 62: WHT rate (%) applied to coupon income for taxable coupon bonds
+   * (FXD / floating-rate). Used to net the accrued-coupon component of current
+   * value. IFB is tax-exempt and ignores this. Defaults to 15% when omitted.
+   */
+  whtRatePct?: number | null;
+}
+
+/** IFB coupons are tax-exempt; FXD and floating-rate coupons attract WHT. */
+function isTaxExemptCoupon(t: string): boolean {
+  return t === "ifb";
 }
 
 /** Discount instrument types that accrete price → face. */
@@ -201,11 +212,62 @@ export function currentSecurityValue(s: CurrentValueSecurity, today: Date = new 
     return accretedValue(face, price, f);
   }
 
-  // Coupon bonds (fxd / ifb / floating_rate): par + pro-rata accrued coupon.
+  // Coupon bonds (fxd / ifb / floating_rate): clean price stays at par; we add
+  // ONLY the coupon accrued since the LAST coupon date (semi-annual periods from
+  // issue), reset at each payment and capped at one period. Net of WHT for FXD /
+  // floating-rate; gross (tax-exempt) for IFB. This prevents the dirty value from
+  // ballooning above face as more coupons accrue over the bond's life, so the
+  // register/Dashboard current value reconciles with the face-based net worth.
   const couponPct = Number(s.couponRate) || 0;
-  const elapsedDays = span > 0 ? (f * span) / (1000 * 60 * 60 * 24) : 0;
-  const accruedCoupon = face * (couponPct / 100) * (elapsedDays / 365);
-  return face + Math.max(0, accruedCoupon);
+  if (couponPct <= 0) return face;
+  const accrued = accruedCouponSinceLastCoupon(
+    face,
+    couponPct,
+    issue,
+    now,
+    maturity,
+  );
+  const exempt = isTaxExemptCoupon(s.securityType);
+  const wht = exempt ? 0 : (Number(s.whtRatePct) || 15) / 100;
+  const net = accrued * (1 - wht);
+  return face + Math.max(0, net);
+}
+
+/** Days in one semi-annual coupon period (365 / 2). */
+const COUPON_PERIOD_DAYS = 182.5;
+const MS_PER_DAY = 1000 * 60 * 60 * 24;
+
+/**
+ * Round 62: GROSS coupon accrued since the most recent coupon date.
+ *
+ * Coupons are assumed semi-annual, falling every ~182.5 days from issue. The
+ * accrued amount resets to zero on each coupon date and grows linearly to one
+ * full half-year coupon just before the next one. Capped at a single period so
+ * the dirty value never exceeds face + one coupon.
+ *
+ *   halfYearCoupon = face × (couponPct/100) / 2
+ *   fractionIntoPeriod = (daysSinceIssue mod 182.5) / 182.5
+ *   accrued = halfYearCoupon × fractionIntoPeriod
+ */
+export function accruedCouponSinceLastCoupon(
+  face: number,
+  couponPct: number,
+  issueTime: number,
+  nowTime: number,
+  maturityTime: number,
+): number {
+  if (face <= 0 || couponPct <= 0) return 0;
+  if (!Number.isFinite(issueTime) || !Number.isFinite(nowTime)) return 0;
+  if (nowTime <= issueTime) return 0;
+  // At/after maturity the final coupon is paid in full (handled by the maturity
+  // redemption path); here we just return a full period's worth.
+  const halfYearCoupon = (face * (couponPct / 100)) / 2;
+  const daysSinceIssue = (nowTime - issueTime) / MS_PER_DAY;
+  if (Number.isFinite(maturityTime) && nowTime >= maturityTime) {
+    return halfYearCoupon;
+  }
+  const fractionIntoPeriod = (daysSinceIssue % COUPON_PERIOD_DAYS) / COUPON_PERIOD_DAYS;
+  return halfYearCoupon * fractionIntoPeriod;
 }
 
 /**

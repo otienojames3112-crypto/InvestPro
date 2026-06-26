@@ -19,6 +19,10 @@ interface Portfolio {
   concentrationCapPct?: number;
   typeConcentrationCapPct?: number;
   concentrationSnoozeUntil?: number | null;
+  /** Round 62: per-portfolio allocation policy. */
+  allocationPolicy?: "balanced" | "yield_first" | "custom";
+  /** Round 62: when the Yield-first risk acknowledgment was recorded (Unix ms). */
+  yieldFirstAckAt?: number | null;
   mmfFundId: number | null;
   cbkSourceUrl: string | null;
   sanlamSourceUrl: string | null;

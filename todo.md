@@ -712,3 +712,16 @@
 - [x] R61.2 Dashboard: add a "snoozed" badge near the Avg. Maturity tile so the muted concentration-warning state is visible from the top, not only the Risk Limits panel.
 - [x] R61.3 Diversify action: offer a quick choice of target instrument (MMF vs 364-day T-bill) before opening the prefilled add form.
 - [x] R61 tests: helper tests for any new shared logic (e.g. diversify target options / link builder for MMF vs T-bill).
+
+
+## Round 62 (per-portfolio caps + allocation policy + liquid allocator + coupon-bond valuation fix + glossary + ledger tooltips)
+
+- [x] R62.1 Make issuer cap (25%) and type cap (60%) per-portfolio overridable; remove hardcoded ISSUER_CONCENTRATION_CAP / FAMILY_CONCENTRATION_CAP from warning path AND engine sweep; add editor in Risk & Allocation settings.
+- [x] R62.2 Per-portfolio Allocation Policy (Balanced / Yield-first / Custom); Yield-first requires logged risk acknowledgment; policy drives projection + liquid allocator + warnings (Yield-first shows "within your chosen policy").
+- [x] R62.3 Acknowledge-on-actual-breach (real money only): inline non-blocking prompt + Change History log; never on projected sweeps.
+- [x] R62.4 Liquid-reserve diversification allocator: runs monthly after term sweep; spreads residual liquid cash across primary MMF + secondary MMFs + liquid bank accounts by net yield; per-issuer cap with 1/n floor; min balances; safety floor; >5% drift no-churn; single-home nudge; Yield-first override; surface split on Dashboard + Ledger; re-run on rate/account change.
+- [x] R62.5 Fix FXD/IFB current-value overstatement: value coupon bonds at face + coupon accrued since LAST coupon date (reset at payment, capped at one period, net WHT for FXD/floating, gross IFB); register Current Value / Dashboard Total Current Value / Unrealized Gain reconcile with face-based net worth. Verify final-coupon-at-maturity committed in source.
+- [x] R62.6 Glossary (Learn the Basics): add/update entries reused as tooltips — Allocation policy; Concentration cap override; Per-issuer vs per-type cap; Liquid-reserve diversification; KDIC insurance; corrected Accrued interest / current value of a coupon bond.
+- [x] R62.7 Confirm Month Ledger column tooltips exist (Mth, Basis, Date, Save, CBK In, Bank In, Swept->Securities, Main Action, MMF End, T-Bill 91/182/364d, IFB, FXD, Bank, Total, Phase).
+- [x] R62.8 Apply EXACT column-header tooltip text provided for each Ledger column.
+- [x] R62 tests: engine (caps from settings, policy, liquid allocator placement/invariants, coupon-bond valuation reconcile) + helper tests; full suite green + tsc clean.

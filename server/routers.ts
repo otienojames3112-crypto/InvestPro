@@ -116,6 +116,11 @@ import {
 } from "../shared/securityTenor";
 import { buildAllocation, blendedYield } from "../shared/actuals";
 import { discountPriceForSecurity, tbillPrice } from "../shared/discount";
+import {
+  allocateLiquidReserve,
+  isLiquidBankKind,
+  type LiquidHome,
+} from "../shared/liquidAllocator";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -175,6 +180,20 @@ function dbToEngine(
     // Round 40: per-tenor bond rate maps (null when unset).
     ifbTenorRates: (r?.ifbTenorRates as Record<string, number> | null | undefined) ?? null,
     fxdTenorRates: (r?.fxdTenorRates as Record<string, number> | null | undefined) ?? null,
+    // Round 62: per-portfolio concentration caps + allocation policy. Defaults
+    // (issuer 25% / type 60% / balanced) preserve prior engine behaviour.
+    issuerCapFrac: p
+      ? (parseFloat(String((p as { concentrationCapPct?: string }).concentrationCapPct ?? "25")) || 25) / 100
+      : 0.25,
+    typeCapFrac: p
+      ? (parseFloat(String((p as { typeConcentrationCapPct?: string }).typeConcentrationCapPct ?? "60")) || 60) / 100
+      : 0.6,
+    allocationPolicy:
+      ((p as { allocationPolicy?: string } | null)?.allocationPolicy as
+        | "balanced"
+        | "yield_first"
+        | "custom"
+        | undefined) ?? "balanced",
   };
 }
 
@@ -335,6 +354,8 @@ const portfolioCreateInput = z.object({
   concentrationCapPct: z.number().min(5).max(100).optional(),
   // Round 58: editable per-instrument-type concentration cap (%). 10–100.
   typeConcentrationCapPct: z.number().min(10).max(100).optional(),
+  // Round 62: allocation policy governing sweep/allocator/warnings.
+  allocationPolicy: z.enum(["balanced", "yield_first", "custom"]).optional(),
 });
 
 const rateOnlyInput = z.object({
@@ -392,6 +413,8 @@ export const appRouter = router({
           concentrationCapPct: parseFloat(String((p as { concentrationCapPct?: string }).concentrationCapPct ?? "25")),
           typeConcentrationCapPct: parseFloat(String((p as { typeConcentrationCapPct?: string }).typeConcentrationCapPct ?? "60")),
           concentrationSnoozeUntil: (p as { concentrationSnoozeUntil?: number | null }).concentrationSnoozeUntil ?? null,
+          allocationPolicy: ((p as { allocationPolicy?: string }).allocationPolicy ?? "balanced") as "balanced" | "yield_first" | "custom",
+          yieldFirstAckAt: (p as { yieldFirstAckAt?: number | null }).yieldFirstAckAt ?? null,
           cbkSourceUrl: p.cbkSourceUrl,
           sanlamSourceUrl: p.sanlamSourceUrl,
           ratesLastUpdatedAt: p.ratesLastUpdatedAt ?? null,
@@ -422,6 +445,8 @@ export const appRouter = router({
         concentrationCapPct: parseFloat(String((p as { concentrationCapPct?: string }).concentrationCapPct ?? "25")),
         typeConcentrationCapPct: parseFloat(String((p as { typeConcentrationCapPct?: string }).typeConcentrationCapPct ?? "60")),
         concentrationSnoozeUntil: (p as { concentrationSnoozeUntil?: number | null }).concentrationSnoozeUntil ?? null,
+        allocationPolicy: ((p as { allocationPolicy?: string }).allocationPolicy ?? "balanced") as "balanced" | "yield_first" | "custom",
+        yieldFirstAckAt: (p as { yieldFirstAckAt?: number | null }).yieldFirstAckAt ?? null,
         cbkSourceUrl: p.cbkSourceUrl,
         sanlamSourceUrl: p.sanlamSourceUrl,
         ratesLastUpdatedAt: p.ratesLastUpdatedAt ?? null,
@@ -446,6 +471,63 @@ export const appRouter = router({
         return { success: true, until: input.until };
       }),
 
+    /**
+     * Round 62: record the user's acknowledgment of the Yield-first allocation
+     * policy's concentration risk. Stamps yieldFirstAckAt and writes a Change
+     * History entry. Pass clear=true to revoke the acknowledgment.
+     */
+    acknowledgeYieldFirst: protectedProcedure
+      .input(z.object({ portfolioId: z.number().int().positive(), clear: z.boolean().optional() }))
+      .mutation(async ({ ctx, input }) => {
+        await requirePortfolio(input.portfolioId, ctx.user.id);
+        const now = input.clear ? null : Date.now();
+        await updatePortfolio(input.portfolioId, ctx.user.id, {
+          yieldFirstAckAt: now,
+        } as Record<string, unknown>);
+        await addAuditLog({
+          portfolioId: input.portfolioId,
+          entity: "allocation_policy",
+          action: "update",
+          field: "yieldFirstAckAt",
+          newValue: now ? new Date(now).toISOString() : null,
+          changedByOpenId: ctx.user.openId,
+          changedByName: ctx.user.name ?? null,
+          summary: input.clear
+            ? "Revoked Yield-first risk acknowledgment"
+            : "Acknowledged Yield-first concentration risk (gives up KDIC diversification across institutions)",
+        });
+        return { success: true, yieldFirstAckAt: now };
+      }),
+
+    /**
+     * Round 62: log that the user acknowledged an ACTUAL (real-money) cap breach.
+     * This never fires on projected sweeps — only when recorded holdings exceed a
+     * cap. Writes a Change History entry describing the breach the user accepted.
+     */
+    recordBreachAck: protectedProcedure
+      .input(z.object({
+        portfolioId: z.number().int().positive(),
+        capKind: z.enum(["issuer", "type"]),
+        label: z.string().max(120),
+        sharePct: z.number().min(0).max(100),
+        capPct: z.number().min(0).max(100),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        await requirePortfolio(input.portfolioId, ctx.user.id);
+        const kindLabel = input.capKind === "issuer" ? "per-issuer (KDIC)" : "per-instrument-type";
+        await addAuditLog({
+          portfolioId: input.portfolioId,
+          entity: "concentration_breach",
+          action: "update",
+          field: input.capKind,
+          newValue: `${input.sharePct.toFixed(1)}% vs ${input.capPct.toFixed(0)}% cap`,
+          changedByOpenId: ctx.user.openId,
+          changedByName: ctx.user.name ?? null,
+          summary: `Acknowledged actual ${kindLabel} concentration breach: ${input.label} at ${input.sharePct.toFixed(1)}% (cap ${input.capPct.toFixed(0)}%)`,
+        });
+        return { success: true };
+      }),
+
     /** Create a new portfolio. Also creates a default rate_settings row for it. */
     create: protectedProcedure
       .input(portfolioCreateInput.extend({ isSandbox: z.boolean().optional() }))
@@ -467,6 +549,7 @@ export const appRouter = router({
         deRiskingFrac: String(input.deRiskingFrac ?? 0.15),
         concentrationCapPct: String(input.concentrationCapPct ?? 25),
         typeConcentrationCapPct: String(input.typeConcentrationCapPct ?? 60),
+        ...(input.allocationPolicy ? { allocationPolicy: input.allocationPolicy } : {}),
       });
       if (!p) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Failed to create portfolio." });
       // Ensure a rate_settings row exists
@@ -494,7 +577,8 @@ export const appRouter = router({
           deRiskingFrac: String(input.deRiskingFrac ?? 0.15),
           ...(input.concentrationCapPct != null ? { concentrationCapPct: String(input.concentrationCapPct) } : {}),
           ...(input.typeConcentrationCapPct != null ? { typeConcentrationCapPct: String(input.typeConcentrationCapPct) } : {}),
-        });
+          ...(input.allocationPolicy ? { allocationPolicy: input.allocationPolicy } : {}),
+        } as Record<string, unknown>);
         return { success: true };
       }),
 
@@ -2589,6 +2673,106 @@ export const appRouter = router({
             share: Math.round(b.share * 10000) / 10000,
           })),
         };
+      }),
+    /**
+     * Round 62: liquid-reserve diversification allocator. Builds the eligible
+     * liquid homes (primary MMF + secondary MMFs + LIQUID bank instruments),
+     * pulls each home's gross yield + WHT (kept current by the weekly updates),
+     * and runs the pure allocator so the Dashboard/Portfolio Review can surface
+     * how the residual liquid cash should be spread to keep each issuer under
+     * its cap. Government securities are sovereign and never enter the pot.
+     */
+    liquidAllocation: protectedProcedure
+      .input(z.object({ portfolioId: z.number().int().positive() }))
+      .query(async ({ ctx, input }) => {
+        const p = await requirePortfolio(input.portfolioId, ctx.user.id);
+        const rates = await getRateSettings(input.portfolioId);
+        const fundEar = await getSelectedFundEar(p);
+        const settings = dbToEngine(rates, p, fundEar);
+        const summary = await getActualsSummary(
+          input.portfolioId,
+          settings.targetAmount,
+          settings.withholdingTax,
+          settings.fxdCouponRate,
+          settings.mmfYield,
+          settings.tbill364Rate,
+        );
+        const netWorth = summary ? summary.totalContributed : 0;
+        const primaryMmfBalance = summary ? summary.depositsContributed : 0;
+
+        const homes: LiquidHome[] = [];
+        // Primary MMF.
+        const primaryFund = p.mmfFundId ? await getMmfFund(p.mmfFundId) : null;
+        if (primaryFund) {
+          homes.push({
+            id: `mmf:${primaryFund.id}`,
+            label: primaryFund.fundName,
+            kind: "primary_mmf",
+            issuer: primaryFund.company || primaryFund.fundName,
+            grossYieldPct: parseFloat(String(primaryFund.grossYield)) || 0,
+            whtRatePct: parseFloat(String(primaryFund.whtRate)) || 15,
+            currentBalance: primaryMmfBalance,
+            minBalance: parseFloat(String(primaryFund.minInvestment)) || 0,
+          });
+        }
+        // Secondary MMFs.
+        const secs = await getSecondaryMmfs(input.portfolioId);
+        for (const s of secs) {
+          homes.push({
+            id: `mmf:${s.mmfFundId}`,
+            label: s.label || s.fundName || "Secondary MMF",
+            kind: "secondary_mmf",
+            issuer: s.company || s.fundName || s.label || `fund-${s.mmfFundId}`,
+            grossYieldPct: parseFloat(String(s.ear)) || 0,
+            whtRatePct: parseFloat(String(s.whtRate)) || 15,
+            currentBalance: parseFloat(String(s.currentBalance)) || 0,
+            minBalance: 0,
+          });
+        }
+        // LIQUID bank instruments only (exclude locked fixed/target deposits).
+        const bank = await getBankInstrumentHoldings(input.portfolioId);
+        for (const b of bank) {
+          if (!b.isActive) continue;
+          if (!isLiquidBankKind(String(b.instrumentType))) continue;
+          homes.push({
+            id: `bank:${b.id}`,
+            label: b.label || `${b.bankName} ${String(b.instrumentType).replace(/_/g, " ")}`,
+            kind: String(b.instrumentType) as LiquidHome["kind"],
+            issuer: b.bankName,
+            grossYieldPct: parseFloat(String(b.interestRate)) || 0,
+            whtRatePct: parseFloat(String(b.whtRate)) || 15,
+            currentBalance: Math.max(
+              parseFloat(String(b.currentValue)) || 0,
+              parseFloat(String(b.principal)) || 0,
+            ),
+            minBalance: 0,
+          });
+        }
+
+        const issuerCapPct = parseFloat(
+          String((p as { concentrationCapPct?: string }).concentrationCapPct ?? "25"),
+        );
+        const issuerCapFrac =
+          (Number.isFinite(issuerCapPct) && issuerCapPct > 0 ? issuerCapPct : 25) / 100;
+        const allocationPolicy =
+          ((p as { allocationPolicy?: string }).allocationPolicy as
+            | "balanced"
+            | "yield_first"
+            | "custom"
+            | undefined) ?? "balanced";
+
+        // Liquid pot = primary MMF + secondary MMFs + liquid bank balances.
+        const liquidPot = homes.reduce((sum, h) => sum + h.currentBalance, 0);
+
+        const result = allocateLiquidReserve({
+          homes,
+          netWorth,
+          liquidPot,
+          issuerCapFrac,
+          safetyFloor: settings.safetyFloor,
+          allocationPolicy,
+        });
+        return result;
       }),
     add: protectedProcedure
       .input(z.object({

@@ -335,10 +335,18 @@ export default function Dashboard() {
   // (T-bills / zero-coupon) and par (face) for coupon bonds bought at par.
   const portfolioValuation = useMemo(() => {
     const rows = (securities as Array<Record<string, unknown>>) ?? [];
+    const now = Date.now();
+    const DAY = 1000 * 60 * 60 * 24;
     let totalFace = 0;
     let totalCurrent = 0;
     let totalCost = 0;
     let lots = 0;
+    // Weighted-average days-to-maturity: weight each lot's remaining days by its
+    // current value. Value-weighted simple YTM: annualize each lot's remaining
+    // gain (face - current) over its remaining life, weighted by current value.
+    let dtmWeight = 0; // sum of current values used as DTM weight
+    let dtmWeighted = 0; // sum of (days * currentValue)
+    let ytmWeighted = 0; // sum of (annualizedYield * currentValue)
     for (const s of rows) {
       if (s?.isMatured) continue;
       const face = parseFloat(String(s?.faceValue ?? "0")) || 0;
@@ -365,10 +373,36 @@ export default function Dashboard() {
       totalCurrent += current;
       totalCost += cost;
       lots += 1;
+
+      if (s?.maturityDate) {
+        const mt = new Date(String(s.maturityDate)).getTime();
+        const days = Math.max(0, Math.round((mt - now) / DAY));
+        if (current > 0) {
+          dtmWeight += current;
+          dtmWeighted += days * current;
+          // Simple annualized yield-to-maturity from today's value to face.
+          if (days > 0 && current > 0) {
+            const periodReturn = (face - current) / current;
+            const annualized = periodReturn * (365 / days);
+            ytmWeighted += annualized * current;
+          }
+        }
+      }
     }
     const unrealizedGain = totalCurrent - totalCost;
     const gainPct = totalCost > 0 ? (unrealizedGain / totalCost) * 100 : 0;
-    return { totalFace, totalCurrent, totalCost, unrealizedGain, gainPct, lots };
+    const wAvgDays = dtmWeight > 0 ? Math.round(dtmWeighted / dtmWeight) : 0;
+    const wAvgYtmPct = dtmWeight > 0 ? (ytmWeighted / dtmWeight) * 100 : 0;
+    return {
+      totalFace,
+      totalCurrent,
+      totalCost,
+      unrealizedGain,
+      gainPct,
+      lots,
+      wAvgDays,
+      wAvgYtmPct,
+    };
   }, [securities]);
 
   // ── Onboarding empty state: authenticated but no portfolios yet ──────────
@@ -445,44 +479,81 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* ── R50: Securities portfolio summary (current vs face vs gain) ── */}
+        {/* ── R50/R51: Securities portfolio summary (current vs face vs gain) ── */}
         {portfolioValuation.lots > 0 && (() => {
           const v = portfolioValuation;
           const positive = v.unrealizedGain >= 0;
           const GainIcon = positive ? TrendingUp : TrendingDown;
+          // R51 — Face → Current delta bar. Fraction of total face already
+          // realised as current value (how close the book sits to redemption).
+          const facePct = v.totalFace > 0 ? Math.min(1, Math.max(0, v.totalCurrent / v.totalFace)) : 0;
+          // Friendly weighted-avg days-to-maturity label.
+          const d = v.wAvgDays;
+          const dtmLabel =
+            d >= 365 ? `${(d / 365).toFixed(1)} yr` : d >= 30 ? `${Math.round(d / 30)} mo` : `${d} d`;
           return (
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              <div className="rounded-xl border border-white/10 bg-white/[0.02] p-4">
-                <div className="flex items-center gap-2 text-muted-foreground">
-                  <TrendingUp className="w-4 h-4 text-sky-400 shrink-0" />
-                  <p className="text-[11px] font-medium uppercase tracking-widest">Total Current Value</p>
+            <div className="space-y-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                <div className="rounded-xl border border-white/10 bg-white/[0.02] p-4">
+                  <div className="flex items-center gap-2 text-muted-foreground">
+                    <TrendingUp className="w-4 h-4 text-sky-400 shrink-0" />
+                    <p className="text-[11px] font-medium uppercase tracking-widest">Total Current Value</p>
+                  </div>
+                  <p className="mt-2 text-2xl font-bold text-sky-300 kes-amount">{formatKES(v.totalCurrent)}</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    Mark-to-model value of {v.lots} active {v.lots === 1 ? "lot" : "lots"} today
+                  </p>
                 </div>
-                <p className="mt-2 text-2xl font-bold text-sky-300 kes-amount">{formatKES(v.totalCurrent)}</p>
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  Mark-to-model value of {v.lots} active {v.lots === 1 ? "lot" : "lots"} today
-                </p>
+                <div className="rounded-xl border border-white/10 bg-white/[0.02] p-4">
+                  <div className="flex items-center gap-2 text-muted-foreground">
+                    <Layers className="w-4 h-4 text-primary shrink-0" />
+                    <p className="text-[11px] font-medium uppercase tracking-widest">Total Face Value</p>
+                  </div>
+                  <p className="mt-2 text-2xl font-bold text-foreground kes-amount">{formatKES(v.totalFace)}</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    Redemption value paid out at maturity
+                  </p>
+                </div>
+                <Link
+                  href="/securities?sort=gain"
+                  className="group rounded-xl border border-white/10 bg-white/[0.02] p-4 transition-colors hover:bg-white/[0.05] hover:border-white/20"
+                >
+                  <div className="flex items-center gap-2 text-muted-foreground">
+                    <GainIcon className={cn("w-4 h-4 shrink-0", positive ? "text-emerald-400" : "text-red-400")} />
+                    <p className="text-[11px] font-medium uppercase tracking-widest">Unrealized Gain</p>
+                    <ArrowUpRight className="w-3.5 h-3.5 ml-auto text-muted-foreground/50 transition-colors group-hover:text-foreground" />
+                  </div>
+                  <p className={cn("mt-2 text-2xl font-bold kes-amount", positive ? "text-emerald-400" : "text-red-400")}>
+                    {positive ? "+" : "−"}{formatKES(Math.abs(v.unrealizedGain))}
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    {positive ? "+" : "−"}{Math.abs(v.gainPct).toFixed(2)}% vs cost basis ({formatKESCompact(v.totalCost)})
+                  </p>
+                </Link>
+                <div className="rounded-xl border border-white/10 bg-white/[0.02] p-4">
+                  <div className="flex items-center gap-2 text-muted-foreground">
+                    <CalendarClock className="w-4 h-4 text-amber-400 shrink-0" />
+                    <p className="text-[11px] font-medium uppercase tracking-widest">Avg. Maturity</p>
+                  </div>
+                  <p className="mt-2 text-2xl font-bold text-foreground kes-amount">{dtmLabel}</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    {v.wAvgDays} days weighted · {v.wAvgYtmPct >= 0 ? "" : "−"}{Math.abs(v.wAvgYtmPct).toFixed(2)}% YTM
+                  </p>
+                </div>
               </div>
-              <div className="rounded-xl border border-white/10 bg-white/[0.02] p-4">
-                <div className="flex items-center gap-2 text-muted-foreground">
-                  <Layers className="w-4 h-4 text-primary shrink-0" />
-                  <p className="text-[11px] font-medium uppercase tracking-widest">Total Face Value</p>
+              {/* R51 — Face → Current delta bar (book progress toward redemption). */}
+              <div className="rounded-xl border border-white/10 bg-white/[0.02] px-4 py-3">
+                <div className="flex items-center justify-between text-[11px] text-muted-foreground mb-1.5">
+                  <span>Current value vs face</span>
+                  <span className="tabular-nums">{(facePct * 100).toFixed(1)}% of face · {formatKESCompact(v.totalFace - v.totalCurrent)} to accrue</span>
                 </div>
-                <p className="mt-2 text-2xl font-bold text-foreground kes-amount">{formatKES(v.totalFace)}</p>
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  Redemption value paid out at maturity
-                </p>
-              </div>
-              <div className="rounded-xl border border-white/10 bg-white/[0.02] p-4">
-                <div className="flex items-center gap-2 text-muted-foreground">
-                  <GainIcon className={cn("w-4 h-4 shrink-0", positive ? "text-emerald-400" : "text-red-400")} />
-                  <p className="text-[11px] font-medium uppercase tracking-widest">Unrealized Gain</p>
+                <div className="h-2 w-full rounded-full bg-muted/50 overflow-hidden">
+                  <div
+                    className="h-full rounded-full bg-gradient-to-r from-sky-500 to-emerald-400 transition-[width] duration-500"
+                    style={{ width: `${facePct * 100}%` }}
+                    title={`${formatKES(v.totalCurrent)} current of ${formatKES(v.totalFace)} face`}
+                  />
                 </div>
-                <p className={cn("mt-2 text-2xl font-bold kes-amount", positive ? "text-emerald-400" : "text-red-400")}>
-                  {positive ? "+" : "−"}{formatKES(Math.abs(v.unrealizedGain))}
-                </p>
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  {positive ? "+" : "−"}{Math.abs(v.gainPct).toFixed(2)}% vs cost basis ({formatKESCompact(v.totalCost)})
-                </p>
               </div>
             </div>
           );

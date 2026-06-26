@@ -328,8 +328,37 @@ export default function Securities() {
     });
   }
 
+  // R51 — deep-link from the Dashboard "Unrealized Gain" tile: ?sort=gain sorts
+  // the active register by largest mark-to-model gain first.
+  const sortByGain =
+    typeof window !== "undefined" &&
+    new URLSearchParams(window.location.search).get("sort") === "gain";
+
+  // Compute a lot's current mark-to-model value and gain-since-cost for sorting.
+  const lotGain = (s: NonNullable<typeof securities>[number]): number => {
+    const face = parseFloat(String(s.faceValue)) || 0;
+    if (face <= 0) return 0;
+    const isDisc = isDiscountInstrument(s.securityType as SecurityType);
+    const price = s.purchasePrice != null ? parseFloat(String(s.purchasePrice)) : NaN;
+    const hasPrice = Number.isFinite(price) && price > 0;
+    const cv = currentSecurityValue({
+      securityType: s.securityType,
+      faceValue: face,
+      purchasePrice: hasPrice ? price : null,
+      couponRate: s.couponRate != null ? parseFloat(String(s.couponRate)) : 0,
+      issueDate: s.issueDate,
+      maturityDate: s.maturityDate,
+      isMatured: s.isMatured,
+    });
+    const cost = hasPrice ? price : isDisc ? face : face;
+    return cv - cost;
+  };
+
   // Group by type
-  const active = securities?.filter((s) => !s.isMatured) ?? [];
+  const activeUnsorted = securities?.filter((s) => !s.isMatured) ?? [];
+  const active = sortByGain
+    ? [...activeUnsorted].sort((a, b) => lotGain(b) - lotGain(a))
+    : activeUnsorted;
   const matured = securities?.filter((s) => s.isMatured) ?? [];
 
   const totalFaceValue = active.reduce((sum, s) => sum + parseFloat(String(s.faceValue)), 0);
@@ -564,6 +593,12 @@ export default function Securities() {
             <CardTitle className="text-sm font-semibold flex items-center gap-2">
               <Landmark className="w-4 h-4 text-primary" />
               Active Holdings
+              {sortByGain && (
+                <Badge variant="secondary" className="ml-2 gap-1 font-normal">
+                  Sorted by gain
+                  <a href="/securities" className="ml-1 text-muted-foreground hover:text-foreground" title="Clear sort">×</a>
+                </Badge>
+              )}
             </CardTitle>
           </CardHeader>
           <CardContent className="p-0">

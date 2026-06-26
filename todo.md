@@ -631,3 +631,10 @@
 
 - [x] R50.1 Add a summary card at the top of the Dashboard aggregating total current value, total face value, and overall unrealized gain across all active CBK lots (uses shared currentSecurityValue).
 - [x] R50.2 Full suite green (426), tsc clean, UI verified, checkpoint, deliver.
+
+## Round 51 (summary card: delta bar, gain deep-link, weighted DTM/YTM)
+
+- [x] R51.1 Add a Face -> Current delta bar inside the summary card mirroring the per-lot accretion bars.
+- [x] R51.2 Make the Unrealized Gain tile deep-link to the CBK Securities register, sorted by largest gain (?sort=gain).
+- [x] R51.3 Add a weighted-average days-to-maturity (and YTM) figure to the summary for a quick portfolio-duration read.
+- [x] R51.4 Tests for weighted DTM/YTM aggregation; full suite green (430), tsc clean, UI verified, checkpoint, deliver.

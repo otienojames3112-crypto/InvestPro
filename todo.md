@@ -658,3 +658,10 @@
 - [x] R54.1 Widen the shared maturing-soon window options to include longer terms (180d / 1yr / 2yr) plus an "All" option, so long-dated bonds (FXD/IFB) appear in the lookahead.
 - [x] R54.2 Update the Securities Register window selector UI with friendly labels (30d/60d/90d/180d/1yr/2yr/All) and keep localStorage + sidebar badge in sync; migrate any stale stored values.
 - [x] R54.3 Full suite green (448), tsc clean, UI verified, checkpoint, deliver.
+
+## Round 55 (bucketed maturing-soon alert, window label on review, ledger column tooltips)
+
+- [x] R55.1 Group the maturing-soon alert in the CBK Securities Register into horizon buckets (≤90d / ≤1yr / ≤2yr) when many lots fall in a wide window.
+- [x] R55.2 Add the chosen window label to the Portfolio Review liquidity calendar so both views read consistently.
+- [x] R55.3 Month-by-Month Ledger: add a hover tooltip to every column header explaining what it means (Save, CBK In, Bank In, Swept→Securities, MMF End, T-Bill 91d/182d/364d, IFB, FXD, Bank, Total, Phase).
+- [x] R55.4 Tests + tsc, screenshot-verify, checkpoint, deliver. Full suite green (451), tsc clean.

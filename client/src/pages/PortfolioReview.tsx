@@ -10,6 +10,11 @@ import {
   DEFAULT_LIQUIDITY_HORIZON_DAYS,
   type CurrentValueSecurity,
 } from "@shared/discount";
+import {
+  useMaturingWindow,
+  MATURING_WINDOW_ALL,
+  maturingWindowLabel,
+} from "@/hooks/useMaturingWindow";
 import { trpc } from "@/lib/trpc";
 import {
   Card,
@@ -84,6 +89,9 @@ function daysUntil(d: string | Date): number {
 export default function PortfolioReview() {
   const { portfolioId, portfolio } = usePortfolio();
   const fund = useSelectedFund();
+  // R55.2 — read the same maturing-soon window the CBK Securities Register uses
+  // (shared via localStorage) so both views report the same lookahead horizon.
+  const [maturingWindow] = useMaturingWindow();
 
   const { data: deposits } = trpc.deposits.list.useQuery(
     { portfolioId: portfolioId! },
@@ -473,8 +481,13 @@ export default function PortfolioReview() {
         {/* Liquidity calendar */}
         <Card>
           <CardHeader>
-            <CardTitle className="text-base flex items-center gap-2">
+            <CardTitle className="text-base flex items-center gap-2 flex-wrap">
               <CalendarClock className="w-4 h-4 text-primary" /> Liquidity Calendar
+              <Badge variant="outline" className="ml-auto font-normal text-xs gap-1">
+                <CalendarClock className="w-3 h-3" />
+                Maturing-soon window:{" "}
+                {maturingWindow === MATURING_WINDOW_ALL ? "All" : maturingWindowLabel(maturingWindow)}
+              </Badge>
             </CardTitle>
             <CardDescription>
               When your cash frees up — CBK security maturities and bank fixed
@@ -528,10 +541,29 @@ export default function PortfolioReview() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {upcoming.map((s) => (
-                      <TableRow key={s.id}>
+                    {upcoming.map((s) => {
+                      // A dated CBK/term lot is "in window" when its free-up date
+                      // falls within the shared maturing-soon window — the same rule
+                      // the Securities Register uses, so both views agree.
+                      const inWindow =
+                        !s.liquid &&
+                        s.maturityDate != null &&
+                        s.days <= maturingWindow;
+                      return (
+                      <TableRow
+                        key={s.id}
+                        className={inWindow ? "bg-amber-500/5" : undefined}
+                      >
                         <TableCell className="font-medium">
                           {s.label}
+                          {inWindow && (
+                            <Badge
+                              variant="outline"
+                              className="ml-2 text-[10px] font-normal border-amber-500/40 text-amber-600 dark:text-amber-400 align-middle"
+                            >
+                              in window
+                            </Badge>
+                          )}
                         </TableCell>
                         <TableCell className="text-muted-foreground text-xs">
                           {s.kind}
@@ -559,7 +591,8 @@ export default function PortfolioReview() {
                           )}
                         </TableCell>
                       </TableRow>
-                    ))}
+                      );
+                    })}
                   </TableBody>
                 </Table>
               </div>

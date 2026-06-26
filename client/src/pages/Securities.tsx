@@ -449,6 +449,58 @@ export default function Securities() {
   );
   const soonFaceValue = maturingSoon.reduce((sum, { s }) => sum + parseFloat(String(s.faceValue)), 0);
 
+  // R55.1 — when a wide window is chosen and several lots fall in it, split the
+  // alert into horizon buckets so short bills and multi-year bonds don't blur
+  // into one long list. Buckets stay collapsed into a flat list for narrow
+  // windows or when there are only a couple of lots.
+  const maturingBuckets = useMemo(() => {
+    const defs: { key: string; label: string; max: number }[] = [
+      { key: "le90", label: "Within 90 days", max: 90 },
+      { key: "le1y", label: "91 days – 1 year", max: 365 },
+      { key: "le2y", label: "1 – 2 years", max: 730 },
+      { key: "gt2y", label: "Beyond 2 years", max: Infinity },
+    ];
+    const groups = defs.map((d, idx) => ({
+      ...d,
+      lots: maturingSoon.filter(
+        ({ days }) => days <= d.max && (idx === 0 || days > defs[idx - 1].max)
+      ),
+    }));
+    return groups.filter((g) => g.lots.length > 0);
+  }, [maturingSoon]);
+
+  // Only bucket when the window is wide (>= 1yr) AND grouping actually separates
+  // lots across more than one horizon — otherwise a flat list reads cleaner.
+  const useBuckets =
+    maturingWindow >= 365 && maturingSoon.length >= 4 && maturingBuckets.length > 1;
+
+  // Shared row renderer for a single maturing lot (used by both the flat and the
+  // horizon-bucketed views) so the markup stays in one place.
+  const renderMaturingLot = (s: NonNullable<typeof securities>[number], days: number) => (
+    <div
+      key={s.id}
+      className="flex items-center gap-3 rounded-lg border border-amber-500/20 bg-card/60 px-3 py-2"
+    >
+      <Badge variant="outline" className="text-xs shrink-0">{getSecurityLabel(s.securityType)}</Badge>
+      <span className="text-xs font-semibold text-foreground kes-amount shrink-0">
+        {formatKES(parseFloat(String(s.faceValue)))}
+      </span>
+      <span className="text-xs text-muted-foreground flex-1 min-w-0 truncate">
+        {days <= 0
+          ? `Due · matured ${new Date(s.maturityDate).toLocaleDateString("en-KE", { day: "numeric", month: "short" })}`
+          : `${days} day${days === 1 ? "" : "s"} left · ${new Date(s.maturityDate).toLocaleDateString("en-KE", { day: "numeric", month: "short" })}`}
+      </span>
+      <Button
+        size="sm"
+        variant="outline"
+        className="h-7 gap-1.5 text-xs shrink-0 border-amber-500/40 text-amber-400 hover:bg-amber-500/10"
+        onClick={() => setRecycleFor(s)}
+      >
+        <RefreshCw className="w-3 h-3" /> Recycle
+      </Button>
+    </div>
+  );
+
   return (
     <AppShell>
       <div className="p-6 lg:p-8 space-y-6">
@@ -630,32 +682,33 @@ export default function Securities() {
                 </p>
               </div>
             </div>
-            <div className="space-y-1.5">
-              {maturingSoon.map(({ s, days }) => (
-                <div
-                  key={s.id}
-                  className="flex items-center gap-3 rounded-lg border border-amber-500/20 bg-card/60 px-3 py-2"
-                >
-                  <Badge variant="outline" className="text-xs shrink-0">{getSecurityLabel(s.securityType)}</Badge>
-                  <span className="text-xs font-semibold text-foreground kes-amount shrink-0">
-                    {formatKES(parseFloat(String(s.faceValue)))}
-                  </span>
-                  <span className="text-xs text-muted-foreground flex-1 min-w-0 truncate">
-                    {days <= 0
-                      ? `Due · matured ${new Date(s.maturityDate).toLocaleDateString("en-KE", { day: "numeric", month: "short" })}`
-                      : `${days} day${days === 1 ? "" : "s"} left · ${new Date(s.maturityDate).toLocaleDateString("en-KE", { day: "numeric", month: "short" })}`}
-                  </span>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="h-7 gap-1.5 text-xs shrink-0 border-amber-500/40 text-amber-400 hover:bg-amber-500/10"
-                    onClick={() => setRecycleFor(s)}
-                  >
-                    <RefreshCw className="w-3 h-3" /> Recycle
-                  </Button>
-                </div>
-              ))}
-            </div>
+            {useBuckets ? (
+              <div className="space-y-3">
+                {maturingBuckets.map((bucket) => {
+                  const bucketFace = bucket.lots.reduce(
+                    (sum, { s }) => sum + parseFloat(String(s.faceValue)),
+                    0
+                  );
+                  return (
+                    <div key={bucket.key} className="space-y-1.5">
+                      <div className="flex items-center justify-between px-0.5">
+                        <span className="text-[11px] font-semibold uppercase tracking-wider text-amber-600 dark:text-amber-400">
+                          {bucket.label}
+                        </span>
+                        <span className="text-[11px] text-muted-foreground tabular-nums">
+                          {bucket.lots.length} {bucket.lots.length === 1 ? "lot" : "lots"} · {formatKES(bucketFace)}
+                        </span>
+                      </div>
+                      {bucket.lots.map(({ s, days }) => renderMaturingLot(s, days))}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="space-y-1.5">
+                {maturingSoon.map(({ s, days }) => renderMaturingLot(s, days))}
+              </div>
+            )}
           </div>
         )}
 

@@ -175,8 +175,57 @@ export default function Ledger() {
     ? Math.max(...(projection ?? []).filter((r) => r.isActual).map((r) => r.monthNumber))
     : 0;
 
+  // R55.3 — plain-language explanations for every ledger column, surfaced as a
+  // hover tooltip on each header so non-finance users understand what they read.
+  const COL_HELP: Record<string, string> = {
+    Mth: "Which month of the plan this row covers (Month 1 is your start). Months up to the last recorded month reflect your real holdings; later months are a forward projection.",
+    Basis: "Whether this row is an Actual (built from money you've actually recorded) or a Projection (the model's forward estimate).",
+    Date: "The calendar month this row maps to.",
+    Save: "The cash you put in that month — your own contribution / new savings.",
+    "CBK In": "Cash coming back into your MMF because a government security (T-bill/bond) matured and paid out.",
+    "Bank In": "Cash coming back from a matured bank deposit. Stays “–” while your bank holding is a call deposit, which never locks up.",
+    "Swept → Securities": "Cash leaving the MMF to buy new T-bills / bonds that month.",
+    "Main Action": "The headline move for the month — e.g. which security was bought or rolled over.",
+    "MMF End": "What's sitting in your money-market fund at month-end — your liquid pot.",
+    "T-Bill 91d": "Money held in 91-day Treasury bills at month-end.",
+    "T-Bill 182d": "Money held in 182-day Treasury bills at month-end.",
+    "T-Bill 364d": "Money held in 364-day Treasury bills at month-end.",
+    IFB: "Money held in Infrastructure Bonds (tax-free government bonds) at month-end.",
+    FXD: "Money held in Fixed-coupon Treasury Bonds at month-end.",
+    Bank: "Your bank deposit balance at month-end.",
+    Total: "Everything added together — your whole portfolio value at month-end.",
+    Phase: "Which stage of the strategy you're in for that month.",
+  };
+  const ColHead = ({
+    label,
+    align = "right",
+    nowrap = true,
+  }: {
+    label: string;
+    align?: "left" | "right";
+    nowrap?: boolean;
+  }) => (
+    <th
+      className={`${align === "left" ? "text-left" : "text-right"} px-4 py-3 text-muted-foreground font-medium ${nowrap ? "whitespace-nowrap" : ""}`}
+    >
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span
+            className={`inline-flex items-center gap-1 cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-4 ${align === "left" ? "" : "justify-end"}`}
+          >
+            <span dangerouslySetInnerHTML={{ __html: label }} />
+          </span>
+        </TooltipTrigger>
+        <TooltipContent side="top" className="max-w-[260px] text-xs leading-relaxed">
+          {COL_HELP[label.replace(/&nbsp;/g, " ").replace(/&rarr;/g, "→").trim()] ?? label}
+        </TooltipContent>
+      </Tooltip>
+    </th>
+  );
+
   return (
     <AppShell>
+      <TooltipProvider delayDuration={150}>
       <div className="p-6 lg:p-8 space-y-6">
         <div className="flex items-start justify-between">
           <div>
@@ -259,23 +308,23 @@ export default function Ledger() {
               <table className="w-full text-xs">
                 <thead>
                   <tr className="border-b border-border bg-muted/30">
-                    <th className="text-left px-4 py-3 text-muted-foreground font-medium whitespace-nowrap">Mth</th>
-                    <th className="text-left px-4 py-3 text-muted-foreground font-medium whitespace-nowrap">Basis</th>
-                    <th className="text-left px-4 py-3 text-muted-foreground font-medium whitespace-nowrap">Date</th>
-                    <th className="text-right px-4 py-3 text-muted-foreground font-medium whitespace-nowrap">Save</th>
-                    <th className="text-right px-4 py-3 text-muted-foreground font-medium whitespace-nowrap">CBK In</th>
-                    <th className="text-right px-4 py-3 text-muted-foreground font-medium whitespace-nowrap">Bank In</th>
-                    <th className="text-right px-4 py-3 text-muted-foreground font-medium whitespace-nowrap">Swept&nbsp;&rarr;&nbsp;Securities</th>
-                    <th className="text-left px-4 py-3 text-muted-foreground font-medium">Main Action</th>
-                    <th className="text-right px-4 py-3 text-muted-foreground font-medium whitespace-nowrap">MMF End</th>
-                    <th className="text-right px-4 py-3 text-muted-foreground font-medium whitespace-nowrap">T-Bill 91d</th>
-                    <th className="text-right px-4 py-3 text-muted-foreground font-medium whitespace-nowrap">T-Bill 182d</th>
-                    <th className="text-right px-4 py-3 text-muted-foreground font-medium whitespace-nowrap">T-Bill 364d</th>
-                    <th className="text-right px-4 py-3 text-muted-foreground font-medium whitespace-nowrap">IFB</th>
-                    <th className="text-right px-4 py-3 text-muted-foreground font-medium whitespace-nowrap">FXD</th>
-                    <th className="text-right px-4 py-3 text-muted-foreground font-medium whitespace-nowrap">Bank</th>
-                    <th className="text-right px-4 py-3 text-muted-foreground font-medium whitespace-nowrap">Total</th>
-                    <th className="text-left px-4 py-3 text-muted-foreground font-medium whitespace-nowrap">Phase</th>
+                    <ColHead label="Mth" align="left" />
+                    <ColHead label="Basis" align="left" />
+                    <ColHead label="Date" align="left" />
+                    <ColHead label="Save" />
+                    <ColHead label="CBK In" />
+                    <ColHead label="Bank In" />
+                    <ColHead label="Swept&nbsp;&rarr;&nbsp;Securities" />
+                    <ColHead label="Main Action" align="left" nowrap={false} />
+                    <ColHead label="MMF End" />
+                    <ColHead label="T-Bill 91d" />
+                    <ColHead label="T-Bill 182d" />
+                    <ColHead label="T-Bill 364d" />
+                    <ColHead label="IFB" />
+                    <ColHead label="FXD" />
+                    <ColHead label="Bank" />
+                    <ColHead label="Total" />
+                    <ColHead label="Phase" align="left" />
                   </tr>
                 </thead>
                 <tbody>
@@ -465,6 +514,7 @@ export default function Ledger() {
           </CardContent>
         </Card>
       </div>
+      </TooltipProvider>
     </AppShell>
   );
 }

@@ -671,3 +671,10 @@
 - [x] R56.1 Add hover tooltips to the Dashboard instrument cards (MMF Balance, T-Bills, IFB Holdings, FXD Bonds) explaining what each instrument is, consistent with the Ledger column tooltips.
 - [x] R56.2 Make the maturing-soon bucket subheaders (≤90d/≤1yr/≤2yr/beyond) collapsible, each showing a per-bucket face-value subtotal and lot count.
 - [x] R56.3 Tests + tsc, screenshot-verify, checkpoint, deliver. Full suite green (451), tsc clean.
+
+## Round 57 (risk snapshot in export + concentration + deep-link)
+
+- [x] R57.1 Add a duration-risk banner to the Portfolio Review printed/CSV export so it appears in shared reports.
+- [x] R57.2 Add a per-issuer concentration one-liner next to the duration-risk line (largest type share of portfolio).
+- [x] R57.3 Let the Dashboard "Avg. Maturity" tile deep-link to Portfolio Review when risk is "elevated".
+- [x] R57.4 Shared helper for type concentration + unit tests (server/concentration.round57.test.ts); full suite + tsc; screenshot-verify; checkpoint; deliver.

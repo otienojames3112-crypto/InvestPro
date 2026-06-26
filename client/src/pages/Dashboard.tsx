@@ -549,19 +549,47 @@ export default function Dashboard() {
                     {positive ? "+" : "−"}{Math.abs(v.gainPct).toFixed(2)}% vs cost basis ({formatKESCompact(v.totalCost)})
                   </p>
                 </Link>
-                <div className={cn("rounded-xl border bg-white/[0.02] p-4", risk === "elevated" ? "border-red-500/30" : risk === "moderate" ? "border-amber-500/30" : "border-white/10")}>
-                  <div className="flex items-center gap-2 text-muted-foreground">
-                    <CalendarClock className={cn("w-4 h-4 shrink-0", riskMeta.iconColor)} />
-                    <p className="text-[11px] font-medium uppercase tracking-widest">Avg. Maturity</p>
-                  </div>
-                  <p className={cn("mt-2 text-2xl font-bold kes-amount", riskMeta.value)}>{dtmLabel}</p>
-                  <p className="text-xs text-muted-foreground mt-0.5">
-                    {v.wAvgDays} days weighted · {v.wAvgYtmPct >= 0 ? "" : "−"}{Math.abs(v.wAvgYtmPct).toFixed(2)}% YTM
-                  </p>
-                  <p className={cn("text-[11px] mt-1.5 flex items-center gap-1 font-medium", riskMeta.color)}>
-                    <RiskIcon className="w-3 h-3 shrink-0" /> {riskMeta.label}
-                  </p>
-                </div>
+                {(() => {
+                  // R57 — when duration risk is "elevated", make the tile a deep-link
+                  // to the Portfolio Review page (where the full risk snapshot,
+                  // liquidity calendar and concentration line live). Lower-risk
+                  // states stay as a plain, non-interactive tile.
+                  const isElevated = risk === "elevated";
+                  const tileBody = (
+                    <>
+                      <div className="flex items-center gap-2 text-muted-foreground">
+                        <CalendarClock className={cn("w-4 h-4 shrink-0", riskMeta.iconColor)} />
+                        <p className="text-[11px] font-medium uppercase tracking-widest">Avg. Maturity</p>
+                        {isElevated && (
+                          <ArrowUpRight className="w-3.5 h-3.5 ml-auto text-muted-foreground/50 transition-colors group-hover:text-foreground" />
+                        )}
+                      </div>
+                      <p className={cn("mt-2 text-2xl font-bold kes-amount", riskMeta.value)}>{dtmLabel}</p>
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        {v.wAvgDays} days weighted · {v.wAvgYtmPct >= 0 ? "" : "−"}{Math.abs(v.wAvgYtmPct).toFixed(2)}% YTM
+                      </p>
+                      <p className={cn("text-[11px] mt-1.5 flex items-center gap-1 font-medium", riskMeta.color)}>
+                        <RiskIcon className="w-3 h-3 shrink-0" /> {riskMeta.label}
+                      </p>
+                      {isElevated && (
+                        <p className="text-[10px] text-red-400/80 mt-1">Review liquidity &rarr;</p>
+                      )}
+                    </>
+                  );
+                  const borderCls = risk === "elevated" ? "border-red-500/30" : risk === "moderate" ? "border-amber-500/30" : "border-white/10";
+                  return isElevated ? (
+                    <Link
+                      href="/portfolio-review"
+                      className={cn("group rounded-xl border bg-white/[0.02] p-4 transition-colors hover:bg-red-500/[0.06] hover:border-red-500/50", borderCls)}
+                    >
+                      {tileBody}
+                    </Link>
+                  ) : (
+                    <div className={cn("rounded-xl border bg-white/[0.02] p-4", borderCls)}>
+                      {tileBody}
+                    </div>
+                  );
+                })()}
               </div>
               {/* R51 — Face → Current delta bar (book progress toward redemption). */}
               <div className="rounded-xl border border-white/10 bg-white/[0.02] px-4 py-3">

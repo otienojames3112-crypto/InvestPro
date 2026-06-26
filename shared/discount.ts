@@ -283,3 +283,81 @@ export function classifyDurationRisk(
   if (ratio <= 1) return "moderate";
   return "elevated";
 }
+
+
+/**
+ * Concentration analysis (Round 57).
+ *
+ * For a risk snapshot we want to flag how lopsided the book is: if a single
+ * instrument TYPE (T-bill / IFB / FXD / zero-coupon / floating-rate) dominates
+ * the portfolio's current (mark-to-model) value, that is concentration risk —
+ * the opposite of diversification. This helper groups active lots by their
+ * security type, values each lot with `currentSecurityValue`, and reports the
+ * single largest type's share of the total.
+ *
+ * It is intentionally TYPE-based (not per-CUSIP) because all CBK paper shares
+ * one issuer (the Government of Kenya); the meaningful diversification axis for
+ * this tracker is instrument type / tenor profile, not issuer.
+ *
+ * Returns null when there are no valued lots so callers can hide the line.
+ */
+export interface ConcentrationResult {
+  /** Human-friendly label of the dominant type, e.g. "T-Bills". */
+  topLabel: string;
+  /** Raw security type key of the dominant type, e.g. "tbill_91". */
+  topType: string;
+  /** Dominant type's share of total current value, 0..1. */
+  topShare: number;
+  /** Current value attributed to the dominant type (KES). */
+  topValue: number;
+  /** Total current value across all valued lots (KES). */
+  totalValue: number;
+  /** How many distinct instrument types are held. */
+  typeCount: number;
+}
+
+/** Map a raw security type to a friendly group label for concentration. */
+export function concentrationTypeLabel(t: string): string {
+  if (t.startsWith("tbill")) return "T-Bills";
+  if (t === "ifb") return "IFB bonds";
+  if (t === "fxd") return "FXD bonds";
+  if (t === "zero_coupon") return "Zero-coupon";
+  if (t === "floating_rate") return "Floating-rate";
+  return t.replace(/_/g, " ");
+}
+
+export function largestConcentration(
+  lots: CurrentValueSecurity[],
+  today: Date = new Date(),
+): ConcentrationResult | null {
+  const byType = new Map<string, number>();
+  let totalValue = 0;
+  for (const lot of lots) {
+    if (lot.isMatured) continue;
+    const cv = currentSecurityValue(lot, today);
+    if (!(cv > 0)) continue;
+    // Group T-bill tenor variants (tbill_91/182/364) under one "tbill" key so
+    // the dominant-type share reflects the asset class, not a single tenor.
+    const key = lot.securityType.startsWith("tbill") ? "tbill" : lot.securityType;
+    byType.set(key, (byType.get(key) ?? 0) + cv);
+    totalValue += cv;
+  }
+  if (totalValue <= 0 || byType.size === 0) return null;
+
+  let topType = "";
+  let topValue = -1;
+  byType.forEach((value, type) => {
+    if (value > topValue) {
+      topValue = value;
+      topType = type;
+    }
+  });
+  return {
+    topLabel: concentrationTypeLabel(topType),
+    topType,
+    topShare: topValue / totalValue,
+    topValue,
+    totalValue,
+    typeCount: byType.size,
+  };
+}

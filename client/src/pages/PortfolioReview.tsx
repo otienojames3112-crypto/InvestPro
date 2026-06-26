@@ -7,6 +7,7 @@ import { bankInstrumentLabel } from "@shared/const";
 import {
   currentSecurityValue,
   classifyDurationRisk,
+  largestConcentration,
   DEFAULT_LIQUIDITY_HORIZON_DAYS,
   type CurrentValueSecurity,
 } from "@shared/discount";
@@ -46,6 +47,7 @@ import {
   ShieldCheck,
   Shield,
   AlertTriangle,
+  Layers,
 } from "lucide-react";
 import { toCsv, downloadCsv, slugify } from "@shared/csv";
 
@@ -293,6 +295,18 @@ export default function PortfolioReview() {
     return { wAvgDays, horizonDays, level, lots: lots.length };
   }, [securities, pSettings?.liquidityHorizonDays]);
 
+  // R57 — per-issuer (instrument-type) concentration: which single CBK paper
+  // type dominates the book by current value. Government of Kenya is the sole
+  // issuer for all CBK paper, so the meaningful diversification axis here is
+  // instrument TYPE / tenor profile rather than issuer.
+  const concentration = useMemo(() => {
+    const now = new Date();
+    const lots = (securities ?? []).filter(
+      (s) => !s.isMatured && Number(s.faceValue ?? 0) > 0,
+    ) as unknown as CurrentValueSecurity[];
+    return largestConcentration(lots, now);
+  }, [securities]);
+
   // CSV export: net-worth allocation, benchmark comparison and the liquidity
   // calendar, written as labelled sections in one file. Raw numbers so it opens
   // cleanly in spreadsheets.
@@ -301,6 +315,28 @@ export default function PortfolioReview() {
     sections.push(["Portfolio Review", portfolio?.name ?? ""]);
     sections.push(["Generated", new Date().toISOString()]);
     sections.push(["Net worth", Math.round(netWorth)]);
+    sections.push([]);
+    // R57 — risk snapshot: duration risk + concentration so it travels with the
+    // shared report instead of living only on screen.
+    sections.push(["RISK SNAPSHOT"]);
+    if (durationRisk) {
+      const horizonLabel =
+        durationRisk.horizonDays % 365 === 0 ? `${durationRisk.horizonDays / 365}yr`
+        : durationRisk.horizonDays % 30 === 0 ? `${durationRisk.horizonDays / 30}mo`
+        : `${durationRisk.horizonDays}d`;
+      const levelWord = { low: "Low", moderate: "Moderate", elevated: "Elevated" }[durationRisk.level];
+      sections.push(["Duration risk", levelWord]);
+      sections.push(["Value-weighted avg maturity (days)", Math.round(durationRisk.wAvgDays)]);
+      sections.push(["Liquidity horizon", horizonLabel]);
+      sections.push(["Active CBK lots", durationRisk.lots]);
+    } else {
+      sections.push(["Duration risk", "No active CBK lots"]);
+    }
+    if (concentration) {
+      sections.push(["Largest instrument type", concentration.topLabel]);
+      sections.push(["Concentration share %", Number((concentration.topShare * 100).toFixed(2))]);
+      sections.push(["Distinct instrument types", concentration.typeCount]);
+    }
     sections.push([]);
     sections.push(["NET-WORTH ALLOCATION"]);
     sections.push(["Bucket", "Value (KES)", "Share %"]);
@@ -511,15 +547,39 @@ export default function PortfolioReview() {
               }[durationRisk.level];
               const RiskIcon = meta.Icon;
               return (
-                <div className={`mb-4 flex items-center gap-2.5 rounded-lg border px-3.5 py-2.5 text-sm ${meta.bg}`}>
-                  <RiskIcon className={`w-4 h-4 shrink-0 ${meta.cls}`} />
-                  <span className="text-foreground">
-                    <strong className={meta.cls}>{meta.word} duration risk</strong>
-                    {" — "}
-                    value-weighted average maturity of <strong>{dtmLabel}</strong>
-                    {" "}across {durationRisk.lots} active {durationRisk.lots === 1 ? "lot" : "lots"}, against a{" "}
-                    {horizonLabel} liquidity horizon.
-                  </span>
+                <div className={`mb-4 rounded-lg border px-3.5 py-2.5 text-sm ${meta.bg}`}>
+                  <div className="flex items-center gap-2.5">
+                    <RiskIcon className={`w-4 h-4 shrink-0 ${meta.cls}`} />
+                    <span className="text-foreground">
+                      <strong className={meta.cls}>{meta.word} duration risk</strong>
+                      {" — "}
+                      value-weighted average maturity of <strong>{dtmLabel}</strong>
+                      {" "}across {durationRisk.lots} active {durationRisk.lots === 1 ? "lot" : "lots"}, against a{" "}
+                      {horizonLabel} liquidity horizon.
+                    </span>
+                  </div>
+                  {/* R57 — per-instrument-type concentration one-liner, sitting with
+                      the duration-risk line for a complete risk snapshot. */}
+                  {concentration && (
+                    <div className="mt-2 flex items-center gap-2.5 border-t border-current/10 pt-2">
+                      <Layers className="w-4 h-4 shrink-0 text-muted-foreground" />
+                      <span className="text-foreground">
+                        {concentration.typeCount === 1 ? (
+                          <>
+                            <strong>Single-instrument book</strong> {" — "}
+                            100% of current value sits in <strong>{concentration.topLabel}</strong>.
+                          </>
+                        ) : (
+                          <>
+                            <strong>Top concentration:</strong>{" "}
+                            <strong>{(concentration.topShare * 100).toFixed(0)}%</strong> in{" "}
+                            <strong>{concentration.topLabel}</strong>{" "}
+                            across {concentration.typeCount} instrument types.
+                          </>
+                        )}
+                      </span>
+                    </div>
+                  )}
                 </div>
               );
             })()}

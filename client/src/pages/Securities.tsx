@@ -11,7 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Landmark, Plus, Trash2, CheckCircle2, Clock, Pencil, Link2, Info, RefreshCw, Wallet, RotateCcw, AlertTriangle, SplitSquareHorizontal, ArrowRightLeft } from "lucide-react";
+import { Landmark, Plus, Trash2, CheckCircle2, Clock, Pencil, Link2, Info, RefreshCw, Wallet, RotateCcw, AlertTriangle, SplitSquareHorizontal, ArrowRightLeft, ArrowUp, ArrowDown, ArrowUpDown } from "lucide-react";
 import { useState, useMemo, useEffect } from "react";
 import { useMaturingWindow } from "@/hooks/useMaturingWindow";
 import { toast } from "sonner";
@@ -140,6 +140,53 @@ export default function Securities() {
 
   // ── Maturity-recycling prompt state ────────────────────────────────────
   const [recycleFor, setRecycleFor] = useState<NonNullable<typeof securities>[number] | null>(null);
+
+  // ── R52: register column sort (persisted + seeded from ?sort= deep-link) ──
+  type SortKey = "none" | "gain" | "maturity" | "face";
+  type SortDir = "asc" | "desc";
+  const SORT_STORAGE_KEY = "kes5m.securities.sort";
+  const [sortKey, setSortKey] = useState<SortKey>(() => {
+    // 1) deep-link wins on first load (e.g. ?sort=gain from the dashboard tile)
+    if (typeof window !== "undefined") {
+      const param = new URLSearchParams(window.location.search).get("sort");
+      if (param === "gain" || param === "maturity" || param === "face") return param;
+      // 2) otherwise restore the last persisted choice
+      try {
+        const saved = JSON.parse(localStorage.getItem(SORT_STORAGE_KEY) ?? "null");
+        if (saved?.key) return saved.key as SortKey;
+      } catch { /* ignore malformed storage */ }
+    }
+    return "none";
+  });
+  const [sortDir, setSortDir] = useState<SortDir>(() => {
+    if (typeof window !== "undefined") {
+      const param = new URLSearchParams(window.location.search).get("sort");
+      // gain/face default to descending (largest first), maturity to ascending (soonest first)
+      if (param === "maturity") return "asc";
+      if (param === "gain" || param === "face") return "desc";
+      try {
+        const saved = JSON.parse(localStorage.getItem(SORT_STORAGE_KEY) ?? "null");
+        if (saved?.dir) return saved.dir as SortDir;
+      } catch { /* ignore */ }
+    }
+    return "desc";
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem(SORT_STORAGE_KEY, JSON.stringify({ key: sortKey, dir: sortDir }));
+    } catch { /* ignore quota / private-mode errors */ }
+  }, [sortKey, sortDir]);
+  // Click a header: same column toggles direction, a new column sets its default.
+  const toggleSort = (key: Exclude<SortKey, "none">) => {
+    setSortKey((prev) => {
+      if (prev === key) {
+        setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+        return prev;
+      }
+      setSortDir(key === "maturity" ? "asc" : "desc");
+      return key;
+    });
+  };
 
   // Deposits list lets us flag which register rows have a linked deposit that
   // will be synced automatically when the security is edited.
@@ -329,16 +376,13 @@ export default function Securities() {
   }
 
   // R51 — deep-link from the Dashboard "Unrealized Gain" tile: ?sort=gain sorts
-  // the active register by largest mark-to-model gain first.
-  const sortByGain =
-    typeof window !== "undefined" &&
-    new URLSearchParams(window.location.search).get("sort") === "gain";
-
+  // the active register by a chosen column. R52 — the sort is now driven by
+  // clickable column headers, persisted to localStorage, and seeded from the
+  // ?sort= deep-link (e.g. the Dashboard "Unrealized Gain" tile -> ?sort=gain).
   // Compute a lot's current mark-to-model value and gain-since-cost for sorting.
   const lotGain = (s: NonNullable<typeof securities>[number]): number => {
     const face = parseFloat(String(s.faceValue)) || 0;
     if (face <= 0) return 0;
-    const isDisc = isDiscountInstrument(s.securityType as SecurityType);
     const price = s.purchasePrice != null ? parseFloat(String(s.purchasePrice)) : NaN;
     const hasPrice = Number.isFinite(price) && price > 0;
     const cv = currentSecurityValue({
@@ -350,15 +394,23 @@ export default function Securities() {
       maturityDate: s.maturityDate,
       isMatured: s.isMatured,
     });
-    const cost = hasPrice ? price : isDisc ? face : face;
+    const cost = hasPrice ? price : face;
     return cv - cost;
   };
 
-  // Group by type
+  // Group by type, then apply the active column sort.
   const activeUnsorted = securities?.filter((s) => !s.isMatured) ?? [];
-  const active = sortByGain
-    ? [...activeUnsorted].sort((a, b) => lotGain(b) - lotGain(a))
-    : activeUnsorted;
+  const active = (() => {
+    if (sortKey === "none") return activeUnsorted;
+    const dir = sortDir === "asc" ? 1 : -1;
+    const valueOf = (s: NonNullable<typeof securities>[number]): number => {
+      if (sortKey === "gain") return lotGain(s);
+      if (sortKey === "face") return parseFloat(String(s.faceValue)) || 0;
+      // maturity
+      return new Date(String(s.maturityDate)).getTime();
+    };
+    return [...activeUnsorted].sort((a, b) => (valueOf(a) - valueOf(b)) * dir);
+  })();
   const matured = securities?.filter((s) => s.isMatured) ?? [];
 
   const totalFaceValue = active.reduce((sum, s) => sum + parseFloat(String(s.faceValue)), 0);
@@ -593,10 +645,18 @@ export default function Securities() {
             <CardTitle className="text-sm font-semibold flex items-center gap-2">
               <Landmark className="w-4 h-4 text-primary" />
               Active Holdings
-              {sortByGain && (
+              {sortKey !== "none" && (
                 <Badge variant="secondary" className="ml-2 gap-1 font-normal">
-                  Sorted by gain
-                  <a href="/securities" className="ml-1 text-muted-foreground hover:text-foreground" title="Clear sort">×</a>
+                  Sorted by {sortKey === "gain" ? "gain" : sortKey === "face" ? "face value" : "maturity"}
+                  {" "}({sortDir === "asc" ? "asc" : "desc"})
+                  <button
+                    type="button"
+                    onClick={() => { setSortKey("none"); }}
+                    className="ml-1 text-muted-foreground hover:text-foreground"
+                    title="Clear sort"
+                  >
+                    ×
+                  </button>
                 </Badge>
               )}
             </CardTitle>
@@ -616,12 +676,27 @@ export default function Securities() {
                   <thead>
                     <tr className="border-b border-border bg-muted/30">
                       <th className="text-left px-4 py-3 text-muted-foreground font-medium">Type</th>
-                      <th className="text-right px-4 py-3 text-muted-foreground font-medium">Face Value</th>
+                      <th className="text-right px-4 py-3 text-muted-foreground font-medium">
+                        <button type="button" onClick={() => toggleSort("face")} className="inline-flex items-center gap-1 ml-auto hover:text-foreground transition-colors">
+                          Face Value
+                          {sortKey === "face" ? (sortDir === "asc" ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />) : <ArrowUpDown className="w-3 h-3 opacity-40" />}
+                        </button>
+                      </th>
                       <th className="text-right px-4 py-3 text-muted-foreground font-medium">Purchase Price</th>
                       <th className="text-right px-4 py-3 text-muted-foreground font-medium">Discount</th>
-                      <th className="text-right px-4 py-3 text-muted-foreground font-medium">Current Value</th>
+                      <th className="text-right px-4 py-3 text-muted-foreground font-medium">
+                        <button type="button" onClick={() => toggleSort("gain")} className="inline-flex items-center gap-1 ml-auto hover:text-foreground transition-colors" title="Sort by unrealized gain">
+                          Current Value
+                          {sortKey === "gain" ? (sortDir === "asc" ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />) : <ArrowUpDown className="w-3 h-3 opacity-40" />}
+                        </button>
+                      </th>
                       <th className="text-left px-4 py-3 text-muted-foreground font-medium">Issue Date</th>
-                      <th className="text-left px-4 py-3 text-muted-foreground font-medium">Maturity Date</th>
+                      <th className="text-left px-4 py-3 text-muted-foreground font-medium">
+                        <button type="button" onClick={() => toggleSort("maturity")} className="inline-flex items-center gap-1 hover:text-foreground transition-colors">
+                          Maturity Date
+                          {sortKey === "maturity" ? (sortDir === "asc" ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />) : <ArrowUpDown className="w-3 h-3 opacity-40" />}
+                        </button>
+                      </th>
                       <th className="text-right px-4 py-3 text-muted-foreground font-medium">Days Left</th>
                       <th className="text-right px-4 py-3 text-muted-foreground font-medium">Coupon Rate</th>
                       <th className="text-left px-4 py-3 text-muted-foreground font-medium">Next Coupon</th>

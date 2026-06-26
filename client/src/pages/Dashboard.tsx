@@ -36,6 +36,7 @@ import {
   Wallet,
   Landmark,
   Shield,
+  ShieldCheck,
   Target,
   ArrowDownCircle,
   PiggyBank,
@@ -57,7 +58,7 @@ import { Plus, Compass, ArrowUpRight } from "lucide-react";
 import { useMemo, useState, useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { rateStaleness } from "@/lib/rateStaleness";
-import { currentSecurityValue } from "@shared/discount";
+import { currentSecurityValue, classifyDurationRisk, DEFAULT_LIQUIDITY_HORIZON_DAYS } from "@shared/discount";
 import { Layers, TrendingDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -491,6 +492,20 @@ export default function Dashboard() {
           const d = v.wAvgDays;
           const dtmLabel =
             d >= 365 ? `${(d / 365).toFixed(1)} yr` : d >= 30 ? `${Math.round(d / 30)} mo` : `${d} d`;
+          // R52 — duration-risk hint: colour-code the Avg. Maturity tile when the
+          // value-weighted DTM approaches / exceeds the liquidity horizon (1 yr).
+          const risk = classifyDurationRisk(v.wAvgDays, DEFAULT_LIQUIDITY_HORIZON_DAYS);
+          const riskMeta = {
+            low: { label: "Low duration risk", icon: ShieldCheck, color: "text-emerald-400", value: "text-foreground", iconColor: "text-emerald-400" },
+            moderate: { label: "Moderate duration risk", icon: Shield, color: "text-amber-400", value: "text-amber-300", iconColor: "text-amber-400" },
+            elevated: { label: "Elevated — locked beyond 1yr horizon", icon: AlertTriangle, color: "text-red-400", value: "text-red-400", iconColor: "text-red-400" },
+          }[risk];
+          const RiskIcon = riskMeta.icon;
+          // R52 — "as of" timestamp so the mark-to-model figures are clearly dated.
+          const asOf = new Date().toLocaleString(undefined, {
+            dateStyle: "medium",
+            timeStyle: "short",
+          });
           return (
             <div className="space-y-3">
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -530,14 +545,17 @@ export default function Dashboard() {
                     {positive ? "+" : "−"}{Math.abs(v.gainPct).toFixed(2)}% vs cost basis ({formatKESCompact(v.totalCost)})
                   </p>
                 </Link>
-                <div className="rounded-xl border border-white/10 bg-white/[0.02] p-4">
+                <div className={cn("rounded-xl border bg-white/[0.02] p-4", risk === "elevated" ? "border-red-500/30" : risk === "moderate" ? "border-amber-500/30" : "border-white/10")}>
                   <div className="flex items-center gap-2 text-muted-foreground">
-                    <CalendarClock className="w-4 h-4 text-amber-400 shrink-0" />
+                    <CalendarClock className={cn("w-4 h-4 shrink-0", riskMeta.iconColor)} />
                     <p className="text-[11px] font-medium uppercase tracking-widest">Avg. Maturity</p>
                   </div>
-                  <p className="mt-2 text-2xl font-bold text-foreground kes-amount">{dtmLabel}</p>
+                  <p className={cn("mt-2 text-2xl font-bold kes-amount", riskMeta.value)}>{dtmLabel}</p>
                   <p className="text-xs text-muted-foreground mt-0.5">
                     {v.wAvgDays} days weighted · {v.wAvgYtmPct >= 0 ? "" : "−"}{Math.abs(v.wAvgYtmPct).toFixed(2)}% YTM
+                  </p>
+                  <p className={cn("text-[11px] mt-1.5 flex items-center gap-1 font-medium", riskMeta.color)}>
+                    <RiskIcon className="w-3 h-3 shrink-0" /> {riskMeta.label}
                   </p>
                 </div>
               </div>
@@ -554,6 +572,9 @@ export default function Dashboard() {
                     title={`${formatKES(v.totalCurrent)} current of ${formatKES(v.totalFace)} face`}
                   />
                 </div>
+                <p className="text-[10px] text-muted-foreground/70 mt-2 text-right">
+                  Mark-to-model values as of {asOf}
+                </p>
               </div>
             </div>
           );

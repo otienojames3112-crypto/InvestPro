@@ -251,3 +251,35 @@ export function accretionProgress(
   }
   return Math.min(1, Math.max(0, (current - price) / spread));
 }
+
+
+/**
+ * Duration-risk classification (Round 52).
+ *
+ * Given a value-weighted average days-to-maturity and a liquidity horizon (the
+ * number of days within which the investor wants cash to be reachable), classify
+ * how exposed the book is to being locked up beyond that horizon.
+ *
+ *   - "low":      weighted DTM is comfortably within the horizon (<= 60%).
+ *   - "moderate": weighted DTM is approaching the horizon (<= 100%).
+ *   - "elevated": weighted DTM exceeds the liquidity horizon.
+ *
+ * Framework-free and deterministic so it can be unit-tested and reused by both
+ * the dashboard tile and any future alerts.
+ */
+export type DurationRisk = "low" | "moderate" | "elevated";
+
+/** Default liquidity horizon used by the dashboard (one year). */
+export const DEFAULT_LIQUIDITY_HORIZON_DAYS = 365;
+
+export function classifyDurationRisk(
+  weightedDays: number,
+  horizonDays: number = DEFAULT_LIQUIDITY_HORIZON_DAYS,
+): DurationRisk {
+  if (!Number.isFinite(weightedDays) || weightedDays <= 0) return "low";
+  if (!Number.isFinite(horizonDays) || horizonDays <= 0) return "elevated";
+  const ratio = weightedDays / horizonDays;
+  if (ratio <= 0.6) return "low";
+  if (ratio <= 1) return "moderate";
+  return "elevated";
+}

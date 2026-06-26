@@ -638,3 +638,10 @@
 - [x] R51.2 Make the Unrealized Gain tile deep-link to the CBK Securities register, sorted by largest gain (?sort=gain).
 - [x] R51.3 Add a weighted-average days-to-maturity (and YTM) figure to the summary for a quick portfolio-duration read.
 - [x] R51.4 Tests for weighted DTM/YTM aggregation; full suite green (430), tsc clean, UI verified, checkpoint, deliver.
+
+## Round 52 (duration-risk hint, sortable register columns, as-of timestamp)
+
+- [x] R52.1 Add a duration-risk hint to the Avg. Maturity tile (colour-code when value-weighted DTM exceeds a liquidity horizon).
+- [x] R52.2 Register: clickable column headers to sort by gain / maturity / face, with sort choice persisted (localStorage) and synced with ?sort= deep-link.
+- [x] R52.3 Add a small "as of" timestamp to the summary card so mark-to-model values are clearly dated.
+- [x] R52.4 Tests for duration-risk classification; full suite green (437), tsc clean, UI verified, checkpoint, deliver.

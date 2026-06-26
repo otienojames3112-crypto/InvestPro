@@ -413,3 +413,36 @@ export function buildTransferPlan(
   }
   return transfers;
 }
+
+
+/**
+ * R66 — drift-threshold evaluation. Given per-home drift (actual − target),
+ * the portfolio net worth, the threshold (% of net worth), and whether any home
+ * has been reconciled, decide whether to raise a rebalancing alert.
+ *
+ * Total drift is the sum of absolute per-home drifts. The alert fires only when
+ * the user has reconciled at least one home (otherwise drift is meaningless) and
+ * net worth is positive.
+ */
+export interface DriftThresholdResult {
+  totalDrift: number;
+  thresholdValue: number;
+  breached: boolean;
+}
+
+export function evaluateDriftThreshold(args: {
+  drifts: number[];
+  netWorth: number;
+  thresholdPct: number;
+  hasActuals: boolean;
+}): DriftThresholdResult {
+  const totalDrift = args.drifts.reduce((sum, d) => sum + Math.abs(d), 0);
+  const thresholdValue = (args.thresholdPct / 100) * args.netWorth;
+  const breached =
+    args.hasActuals && args.netWorth > 0 && totalDrift > thresholdValue;
+  return {
+    totalDrift: Math.round(totalDrift * 100) / 100,
+    thresholdValue: Math.round(thresholdValue * 100) / 100,
+    breached,
+  };
+}

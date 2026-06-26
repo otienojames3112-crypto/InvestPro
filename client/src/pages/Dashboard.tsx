@@ -1,7 +1,7 @@
 import { usePortfolio } from "@/contexts/PortfolioContext";
 import { AppShell } from "@/components/AppShell";
 import { trpc } from "@/lib/trpc";
-import { formatKES, formatKESCompact, formatPct, getPhaseName, getPhaseColorClass } from "@/lib/format";
+import { formatKES, formatKESCompact, formatPct, getPhaseName, getPhaseColorClass, formatRelativeTime, isReconcileStale } from "@/lib/format";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -958,6 +958,19 @@ export default function Dashboard() {
                   {liquidAlloc.state === "too_small" && "Too small yet"}
                 </span>
               </div>
+              {liquidAlloc.driftBreached && (
+                <div className="mb-3 flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-amber-200">
+                  <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+                  <div className="min-w-0 text-[11px] leading-relaxed">
+                    <p className="font-semibold">Time to rebalance</p>
+                    <p className="text-amber-200/85">
+                      Your liquid cash is {formatKES(liquidAlloc.totalDrift)} away from the recommended split — above your{" "}
+                      {liquidAlloc.driftThresholdPct}% alert threshold ({formatKES(liquidAlloc.driftThresholdValue)} of net worth).
+                      Use <span className="font-medium">Apply this split</span> below to bring each home back toward target.
+                    </p>
+                  </div>
+                </div>
+              )}
               {(() => {
                 const totalDrift = liquidAlloc.slices.reduce(
                   (sum, s) => sum + Math.abs(s.drift ?? 0),
@@ -1043,6 +1056,18 @@ export default function Dashboard() {
                           {hasDrift && (
                             <span className={cn("ml-1.5", drift > 0 ? "text-amber-300/90" : "text-sky-300/90")}>
                               ({drift > 0 ? "+" : "−"}{formatKES(Math.abs(drift))} vs target)
+                            </span>
+                          )}
+                          {s.reconciled && s.reconciledAt != null && (
+                            <span
+                              className={cn(
+                                "ml-1.5",
+                                isReconcileStale(s.reconciledAt) ? "text-amber-300/90" : "text-muted-foreground/70",
+                              )}
+                              title={new Date(s.reconciledAt).toLocaleString("en-KE")}
+                            >
+                              · reconciled {formatRelativeTime(s.reconciledAt)}
+                              {isReconcileStale(s.reconciledAt) && " (stale)"}
                             </span>
                           )}
                         </span>

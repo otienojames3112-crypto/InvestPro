@@ -122,6 +122,7 @@ import { discountPriceForSecurity, tbillPrice } from "../shared/discount";
 import {
   allocateLiquidReserve,
   isLiquidBankKind,
+  evaluateDriftThreshold,
   type LiquidHome,
 } from "../shared/liquidAllocator";
 
@@ -359,6 +360,8 @@ const portfolioCreateInput = z.object({
   typeConcentrationCapPct: z.number().min(10).max(100).optional(),
   // Round 62: allocation policy governing sweep/allocator/warnings.
   allocationPolicy: z.enum(["balanced", "yield_first", "custom"]).optional(),
+  // Round 66: total-liquid-drift alert threshold (% of net worth). 1–50.
+  driftAlertThresholdPct: z.number().min(1).max(50).optional(),
 });
 
 const rateOnlyInput = z.object({
@@ -417,6 +420,7 @@ export const appRouter = router({
           typeConcentrationCapPct: parseFloat(String((p as { typeConcentrationCapPct?: string }).typeConcentrationCapPct ?? "60")),
           concentrationSnoozeUntil: (p as { concentrationSnoozeUntil?: number | null }).concentrationSnoozeUntil ?? null,
           allocationPolicy: ((p as { allocationPolicy?: string }).allocationPolicy ?? "balanced") as "balanced" | "yield_first" | "custom",
+          driftAlertThresholdPct: parseFloat(String((p as { driftAlertThresholdPct?: string }).driftAlertThresholdPct ?? "5")),
           yieldFirstAckAt: (p as { yieldFirstAckAt?: number | null }).yieldFirstAckAt ?? null,
           cbkSourceUrl: p.cbkSourceUrl,
           sanlamSourceUrl: p.sanlamSourceUrl,
@@ -449,6 +453,7 @@ export const appRouter = router({
         typeConcentrationCapPct: parseFloat(String((p as { typeConcentrationCapPct?: string }).typeConcentrationCapPct ?? "60")),
         concentrationSnoozeUntil: (p as { concentrationSnoozeUntil?: number | null }).concentrationSnoozeUntil ?? null,
         allocationPolicy: ((p as { allocationPolicy?: string }).allocationPolicy ?? "balanced") as "balanced" | "yield_first" | "custom",
+        driftAlertThresholdPct: parseFloat(String((p as { driftAlertThresholdPct?: string }).driftAlertThresholdPct ?? "5")),
         yieldFirstAckAt: (p as { yieldFirstAckAt?: number | null }).yieldFirstAckAt ?? null,
         cbkSourceUrl: p.cbkSourceUrl,
         sanlamSourceUrl: p.sanlamSourceUrl,
@@ -581,6 +586,7 @@ export const appRouter = router({
           ...(input.concentrationCapPct != null ? { concentrationCapPct: String(input.concentrationCapPct) } : {}),
           ...(input.typeConcentrationCapPct != null ? { typeConcentrationCapPct: String(input.typeConcentrationCapPct) } : {}),
           ...(input.allocationPolicy ? { allocationPolicy: input.allocationPolicy } : {}),
+          ...(input.driftAlertThresholdPct != null ? { driftAlertThresholdPct: String(input.driftAlertThresholdPct) } : {}),
         } as Record<string, unknown>);
         return { success: true };
       }),
@@ -2771,6 +2777,13 @@ export const appRouter = router({
         const actualById = new Map(
           recorded.map((r) => [r.homeId, parseFloat(String(r.actualBalance)) || 0]),
         );
+        // R66 — when each home was last reconciled (epoch ms), so the UI can flag
+        // stale balances.
+        const reconciledAtById = new Map<string, number>(
+          recorded
+            .filter((r) => r.updatedAt instanceof Date)
+            .map((r) => [r.homeId, (r.updatedAt as Date).getTime()]),
+        );
         const reconciledIds: string[] = [];
         for (const h of homes) {
           if (actualById.has(h.id)) {
@@ -2802,10 +2815,32 @@ export const appRouter = router({
             ...s,
             currentBalance: Math.round(current * 100) / 100,
             reconciled: actualById.has(s.id),
+            reconciledAt: reconciledAtById.get(s.id) ?? null,
             drift: Math.round((current - s.targetBalance) * 100) / 100,
           };
         });
-        return { ...result, slices, hasActuals, reconciledCount: reconciledIds.length };
+        // R66 — drift-threshold alert. When total drift exceeds the configured %
+        // of net worth (and the user has reconciled at least one home), flag it so
+        // the UI can prompt a rebalance.
+        const driftThresholdPct = parseFloat(
+          String((p as { driftAlertThresholdPct?: string }).driftAlertThresholdPct ?? "5"),
+        );
+        const driftEval = evaluateDriftThreshold({
+          drifts: slices.map((s) => s.drift ?? 0),
+          netWorth,
+          thresholdPct: driftThresholdPct,
+          hasActuals,
+        });
+        return {
+          ...result,
+          slices,
+          hasActuals,
+          reconciledCount: reconciledIds.length,
+          totalDrift: driftEval.totalDrift,
+          driftThresholdPct,
+          driftThresholdValue: driftEval.thresholdValue,
+          driftBreached: driftEval.breached,
+        };
       }),
     // R64 — record/clear the ACTUAL balance resting in a liquid home so the split
     // shows real drift (actual vs target) and survives reloads.

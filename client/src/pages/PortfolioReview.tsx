@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { usePortfolio } from "@/contexts/PortfolioContext";
 import { useSelectedFund } from "@/hooks/useSelectedFund";
@@ -123,9 +123,22 @@ export default function PortfolioReview() {
     { enabled: !!portfolioId }
   );
   const { data: audit } = trpc.audit.list.useQuery(
-    { portfolioId: portfolioId!, limit: 25 },
+    { portfolioId: portfolioId!, limit: 60 },
     { enabled: !!portfolioId }
   );
+  // R66 — Change History filter: All vs liquid (reconciles + transfers) vs other.
+  const [auditFilter, setAuditFilter] = useState<"all" | "liquid" | "other">("all");
+  const LIQUID_ENTITIES = useMemo(
+    () => new Set(["liquid_home_balance", "liquid_transfer"]),
+    [],
+  );
+  const filteredAudit = useMemo(() => {
+    if (!audit) return [];
+    if (auditFilter === "all") return audit;
+    if (auditFilter === "liquid")
+      return audit.filter((a) => LIQUID_ENTITIES.has(a.entity));
+    return audit.filter((a) => !LIQUID_ENTITIES.has(a.entity));
+  }, [audit, auditFilter, LIQUID_ENTITIES]);
   const { data: pSettings } = trpc.settings.get.useQuery(
     { portfolioId: portfolioId! },
     { enabled: !!portfolioId }
@@ -930,17 +943,39 @@ export default function PortfolioReview() {
               <History className="w-4 h-4 text-primary" /> Change History
             </CardTitle>
             <CardDescription>
-              Recent edits to rates, composition and benchmarks for this account.
+              Recent edits to rates, composition, benchmarks, liquid reconciles and transfers for this account.
             </CardDescription>
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {([
+                { id: "all", label: "All" },
+                { id: "liquid", label: "Liquid reconciles & transfers" },
+                { id: "other", label: "Other" },
+              ] as const).map((opt) => (
+                <Button
+                  key={opt.id}
+                  type="button"
+                  size="sm"
+                  variant={auditFilter === opt.id ? "default" : "outline"}
+                  className="h-7 px-2.5 text-xs"
+                  onClick={() => setAuditFilter(opt.id)}
+                >
+                  {opt.label}
+                </Button>
+              ))}
+            </div>
           </CardHeader>
           <CardContent>
-            {!audit || audit.length === 0 ? (
+            {filteredAudit.length === 0 ? (
               <p className="text-sm text-muted-foreground py-4 text-center">
-                No changes recorded yet.
+                {auditFilter === "liquid"
+                  ? "No liquid reconciles or transfers recorded yet."
+                  : auditFilter === "other"
+                    ? "No other changes recorded yet."
+                    : "No changes recorded yet."}
               </p>
             ) : (
               <ul className="space-y-2">
-                {audit.map((a) => (
+                {filteredAudit.map((a) => (
                   <li
                     key={a.id}
                     className="flex items-start gap-3 text-sm border-b border-border/50 pb-2 last:border-0"
@@ -955,7 +990,14 @@ export default function PortfolioReview() {
                       )}
                     </span>
                     <div className="flex-1">
-                      <p>{a.summary ?? `${a.action} on ${a.entity}`}</p>
+                      <p className="flex items-center gap-1.5">
+                        {LIQUID_ENTITIES.has(a.entity) && (
+                          <span className="shrink-0 rounded-full border border-sky-500/30 bg-sky-500/10 px-1.5 py-px text-[9px] font-medium text-sky-300">
+                            {a.entity === "liquid_transfer" ? "Transfer" : "Reconcile"}
+                          </span>
+                        )}
+                        <span>{a.summary ?? `${a.action} on ${a.entity}`}</span>
+                      </p>
                       <p className="text-xs text-muted-foreground">
                         {a.changedByName ? `${a.changedByName} · ` : ""}
                         {new Date(a.createdAt).toLocaleString("en-KE")}

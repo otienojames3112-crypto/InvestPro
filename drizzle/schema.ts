@@ -101,6 +101,12 @@ export const portfolios = mysqlTable("portfolios", {
    * written to the audit_log (Change History).
    */
   yieldFirstAckAt: bigint("yieldFirstAckAt", { mode: "number" }),
+  /**
+   * Round 66: when total liquid drift (sum of |actual − target| across reconciled
+   * homes) exceeds this percentage of net worth, the Dashboard liquid card shows
+   * a rebalancing alert. Default 5%.
+   */
+  driftAlertThresholdPct: decimal("driftAlertThresholdPct", { precision: 5, scale: 2 }).notNull().default("5.00"),
   // finalLiquidityFrac is implied: 1 - foundationFrac - growthFrac - deRiskingFrac
   /** Editable source URL for CBK T-Bills rates page */
   cbkSourceUrl: varchar("cbkSourceUrl", { length: 500 }).notNull().default("https://www.centralbank.go.ke/bills-bonds/treasury-bills/"),

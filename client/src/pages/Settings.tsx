@@ -59,6 +59,7 @@ interface PlanForm {
   concentrationCapPct: number;
   typeConcentrationCapPct: number;
   allocationPolicy: "balanced" | "yield_first" | "custom";
+  driftAlertThresholdPct: number;
 }
 
 function RateField({ label, name, register, description }: {
@@ -249,6 +250,7 @@ export default function Settings() {
       concentrationCapPct: 25,
       typeConcentrationCapPct: 60,
       allocationPolicy: "balanced",
+      driftAlertThresholdPct: 5,
     },
   });
 
@@ -268,6 +270,8 @@ export default function Settings() {
         typeConcentrationCapPct: (portfolio as { typeConcentrationCapPct?: number }).typeConcentrationCapPct ?? 60,
         allocationPolicy:
           (portfolio as { allocationPolicy?: "balanced" | "yield_first" | "custom" }).allocationPolicy ?? "balanced",
+        driftAlertThresholdPct:
+          (portfolio as { driftAlertThresholdPct?: number }).driftAlertThresholdPct ?? 5,
       });
     }
   }, [portfolio]);
@@ -513,6 +517,11 @@ export default function Settings() {
                     <span className="block mt-1 text-[11px] text-muted-foreground/80">Yield-first risk already acknowledged for this portfolio.</span>
                   )}
                 </p>
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs font-medium">Drift Alert Threshold (%)</Label>
+                <Input type="number" step="0.5" min="1" max="50" {...planForm.register("driftAlertThresholdPct", { valueAsNumber: true })} />
+                <p className="text-xs text-muted-foreground">When your reconciled liquid cash drifts from the recommended split by more than this share of net worth (total of all gaps), the Dashboard liquid card shows a rebalancing alert. Default 5%.</p>
               </div>
               <div className="space-y-1.5">
                 <Label className="text-xs font-medium">Liquidity Horizon (days)</Label>

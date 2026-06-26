@@ -1098,11 +1098,12 @@ import { liquidHomeBalances } from "../drizzle/schema";
 /** All user-recorded actual balances for a portfolio's liquid homes. */
 export async function getLiquidHomeBalances(portfolioId: number) {
   const db = await getDb();
-  if (!db) return [] as { homeId: string; actualBalance: string }[];
+  if (!db) return [] as { homeId: string; actualBalance: string; updatedAt: Date | null }[];
   return db
     .select({
       homeId: liquidHomeBalances.homeId,
       actualBalance: liquidHomeBalances.actualBalance,
+      updatedAt: liquidHomeBalances.updatedAt,
     })
     .from(liquidHomeBalances)
     .where(eq(liquidHomeBalances.portfolioId, portfolioId));

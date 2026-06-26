@@ -749,3 +749,11 @@
 - [x] R65.2 Change History logging: record each reconcile (set/clear of a home balance) and each applied transfer into the existing Change History so balance updates are auditable.
 - [x] R65.3 Total-drift badge: portfolio-level badge on the liquid card summarizing total absolute drift (sum of |actual − target|) vs the recommended split.
 - [x] R65 tests: full suite green (535) + tsc clean; add/extend tests for any new shared helper logic (total-drift computation).
+
+
+## Round 66 (change-history filter + last-reconciled timestamp + drift-threshold alert)
+
+- [x] R66.1 Change History view: add a filter/tab to show only liquid reconciles and applied transfers (audit trail), reusing the existing audit-log category tags.
+- [x] R66.2 Last-reconciled timestamp: surface a small "last reconciled <relative time>" per liquid home on the Dashboard liquid card so stale balances are easy to spot.
+- [x] R66.3 Drift-threshold alert: when total drift exceeds a configurable % of net worth, show an alert on the liquid card prompting rebalancing. Threshold editable in Settings (with a sensible default).
+- [x] R66 tests: full suite green (548) + tsc clean; add/extend tests for the drift-threshold breach logic.

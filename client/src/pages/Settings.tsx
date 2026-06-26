@@ -39,6 +39,7 @@ interface PlanForm {
   stepUpMonths: number;
   safetyFloor: number;
   concentrationCapPct: number;
+  typeConcentrationCapPct: number;
 }
 
 function RateField({ label, name, register, description }: {
@@ -227,6 +228,7 @@ export default function Settings() {
       stepUpMonths: 6,
       safetyFloor: 50000,
       concentrationCapPct: 25,
+      typeConcentrationCapPct: 60,
     },
   });
 
@@ -243,6 +245,7 @@ export default function Settings() {
         stepUpMonths: portfolio.stepUpMonths,
         safetyFloor: portfolio.safetyFloor,
         concentrationCapPct: (portfolio as { concentrationCapPct?: number }).concentrationCapPct ?? 25,
+        typeConcentrationCapPct: (portfolio as { typeConcentrationCapPct?: number }).typeConcentrationCapPct ?? 60,
       });
     }
   }, [portfolio]);
@@ -426,6 +429,11 @@ export default function Settings() {
                 <Label className="text-xs font-medium">Per-Issuer Concentration Cap (%)</Label>
                 <Input type="number" step="1" min="5" max="100" {...planForm.register("concentrationCapPct", { valueAsNumber: true })} />
                 <p className="text-xs text-muted-foreground">No single bank/issuer should exceed this share of net worth before the Dashboard warns. Government securities are exempt (sovereign). Default 25%.</p>
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs font-medium">Per-Type Concentration Cap (%)</Label>
+                <Input type="number" step="1" min="10" max="100" {...planForm.register("typeConcentrationCapPct", { valueAsNumber: true })} />
+                <p className="text-xs text-muted-foreground">When a single CBK instrument TYPE (T-Bills / IFB / FXD) exceeds this share of your current portfolio value, the Portfolio Review concentration line and Dashboard maturity tile flip to a warning colour. Default 60%.</p>
               </div>
               <div className="space-y-1.5">
                 <Label className="text-xs font-medium">Liquidity Horizon (days)</Label>

@@ -314,6 +314,38 @@ export interface ConcentrationResult {
   totalValue: number;
   /** How many distinct instrument types are held. */
   typeCount: number;
+  /**
+   * Full per-type breakdown, sorted by value descending. Each share is 0..1 of
+   * totalValue. Drives the per-type concentration bar (Round 58).
+   */
+  breakdown: ConcentrationSlice[];
+}
+
+/** One instrument-type's slice of the portfolio's current value. */
+export interface ConcentrationSlice {
+  /** Raw grouped type key, e.g. "tbill", "ifb", "fxd". */
+  type: string;
+  /** Friendly label, e.g. "T-Bills". */
+  label: string;
+  /** Current value held in this type (KES). */
+  value: number;
+  /** Share of total current value, 0..1. */
+  share: number;
+}
+
+/**
+ * Classify the top concentration share against a user-set cap (Round 58).
+ * `capPct` is a percentage (e.g. 60 means 60%). Returns "breached" when the
+ * dominant type's share strictly exceeds the cap, else "ok".
+ */
+export type ConcentrationStatus = "ok" | "breached";
+
+export function classifyConcentration(
+  topShare: number,
+  capPct: number,
+): ConcentrationStatus {
+  if (!(capPct > 0)) return "ok";
+  return topShare * 100 > capPct ? "breached" : "ok";
 }
 
 /** Map a raw security type to a friendly group label for concentration. */
@@ -352,6 +384,17 @@ export function largestConcentration(
       topType = type;
     }
   });
+  const breakdown: ConcentrationSlice[] = [];
+  byType.forEach((value, type) => {
+    breakdown.push({
+      type,
+      label: concentrationTypeLabel(type),
+      value,
+      share: value / totalValue,
+    });
+  });
+  breakdown.sort((a, b) => b.value - a.value);
+
   return {
     topLabel: concentrationTypeLabel(topType),
     topType,
@@ -359,5 +402,6 @@ export function largestConcentration(
     topValue,
     totalValue,
     typeCount: byType.size,
+    breakdown,
   };
 }

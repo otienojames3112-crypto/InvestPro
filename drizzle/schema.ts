@@ -66,6 +66,14 @@ export const portfolios = mysqlTable("portfolios", {
    * Government securities are sovereign and exempt. Default 25%.
    */
   concentrationCapPct: decimal("concentrationCapPct", { precision: 5, scale: 2 }).notNull().default("25.00"),
+  /**
+   * Round 58: editable per-INSTRUMENT-TYPE concentration cap (%). Distinct from
+   * concentrationCapPct (which is a per-ISSUER/bank cap for KDIC deposit-insurance
+   * risk). This cap flags when a single CBK instrument TYPE (T-bills / IFB / FXD /
+   * etc.) dominates more than this share of current portfolio value, surfacing a
+   * diversification warning on the Portfolio Review risk snapshot. Default 60%.
+   */
+  typeConcentrationCapPct: decimal("typeConcentrationCapPct", { precision: 5, scale: 2 }).notNull().default("60.00"),
   // finalLiquidityFrac is implied: 1 - foundationFrac - growthFrac - deRiskingFrac
   /** Editable source URL for CBK T-Bills rates page */
   cbkSourceUrl: varchar("cbkSourceUrl", { length: 500 }).notNull().default("https://www.centralbank.go.ke/bills-bonds/treasury-bills/"),

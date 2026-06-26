@@ -333,6 +333,8 @@ const portfolioCreateInput = z.object({
   deRiskingFrac: z.number().min(0.05).max(0.4).optional(),
   // Round 34: editable per-issuer concentration cap (%). 5–100.
   concentrationCapPct: z.number().min(5).max(100).optional(),
+  // Round 58: editable per-instrument-type concentration cap (%). 10–100.
+  typeConcentrationCapPct: z.number().min(10).max(100).optional(),
 });
 
 const rateOnlyInput = z.object({
@@ -388,6 +390,7 @@ export const appRouter = router({
           growthFrac: parseFloat(String(p.growthFrac)),
           deRiskingFrac: parseFloat(String(p.deRiskingFrac)),
           concentrationCapPct: parseFloat(String((p as { concentrationCapPct?: string }).concentrationCapPct ?? "25")),
+          typeConcentrationCapPct: parseFloat(String((p as { typeConcentrationCapPct?: string }).typeConcentrationCapPct ?? "60")),
           cbkSourceUrl: p.cbkSourceUrl,
           sanlamSourceUrl: p.sanlamSourceUrl,
           ratesLastUpdatedAt: p.ratesLastUpdatedAt ?? null,
@@ -416,6 +419,7 @@ export const appRouter = router({
         growthFrac: parseFloat(String(p.growthFrac)),
         deRiskingFrac: parseFloat(String(p.deRiskingFrac)),
         concentrationCapPct: parseFloat(String((p as { concentrationCapPct?: string }).concentrationCapPct ?? "25")),
+        typeConcentrationCapPct: parseFloat(String((p as { typeConcentrationCapPct?: string }).typeConcentrationCapPct ?? "60")),
         cbkSourceUrl: p.cbkSourceUrl,
         sanlamSourceUrl: p.sanlamSourceUrl,
         ratesLastUpdatedAt: p.ratesLastUpdatedAt ?? null,
@@ -445,6 +449,7 @@ export const appRouter = router({
         growthFrac: String(input.growthFrac ?? 0.50),
         deRiskingFrac: String(input.deRiskingFrac ?? 0.15),
         concentrationCapPct: String(input.concentrationCapPct ?? 25),
+        typeConcentrationCapPct: String(input.typeConcentrationCapPct ?? 60),
       });
       if (!p) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Failed to create portfolio." });
       // Ensure a rate_settings row exists
@@ -471,6 +476,7 @@ export const appRouter = router({
           growthFrac: String(input.growthFrac ?? 0.50),
           deRiskingFrac: String(input.deRiskingFrac ?? 0.15),
           ...(input.concentrationCapPct != null ? { concentrationCapPct: String(input.concentrationCapPct) } : {}),
+          ...(input.typeConcentrationCapPct != null ? { typeConcentrationCapPct: String(input.typeConcentrationCapPct) } : {}),
         });
         return { success: true };
       }),

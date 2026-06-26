@@ -59,7 +59,7 @@ import { Plus, Compass, ArrowUpRight } from "lucide-react";
 import { useMemo, useState, useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { rateStaleness } from "@/lib/rateStaleness";
-import { currentSecurityValue, classifyDurationRisk, DEFAULT_LIQUIDITY_HORIZON_DAYS } from "@shared/discount";
+import { currentSecurityValue, classifyDurationRisk, largestConcentration, classifyConcentration, DEFAULT_LIQUIDITY_HORIZON_DAYS, type CurrentValueSecurity } from "@shared/discount";
 import { Layers, TrendingDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -407,6 +407,22 @@ export default function Dashboard() {
     };
   }, [securities]);
 
+  // R58 — per-instrument-type concentration of the active register, surfaced as a
+  // one-line snapshot on the Avg. Maturity tile. Uses the shared helper so the
+  // figure matches the Portfolio Review risk snapshot exactly.
+  const typeConcentration = useMemo(() => {
+    const now = new Date();
+    const lots = (securities ?? []).filter(
+      (s: Record<string, unknown>) =>
+        !(s.isMatured as boolean) && Number(s.faceValue ?? 0) > 0,
+    ) as unknown as CurrentValueSecurity[];
+    return largestConcentration(lots, now);
+  }, [securities]);
+  const typeCapPct = portfolio?.typeConcentrationCapPct ?? 60;
+  const typeConcentrationBreached = typeConcentration
+    ? classifyConcentration(typeConcentration.topShare, typeCapPct) === "breached"
+    : false;
+
   // ── Onboarding empty state: authenticated but no portfolios yet ──────────
   if (!portfoliosLoading && portfolios.length === 0) {
     return (
@@ -571,6 +587,23 @@ export default function Dashboard() {
                       <p className={cn("text-[11px] mt-1.5 flex items-center gap-1 font-medium", riskMeta.color)}>
                         <RiskIcon className="w-3 h-3 shrink-0" /> {riskMeta.label}
                       </p>
+                      {/* R58 — concentration snapshot, visible without leaving the
+                          dashboard. Turns red when the dominant type breaches the
+                          configured cap (Rate Settings). */}
+                      {typeConcentration && (
+                        <p className={cn(
+                          "text-[11px] mt-1 flex items-center gap-1",
+                          typeConcentrationBreached ? "text-red-400 font-medium" : "text-muted-foreground",
+                        )}>
+                          <Layers className="w-3 h-3 shrink-0" />
+                          {typeConcentration.topShare >= 0.999 ? (
+                            <>100% {typeConcentration.topLabel}</>
+                          ) : (
+                            <>{(typeConcentration.topShare * 100).toFixed(0)}% in {typeConcentration.topLabel}</>
+                          )}
+                          {typeConcentrationBreached && <> · over {typeCapPct.toFixed(0)}% cap</>}
+                        </p>
+                      )}
                       {isElevated && (
                         <p className="text-[10px] text-red-400/80 mt-1">Review liquidity &rarr;</p>
                       )}
@@ -797,7 +830,7 @@ export default function Dashboard() {
                 { title: "T-Bills", key: "tbillEnd" as const, subtitle: "CBK Treasury Bills", icon: TrendingUp, accent: false, tooltip: `Your total invested in CBK Treasury Bills at Year ${horizonYearsLabel}. T-bills are short-term (91–364 days), very safe government instruments. You earn a discount return (net ~7.5% p.a. after 15% WHT deducted at source).` },
                 { title: "IFB Holdings", key: "ifbEnd" as const, subtitle: "Tax-exempt bonds", icon: Shield, accent: false, tooltip: `Your total invested in Infrastructure Finance Bonds at Year ${horizonYearsLabel}. IFBs pay a semi-annual coupon (e.g. 12.5% p.a.) and are 100% tax-exempt — you keep every shilling of interest earned.` },
                 { title: "FXD Bonds", key: "fxdEnd" as const, subtitle: "Fixed coupon bonds", icon: Landmark, accent: false, tooltip: `Your total invested in Fixed Coupon Bonds at Year ${horizonYearsLabel}. FXDs pay a semi-annual coupon (e.g. 12.35% gross, ~10.5% net after 15% WHT). They provide predictable income but the WHT is deducted before you receive the coupon.` },
-                ...(usesBankInstruments ? [{ title: "Bank Deposits", key: "bankEnd" as const, subtitle: "Call / fixed deposits", icon: Landmark, accent: false, tooltip: `Your recorded bank call and fixed deposits, projected forward at their own rates (net of WHT) at Year ${horizonYearsLabel}. Call deposits are liquid like the MMF; fixed deposits lock for a tenor and forfeit interest if broken early.` }] : []),
+                ...(usesBankInstruments ? [{ title: "Bank Deposits", key: "bankEnd" as const, subtitle: "All bank instruments", icon: Landmark, accent: false, tooltip: `Your recorded bank deposits of EVERY type — call deposits, fixed deposits, ordinary savings, target/goal savings and tiered savings — projected forward at their own rates (net of WHT) at Year ${horizonYearsLabel}. Liquid kinds (call, ordinary savings, tiered savings) stay withdrawable and accrue in place; term kinds (fixed deposit, target savings) lock for a tenor, then return principal + net interest to the MMF at maturity.` }] : []),
               ].map(({ title, key, subtitle, icon, accent, tooltip }) => {
                 const bucketValue = lastData?.[key] ?? 0;
                 const pctOfTarget = targetAmount > 0 ? ((bucketValue / targetAmount) * 100).toFixed(1) : "0.0";

@@ -678,3 +678,12 @@
 - [x] R57.2 Add a per-issuer concentration one-liner next to the duration-risk line (largest type share of portfolio).
 - [x] R57.3 Let the Dashboard "Avg. Maturity" tile deep-link to Portfolio Review when risk is "elevated".
 - [x] R57.4 Shared helper for type concentration + unit tests (server/concentration.round57.test.ts); full suite + tsc; screenshot-verify; checkpoint; deliver.
+
+
+## Round 58 (bank-bucket coverage + concentration UX)
+
+- [x] R58.1 Dashboard "Bank Deposits" bucket copy covers ALL five bank instrument types (call/fixed/ordinary savings/target savings/tiered savings), not just call/fixed. Engine already sums all kinds into bankEnd; this fixes the misleading subtitle + tooltip.
+- [x] R58.2 Add concentration % to the Dashboard Avg. Maturity tile sublabel (snapshot visible without leaving the dashboard).
+- [x] R58.3 Add a small per-type concentration bar (stacked shares) to Portfolio Review below the one-liner.
+- [x] R58.4 Configurable concentration threshold in Rate Settings; concentration line/bar flips to warning colour when the top share breaches it.
+- [x] R58 tests: concentration breakdown helper + threshold classification unit tests.

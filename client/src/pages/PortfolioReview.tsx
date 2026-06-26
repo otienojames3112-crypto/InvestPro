@@ -8,6 +8,7 @@ import {
   currentSecurityValue,
   classifyDurationRisk,
   largestConcentration,
+  classifyConcentration,
   DEFAULT_LIQUIDITY_HORIZON_DAYS,
   type CurrentValueSecurity,
 } from "@shared/discount";
@@ -307,6 +308,13 @@ export default function PortfolioReview() {
     return largestConcentration(lots, now);
   }, [securities]);
 
+  // R58 — configurable per-type concentration cap (Rate Settings). The snapshot
+  // line + bar flip to a warning colour when the dominant type breaches it.
+  const typeCapPct = portfolio?.typeConcentrationCapPct ?? 60;
+  const concentrationBreached = concentration
+    ? classifyConcentration(concentration.topShare, typeCapPct) === "breached"
+    : false;
+
   // CSV export: net-worth allocation, benchmark comparison and the liquidity
   // calendar, written as labelled sections in one file. Raw numbers so it opens
   // cleanly in spreadsheets.
@@ -336,6 +344,8 @@ export default function PortfolioReview() {
       sections.push(["Largest instrument type", concentration.topLabel]);
       sections.push(["Concentration share %", Number((concentration.topShare * 100).toFixed(2))]);
       sections.push(["Distinct instrument types", concentration.typeCount]);
+      sections.push(["Single-type cap %", Number(typeCapPct.toFixed(2))]);
+      sections.push(["Cap status", concentrationBreached ? "BREACHED" : "Within cap"]);
     }
     sections.push([]);
     sections.push(["NET-WORTH ALLOCATION"]);
@@ -559,11 +569,13 @@ export default function PortfolioReview() {
                     </span>
                   </div>
                   {/* R57 — per-instrument-type concentration one-liner, sitting with
-                      the duration-risk line for a complete risk snapshot. */}
+                      the duration-risk line for a complete risk snapshot.
+                      R58 — flips to a warning colour when the dominant type breaches
+                      the configured cap, and is followed by a per-type bar. */}
                   {concentration && (
-                    <div className="mt-2 flex items-center gap-2.5 border-t border-current/10 pt-2">
-                      <Layers className="w-4 h-4 shrink-0 text-muted-foreground" />
-                      <span className="text-foreground">
+                    <div className="mt-2 flex items-start gap-2.5 border-t border-current/10 pt-2">
+                      <Layers className={`w-4 h-4 shrink-0 mt-0.5 ${concentrationBreached ? "text-red-600 dark:text-red-400" : "text-muted-foreground"}`} />
+                      <span className={concentrationBreached ? "text-red-600 dark:text-red-400" : "text-foreground"}>
                         {concentration.typeCount === 1 ? (
                           <>
                             <strong>Single-instrument book</strong> {" — "}
@@ -577,7 +589,51 @@ export default function PortfolioReview() {
                             across {concentration.typeCount} instrument types.
                           </>
                         )}
+                        {concentrationBreached && (
+                          <> Exceeds your <strong>{typeCapPct.toFixed(0)}%</strong> single-type cap — consider diversifying.</>
+                        )}
                       </span>
+                    </div>
+                  )}
+                  {/* R58 — per-type concentration bar: a compact stacked view of how
+                      current value splits across instrument types. */}
+                  {concentration && concentration.breakdown.length > 0 && (
+                    <div className="mt-2.5">
+                      <div className="flex h-2.5 w-full overflow-hidden rounded-full bg-muted">
+                        {concentration.breakdown.map((slice, i) => {
+                          const isTop = i === 0;
+                          const palette = [
+                            "#3b82f6", "#10b981", "#fb923c", "#a78bfa", "#f472b6", "#94a3b8",
+                          ];
+                          const colour = isTop && concentrationBreached ? "#ef4444" : palette[i % palette.length];
+                          return (
+                            <div
+                              key={slice.type}
+                              className="h-full"
+                              style={{ width: `${Math.max(slice.share * 100, 1.5)}%`, backgroundColor: colour }}
+                              title={`${slice.label}: ${(slice.share * 100).toFixed(1)}%`}
+                            />
+                          );
+                        })}
+                      </div>
+                      <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+                        {concentration.breakdown.map((slice, i) => {
+                          const isTop = i === 0;
+                          const palette = [
+                            "#3b82f6", "#10b981", "#fb923c", "#a78bfa", "#f472b6", "#94a3b8",
+                          ];
+                          const colour = isTop && concentrationBreached ? "#ef4444" : palette[i % palette.length];
+                          return (
+                            <span key={slice.type} className="inline-flex items-center gap-1">
+                              <span className="inline-block h-2 w-2 rounded-full" style={{ backgroundColor: colour }} />
+                              {slice.label} {(slice.share * 100).toFixed(0)}%
+                            </span>
+                          );
+                        })}
+                        <span className="inline-flex items-center gap-1 opacity-70">
+                          · cap {typeCapPct.toFixed(0)}%
+                        </span>
+                      </div>
                     </div>
                   )}
                 </div>

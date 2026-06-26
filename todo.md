@@ -687,3 +687,11 @@
 - [x] R58.3 Add a small per-type concentration bar (stacked shares) to Portfolio Review below the one-liner.
 - [x] R58.4 Configurable concentration threshold in Rate Settings; concentration line/bar flips to warning colour when the top share breaches it.
 - [x] R58 tests: concentration breakdown helper + threshold classification unit tests.
+
+
+## Round 59 (concentration drill-down + diversification + risk-limits panel)
+
+- [x] R59.1 Portfolio Review concentration-bar slices are clickable and deep-link to the CBK Securities register pre-filtered by that instrument type.
+- [x] R59.2 Diversification suggestion line: when the top type breaches the per-type cap, compute and show how much current value to shift out of it to get back under the cap.
+- [x] R59.3 Dashboard "Risk limits" mini-panel surfacing per-issuer (KDIC) and per-type caps together with current vs cap status.
+- [x] R59 tests: diversification "amount to shift" helper unit tests.

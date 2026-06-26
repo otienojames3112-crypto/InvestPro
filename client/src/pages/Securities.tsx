@@ -31,7 +31,7 @@ import {
   isDiscountInstrument,
   type SecurityType,
 } from "@shared/securityTenor";
-import { discountPriceForSecurity, currentSecurityValue, accretionProgress, type CurrentValueSecurity } from "@shared/discount";
+import { discountPriceForSecurity, currentSecurityValue, accretionProgress, concentrationTypeLabel, type CurrentValueSecurity } from "@shared/discount";
 import { SecurityTenorFields } from "@/components/SecurityTenorFields";
 
 interface SecurityForm {
@@ -200,6 +200,32 @@ export default function Securities() {
     if (typeof window !== "undefined" && window.location.search.includes("sort=")) {
       const url = new URL(window.location.href);
       url.searchParams.delete("sort");
+      window.history.replaceState({}, "", url.toString());
+    }
+  };
+
+  // ── R59: instrument-type filter, seeded from the ?type= deep-link (e.g. the
+  // Portfolio Review concentration bar -> ?type=fxd). T-bill tenors are grouped
+  // under "tbill" to match the concentration grouping. "" means no filter. ──
+  const [typeFilter, setTypeFilter] = useState<string>(() => {
+    if (typeof window !== "undefined") {
+      const param = new URLSearchParams(window.location.search).get("type");
+      if (param) return param;
+    }
+    return "";
+  });
+  // A lot matches the active filter when its grouped type equals the filter.
+  const matchesTypeFilter = (rawType: string): boolean => {
+    if (!typeFilter) return true;
+    const grouped = rawType.startsWith("tbill") ? "tbill" : rawType;
+    return grouped === typeFilter;
+  };
+  const typeFilterLabel = typeFilter ? concentrationTypeLabel(typeFilter) : "";
+  const clearTypeFilter = () => {
+    setTypeFilter("");
+    if (typeof window !== "undefined" && window.location.search.includes("type=")) {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("type");
       window.history.replaceState({}, "", url.toString());
     }
   };
@@ -432,10 +458,11 @@ export default function Securities() {
     return [...rows].sort((a, b) => (valueOf(a) - valueOf(b)) * dir);
   };
 
-  // Group by type, then apply the active column sort.
-  const activeUnsorted = securities?.filter((s) => !s.isMatured) ?? [];
+  // Group by type, then apply the active column sort. R59: an optional
+  // instrument-type filter (from the ?type= deep-link) narrows both lists.
+  const activeUnsorted = (securities?.filter((s) => !s.isMatured) ?? []).filter((s) => matchesTypeFilter(s.securityType));
   const active = applySort(activeUnsorted, true);
-  const matured = applySort(securities?.filter((s) => s.isMatured) ?? [], false);
+  const matured = applySort((securities?.filter((s) => s.isMatured) ?? []).filter((s) => matchesTypeFilter(s.securityType)), false);
 
   const totalFaceValue = active.reduce((sum, s) => sum + parseFloat(String(s.faceValue)), 0);
 
@@ -747,6 +774,22 @@ export default function Securities() {
                   >
                     <RotateCcw className="w-3 h-3" />
                     Reset to default sort
+                  </button>
+                </>
+              )}
+              {typeFilter && (
+                <>
+                  <Badge variant="secondary" className="ml-2 gap-1 font-normal">
+                    Filtered: {typeFilterLabel}
+                  </Badge>
+                  <button
+                    type="button"
+                    onClick={clearTypeFilter}
+                    className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                    title="Clear instrument-type filter"
+                  >
+                    <RotateCcw className="w-3 h-3" />
+                    Clear filter
                   </button>
                 </>
               )}

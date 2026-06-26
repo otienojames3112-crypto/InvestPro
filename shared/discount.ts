@@ -405,3 +405,34 @@ export function largestConcentration(
     breakdown,
   };
 }
+
+/**
+ * How much current value must be shifted OUT of the dominant instrument type to
+ * bring its share back to (at most) the cap (Round 59).
+ *
+ * If we remove `x` from the top type's value (and from the total), the new share
+ * is `(topValue - x) / (totalValue - x)`. Solving `(topValue - x)/(totalValue - x)
+ * = cap` (cap as a fraction 0..1) gives:
+ *
+ *   x = (topValue - cap * totalValue) / (1 - cap)
+ *
+ * Intuition: every shilling moved out of the top type drops both its value and
+ * the base, which is why the denominator is `(1 - cap)` rather than just 1.
+ *
+ * Returns 0 when already within the cap, when inputs are degenerate, or when the
+ * cap is >= 100% (no constraint). Caps <= 0 are treated as "no constraint" too
+ * (the feature is effectively disabled), matching `classifyConcentration`.
+ */
+export function amountToShiftUnderCap(
+  topValue: number,
+  totalValue: number,
+  capPct: number,
+): number {
+  if (!(capPct > 0) || capPct >= 100) return 0;
+  if (!(totalValue > 0) || !(topValue > 0)) return 0;
+  const cap = capPct / 100;
+  // Already within cap → nothing to shift.
+  if (topValue / totalValue <= cap) return 0;
+  const x = (topValue - cap * totalValue) / (1 - cap);
+  return x > 0 ? x : 0;
+}

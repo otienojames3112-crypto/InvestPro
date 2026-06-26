@@ -4,11 +4,13 @@ import { usePortfolio } from "@/contexts/PortfolioContext";
 import { useSelectedFund } from "@/hooks/useSelectedFund";
 import { bankHoldingValue, buildAllocation, blendedYield } from "@shared/actuals";
 import { bankInstrumentLabel } from "@shared/const";
+import { Link } from "wouter";
 import {
   currentSecurityValue,
   classifyDurationRisk,
   largestConcentration,
   classifyConcentration,
+  amountToShiftUnderCap,
   DEFAULT_LIQUIDITY_HORIZON_DAYS,
   type CurrentValueSecurity,
 } from "@shared/discount";
@@ -49,6 +51,7 @@ import {
   Shield,
   AlertTriangle,
   Layers,
+  Lightbulb,
 } from "lucide-react";
 import { toCsv, downloadCsv, slugify } from "@shared/csv";
 
@@ -314,6 +317,11 @@ export default function PortfolioReview() {
   const concentrationBreached = concentration
     ? classifyConcentration(concentration.topShare, typeCapPct) === "breached"
     : false;
+  // R59 — when breached, how much current value to move OUT of the dominant type
+  // to get its share back to the cap. Drives the diversification-suggestion line.
+  const shiftToUnderCap = concentration
+    ? amountToShiftUnderCap(concentration.topValue, concentration.totalValue, typeCapPct)
+    : 0;
 
   // CSV export: net-worth allocation, benchmark comparison and the liquidity
   // calendar, written as labelled sections in one file. Raw numbers so it opens
@@ -346,6 +354,9 @@ export default function PortfolioReview() {
       sections.push(["Distinct instrument types", concentration.typeCount]);
       sections.push(["Single-type cap %", Number(typeCapPct.toFixed(2))]);
       sections.push(["Cap status", concentrationBreached ? "BREACHED" : "Within cap"]);
+      if (concentrationBreached && shiftToUnderCap > 0) {
+        sections.push(["Suggested shift out of top type (KES)", Math.round(shiftToUnderCap)]);
+      }
     }
     sections.push([]);
     sections.push(["NET-WORTH ALLOCATION"]);
@@ -595,11 +606,26 @@ export default function PortfolioReview() {
                       </span>
                     </div>
                   )}
+                  {/* R59 — diversification suggestion: how much value to move out of
+                      the dominant type to get back under the cap. */}
+                  {concentration && concentrationBreached && shiftToUnderCap > 0 && (
+                    <div className="mt-2 flex items-start gap-2.5 text-sm">
+                      <Lightbulb className="w-4 h-4 shrink-0 mt-0.5 text-amber-600 dark:text-amber-400" />
+                      <span className="text-foreground">
+                        <strong>Suggestion:</strong> shift about{" "}
+                        <strong>{kes(Math.round(shiftToUnderCap))}</strong>{" "}
+                        out of <strong>{concentration.topLabel}</strong> (into other instruments or MMF)
+                        to bring it to the {typeCapPct.toFixed(0)}% cap.
+                      </span>
+                    </div>
+                  )}
                   {/* R58 — per-type concentration bar: a compact stacked view of how
                       current value splits across instrument types. */}
                   {concentration && concentration.breakdown.length > 0 && (
                     <div className="mt-2.5">
-                      <div className="flex h-2.5 w-full overflow-hidden rounded-full bg-muted">
+                      {/* R59 — each slice deep-links to the CBK Securities register
+                          pre-filtered to that instrument type. */}
+                      <div className="flex h-2.5 w-full overflow-hidden rounded-full bg-muted print:pointer-events-none">
                         {concentration.breakdown.map((slice, i) => {
                           const isTop = i === 0;
                           const palette = [
@@ -607,11 +633,12 @@ export default function PortfolioReview() {
                           ];
                           const colour = isTop && concentrationBreached ? "#ef4444" : palette[i % palette.length];
                           return (
-                            <div
+                            <Link
                               key={slice.type}
-                              className="h-full"
+                              href={`/securities?type=${encodeURIComponent(slice.type)}`}
+                              className="h-full block transition-opacity hover:opacity-80"
                               style={{ width: `${Math.max(slice.share * 100, 1.5)}%`, backgroundColor: colour }}
-                              title={`${slice.label}: ${(slice.share * 100).toFixed(1)}%`}
+                              title={`${slice.label}: ${(slice.share * 100).toFixed(1)}% — view in register`}
                             />
                           );
                         })}
@@ -624,10 +651,15 @@ export default function PortfolioReview() {
                           ];
                           const colour = isTop && concentrationBreached ? "#ef4444" : palette[i % palette.length];
                           return (
-                            <span key={slice.type} className="inline-flex items-center gap-1">
+                            <Link
+                              key={slice.type}
+                              href={`/securities?type=${encodeURIComponent(slice.type)}`}
+                              className="inline-flex items-center gap-1 rounded px-1 -mx-1 hover:bg-muted hover:text-foreground transition-colors print:hover:bg-transparent"
+                              title={`View ${slice.label} in the register`}
+                            >
                               <span className="inline-block h-2 w-2 rounded-full" style={{ backgroundColor: colour }} />
                               {slice.label} {(slice.share * 100).toFixed(0)}%
-                            </span>
+                            </Link>
                           );
                         })}
                         <span className="inline-flex items-center gap-1 opacity-70">

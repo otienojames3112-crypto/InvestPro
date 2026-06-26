@@ -645,6 +645,68 @@ export default function Dashboard() {
           );
         })()}
 
+        {/* ── R59: Risk limits mini-panel — surfaces the per-issuer (KDIC) and
+            per-type caps together with current-vs-cap status. ──────────── */}
+        {(concentration || typeConcentration) && (
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                <ShieldCheck className="w-4 h-4 text-primary" />
+                Risk limits
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="grid gap-3 sm:grid-cols-2">
+              {/* Per-issuer (KDIC) limit */}
+              {(() => {
+                const issuerBreached = !!concentration && concentration.breaches.length > 0;
+                const issuerCapPct = concentration ? Math.round(concentration.cap * 100) : 25;
+                return (
+                  <Link
+                    href="/deposits"
+                    className={`group rounded-lg border p-3 transition-colors ${issuerBreached ? "border-red-500/40 bg-red-500/5 hover:bg-red-500/10" : "border-border bg-card hover:bg-muted/40"}`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-medium text-muted-foreground">Per-issuer cap (KDIC)</span>
+                      <span className="text-[11px] tabular-nums text-muted-foreground">{issuerCapPct}% cap</span>
+                    </div>
+                    <p className={`mt-1 text-sm font-semibold ${issuerBreached ? "text-red-600 dark:text-red-400" : "text-foreground"}`}>
+                      {issuerBreached
+                        ? `${concentration!.breaches.length} ${concentration!.breaches.length === 1 ? "issuer" : "issuers"} over cap`
+                        : "Within cap"}
+                    </p>
+                    <p className="mt-0.5 text-[11px] text-muted-foreground">
+                      No single bank above {issuerCapPct}% of net worth.
+                    </p>
+                  </Link>
+                );
+              })()}
+              {/* Per-instrument-type limit */}
+              {(() => {
+                const topPct = typeConcentration ? Math.round(typeConcentration.topShare * 100) : 0;
+                return (
+                  <Link
+                    href={typeConcentration ? `/securities?type=${encodeURIComponent(typeConcentration.topType)}` : "/securities"}
+                    className={`group rounded-lg border p-3 transition-colors ${typeConcentrationBreached ? "border-red-500/40 bg-red-500/5 hover:bg-red-500/10" : "border-border bg-card hover:bg-muted/40"}`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-medium text-muted-foreground">Per-type cap</span>
+                      <span className="text-[11px] tabular-nums text-muted-foreground">{typeCapPct.toFixed(0)}% cap</span>
+                    </div>
+                    <p className={`mt-1 text-sm font-semibold ${typeConcentrationBreached ? "text-red-600 dark:text-red-400" : "text-foreground"}`}>
+                      {typeConcentration
+                        ? `${topPct}% in ${typeConcentration.topLabel}${typeConcentrationBreached ? " — over cap" : ""}`
+                        : "No securities yet"}
+                    </p>
+                    <p className="mt-0.5 text-[11px] text-muted-foreground">
+                      Largest instrument type vs the {typeCapPct.toFixed(0)}% limit.
+                    </p>
+                  </Link>
+                );
+              })()}
+            </CardContent>
+          </Card>
+        )}
+
         {/* ── Per-issuer concentration warning (Round 31) ──────────────── */}
         {concentration && concentration.breaches.length > 0 && (
           <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 flex gap-3">

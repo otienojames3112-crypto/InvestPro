@@ -61,7 +61,7 @@ import { toast } from "sonner";
 import { rateStaleness } from "@/lib/rateStaleness";
 import { currentSecurityValue, classifyDurationRisk, largestConcentration, classifyConcentration, isConcentrationSnoozed, DEFAULT_LIQUIDITY_HORIZON_DAYS, type CurrentValueSecurity } from "@shared/discount";
 import { whtRateForSecurity } from "@shared/securityTenor";
-import { Layers, TrendingDown, BellOff, Bell, Scale, ArrowRightLeft, Copy } from "lucide-react";
+import { Layers, TrendingDown, BellOff, Bell, Scale, ArrowRightLeft, Copy, Check } from "lucide-react";
 import { buildTransferPlan } from "@shared/liquidAllocator";
 import {
   DropdownMenu,
@@ -182,6 +182,27 @@ export default function Dashboard() {
     () => (liquidAlloc ? buildTransferPlan(liquidAlloc) : []),
     [liquidAlloc],
   );
+  // R64 — per-home balance reconcile (actual vs target drift).
+  const [reconcileHome, setReconcileHome] = useState<
+    { id: string; label: string; current: number } | null
+  >(null);
+  const [reconcileValue, setReconcileValue] = useState("");
+  const setLiquidBalanceMutation = trpc.bankHoldings.setLiquidBalance.useMutation({
+    onSuccess: () => {
+      toast.success("Balance recorded");
+      utils.bankHoldings.liquidAllocation.invalidate({ portfolioId: portfolioId! });
+      setReconcileHome(null);
+    },
+    onError: (e) => toast.error(e.message || "Could not save balance"),
+  });
+  const clearLiquidBalanceMutation = trpc.bankHoldings.clearLiquidBalance.useMutation({
+    onSuccess: () => {
+      toast.success("Reverted to estimated balance");
+      utils.bankHoldings.liquidAllocation.invalidate({ portfolioId: portfolioId! });
+      setReconcileHome(null);
+    },
+    onError: (e) => toast.error(e.message || "Could not clear balance"),
+  });
   const updatePortfolioMutation = trpc.portfolios.update.useMutation({
     onSuccess: () => {
       toast.success("Target updated — projection recalculated");
@@ -265,6 +286,15 @@ export default function Dashboard() {
   const [maturityWindow, setMaturityWindow] = useState<30 | 90 | 365 | "all">("all");
   // R63 — "Apply this split" dialog showing the prefilled transfer plan.
   const [splitOpen, setSplitOpen] = useState(false);
+  // R64 — per-transfer "mark as done" tracking (dialog-local, by transfer key).
+  const [doneTransfers, setDoneTransfers] = useState<Set<string>>(new Set());
+  const toggleTransferDone = (key: string) =>
+    setDoneTransfers((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -918,11 +948,22 @@ export default function Dashboard() {
                 {liquidAlloc.slices.map((s) => {
                   const pct = Math.round(s.targetShare * 100);
                   const needsMove = s.rebalance && Math.abs(s.delta) > 0.5;
+                  const drift = s.drift ?? 0;
+                  const hasDrift = Math.abs(drift) > 0.5;
                   return (
                     <div key={s.id} className="space-y-1">
                       <div className="flex items-center gap-2 text-xs">
                         <span className="font-medium text-foreground truncate">{s.label}</span>
                         <span className="text-muted-foreground">· {s.netYieldPct.toFixed(2)}% net</span>
+                        {s.reconciled ? (
+                          <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-1.5 py-px text-[9px] font-medium text-emerald-300">
+                            Reconciled
+                          </span>
+                        ) : (
+                          <span className="rounded-full border border-border bg-muted/40 px-1.5 py-px text-[9px] font-medium text-muted-foreground">
+                            Estimated
+                          </span>
+                        )}
                         <span className="ml-auto font-semibold text-foreground kes-amount shrink-0">{formatKES(s.targetBalance)}</span>
                         <span className="text-muted-foreground tabular-nums w-10 text-right shrink-0">{pct}%</span>
                       </div>
@@ -931,6 +972,26 @@ export default function Dashboard() {
                           className="h-full rounded-full bg-sky-500/70 transition-[width] duration-300"
                           style={{ width: `${Math.min(100, pct)}%` }}
                         />
+                      </div>
+                      <div className="flex items-center gap-2 text-[11px]">
+                        <span className="text-muted-foreground">
+                          Now: <span className="text-foreground/80 kes-amount">{formatKES(s.currentBalance ?? 0)}</span>
+                          {hasDrift && (
+                            <span className={cn("ml-1.5", drift > 0 ? "text-amber-300/90" : "text-sky-300/90")}>
+                              ({drift > 0 ? "+" : "−"}{formatKES(Math.abs(drift))} vs target)
+                            </span>
+                          )}
+                        </span>
+                        <button
+                          type="button"
+                          className="ml-auto text-sky-300/90 hover:text-sky-200 underline-offset-2 hover:underline"
+                          onClick={() => {
+                            setReconcileHome({ id: s.id, label: s.label, current: s.currentBalance ?? 0 });
+                            setReconcileValue(String(Math.round((s.currentBalance ?? 0) * 100) / 100));
+                          }}
+                        >
+                          {s.reconciled ? "Edit balance" : "Reconcile"}
+                        </button>
                       </div>
                       {needsMove && (
                         <p className="text-[11px] text-amber-300/80">
@@ -961,7 +1022,13 @@ export default function Dashboard() {
         )}
 
         {/* R63 — Apply-this-split transfer plan dialog */}
-        <Dialog open={splitOpen} onOpenChange={setSplitOpen}>
+        <Dialog
+          open={splitOpen}
+          onOpenChange={(o) => {
+            setSplitOpen(o);
+            if (o) setDoneTransfers(new Set()); // fresh checklist each open
+          }}
+        >
           <DialogContent className="max-w-lg">
             <DialogHeader>
               <DialogTitle className="flex items-center gap-2">
@@ -970,30 +1037,69 @@ export default function Dashboard() {
               </DialogTitle>
             </DialogHeader>
             <div className="space-y-3">
-              <p className="text-sm text-muted-foreground">
-                To match the recommended diversification, make the following transfers between
-                your liquid homes. Amounts are pre-filled from the gap between each home's current
-                balance and its target.
-              </p>
-              <div className="space-y-2">
-                {transferPlan.map((t, i) => (
-                  <div
-                    key={`${t.fromId}-${t.toId}-${i}`}
-                    className="flex items-center gap-2 rounded-lg border border-border bg-muted/30 p-3 text-sm"
-                  >
-                    <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-sky-500/20 text-[11px] font-semibold text-sky-300">
-                      {i + 1}
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-1.5 text-foreground">
-                        <span className="truncate font-medium">{t.fromLabel}</span>
-                        <ArrowRight className="w-3.5 h-3.5 shrink-0 text-muted-foreground" />
-                        <span className="truncate font-medium">{t.toLabel}</span>
-                      </div>
-                    </div>
-                    <span className="shrink-0 font-semibold text-sky-200 kes-amount">{formatKES(t.amount)}</span>
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-sm text-muted-foreground">
+                  To match the recommended diversification, make the following transfers between
+                  your liquid homes. Tick each one off as you complete it.
+                </p>
+              </div>
+              {transferPlan.length > 0 && (
+                <div className="flex items-center gap-2">
+                  <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
+                    <div
+                      className="h-full rounded-full bg-emerald-500 transition-[width] duration-300"
+                      style={{ width: `${(doneTransfers.size / transferPlan.length) * 100}%` }}
+                    />
                   </div>
-                ))}
+                  <span className="shrink-0 text-xs font-medium tabular-nums text-muted-foreground">
+                    {doneTransfers.size} of {transferPlan.length} done
+                  </span>
+                </div>
+              )}
+              <div className="space-y-2">
+                {transferPlan.map((t, i) => {
+                  const key = `${t.fromId}-${t.toId}-${i}`;
+                  const isDone = doneTransfers.has(key);
+                  return (
+                    <button
+                      type="button"
+                      key={key}
+                      onClick={() => toggleTransferDone(key)}
+                      aria-pressed={isDone}
+                      className={`flex w-full items-center gap-2 rounded-lg border p-3 text-sm text-left transition-colors ${
+                        isDone
+                          ? "border-emerald-500/40 bg-emerald-500/10"
+                          : "border-border bg-muted/30 hover:bg-muted/50"
+                      }`}
+                    >
+                      <span
+                        className={`inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[11px] font-semibold ${
+                          isDone ? "bg-emerald-500/30 text-emerald-200" : "bg-sky-500/20 text-sky-300"
+                        }`}
+                      >
+                        {isDone ? <Check className="h-3 w-3" /> : i + 1}
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <div
+                          className={`flex items-center gap-1.5 ${
+                            isDone ? "text-muted-foreground line-through" : "text-foreground"
+                          }`}
+                        >
+                          <span className="truncate font-medium">{t.fromLabel}</span>
+                          <ArrowRight className="w-3.5 h-3.5 shrink-0 text-muted-foreground" />
+                          <span className="truncate font-medium">{t.toLabel}</span>
+                        </div>
+                      </div>
+                      <span
+                        className={`shrink-0 font-semibold kes-amount ${
+                          isDone ? "text-muted-foreground line-through" : "text-sky-200"
+                        }`}
+                      >
+                        {formatKES(t.amount)}
+                      </span>
+                    </button>
+                  );
+                })}
               </div>
               <div className="flex items-center justify-between gap-2 rounded-lg border border-sky-500/20 bg-sky-500/5 p-3">
                 <span className="text-xs text-muted-foreground">Total cash to move</span>
@@ -1024,6 +1130,67 @@ export default function Dashboard() {
                 Copy plan
               </Button>
               <Button size="sm" onClick={() => setSplitOpen(false)}>Done</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* R64 — per-home balance reconcile dialog */}
+        <Dialog open={!!reconcileHome} onOpenChange={(o) => !o && setReconcileHome(null)}>
+          <DialogContent className="max-w-sm">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <Scale className="w-4 h-4 text-sky-400" />
+                Reconcile balance
+              </DialogTitle>
+            </DialogHeader>
+            <div className="space-y-3">
+              <p className="text-sm text-muted-foreground">
+                Enter the actual balance currently resting in{" "}
+                <span className="font-medium text-foreground">{reconcileHome?.label}</span>. The
+                split will then show real drift (actual vs target) instead of an estimate.
+              </p>
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-muted-foreground">Actual balance (KES)</label>
+                <Input
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  inputMode="decimal"
+                  value={reconcileValue}
+                  onChange={(e) => setReconcileValue(e.target.value)}
+                  placeholder="0.00"
+                  autoFocus
+                />
+              </div>
+            </div>
+            <DialogFooter className="gap-2 sm:gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  if (reconcileHome && portfolioId) {
+                    clearLiquidBalanceMutation.mutate({ portfolioId, homeId: reconcileHome.id });
+                  }
+                }}
+                disabled={clearLiquidBalanceMutation.isPending}
+              >
+                Revert to estimate
+              </Button>
+              <Button
+                size="sm"
+                onClick={() => {
+                  if (!reconcileHome || !portfolioId) return;
+                  const v = parseFloat(reconcileValue);
+                  if (!Number.isFinite(v) || v < 0) {
+                    toast.error("Enter a valid balance");
+                    return;
+                  }
+                  setLiquidBalanceMutation.mutate({ portfolioId, homeId: reconcileHome.id, actualBalance: v });
+                }}
+                disabled={setLiquidBalanceMutation.isPending}
+              >
+                Save balance
+              </Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>

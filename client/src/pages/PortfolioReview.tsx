@@ -375,6 +375,41 @@ export default function PortfolioReview() {
         sections.push(["Suggested shift out of top type (KES)", Math.round(shiftToUnderCap)]);
       }
     }
+    // R64 — Risk & Allocation policy summary (policy, caps, current breaches) so
+    // the governance context travels with the printed/exported report.
+    sections.push([]);
+    sections.push(["RISK & ALLOCATION POLICY"]);
+    const polRaw = portfolio?.allocationPolicy ?? "balanced";
+    const polLabel =
+      polRaw === "yield_first" ? "Yield-first" : polRaw === "custom" ? "Custom" : "Balanced";
+    sections.push(["Allocation policy", polLabel]);
+    sections.push(["Per-issuer cap %", Number(Math.round(portfolio?.concentrationCapPct ?? 25))]);
+    sections.push(["Per-type cap %", Number(Math.round(typeCapPct))]);
+    const issuerBreachList = issuerConc?.breaches ?? [];
+    const issuerCapShown = Math.round((issuerConc?.cap ?? 0.25) * 100);
+    if (issuerBreachList.length === 0 && !concentrationBreached) {
+      sections.push(["Breach status", "All concentration limits within range"]);
+    } else {
+      sections.push(["Breach status", "BREACHES PRESENT"]);
+      if (concentrationBreached && concentration) {
+        sections.push([
+          "Type breach",
+          `${concentration.topLabel} ${(concentration.topShare * 100).toFixed(1)}% > ${Math.round(typeCapPct)}% cap`,
+        ]);
+      }
+      issuerBreachList.forEach((b) =>
+        sections.push([
+          "Issuer breach",
+          `${b.issuer}: ${(b.share * 100).toFixed(1)}% of net worth (${Math.round(b.value)}) > ${issuerCapShown}% cap`,
+        ]),
+      );
+    }
+    if (polRaw === "yield_first") {
+      sections.push([
+        "Policy note",
+        "Yield-first: caps relaxed by design; breaches are within your chosen policy",
+      ]);
+    }
     sections.push([]);
     sections.push(["NET-WORTH ALLOCATION"]);
     sections.push(["Bucket", "Value (KES)", "Share %"]);

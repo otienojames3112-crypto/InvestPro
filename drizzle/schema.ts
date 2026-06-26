@@ -714,3 +714,24 @@ export const auditLog = mysqlTable("audit_log", {
 
 export type AuditLog = typeof auditLog.$inferSelect;
 export type InsertAuditLog = typeof auditLog.$inferInsert;
+
+/**
+ * Round 64 — user-recorded ACTUAL balances resting in each liquid home, so the
+ * liquid-split recommendation can show real drift (actual vs target) instead of
+ * being guidance-only. Keyed by the allocator's stable home id (e.g. "mmf:3",
+ * "bank:12"). One row per (portfolio, homeId); upserted on save.
+ */
+export const liquidHomeBalances = mysqlTable("liquid_home_balances", {
+  id: int("id").autoincrement().primaryKey(),
+  portfolioId: int("portfolioId").notNull(),
+  /** Allocator home id, e.g. "mmf:3" or "bank:12". */
+  homeId: varchar("homeId", { length: 64 }).notNull(),
+  /** Actual balance the user has confirmed resting in this home (KES). */
+  actualBalance: decimal("actualBalance", { precision: 14, scale: 2 })
+    .notNull()
+    .default("0.00"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+export type LiquidHomeBalance = typeof liquidHomeBalances.$inferSelect;
+export type InsertLiquidHomeBalance = typeof liquidHomeBalances.$inferInsert;

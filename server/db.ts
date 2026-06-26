@@ -1091,3 +1091,51 @@ export async function updateMmfFundAccrualSettings(
     .set({ ...data, updatedAt: new Date() })
     .where(eq(mmfFunds.id, id));
 }
+
+/** ---------------- Round 64: actual liquid-home balances ---------------- */
+import { liquidHomeBalances } from "../drizzle/schema";
+
+/** All user-recorded actual balances for a portfolio's liquid homes. */
+export async function getLiquidHomeBalances(portfolioId: number) {
+  const db = await getDb();
+  if (!db) return [] as { homeId: string; actualBalance: string }[];
+  return db
+    .select({
+      homeId: liquidHomeBalances.homeId,
+      actualBalance: liquidHomeBalances.actualBalance,
+    })
+    .from(liquidHomeBalances)
+    .where(eq(liquidHomeBalances.portfolioId, portfolioId));
+}
+
+/**
+ * Upsert one actual balance for a (portfolio, homeId). Relies on the unique
+ * constraint on (portfolioId, homeId) so a repeat save updates in place.
+ */
+export async function upsertLiquidHomeBalance(
+  portfolioId: number,
+  homeId: string,
+  actualBalance: number,
+) {
+  const db = await getDb();
+  if (!db) return;
+  const value = actualBalance.toFixed(2);
+  await db
+    .insert(liquidHomeBalances)
+    .values({ portfolioId, homeId, actualBalance: value })
+    .onDuplicateKeyUpdate({ set: { actualBalance: value, updatedAt: new Date() } });
+}
+
+/** Clear a recorded actual balance (revert that home to its computed balance). */
+export async function clearLiquidHomeBalance(portfolioId: number, homeId: string) {
+  const db = await getDb();
+  if (!db) return;
+  await db
+    .delete(liquidHomeBalances)
+    .where(
+      and(
+        eq(liquidHomeBalances.portfolioId, portfolioId),
+        eq(liquidHomeBalances.homeId, homeId),
+      ),
+    );
+}

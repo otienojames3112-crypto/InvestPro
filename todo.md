@@ -733,3 +733,11 @@
 - [x] R63.2 Month Ledger: surface the liquid split as a per-month breakdown (which liquid homes hold the residual cash) so projections and actuals stay aligned.
 - [x] R63.3 Portfolio Review: add a Risk & Allocation summary block (per-issuer cap, per-type cap, allocation policy, and any current breaches) in one printable view.
 - [x] R63 tests: helper/UI logic tests for the apply-split transfer plan; full suite green (529) + tsc clean.
+
+
+## Round 64 (mark-as-done transfers + per-home reconcile + risk summary in export)
+
+- [x] R64.1 Apply-split dialog: per-transfer "Mark as done" toggle so users can track which moves they've completed; persist within the dialog session and show progress (n of m done).
+- [x] R64.2 Quick per-home balance reconcile: let users enter the actual balance now resting in each liquid home so the split shows real drift (actual vs target) instead of guidance-only. Persist actuals so they survive reloads.
+- [x] R64.3 Portfolio Review export: include the Risk & Allocation summary (allocation policy, per-issuer cap, per-type cap, current breaches) in the CSV so it travels with the printed/exported report.
+- [x] R64 tests: full suite green (532) + tsc clean; add/extend tests for any new shared helper logic.

@@ -68,6 +68,9 @@ import {
   addAuditLog,
   getAuditLog,
   updateMmfFundAccrualSettings,
+  getLiquidHomeBalances,
+  upsertLiquidHomeBalance,
+  clearLiquidHomeBalance,
 } from "./db";
 import {
   runProjection,
@@ -2761,7 +2764,24 @@ export const appRouter = router({
             | "custom"
             | undefined) ?? "balanced";
 
-        // Liquid pot = primary MMF + secondary MMFs + liquid bank balances.
+        // R64 — overlay user-recorded ACTUAL balances. When the user has confirmed
+        // what is really resting in a home, that figure overrides the computed
+        // balance, so the recommended split (and its drift) reflects reality.
+        const recorded = await getLiquidHomeBalances(input.portfolioId);
+        const actualById = new Map(
+          recorded.map((r) => [r.homeId, parseFloat(String(r.actualBalance)) || 0]),
+        );
+        const reconciledIds: string[] = [];
+        for (const h of homes) {
+          if (actualById.has(h.id)) {
+            h.currentBalance = actualById.get(h.id) ?? 0;
+            reconciledIds.push(h.id);
+          }
+        }
+        const hasActuals = reconciledIds.length > 0;
+
+        // Liquid pot = primary MMF + secondary MMFs + liquid bank balances
+        // (using actuals where the user has reconciled them).
         const liquidPot = homes.reduce((sum, h) => sum + h.currentBalance, 0);
 
         const result = allocateLiquidReserve({
@@ -2772,7 +2792,47 @@ export const appRouter = router({
           safetyFloor: settings.safetyFloor,
           allocationPolicy,
         });
-        return result;
+
+        // Attach per-home reconcile context: the current (actual-or-computed)
+        // balance, whether it was user-reconciled, and the drift vs target.
+        const currentById = new Map(homes.map((h) => [h.id, h.currentBalance]));
+        const slices = result.slices.map((s) => {
+          const current = currentById.get(s.id) ?? 0;
+          return {
+            ...s,
+            currentBalance: Math.round(current * 100) / 100,
+            reconciled: actualById.has(s.id),
+            drift: Math.round((current - s.targetBalance) * 100) / 100,
+          };
+        });
+        return { ...result, slices, hasActuals, reconciledCount: reconciledIds.length };
+      }),
+    // R64 — record/clear the ACTUAL balance resting in a liquid home so the split
+    // shows real drift (actual vs target) and survives reloads.
+    setLiquidBalance: protectedProcedure
+      .input(
+        z.object({
+          portfolioId: z.number().int().positive(),
+          homeId: z.string().min(1).max(64),
+          actualBalance: z.number().min(0),
+        }),
+      )
+      .mutation(async ({ ctx, input }) => {
+        await requirePortfolio(input.portfolioId, ctx.user.id);
+        await upsertLiquidHomeBalance(input.portfolioId, input.homeId, input.actualBalance);
+        return { ok: true };
+      }),
+    clearLiquidBalance: protectedProcedure
+      .input(
+        z.object({
+          portfolioId: z.number().int().positive(),
+          homeId: z.string().min(1).max(64),
+        }),
+      )
+      .mutation(async ({ ctx, input }) => {
+        await requirePortfolio(input.portfolioId, ctx.user.id);
+        await clearLiquidHomeBalance(input.portfolioId, input.homeId);
+        return { ok: true };
       }),
     add: protectedProcedure
       .input(z.object({

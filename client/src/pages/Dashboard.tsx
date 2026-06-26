@@ -58,6 +58,7 @@ import { useMemo, useState, useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { rateStaleness } from "@/lib/rateStaleness";
 import { currentSecurityValue } from "@shared/discount";
+import { Layers, TrendingDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 function StatCard({
@@ -328,6 +329,48 @@ export default function Dashboard() {
 
   const currentPhase = currentData ? currentData.phase : "foundation";
 
+  // R50 — portfolio-level valuation across ALL active CBK lots: total current
+  // (mark-to-model) value, total face (redemption) value, total cost basis, and
+  // overall unrealized gain. Cost basis = purchase price for discount lots
+  // (T-bills / zero-coupon) and par (face) for coupon bonds bought at par.
+  const portfolioValuation = useMemo(() => {
+    const rows = (securities as Array<Record<string, unknown>>) ?? [];
+    let totalFace = 0;
+    let totalCurrent = 0;
+    let totalCost = 0;
+    let lots = 0;
+    for (const s of rows) {
+      if (s?.isMatured) continue;
+      const face = parseFloat(String(s?.faceValue ?? "0")) || 0;
+      if (face <= 0) continue;
+      const t = String(s?.securityType ?? "");
+      const price = parseFloat(String(s?.purchasePrice ?? ""));
+      const hasPrice = Number.isFinite(price) && price > 0;
+      let current = face;
+      if (s?.issueDate && s?.maturityDate) {
+        current = currentSecurityValue({
+          securityType: t,
+          faceValue: face,
+          purchasePrice: hasPrice ? price : null,
+          couponRate: parseFloat(String(s?.couponRate ?? "0")) || 0,
+          issueDate: String(s.issueDate),
+          maturityDate: String(s.maturityDate),
+          isMatured: Boolean(s?.isMatured),
+        });
+      }
+      // Cost basis: discount lots use their purchase price; coupon bonds bought
+      // at par use face. Fall back to face when no price is recorded.
+      const cost = hasPrice ? price : face;
+      totalFace += face;
+      totalCurrent += current;
+      totalCost += cost;
+      lots += 1;
+    }
+    const unrealizedGain = totalCurrent - totalCost;
+    const gainPct = totalCost > 0 ? (unrealizedGain / totalCost) * 100 : 0;
+    return { totalFace, totalCurrent, totalCost, unrealizedGain, gainPct, lots };
+  }, [securities]);
+
   // ── Onboarding empty state: authenticated but no portfolios yet ──────────
   if (!portfoliosLoading && portfolios.length === 0) {
     return (
@@ -401,6 +444,49 @@ export default function Dashboard() {
             </Badge>
           </div>
         </div>
+
+        {/* ── R50: Securities portfolio summary (current vs face vs gain) ── */}
+        {portfolioValuation.lots > 0 && (() => {
+          const v = portfolioValuation;
+          const positive = v.unrealizedGain >= 0;
+          const GainIcon = positive ? TrendingUp : TrendingDown;
+          return (
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div className="rounded-xl border border-white/10 bg-white/[0.02] p-4">
+                <div className="flex items-center gap-2 text-muted-foreground">
+                  <TrendingUp className="w-4 h-4 text-sky-400 shrink-0" />
+                  <p className="text-[11px] font-medium uppercase tracking-widest">Total Current Value</p>
+                </div>
+                <p className="mt-2 text-2xl font-bold text-sky-300 kes-amount">{formatKES(v.totalCurrent)}</p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Mark-to-model value of {v.lots} active {v.lots === 1 ? "lot" : "lots"} today
+                </p>
+              </div>
+              <div className="rounded-xl border border-white/10 bg-white/[0.02] p-4">
+                <div className="flex items-center gap-2 text-muted-foreground">
+                  <Layers className="w-4 h-4 text-primary shrink-0" />
+                  <p className="text-[11px] font-medium uppercase tracking-widest">Total Face Value</p>
+                </div>
+                <p className="mt-2 text-2xl font-bold text-foreground kes-amount">{formatKES(v.totalFace)}</p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Redemption value paid out at maturity
+                </p>
+              </div>
+              <div className="rounded-xl border border-white/10 bg-white/[0.02] p-4">
+                <div className="flex items-center gap-2 text-muted-foreground">
+                  <GainIcon className={cn("w-4 h-4 shrink-0", positive ? "text-emerald-400" : "text-red-400")} />
+                  <p className="text-[11px] font-medium uppercase tracking-widest">Unrealized Gain</p>
+                </div>
+                <p className={cn("mt-2 text-2xl font-bold kes-amount", positive ? "text-emerald-400" : "text-red-400")}>
+                  {positive ? "+" : "−"}{formatKES(Math.abs(v.unrealizedGain))}
+                </p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {positive ? "+" : "−"}{Math.abs(v.gainPct).toFixed(2)}% vs cost basis ({formatKESCompact(v.totalCost)})
+                </p>
+              </div>
+            </div>
+          );
+        })()}
 
         {/* ── Per-issuer concentration warning (Round 31) ──────────────── */}
         {concentration && concentration.breaches.length > 0 && (

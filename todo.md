@@ -625,4 +625,9 @@
 - [x] R49.2 Per discount lot (T-bill/zero-coupon): add an accretion-progress bar showing how far it has moved from purchase price toward face.
 - [x] R49.3 Maturity Calendar widget: add a time-window filter (30 / 90 / 365 days / all) for portfolios with many lots.
 - [x] R49.4 Tests for accretion-progress fraction helper; full suite green (422), tsc clean, UI verified, checkpoint.
-- [ ] R49.5 Package the full project as a downloadable ZIP and deliver.
+- [x] R49.5 Package the full project as a downloadable ZIP and deliver.
+
+## Round 50 (portfolio summary card at top of dashboard)
+
+- [x] R50.1 Add a summary card at the top of the Dashboard aggregating total current value, total face value, and overall unrealized gain across all active CBK lots (uses shared currentSecurityValue).
+- [x] R50.2 Full suite green (426), tsc clean, UI verified, checkpoint, deliver.

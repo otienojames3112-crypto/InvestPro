@@ -38,7 +38,7 @@ import { Skeleton } from "./ui/skeleton";
 import { trpc } from "@/lib/trpc";
 import { rateStaleness } from "@/lib/rateStaleness";
 import { useReconciliationDrift } from "@/hooks/useReconciliationDrift";
-import { useMaturingWindow, daysUntilDate } from "@/hooks/useMaturingWindow";
+import { useMaturingWindow, daysUntilDate, maturingWindowLabel, MATURING_WINDOW_ALL } from "@/hooks/useMaturingWindow";
 import { Clock } from "lucide-react";
 import { useMemo } from "react";
 
@@ -149,7 +149,7 @@ function SidebarSecuritiesBadge({ portfolioId }: { portfolioId: number | null | 
   return (
     <span
       className="shrink-0 rounded-full border border-amber-500/30 bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold leading-none tabular-nums text-amber-400"
-      title={`${count} lot${count === 1 ? "" : "s"} maturing within ${windowDays} days`}
+      title={`${count} lot${count === 1 ? "" : "s"} maturing${windowDays === MATURING_WINDOW_ALL ? " ahead" : ` within ${maturingWindowLabel(windowDays)}`}`}
     >
       {count}
     </span>

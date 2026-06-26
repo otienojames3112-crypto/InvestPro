@@ -13,7 +13,7 @@ import { Switch } from "@/components/ui/switch";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Landmark, Plus, Trash2, CheckCircle2, Clock, Pencil, Link2, Info, RefreshCw, Wallet, RotateCcw, AlertTriangle, SplitSquareHorizontal, ArrowRightLeft, ArrowUp, ArrowDown, ArrowUpDown } from "lucide-react";
 import { useState, useMemo, useEffect } from "react";
-import { useMaturingWindow } from "@/hooks/useMaturingWindow";
+import { useMaturingWindow, MATURING_WINDOW_OPTIONS, MATURING_WINDOW_ALL, maturingWindowLabel } from "@/hooks/useMaturingWindow";
 import { toast } from "sonner";
 import { useForm, Controller } from "react-hook-form";
 import {
@@ -593,20 +593,20 @@ export default function Securities() {
         {active.length > 0 && (
           <div className="flex items-center justify-end gap-2">
             <span className="text-xs text-muted-foreground">Maturing-soon window:</span>
-            <div className="inline-flex rounded-lg bg-muted/40 p-0.5">
-              {([30, 60, 90] as const).map((w) => (
+            <div className="inline-flex flex-wrap justify-end rounded-lg bg-muted/40 p-0.5">
+              {MATURING_WINDOW_OPTIONS.map(({ value, label }) => (
                 <button
-                  key={w}
+                  key={value}
                   type="button"
-                  onClick={() => setMaturingWindow(w)}
+                  onClick={() => setMaturingWindow(value)}
                   className={
                     "rounded-md px-2.5 py-1 text-xs font-medium tabular-nums transition-colors " +
-                    (maturingWindow === w
+                    (maturingWindow === value
                       ? "bg-card text-foreground shadow-sm"
                       : "text-muted-foreground hover:text-foreground")
                   }
                 >
-                  {w}d
+                  {label}
                 </button>
               ))}
             </div>
@@ -622,7 +622,7 @@ export default function Securities() {
               </div>
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-semibold text-foreground">
-                  {maturingSoon.length} {maturingSoon.length === 1 ? "lot" : "lots"} maturing within {maturingWindow} days
+                  {maturingSoon.length} {maturingSoon.length === 1 ? "lot" : "lots"} maturing{maturingWindow === MATURING_WINDOW_ALL ? " ahead" : ` within ${maturingWindowLabel(maturingWindow)}`}
                   <span className="text-muted-foreground font-normal"> · {formatKES(soonFaceValue)} face value</span>
                 </p>
                 <p className="text-xs text-muted-foreground mt-0.5">

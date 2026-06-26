@@ -652,3 +652,9 @@
 - [x] R53.2 Add a "Reset to default sort" affordance on the register and apply the same sort controls to the matured-holdings table.
 - [x] R53.3 Surface the duration-risk level as a one-line summary on the Portfolio Review page alongside concentration metrics.
 - [x] R53.4 Tests for configurable-horizon behavior; full suite green (442), tsc clean, UI verified, checkpoint, deliver.
+
+## Round 54 (wider maturing-soon window for long-term govt securities)
+
+- [x] R54.1 Widen the shared maturing-soon window options to include longer terms (180d / 1yr / 2yr) plus an "All" option, so long-dated bonds (FXD/IFB) appear in the lookahead.
+- [x] R54.2 Update the Securities Register window selector UI with friendly labels (30d/60d/90d/180d/1yr/2yr/All) and keep localStorage + sidebar badge in sync; migrate any stale stored values.
+- [x] R54.3 Full suite green (448), tsc clean, UI verified, checkpoint, deliver.

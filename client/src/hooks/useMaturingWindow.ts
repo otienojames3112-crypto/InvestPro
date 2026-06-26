@@ -5,12 +5,28 @@ import { useEffect, useState } from "react";
  * sync across the app — the Securities page selector and the sidebar count badge
  * both read/write the same value so they never disagree.
  *
- * Allowed values: 30 / 60 / 90 days. Defaults to 30.
+ * Allowed values (days): 30 / 60 / 90 / 180 / 365 (1yr) / 730 (2yr) / ALL.
+ * The wider windows let long-dated government paper (FXD / IFB bonds with
+ * multi-year tenors) surface in the lookahead, not just short T-bills.
+ * "All" is encoded as a large sentinel so any future maturity is included.
+ * Defaults to 30.
  */
-export type MaturingWindow = 30 | 60 | 90;
+export const MATURING_WINDOW_ALL = 36500; // ~100 years — effectively "all upcoming"
+export type MaturingWindow = 30 | 60 | 90 | 180 | 365 | 730 | typeof MATURING_WINDOW_ALL;
+
+/** Ordered options with human-friendly labels for the selector UI. */
+export const MATURING_WINDOW_OPTIONS: { value: MaturingWindow; label: string }[] = [
+  { value: 30, label: "30d" },
+  { value: 60, label: "60d" },
+  { value: 90, label: "90d" },
+  { value: 180, label: "180d" },
+  { value: 365, label: "1yr" },
+  { value: 730, label: "2yr" },
+  { value: MATURING_WINDOW_ALL, label: "All" },
+];
 
 const STORAGE_KEY = "kes5m.maturingWindowDays";
-const ALLOWED: MaturingWindow[] = [30, 60, 90];
+const ALLOWED: MaturingWindow[] = MATURING_WINDOW_OPTIONS.map((o) => o.value);
 const EVENT = "kes5m:maturing-window-change";
 
 function readStored(): MaturingWindow {
@@ -50,4 +66,9 @@ export function daysUntilDate(dateStr: string | Date): number {
   const d = new Date(dateStr);
   const now = new Date();
   return Math.ceil((d.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+}
+
+/** Friendly label for a window value (e.g. "1yr", "All"). */
+export function maturingWindowLabel(value: number): string {
+  return MATURING_WINDOW_OPTIONS.find((o) => o.value === value)?.label ?? `${value}d`;
 }

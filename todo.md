@@ -725,3 +725,11 @@
 - [x] R62.7 Confirm Month Ledger column tooltips exist (Mth, Basis, Date, Save, CBK In, Bank In, Swept->Securities, Main Action, MMF End, T-Bill 91/182/364d, IFB, FXD, Bank, Total, Phase).
 - [x] R62.8 Apply EXACT column-header tooltip text provided for each Ledger column.
 - [x] R62 tests: engine (caps from settings, policy, liquid allocator placement/invariants, coupon-bond valuation reconcile) + helper tests; full suite green + tsc clean.
+
+
+## Round 63 (apply-liquid-split action + ledger liquid breakdown + portfolio-review risk summary)
+
+- [x] R63.1 Dashboard liquid card: one-click "Apply this split" action that pre-fills the transfers (per home: from current balance → target balance, the delta) so the user can action the recommended allocation.
+- [x] R63.2 Month Ledger: surface the liquid split as a per-month breakdown (which liquid homes hold the residual cash) so projections and actuals stay aligned.
+- [x] R63.3 Portfolio Review: add a Risk & Allocation summary block (per-issuer cap, per-type cap, allocation policy, and any current breaches) in one printable view.
+- [x] R63 tests: helper/UI logic tests for the apply-split transfer plan; full suite green (529) + tsc clean.

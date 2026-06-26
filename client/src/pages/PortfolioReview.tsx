@@ -130,6 +130,12 @@ export default function PortfolioReview() {
     { portfolioId: portfolioId! },
     { enabled: !!portfolioId }
   );
+  // R63 — per-issuer (institution) concentration on liquid/bank holdings, for the
+  // Risk & Allocation summary block.
+  const { data: issuerConc } = trpc.bankHoldings.concentration.useQuery(
+    { portfolioId: portfolioId! },
+    { enabled: !!portfolioId }
+  );
 
   // ─── Net worth allocation (Round 32: single shared path) ────────────────
   // `buildAllocation` is the ONE net-worth builder shared with Reconciliation.
@@ -492,6 +498,110 @@ export default function PortfolioReview() {
                 </div>
               </>
             )}
+          </CardContent>
+        </Card>
+
+        {/* R63 — Risk & Allocation summary (caps + policy + current breaches) */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base flex items-center gap-2">
+              <ShieldCheck className="w-4 h-4 text-primary" /> Risk &amp; Allocation
+            </CardTitle>
+            <CardDescription>
+              Your concentration limits, allocation policy, and any limits currently breached —
+              the rules that govern how the engine spreads your money.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {/* Policy + caps grid */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="rounded-lg border border-border bg-muted/20 p-3">
+                <p className="text-xs text-muted-foreground">Allocation policy</p>
+                <p className="text-sm font-semibold text-foreground mt-0.5 capitalize">
+                  {(portfolio?.allocationPolicy ?? "balanced").replace("_", "-")}
+                </p>
+                <p className="text-[11px] text-muted-foreground mt-1">
+                  {(() => {
+                    const pol = portfolio?.allocationPolicy ?? "balanced";
+                    if (pol === "yield_first")
+                      return "Caps relaxed toward 100% — chases the highest net yield, concentration allowed.";
+                    if (pol === "custom") return "Your own caps, applied as set below.";
+                    return "Spreads across instruments and issuers, respecting the caps below.";
+                  })()}
+                </p>
+              </div>
+              <div className="rounded-lg border border-border bg-muted/20 p-3">
+                <p className="text-xs text-muted-foreground">Per-issuer cap</p>
+                <p className="text-sm font-semibold text-foreground mt-0.5">
+                  {Math.round(portfolio?.concentrationCapPct ?? 25)}% of net worth
+                </p>
+                <p className="text-[11px] text-muted-foreground mt-1">
+                  Max share for any one institution (bank / fund manager).
+                </p>
+              </div>
+              <div className="rounded-lg border border-border bg-muted/20 p-3">
+                <p className="text-xs text-muted-foreground">Per-type cap</p>
+                <p className="text-sm font-semibold text-foreground mt-0.5">
+                  {Math.round(typeCapPct)}% of securities
+                </p>
+                <p className="text-[11px] text-muted-foreground mt-1">
+                  Max share for any single instrument type / tenor profile.
+                </p>
+              </div>
+            </div>
+
+            {/* Current breaches */}
+            <div className="space-y-2">
+              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                Current limit status
+              </p>
+              {(() => {
+                const issuerBreaches = issuerConc?.breaches ?? [];
+                const anyBreach = concentrationBreached || issuerBreaches.length > 0;
+                if (!anyBreach) {
+                  return (
+                    <div className="flex items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3 text-sm text-emerald-300">
+                      <ShieldCheck className="w-4 h-4 shrink-0" />
+                      <span>All concentration limits are within range. No breaches.</span>
+                    </div>
+                  );
+                }
+                return (
+                  <div className="space-y-2">
+                    {concentration && concentrationBreached && (
+                      <div className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-200">
+                        <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                        <div>
+                          <p className="font-medium text-foreground">
+                            Per-type cap breached: {concentration.topLabel}
+                          </p>
+                          <p className="text-amber-200/90">
+                            {(concentration.topShare * 100).toFixed(1)}% of securities (cap {Math.round(typeCapPct)}%).
+                            {shiftToUnderCap > 0 && <> Shift about {kes(shiftToUnderCap)} to a different type to return under the cap.</>}
+                          </p>
+                        </div>
+                      </div>
+                    )}
+                    {issuerBreaches.map((b) => (
+                      <div key={b.issuer} className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-200">
+                        <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                        <div>
+                          <p className="font-medium text-foreground">Per-issuer cap breached: {b.issuer}</p>
+                          <p className="text-amber-200/90">
+                            {(b.share * 100).toFixed(1)}% of net worth ({kes(b.value)}) — cap {Math.round((issuerConc?.cap ?? 0.25) * 100)}%.
+                          </p>
+                        </div>
+                      </div>
+                    ))}
+                    {(portfolio?.allocationPolicy ?? "balanced") === "yield_first" && (
+                      <p className="text-[11px] text-muted-foreground">
+                        Note: under the Yield-first policy these concentrations are within your chosen policy.
+                      </p>
+                    )}
+                  </div>
+                );
+              })()}
+            </div>
           </CardContent>
         </Card>
 

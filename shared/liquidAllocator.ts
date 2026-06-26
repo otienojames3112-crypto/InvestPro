@@ -353,3 +353,63 @@ export function allocateLiquidReserve(
     message,
   };
 }
+
+
+/**
+ * Round 63 — turn an allocation result into a concrete list of "move money from
+ * A → B" transfers a user can action one by one.
+ *
+ * The allocator gives each home a target balance and a delta (target − current).
+ * Homes with a negative delta are SOURCES (cash to pull out); homes with a
+ * positive delta are DESTINATIONS (cash to push in). We greedily match the
+ * largest source against the largest destination so the number of transfers is
+ * minimal, producing a clean payment plan. Only homes flagged `rebalance`
+ * (drift beyond the no-churn threshold) participate, so tiny adjustments never
+ * generate a transfer instruction.
+ */
+export interface LiquidTransfer {
+  fromId: string;
+  fromLabel: string;
+  toId: string;
+  toLabel: string;
+  /** Amount to move (KES, positive). */
+  amount: number;
+}
+
+export function buildTransferPlan(
+  result: Pick<LiquidAllocationResult, "slices">,
+): LiquidTransfer[] {
+  const byId = new Map(result.slices.map((s) => [s.id, s]));
+  // Only actionable (rebalance) slices generate real moves.
+  const sources = result.slices
+    .filter((s) => s.rebalance && s.delta < -0.5)
+    .map((s) => ({ id: s.id, label: s.label, amount: -s.delta }))
+    .sort((a, b) => b.amount - a.amount);
+  const dests = result.slices
+    .filter((s) => s.rebalance && s.delta > 0.5)
+    .map((s) => ({ id: s.id, label: s.label, amount: s.delta }))
+    .sort((a, b) => b.amount - a.amount);
+
+  const transfers: LiquidTransfer[] = [];
+  let si = 0;
+  let di = 0;
+  while (si < sources.length && di < dests.length) {
+    const src = sources[si];
+    const dst = dests[di];
+    const move = Math.min(src.amount, dst.amount);
+    if (move > 0.5) {
+      transfers.push({
+        fromId: src.id,
+        fromLabel: byId.get(src.id)?.label ?? src.label,
+        toId: dst.id,
+        toLabel: byId.get(dst.id)?.label ?? dst.label,
+        amount: round2(move),
+      });
+    }
+    src.amount -= move;
+    dst.amount -= move;
+    if (src.amount <= 0.5) si += 1;
+    if (dst.amount <= 0.5) di += 1;
+  }
+  return transfers;
+}

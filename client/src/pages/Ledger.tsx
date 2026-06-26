@@ -43,6 +43,23 @@ export default function Ledger() {
   });
   const handleSync = () => { if (portfolioId) syncMutation.mutate({ portfolioId }); };
 
+  // R63 — the recommended liquid-home target shares, used to show a per-month
+  // breakdown of how each month's MMF balance would be diversified across homes.
+  const { data: liquidAlloc } = trpc.bankHoldings.liquidAllocation.useQuery(
+    { portfolioId: portfolioId! },
+    { enabled: !!portfolioId }
+  );
+  // Stable, ranked share table (only homes with a positive target share).
+  const liquidShares = useMemo(() => {
+    if (!liquidAlloc || liquidAlloc.liquidPot <= 0) return [];
+    const totalShare = liquidAlloc.slices.reduce((s, x) => s + Math.max(0, x.targetShare), 0);
+    if (totalShare <= 0) return [];
+    return liquidAlloc.slices
+      .filter((s) => s.targetShare > 0)
+      .map((s) => ({ id: s.id, label: s.label, frac: s.targetShare / totalShare, netYieldPct: s.netYieldPct }))
+      .sort((a, b) => b.frac - a.frac);
+  }, [liquidAlloc]);
+
   const focusMonth = useFocusMonth();
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
@@ -480,7 +497,51 @@ export default function Ledger() {
                             </div>
                           </td>
                           <td className="px-4 py-2.5 text-right kes-amount text-foreground font-medium">
-                            {formatKES(r.mmfEnd)}
+                            {liquidShares.length > 1 && r.mmfEnd > 0 ? (
+                              <div className="flex items-center justify-end gap-1.5">
+                                <span>{formatKES(r.mmfEnd)}</span>
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <button
+                                      type="button"
+                                      className="shrink-0 text-muted-foreground/70 hover:text-sky-400 transition-colors"
+                                      aria-label="Liquid split for this month"
+                                    >
+                                      <Info className="w-3.5 h-3.5" />
+                                    </button>
+                                  </TooltipTrigger>
+                                  <TooltipContent side="left" align="start" className="max-w-xs text-xs space-y-2 p-3">
+                                    <p className="font-semibold text-foreground">
+                                      Recommended liquid split this month
+                                    </p>
+                                    <p className="text-muted-foreground">
+                                      How this month's {formatKES(r.mmfEnd)} liquid balance would diversify across your
+                                      eligible homes (keeping each issuer under its cap):
+                                    </p>
+                                    <div className="space-y-1">
+                                      {liquidShares.map((s) => (
+                                        <div key={s.id} className="flex items-center justify-between gap-4">
+                                          <span className="text-foreground truncate">
+                                            {s.label}
+                                            <span className="text-muted-foreground"> · {s.netYieldPct.toFixed(2)}% net</span>
+                                          </span>
+                                          <span className="tabular-nums font-medium text-sky-300 shrink-0">
+                                            {formatKES(r.mmfEnd * s.frac)}
+                                            <span className="text-muted-foreground"> ({Math.round(s.frac * 100)}%)</span>
+                                          </span>
+                                        </div>
+                                      ))}
+                                    </div>
+                                    <p className="text-[11px] text-muted-foreground/70 pt-1 border-t border-border/50">
+                                      Guidance only — the projection holds this as one MMF balance; the split shows
+                                      where to place it to stay diversified.
+                                    </p>
+                                  </TooltipContent>
+                                </Tooltip>
+                              </div>
+                            ) : (
+                              formatKES(r.mmfEnd)
+                            )}
                           </td>
                           <td className="px-4 py-2.5 text-right kes-amount text-muted-foreground">
                             {r.tbill91End > 0 ? formatKES(r.tbill91End) : "–"}

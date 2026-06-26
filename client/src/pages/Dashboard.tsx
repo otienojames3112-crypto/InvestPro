@@ -61,7 +61,8 @@ import { toast } from "sonner";
 import { rateStaleness } from "@/lib/rateStaleness";
 import { currentSecurityValue, classifyDurationRisk, largestConcentration, classifyConcentration, isConcentrationSnoozed, DEFAULT_LIQUIDITY_HORIZON_DAYS, type CurrentValueSecurity } from "@shared/discount";
 import { whtRateForSecurity } from "@shared/securityTenor";
-import { Layers, TrendingDown, BellOff, Bell, Scale } from "lucide-react";
+import { Layers, TrendingDown, BellOff, Bell, Scale, ArrowRightLeft, Copy } from "lucide-react";
+import { buildTransferPlan } from "@shared/liquidAllocator";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -176,6 +177,11 @@ export default function Dashboard() {
     { portfolioId: portfolioId! },
     { enabled: !!portfolioId }
   );
+  // R63 — concrete transfer plan derived from the recommended split.
+  const transferPlan = useMemo(
+    () => (liquidAlloc ? buildTransferPlan(liquidAlloc) : []),
+    [liquidAlloc],
+  );
   const updatePortfolioMutation = trpc.portfolios.update.useMutation({
     onSuccess: () => {
       toast.success("Target updated — projection recalculated");
@@ -257,6 +263,8 @@ export default function Dashboard() {
   const [holdingsBasis, setHoldingsBasis] = useState<"face" | "current">("face");
   // R49 — Maturity Calendar time-window filter (days, or "all").
   const [maturityWindow, setMaturityWindow] = useState<30 | 90 | 365 | "all">("all");
+  // R63 — "Apply this split" dialog showing the prefilled transfer plan.
+  const [splitOpen, setSplitOpen] = useState(false);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -933,6 +941,17 @@ export default function Dashboard() {
                   );
                 })}
               </div>
+              {transferPlan.length > 0 && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="mt-3 w-full border-sky-500/40 bg-sky-500/10 text-sky-200 hover:bg-sky-500/20"
+                  onClick={() => setSplitOpen(true)}
+                >
+                  <ArrowRightLeft className="w-3.5 h-3.5 mr-1.5" />
+                  Apply this split ({transferPlan.length} transfer{transferPlan.length === 1 ? "" : "s"})
+                </Button>
+              )}
               <p className="text-[11px] text-muted-foreground/70 mt-3">
                 Targets keep each issuer at or under {Math.round(liquidAlloc.effectiveIssuerCapFrac * 100)}% of net worth.
                 Only liquid homes (MMFs, call/savings deposits) are shown — fixed deposits and government securities are excluded.
@@ -940,6 +959,74 @@ export default function Dashboard() {
             </CardContent>
           </Card>
         )}
+
+        {/* R63 — Apply-this-split transfer plan dialog */}
+        <Dialog open={splitOpen} onOpenChange={setSplitOpen}>
+          <DialogContent className="max-w-lg">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <ArrowRightLeft className="w-4 h-4 text-sky-400" />
+                Apply liquid split
+              </DialogTitle>
+            </DialogHeader>
+            <div className="space-y-3">
+              <p className="text-sm text-muted-foreground">
+                To match the recommended diversification, make the following transfers between
+                your liquid homes. Amounts are pre-filled from the gap between each home's current
+                balance and its target.
+              </p>
+              <div className="space-y-2">
+                {transferPlan.map((t, i) => (
+                  <div
+                    key={`${t.fromId}-${t.toId}-${i}`}
+                    className="flex items-center gap-2 rounded-lg border border-border bg-muted/30 p-3 text-sm"
+                  >
+                    <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-sky-500/20 text-[11px] font-semibold text-sky-300">
+                      {i + 1}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5 text-foreground">
+                        <span className="truncate font-medium">{t.fromLabel}</span>
+                        <ArrowRight className="w-3.5 h-3.5 shrink-0 text-muted-foreground" />
+                        <span className="truncate font-medium">{t.toLabel}</span>
+                      </div>
+                    </div>
+                    <span className="shrink-0 font-semibold text-sky-200 kes-amount">{formatKES(t.amount)}</span>
+                  </div>
+                ))}
+              </div>
+              <div className="flex items-center justify-between gap-2 rounded-lg border border-sky-500/20 bg-sky-500/5 p-3">
+                <span className="text-xs text-muted-foreground">Total cash to move</span>
+                <span className="font-semibold text-foreground kes-amount">
+                  {formatKES(transferPlan.reduce((s, t) => s + t.amount, 0))}
+                </span>
+              </div>
+              <p className="text-[11px] text-muted-foreground/70">
+                These are guidance amounts — execute the moves in your MMF and bank apps, then record the
+                resulting balances here so the tracker stays in sync. Nothing is moved automatically.
+              </p>
+            </div>
+            <DialogFooter className="gap-2 sm:gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  const text = transferPlan
+                    .map((t, i) => `${i + 1}. ${t.fromLabel} → ${t.toLabel}: ${formatKES(t.amount)}`)
+                    .join("\n");
+                  navigator.clipboard?.writeText(text).then(
+                    () => toast.success("Transfer plan copied to clipboard"),
+                    () => toast.error("Could not copy"),
+                  );
+                }}
+              >
+                <Copy className="w-3.5 h-3.5 mr-1.5" />
+                Copy plan
+              </Button>
+              <Button size="sm" onClick={() => setSplitOpen(false)}>Done</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         {/* ── What the engine projection means ───────────────────────────── */}
         <div className="rounded-xl border border-primary/20 bg-primary/5 p-4 flex gap-3">

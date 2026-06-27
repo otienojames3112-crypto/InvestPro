@@ -13,8 +13,10 @@ import {
   amountToShiftUnderCap,
   analyzePerTypeBreach,
   buildDiversifyLink,
+  filterBreachAcks,
   DEFAULT_LIQUIDITY_HORIZON_DAYS,
   type CurrentValueSecurity,
+  type BreachAckCapFilter,
 } from "@shared/discount";
 import { whtRateForSecurity } from "@shared/securityTenor";
 import {
@@ -133,6 +135,18 @@ export default function PortfolioReview() {
     { portfolioId: portfolioId!, limit: 50 },
     { enabled: !!portfolioId }
   );
+  // R71.1 — acknowledged-breaches table filter (cap kind + date range).
+  const [ackCapFilter, setAckCapFilter] = useState<BreachAckCapFilter>("all");
+  const [ackFrom, setAckFrom] = useState<string>(""); // yyyy-mm-dd (local)
+  const [ackTo, setAckTo] = useState<string>(""); // yyyy-mm-dd (local)
+  const filteredBreachAcks = useMemo(() => {
+    if (!breachAcks) return [];
+    // Convert the date-only inputs to inclusive local-day Unix-ms bounds.
+    const fromMs = ackFrom ? new Date(`${ackFrom}T00:00:00`).getTime() : null;
+    const toMs = ackTo ? new Date(`${ackTo}T23:59:59.999`).getTime() : null;
+    return filterBreachAcks(breachAcks, { capKind: ackCapFilter, fromMs, toMs });
+  }, [breachAcks, ackCapFilter, ackFrom, ackTo]);
+
   // R66 — Change History filter: All vs liquid (reconciles + transfers) vs other.
   const [auditFilter, setAuditFilter] = useState<"all" | "liquid" | "other">("all");
   const LIQUID_ENTITIES = useMemo(
@@ -1016,11 +1030,71 @@ export default function PortfolioReview() {
             <CardDescription>
               A record of every concentration-cap breach you have explicitly accepted — the cap, the share at the time, and when. Acknowledging a breach does not change the cap; it just logs that you chose to hold through it.
             </CardDescription>
+            {breachAcks && breachAcks.length > 0 && (
+              <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                {([
+                  { id: "all", label: "All" },
+                  { id: "issuer", label: "Per-issuer (KDIC)" },
+                  { id: "type", label: "Per-type" },
+                ] as const).map((opt) => (
+                  <Button
+                    key={opt.id}
+                    type="button"
+                    size="sm"
+                    variant={ackCapFilter === opt.id ? "default" : "outline"}
+                    className="h-7 px-2.5 text-xs"
+                    onClick={() => setAckCapFilter(opt.id)}
+                  >
+                    {opt.label}
+                  </Button>
+                ))}
+                <span className="mx-1 h-4 w-px bg-border" aria-hidden />
+                <label className="flex items-center gap-1 text-xs text-muted-foreground">
+                  From
+                  <input
+                    type="date"
+                    value={ackFrom}
+                    max={ackTo || undefined}
+                    onChange={(e) => setAckFrom(e.target.value)}
+                    className="h-7 rounded-md border border-input bg-transparent px-2 text-xs text-foreground"
+                  />
+                </label>
+                <label className="flex items-center gap-1 text-xs text-muted-foreground">
+                  To
+                  <input
+                    type="date"
+                    value={ackTo}
+                    min={ackFrom || undefined}
+                    onChange={(e) => setAckTo(e.target.value)}
+                    className="h-7 rounded-md border border-input bg-transparent px-2 text-xs text-foreground"
+                  />
+                </label>
+                {(ackCapFilter !== "all" || ackFrom || ackTo) && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    className="h-7 px-2 text-xs text-muted-foreground"
+                    onClick={() => {
+                      setAckCapFilter("all");
+                      setAckFrom("");
+                      setAckTo("");
+                    }}
+                  >
+                    Clear
+                  </Button>
+                )}
+              </div>
+            )}
           </CardHeader>
           <CardContent>
             {!breachAcks || breachAcks.length === 0 ? (
               <p className="text-sm text-muted-foreground py-4 text-center">
                 No breaches acknowledged. When a recorded holding exceeds a cap and you accept it, it will be listed here.
+              </p>
+            ) : filteredBreachAcks.length === 0 ? (
+              <p className="text-sm text-muted-foreground py-4 text-center">
+                No acknowledged breaches match this filter. Try widening the date range or selecting “All”.
               </p>
             ) : (
               <div className="overflow-x-auto">
@@ -1035,7 +1109,7 @@ export default function PortfolioReview() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {breachAcks.map((b) => (
+                    {filteredBreachAcks.map((b) => (
                       <TableRow key={b.id}>
                         <TableCell>
                           <span

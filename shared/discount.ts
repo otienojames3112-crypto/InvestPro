@@ -688,3 +688,40 @@ export function parseBreachAckRow(row: BreachAckRowInput): ParsedBreachAck {
   }
   return { capKind, label, sharePct, capPct };
 }
+
+// ─── R71.1 — acknowledged-breaches table filter ──────────────────────────
+// Pure, client-side filter for the acknowledged-breaches audit table so a long
+// trail stays scannable. Kept here (not in the page) so it can be unit-tested.
+// `capKind === "all"` passes every kind through; `fromMs` / `toMs` are inclusive
+// Unix-ms bounds (either may be null to leave that side unbounded).
+
+export type BreachAckCapFilter = "all" | "issuer" | "type";
+
+export interface BreachAckFilterRow {
+  capKind: "issuer" | "type";
+  at: number | Date;
+}
+
+export interface BreachAckFilter {
+  capKind?: BreachAckCapFilter;
+  fromMs?: number | null;
+  toMs?: number | null;
+}
+
+export function filterBreachAcks<T extends BreachAckFilterRow>(
+  rows: T[],
+  filter: BreachAckFilter,
+): T[] {
+  const kind = filter.capKind ?? "all";
+  const from = filter.fromMs ?? null;
+  // Treat `toMs` as the END of that day if a date-only boundary is given by the
+  // caller; callers pass an explicit end-of-day ms, so we compare inclusively.
+  const to = filter.toMs ?? null;
+  return rows.filter((r) => {
+    if (kind !== "all" && r.capKind !== kind) return false;
+    const atMs = r.at instanceof Date ? r.at.getTime() : r.at;
+    if (from != null && atMs < from) return false;
+    if (to != null && atMs > to) return false;
+    return true;
+  });
+}

@@ -21,6 +21,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Scale, CheckCircle2, AlertTriangle, Info, Activity, TrendingDown, TrendingUp } from "lucide-react";
 import { formatKES, formatRelativeTime } from "@/lib/format";
 import { Sparkline } from "@/components/Sparkline";
+import { GlossaryTerm } from "@/components/GlossaryTerm";
 
 export default function Reconciliation() {
   const { portfolioId, portfolio } = usePortfolio();
@@ -362,7 +363,7 @@ export default function Reconciliation() {
                   Government securities &mdash; accrued interest &amp; WHT (1-year window)
                 </CardTitle>
                 <CardDescription>
-                  The day-by-day accrual schedule for CBK securities must match an
+                  The day-by-day <GlossaryTerm id="accrued-interest">accrued interest</GlossaryTerm> schedule for CBK securities must match an
                   independent closed-form expectation (annual gross &times; days &divide;
                   365, with 15% WHT on T-Bills/FXD coupons and 0% on IFBs). A drift in
                   either path turns this red.
@@ -452,7 +453,7 @@ export default function Reconciliation() {
                 <CardDescription>
                   Every time you reconcile a liquid home (set, bulk-set, or clear a
                   balance) the tracker records the total drift from the recommended
-                  split. This is the history behind the Dashboard sparkline &mdash; a
+                  split, as governed by your <GlossaryTerm id="liquid-reserve-diversification">liquid-reserve diversification</GlossaryTerm> rules and your <GlossaryTerm id="allocation-policy">allocation policy</GlossaryTerm>. This is the history behind the Dashboard sparkline &mdash; a
                   downward trend means your balances are converging back to target.
                 </CardDescription>
               </CardHeader>
@@ -548,7 +549,9 @@ export default function Reconciliation() {
                   <p>
                     The sum-of-holdings figure adds the primary MMF balance, every
                     secondary MMF, all active bank deposits and all un-matured CBK
-                    register securities (valued at face). The projection
+                    register securities (valued at face). Liquid balances stay within
+                    your <GlossaryTerm id="per-issuer-cap">per-issuer cap</GlossaryTerm> (KDIC) and{" "}
+                    <GlossaryTerm id="per-type-cap">per-type cap</GlossaryTerm>. The projection
                     engine&rsquo;s &ldquo;today&rdquo; figure is the value of the
                     most recent actual-seeded month; before any month has elapsed
                     it equals the sum of holdings. The dashboard total and

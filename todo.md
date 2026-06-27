@@ -788,3 +788,9 @@
 - [x] R70.2 Visual projected end-state split bar: stacked bar + legend under the "lands fully liquid" line, rendered from endStateLiquidSplit slices (shown only for a genuine multi-home split).
 - [x] R70.3 Tooltip "Learn more" link: GlossaryTerm now uses a hoverable HoverCard with a "Learn more →" link to /learn?term=<id>; Learn page reads the param to expand, scroll to, and briefly highlight the entry.
 - [x] R70 tests: full suite green (599) + tsc clean; round70.test.ts covers breach-ack parsing (issuer/type, label+pct extraction, exact recordBreachAck round-trip, malformed rows, labels containing "at").
+
+## Round 71 (ack-table filter + hoverable split bar + reconciliation glossary links)
+- [x] R71.1 Cap-kind + date-range filter on the acknowledged-breaches table on Portfolio Review (All / per-issuer / per-type; date range), so a long audit trail stays scannable. Pure filterBreachAcks helper in shared/discount.ts (handles number|Date at).
+- [x] R71.2 Hoverable end-state split-bar segments on the Dashboard: each segment is a Tooltip trigger showing label, KES balance, % of pot, and net yield.
+- [x] R71.3 Learn-more glossary deep-links in the Reconciliation help text (accrued-interest, liquid-reserve-diversification, allocation-policy, per-issuer-cap, per-type-cap) via GlossaryTerm.
+- [x] R71 tests: full suite green (608) + tsc clean; round71.test.ts covers filterBreachAcks (all/kind/from/to/combined/Date-at/empty/null-bounds) + Reconciliation glossary id validity.

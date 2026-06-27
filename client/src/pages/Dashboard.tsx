@@ -1756,15 +1756,24 @@ export default function Dashboard() {
                     <div className="mt-2">
                       <div className="flex h-2 w-full overflow-hidden rounded-full bg-muted">
                         {endStateSplit.slices.map((s, i) => (
-                          <div
-                            key={`${s.label}-${i}`}
-                            className="h-full"
-                            style={{
-                              width: `${(s.targetShare * 100).toFixed(2)}%`,
-                              backgroundColor: END_STATE_SPLIT_COLORS[i % END_STATE_SPLIT_COLORS.length],
-                            }}
-                            title={`${s.label}: ${(s.targetShare * 100).toFixed(0)}% · ${formatKES(s.targetBalance)}`}
-                          />
+                          <Tooltip key={`${s.label}-${i}`}>
+                            <TooltipTrigger asChild>
+                              <div
+                                className="h-full cursor-help transition-opacity hover:opacity-80"
+                                style={{
+                                  width: `${(s.targetShare * 100).toFixed(2)}%`,
+                                  backgroundColor: END_STATE_SPLIT_COLORS[i % END_STATE_SPLIT_COLORS.length],
+                                }}
+                              />
+                            </TooltipTrigger>
+                            <TooltipContent className="text-xs">
+                              <div className="font-medium text-foreground">{s.label}</div>
+                              <div className="text-muted-foreground">
+                                {formatKES(s.targetBalance)} · {(s.targetShare * 100).toFixed(0)}% of pot
+                              </div>
+                              <div className="text-muted-foreground">{s.netYieldPct.toFixed(2)}% net yield</div>
+                            </TooltipContent>
+                          </Tooltip>
                         ))}
                       </div>
                       <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1">

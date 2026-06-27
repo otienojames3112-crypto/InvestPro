@@ -839,3 +839,10 @@
 - [x] TM.29 Engine pastTensifyMainAction transform applied when isActualMonth: Move->Moved, matures->matured (at/,/;/space), pays a->paid a, Add KES->Added KES, Add this month's saving->Added...; future rows keep present/imperative tense. Bank phrases already past-tense.
 - [x] TM.30 Settled contribution-only narration now states the ACTUAL amount ("Added KES <contribution> of savings..."); contribution for actual months sources from actualMmfByMonth, which includes injected-variance deposits the Time Machine materialized.
 - [x] TM.31 round75.test.ts (8 cases): pastTensifyMainAction unit coverage (Move/matures/pays/Add KES/Add saving, bank idempotency) + engine integration (settled months past tense & no present-tense verbs, future months present tense, settled contribution states actual KES). Found & fixed missing 'Add KES'->'Added KES' rule. Full suite 667 green + tsc clean.
+
+## Time Machine: consistency polish (round 76)
+- [x] TM.32 Reconciliation audit: page is balance/accrual cross-checks only, no per-event maturity/coupon rows — tense-aware work retargeted to Daily Accrual.
+- [x] TM.33 Tense-aware labels on Daily Accrual security rows: effective (simulated) now threaded into buildSecurityIncome + new securityRowStatus helper; status badge (Accruing / Maturing today / Matured (coupons paid)) on per-holding rows; SimulatedDateChip in header.
+- [x] TM.34 "As of simulated date" stamp on Securities valuation cards (Active Holdings header badge + per-row current-value stamp), shown only when a simulation is active.
+- [x] TM.35 Settled/projected flag column in the Ledger CSV export — already present ("Basis" = Actual/Projected); verified, no change needed.
+- [x] TM.36 Tests for new pure helpers (server/round76.test.ts, 11 cases) + full suite 678 green + tsc clean.

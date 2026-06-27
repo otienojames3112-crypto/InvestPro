@@ -1,4 +1,6 @@
 import { useMemo, useState } from "react";
+import { useSimulatedNow } from "@/hooks/useSimulatedNow";
+import { SimulatedDateChip } from "@/components/SimulatedDateChip";
 import { AppShell } from "@/components/AppShell";
 import { usePortfolio } from "@/contexts/PortfolioContext";
 import { useSelectedFund } from "@/hooks/useSelectedFund";
@@ -84,6 +86,12 @@ interface AccrualAccount {
 export default function MmfAccrual() {
   const { portfolioId } = usePortfolio();
   const fund = useSelectedFund();
+
+  // Time Machine parity: when a simulated clock is active, the Daily Accrual
+  // breakdowns must reckon "today" from the simulated date so matured paper
+  // drops out and live rows read in the correct tense.
+  const { now: simulatedNow } = useSimulatedNow();
+  const effectiveNow = simulatedNow();
 
   // Full fund catalogue (for per-fund accrual settings: day-count, crediting, WHT).
   const { data: funds } = trpc.mmfFunds.list.useQuery(undefined, { enabled: true });
@@ -200,8 +208,9 @@ export default function MmfAccrual() {
           } satisfies SecurityIncomeInput;
         }),
         days,
+        effectiveNow,
       ),
-    [securitiesData, days],
+    [securitiesData, days, effectiveNow],
   );
 
   const bankIncome: IncomeSummary = useMemo(
@@ -243,8 +252,9 @@ export default function MmfAccrual() {
           } satisfies SecurityIncomeInput;
         }),
         days,
+        effectiveNow,
       ),
-    [securitiesData, days],
+    [securitiesData, days, effectiveNow],
   );
 
   const bankDaily = useMemo(
@@ -353,11 +363,12 @@ export default function MmfAccrual() {
       <div className="space-y-6">
         {/* Header */}
         <div className="flex flex-col gap-2">
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <CalendarClock className="w-5 h-5 text-primary" />
             <h1 className="text-2xl font-bold" style={{ fontFamily: "'Playfair Display', serif" }}>
               Daily Income & Accrual Ledger
             </h1>
+            <SimulatedDateChip className="ml-1" />
           </div>
           <p className="text-muted-foreground text-sm max-w-3xl">
             Money market funds accrue interest <strong>every day</strong> and quote a net yield after
@@ -903,8 +914,31 @@ function IncomeBreakdownSection({
                       <TableRow key={r.id}>
                         <TableCell className="font-medium">{r.label}</TableCell>
                         <TableCell className="text-xs text-muted-foreground">
-                          {r.kind}
-                          {r.taxExempt && <Badge variant="secondary" className="ml-2">Tax-exempt</Badge>}
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span>{r.kind}</span>
+                            {r.taxExempt && <Badge variant="secondary">Tax-exempt</Badge>}
+                            {r.statusLabel && (
+                              <Badge
+                                variant="outline"
+                                className={
+                                  r.status === "matured"
+                                    ? "border-muted-foreground/30 text-muted-foreground"
+                                    : r.status === "maturing"
+                                      ? "border-amber-500/40 bg-amber-500/10 text-amber-600"
+                                      : "border-emerald-500/40 bg-emerald-500/10 text-emerald-600"
+                                }
+                                title={
+                                  r.status === "matured"
+                                    ? "This security has matured as of the current (simulated) date — its principal and final coupon have settled."
+                                    : r.status === "maturing"
+                                      ? "This security matures on the current (simulated) date."
+                                      : "This security is still live and accruing toward a future maturity."
+                                }
+                              >
+                                {r.statusLabel}
+                              </Badge>
+                            )}
+                          </div>
                         </TableCell>
                         <TableCell className="text-right tabular-nums">{kes(r.base)}</TableCell>
                         <TableCell className="text-right tabular-nums">{r.ratePct.toFixed(2)}%</TableCell>

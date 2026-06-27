@@ -57,6 +57,13 @@ export interface IncomeRow {
   whtHorizon: number;
   netHorizon: number;
   taxExempt: boolean;
+  /**
+   * Tense-aware lifecycle status relative to the effective "now" (simulated when
+   * the Time Machine is active). Present for government securities; bank rows
+   * leave it undefined. Powers the Daily Accrual status badge.
+   */
+  status?: SecurityRowStatus;
+  statusLabel?: string;
 }
 
 export interface IncomeSummary {
@@ -95,14 +102,62 @@ function isLiveSecurity(s: SecurityIncomeInput, now: number = Date.now()): boole
   return m.getTime() >= today.getTime();
 }
 
+/**
+ * Tense-aware status of a security relative to the effective "now" (the
+ * simulated clock when the Time Machine is active, otherwise the real clock).
+ *
+ * This powers the Daily Accrual per-holding labels so that, once a maturity
+ * date has passed in the active (possibly simulated) timeline, the row reads in
+ * the PAST tense ("Matured") instead of pretending it is still accruing.
+ *
+ *  - "matured"  : flagged matured, OR maturity date is strictly before today.
+ *  - "maturing" : maturity date is today (settles today).
+ *  - "accruing" : still live and accruing toward a future maturity (or open-ended).
+ */
+export type SecurityRowStatus = "matured" | "maturing" | "accruing";
+
+export interface SecurityRowStatusInfo {
+  status: SecurityRowStatus;
+  /** True when the event is in the past (settled) relative to `now`. */
+  isPast: boolean;
+  /** Short tense-aware label suitable for a badge. */
+  label: string;
+}
+
+export function securityRowStatus(
+  s: Pick<SecurityIncomeInput, "maturityDate" | "isMatured" | "securityType">,
+  now: number = Date.now(),
+): SecurityRowStatusInfo {
+  const isCoupon = s.securityType === "ifb" || s.securityType === "fxd";
+  const maturedLabel = isCoupon ? "Matured (coupons paid)" : "Matured";
+  if (s.isMatured) {
+    return { status: "matured", isPast: true, label: maturedLabel };
+  }
+  if (!s.maturityDate) {
+    return { status: "accruing", isPast: false, label: "Accruing" };
+  }
+  const m = new Date(s.maturityDate);
+  m.setHours(0, 0, 0, 0);
+  const today = new Date(now);
+  today.setHours(0, 0, 0, 0);
+  if (m.getTime() < today.getTime()) {
+    return { status: "matured", isPast: true, label: maturedLabel };
+  }
+  if (m.getTime() === today.getTime()) {
+    return { status: "maturing", isPast: false, label: "Maturing today" };
+  }
+  return { status: "accruing", isPast: false, label: "Accruing" };
+}
+
 /** Build the government-securities income breakdown over `days`. */
 export function buildSecurityIncome(
   securities: SecurityIncomeInput[],
   days: number,
+  now: number = Date.now(),
 ): IncomeSummary {
   const rows: IncomeRow[] = [];
   for (const s of securities) {
-    if (!isLiveSecurity(s)) continue;
+    if (!isLiveSecurity(s, now)) continue;
     const base = Math.max(0, s.faceValue);
     const ratePct = Math.max(0, s.couponRate);
     const grossAnnual = base * (ratePct / 100);
@@ -110,6 +165,7 @@ export function buildSecurityIncome(
     const taxExempt = s.isTaxExempt || s.securityType === "ifb";
     const whtAnnual = taxExempt ? 0 : grossAnnual * (GOV_WHT_PCT / 100);
     const netAnnual = grossAnnual - whtAnnual;
+    const { status, label: statusLabel } = securityRowStatus(s, now);
     rows.push({
       id: s.id,
       label: SECURITY_LABELS[s.securityType] ?? s.securityType,
@@ -123,6 +179,8 @@ export function buildSecurityIncome(
       whtHorizon: proRata(whtAnnual, days),
       netHorizon: proRata(netAnnual, days),
       taxExempt,
+      status,
+      statusLabel,
     });
   }
   return summarize(rows);

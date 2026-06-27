@@ -80,7 +80,7 @@ export default function Securities() {
   const { portfolioId } = usePortfolio();
   // R75 — effective "now" (simulated date under the Time Machine, else real),
   // so current value / accretion / days-left match the server reconciliation.
-  const { simulatedDate } = useSimulatedNow();
+  const { simulatedDate, active: simActive, label: simLabel } = useSimulatedNow();
   const effectiveNowMs = simulatedDate ?? Date.now();
   const utils = trpc.useUtils();
   const { data: securities, isLoading } = trpc.securities.list.useQuery(
@@ -824,6 +824,16 @@ export default function Securities() {
                   </button>
                 </>
               )}
+              {simActive && simLabel && (
+                <Badge
+                  variant="outline"
+                  className="ml-2 gap-1 font-normal border-primary/30 bg-primary/10 text-primary"
+                  title="Current values are computed as of the simulated date, not the real clock."
+                >
+                  <Clock className="w-3 h-3" />
+                  Valued as of {simLabel}
+                </Badge>
+              )}
             </CardTitle>
           </CardHeader>
           <CardContent className="p-0">
@@ -945,6 +955,15 @@ export default function Securities() {
                           <td className="px-4 py-3 text-right kes-amount min-w-[140px]">
                             <div className="flex flex-col items-end gap-1">
                               <span className="font-semibold text-sky-300">{formatKES(currentValue)}</span>
+                              {simActive && simLabel && (
+                                <span
+                                  className="text-[10px] text-primary/80 inline-flex items-center gap-0.5"
+                                  title="This value is computed as of the simulated date."
+                                >
+                                  <Clock className="w-2.5 h-2.5" />
+                                  as of {simLabel}
+                                </span>
+                              )}
                               {Math.abs(gainSinceBuy) >= 1 && (
                                 <span className="text-[10px] text-emerald-400/80">
                                   +{formatKES(gainSinceBuy)} {progress != null ? "accreted" : "accrued"}

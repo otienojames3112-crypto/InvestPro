@@ -1,4 +1,5 @@
 import { usePortfolio } from "@/contexts/PortfolioContext";
+import { useSimulatedNow } from "@/hooks/useSimulatedNow";
 import { AppShell } from "@/components/AppShell";
 import { trpc } from "@/lib/trpc";
 import { formatKES, formatPct, getSecurityLabel } from "@/lib/format";
@@ -57,16 +58,15 @@ function usesTenor(t: SecurityType): boolean {
   return t === "ifb" || t === "fxd" || t === "zero_coupon" || t === "floating_rate";
 }
 
-function daysUntil(dateStr: string | Date): number {
+function daysUntil(dateStr: string | Date, nowMs: number = Date.now()): number {
   const d = new Date(dateStr);
-  const now = new Date();
-  return Math.ceil((d.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+  return Math.ceil((d.getTime() - nowMs) / (1000 * 60 * 60 * 24));
 }
 
-function nextCouponDate(issueDate: string | Date, maturityDate: string | Date): string {
+function nextCouponDate(issueDate: string | Date, maturityDate: string | Date, nowMs: number = Date.now()): string {
   const issue = new Date(issueDate);
   const maturity = new Date(maturityDate);
-  const now = new Date();
+  const now = new Date(nowMs);
   // Semi-annual coupons: every 6 months from issue
   let next = new Date(issue);
   while (next <= now && next < maturity) {
@@ -78,6 +78,10 @@ function nextCouponDate(issueDate: string | Date, maturityDate: string | Date): 
 
 export default function Securities() {
   const { portfolioId } = usePortfolio();
+  // R75 — effective "now" (simulated date under the Time Machine, else real),
+  // so current value / accretion / days-left match the server reconciliation.
+  const { simulatedDate } = useSimulatedNow();
+  const effectiveNowMs = simulatedDate ?? Date.now();
   const utils = trpc.useUtils();
   const { data: securities, isLoading } = trpc.securities.list.useQuery(
     { portfolioId: portfolioId! },
@@ -462,7 +466,7 @@ export default function Securities() {
         s.securityType as SecurityType,
         s.tenorYears != null ? parseFloat(String(s.tenorYears)) : null,
       ),
-    });
+    }, new Date(effectiveNowMs));
     const cost = hasPrice ? price : face;
     return cv - cost;
   };
@@ -902,8 +906,8 @@ export default function Securities() {
                           s.tenorYears != null ? parseFloat(String(s.tenorYears)) : null,
                         ),
                       };
-                      const currentValue = currentSecurityValue(cvLot);
-                      const progress = accretionProgress(cvLot);
+                      const currentValue = currentSecurityValue(cvLot, new Date(effectiveNowMs));
+                      const progress = accretionProgress(cvLot, new Date(effectiveNowMs));
                       // For discount lots the meaningful gain is current − purchase price
                       // (it accretes UP toward face); for coupon bonds it's the accrued
                       // coupon above par (current − face).

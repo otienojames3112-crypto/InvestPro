@@ -1,4 +1,5 @@
 import { usePortfolio } from "@/contexts/PortfolioContext";
+import { useSimulatedNow } from "@/hooks/useSimulatedNow";
 import { AppShell } from "@/components/AppShell";
 import { SimulatedDateChip } from "@/components/SimulatedDateChip";
 import { trpc } from "@/lib/trpc";
@@ -148,6 +149,12 @@ const END_STATE_SPLIT_COLORS = [
 
 export default function Dashboard() {
   const { portfolioId, portfolio, portfolios, mode, isLoading: portfoliosLoading } = usePortfolio();
+  // R75 — the app's effective "now": the Time Machine's simulated date when a
+  // sandbox session is active, else the real clock. Threading this into every
+  // client-side security valuation keeps these cards in lock-step with the
+  // server's reconciliation (which uses getNow), so no client/server drift.
+  const { simulatedDate } = useSimulatedNow();
+  const effectiveNowMs = simulatedDate ?? Date.now();
   const [createOpen, setCreateOpen] = useState(false);
   const utils = trpc.useUtils();
   const { data: projection, isLoading: projLoading } = trpc.projection.run.useQuery(
@@ -500,7 +507,8 @@ export default function Dashboard() {
   // (T-bills / zero-coupon) and par (face) for coupon bonds bought at par.
   const portfolioValuation = useMemo(() => {
     const rows = (securities as Array<Record<string, unknown>>) ?? [];
-    const now = Date.now();
+    const now = effectiveNowMs;
+    const nowDate = new Date(now);
     const DAY = 1000 * 60 * 60 * 24;
     let totalFace = 0;
     let totalCurrent = 0;
@@ -533,7 +541,7 @@ export default function Dashboard() {
             t as never,
             parseFloat(String(s?.tenorYears ?? "")) || null,
           ),
-        });
+        }, nowDate);
       }
       // Cost basis: discount lots use their purchase price; coupon bonds bought
       // at par use face. Fall back to face when no price is recorded.
@@ -572,19 +580,19 @@ export default function Dashboard() {
       wAvgDays,
       wAvgYtmPct,
     };
-  }, [securities]);
+  }, [securities, effectiveNowMs]);
 
   // R58 — per-instrument-type concentration of the active register, surfaced as a
   // one-line snapshot on the Avg. Maturity tile. Uses the shared helper so the
   // figure matches the Portfolio Review risk snapshot exactly.
   const typeConcentration = useMemo(() => {
-    const now = new Date();
+    const now = new Date(effectiveNowMs);
     const lots = (securities ?? []).filter(
       (s: Record<string, unknown>) =>
         !(s.isMatured as boolean) && Number(s.faceValue ?? 0) > 0,
     ) as unknown as CurrentValueSecurity[];
     return largestConcentration(lots, now);
-  }, [securities]);
+  }, [securities, effectiveNowMs]);
   const typeCapPct = portfolio?.typeConcentrationCapPct ?? 60;
   const typeConcentrationBreached = typeConcentration
     ? classifyConcentration(typeConcentration.topShare, typeCapPct) === "breached"
@@ -611,8 +619,8 @@ export default function Dashboard() {
         horizonEndMs = end.getTime();
       }
     }
-    return analyzePerTypeBreach(lots, typeCapPct, nw, horizonEndMs, new Date());
-  }, [securities, typeCapPct, concentration?.netWorth, portfolio?.startDate, portfolio?.horizonMonths]);
+    return analyzePerTypeBreach(lots, typeCapPct, nw, horizonEndMs, new Date(effectiveNowMs));
+  }, [securities, typeCapPct, concentration?.netWorth, portfolio?.startDate, portfolio?.horizonMonths, effectiveNowMs]);
 
   const fmtBreachDate = (ms: number) =>
     new Date(ms).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
@@ -2429,7 +2437,7 @@ export default function Dashboard() {
                       t as never,
                       parseFloat(String(s?.tenorYears ?? "")) || null,
                     ),
-                  });
+                  }, new Date(effectiveNowMs));
                 }
                 const g = groups[key] ?? { face: 0, current: 0 };
                 g.face += face;

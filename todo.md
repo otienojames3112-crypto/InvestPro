@@ -827,8 +827,15 @@
 - [x] TM.21 Packaged full project as kes5m-tracker.zip (1.1M; excludes node_modules/dist/.git/logs).
 
 ## Time Machine: history log + tooltips (round 74)
-- [ ] TM.22 Extend simStepLog entries to carry display detail (fromMs, toMs, mode, contributionsWritten, contributionTotal, monthsElapsed, rateShock snapshot, createdAt) so a full audit of each advance survives reloads.
-- [ ] TM.23 Expose the ordered step history in timeMachine.status (newest-first) with labels; keep undo popping the LAST step.
-- [ ] TM.24 History-log UI on the Time Machine page: chronological list of every advance (date range, mode badge, contributions added, months elapsed), empty state, and a marker when a step is the next-undoable one.
-- [ ] TM.25 Tooltips across the Time Machine: materialisation modes, each step button, jump-to-next-event, jump-to-date, rate-shock fields, Undo, Reset, and the status metrics — concise plain-language explanations.
-- [ ] TM.26 Tests for the richer step-log shape (parse/round-trip/back-compat with old minimal entries) + full suite green + tsc clean.
+- [x] TM.22 SimStep extended (back-compatible) with createdAt, monthsElapsed, contributionsWritten, contributionTotal, targetKind/stepUnit/stepCount, and a rateShock snapshot; advance mutation populates them; old minimal entries still parse.
+- [x] TM.23 status query now returns history (newest-first) with from/to labels, targetLabel (describeStepTarget), and isNextUndoable flag; undo still pops the LAST chronological step.
+- [x] TM.24 History-log card: timeline list (from -> to, mode badge, target label, months elapsed, contributions + KES, rate-shock note, time), step count badge, 'next undo' marker, scrollable past 6 steps, and an empty state.
+- [x] TM.25 Tooltips added: InfoHint on 'Simulated today', settle-modes header, contribution factor, jump-to-date, rate-shock header, history header; Tooltip wrappers on deposits/securities counts, each step button, jump-to-next-event, Undo, and Reset.
+- [x] TM.26 round74.test.ts (12 cases): describeStepTarget labels, parseStepLog back-compat (legacy minimal entries, rich round-trip, malformed-drop, null/garbage), and popLastStep ordering. Full suite 659 green + tsc clean.
+
+## Time Machine: client/server clock parity + tense-aware Main Action (round 75)
+- [x] TM.27 Satisfied by the existing useSimulatedNow().now() hook (simulatedDate when a sandbox session is active, else real now) — used as the client effective-now; no new server field needed.
+- [x] TM.28 Threaded the effective simulated now into all client valuation memos: Dashboard (both currentSecurityValue sites), Securities (valuation + days/coupon helpers), PortfolioReview (valuation memos + local daysUntil now accepts an optional now). Simulated value is in the memo deps so cards recompute on clock change.
+- [x] TM.29 Engine pastTensifyMainAction transform applied when isActualMonth: Move->Moved, matures->matured (at/,/;/space), pays a->paid a, Add KES->Added KES, Add this month's saving->Added...; future rows keep present/imperative tense. Bank phrases already past-tense.
+- [x] TM.30 Settled contribution-only narration now states the ACTUAL amount ("Added KES <contribution> of savings..."); contribution for actual months sources from actualMmfByMonth, which includes injected-variance deposits the Time Machine materialized.
+- [x] TM.31 round75.test.ts (8 cases): pastTensifyMainAction unit coverage (Move/matures/pays/Add KES/Add saving, bank idempotency) + engine integration (settled months past tense & no present-tense verbs, future months present tense, settled contribution states actual KES). Found & fixed missing 'Add KES'->'Added KES' rule. Full suite 667 green + tsc clean.

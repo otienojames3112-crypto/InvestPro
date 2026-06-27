@@ -968,6 +968,28 @@ export function lowerFirst(s: string): string {
   return s.length === 0 ? s : s[0].toLowerCase() + s.slice(1);
 }
 
+/**
+ * R75 — tense-aware Main Action. The ledger narration is written in the
+ * present/future tense for months that are still ahead of the clock ("Move…",
+ * "a 182-day T-bill matures…", "Add this month's saving…"). Once a month has
+ * settled into actual (the simulated/real clock has passed it), the same phrase
+ * should read as something that already happened. This switches only the finite
+ * set of verbs the builder above can emit, so it stays accurate and natural
+ * regardless of which branch produced the string. Idempotent on already-past
+ * phrases (e.g. bank "Placed…/matured…" wording is left untouched).
+ */
+export function pastTensifyMainAction(s: string): string {
+  return s
+    .replace(/\bMove KES/g, "Moved KES")
+    .replace(/ matures at /g, " matured at ")
+    .replace(/ matures,/g, " matured,")
+    .replace(/ matures;/g, " matured;")
+    .replace(/ matures /g, " matured ")
+    .replace(/ pays a /g, " paid a ")
+    .replace(/\bAdd KES/g, "Added KES")
+    .replace(/Add this month's saving/g, "Added this month's saving");
+}
+
 /** Human-readable tenor label for a swept lot, e.g. "364-day T-bill". */
 export function tenorLabel(bucket: "tbill" | "ifb" | "fxd", tenorMonths: number): string {
   if (bucket === "tbill") {
@@ -1850,6 +1872,11 @@ export function runProjection(
       mainAction = `${capitalise(maturityActions.join("; "))}; kept in the MMF (no instrument matures before your goal date)`;
     } else if (sweepDesc) {
       mainAction = sweepDesc;
+    } else if (isActualMonth && contribution > 0) {
+      // R75 — settled month with a recorded contribution: state the ACTUAL KES
+      // that went in (this is the materialized deposit, e.g. an injected-variance
+      // amount), not the originally-scheduled figure.
+      mainAction = `Add KES ${Math.round(contribution).toLocaleString()} of savings to the MMF; nothing swept into securities this month`;
     } else {
       mainAction = "Add this month's saving to the MMF; nothing swept into securities this month";
     }
@@ -1857,6 +1884,11 @@ export function runProjection(
     // newly-appearing bank balance came from (Round 35).
     if (bankPlacementActions.length > 0) {
       mainAction = `${capitalise(bankPlacementActions.join("; "))}. ${mainAction}`;
+    }
+    // R75 — a settled (actual) month already happened, so narrate it in the past
+    // tense. Future months keep the present/future tense.
+    if (isActualMonth) {
+      mainAction = pastTensifyMainAction(mainAction);
     }
     // Silence unused-variable lints when no maturity occurred.
     void maturedCashThisMonth;

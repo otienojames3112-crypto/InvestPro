@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { usePortfolio } from "@/contexts/PortfolioContext";
+import { useSimulatedNow } from "@/hooks/useSimulatedNow";
 import { useSelectedFund } from "@/hooks/useSelectedFund";
 import { bankHoldingValue, buildAllocation, blendedYield } from "@shared/actuals";
 import { bankInstrumentLabel } from "@shared/const";
@@ -93,13 +94,17 @@ const ALLOC_COLORS = [
   "bg-orange-500",
 ];
 
-function daysUntil(d: string | Date): number {
+function daysUntil(d: string | Date, nowMs: number = Date.now()): number {
   const t = new Date(d).getTime();
-  return Math.ceil((t - Date.now()) / (1000 * 60 * 60 * 24));
+  return Math.ceil((t - nowMs) / (1000 * 60 * 60 * 24));
 }
 
 export default function PortfolioReview() {
   const { portfolioId, portfolio } = usePortfolio();
+  // R75 — effective "now" (simulated under the Time Machine, else real) so the
+  // duration / concentration / breach numbers match the server reconciliation.
+  const { simulatedDate } = useSimulatedNow();
+  const effectiveNowMs = simulatedDate ?? Date.now();
   const fund = useSelectedFund();
   // R55.2 — read the same maturing-soon window the CBK Securities Register uses
   // (shared via localStorage) so both views report the same lookahead horizon.
@@ -322,7 +327,7 @@ export default function PortfolioReview() {
   // investor's configured liquidity horizon (Rate Settings).
   const durationRisk = useMemo(() => {
     const horizonDays = pSettings?.liquidityHorizonDays ?? DEFAULT_LIQUIDITY_HORIZON_DAYS;
-    const now = new Date();
+    const now = new Date(effectiveNowMs);
     const lots = (securities ?? []).filter(
       (s) => !s.isMatured && Number(s.faceValue ?? 0) > 0 && s.maturityDate,
     );
@@ -340,7 +345,7 @@ export default function PortfolioReview() {
         },
         now,
       );
-      const days = Math.max(0, daysUntil(s.maturityDate as string | Date));
+      const days = Math.max(0, daysUntil(s.maturityDate as string | Date, effectiveNowMs));
       weightSum += cv;
       weightedDaySum += cv * days;
     }
@@ -348,19 +353,19 @@ export default function PortfolioReview() {
     const wAvgDays = weightedDaySum / weightSum;
     const level = classifyDurationRisk(wAvgDays, horizonDays);
     return { wAvgDays, horizonDays, level, lots: lots.length };
-  }, [securities, pSettings?.liquidityHorizonDays]);
+  }, [securities, pSettings?.liquidityHorizonDays, effectiveNowMs]);
 
   // R57 — per-issuer (instrument-type) concentration: which single CBK paper
   // type dominates the book by current value. Government of Kenya is the sole
   // issuer for all CBK paper, so the meaningful diversification axis here is
   // instrument TYPE / tenor profile rather than issuer.
   const concentration = useMemo(() => {
-    const now = new Date();
+    const now = new Date(effectiveNowMs);
     const lots = (securities ?? []).filter(
       (s) => !s.isMatured && Number(s.faceValue ?? 0) > 0,
     ) as unknown as CurrentValueSecurity[];
     return largestConcentration(lots, now);
-  }, [securities]);
+  }, [securities, effectiveNowMs]);
 
   // R58 — configurable per-type concentration cap (Rate Settings). The snapshot
   // line + bar flip to a warning colour when the dominant type breaches it.
@@ -393,8 +398,8 @@ export default function PortfolioReview() {
         horizonEndMs = end.getTime();
       }
     }
-    return analyzePerTypeBreach(lots, typeCapPct, netWorth, horizonEndMs, new Date());
-  }, [securities, typeCapPct, netWorth, portfolio?.startDate, portfolio?.horizonMonths]);
+    return analyzePerTypeBreach(lots, typeCapPct, netWorth, horizonEndMs, new Date(effectiveNowMs));
+  }, [securities, typeCapPct, netWorth, portfolio?.startDate, portfolio?.horizonMonths, effectiveNowMs]);
 
   // Format a Unix-ms date as a short local date for breach-clear messaging.
   const fmtDate = (ms: number) =>

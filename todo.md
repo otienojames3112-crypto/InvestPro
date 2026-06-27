@@ -766,3 +766,10 @@
 - [x] R67.3 Snooze drift alert: dismiss the drift alert for 7 days, mirroring the existing Risk-limits snooze pattern (persisted per portfolio).
 - [x] R67.4 Total-drift sparkline: show a small drift-history sparkline on the liquid card so users see convergence/divergence over time.
 - [x] R67 tests: full suite green (563) + tsc clean; added driftSnooze.round67.test.ts (snooze-active logic + breach-transition dedup + drift-history snapshot fields).
+
+## Round 68 (snooze duration + drift detail + digest)
+
+- [x] R68.1 Snooze-duration choice: replaced the fixed 7-day snooze with a 1 / 7 / 30 day dropdown on the Dashboard drift alert (shared SNOOZE_OPTIONS + snoozeUntilFromDays).
+- [x] R68.2 Drift-history detail view: added a Reconciliation-page "Liquid drift over time" panel (sparkline + converging/drifting label + recent-snapshot table with breach status).
+- [x] R68.3 Daily digest: optional per-portfolio digest mode — toggle on the Dashboard, setDriftDigest mutation creates/updates/deletes a Heartbeat cron, /api/scheduled/driftDigest handler sends one daily summary; immediate-mode pings suppressed via driftDigestPending flag.
+- [x] R68 tests: full suite green (578) + tsc clean; added driftDigest.round68.test.ts (snooze-duration mapping, digest send-decision + message builder, digest-vs-immediate gating table).

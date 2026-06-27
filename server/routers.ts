@@ -75,8 +75,12 @@ import {
   getDriftHistory,
   setDriftSnoozeUntil,
   setDriftLastNotifiedAt,
+  setDriftDigestConfig,
+  setDriftDigestPending,
 } from "./db";
 import { notifyOwner } from "./_core/notification";
+import { createHeartbeatJob, updateHeartbeatJob, deleteHeartbeatJob } from "./_core/heartbeat";
+import { parse as parseCookie } from "cookie";
 import {
   runProjection,
   runScenarios,
@@ -522,6 +526,21 @@ async function computeLiquidDriftContext(
 }
 
 /**
+ * R68 — exported drift snapshot for the scheduled digest handler. Re-reads the
+ * portfolio (by owner) and returns just the numbers the digest needs.
+ */
+export async function computeDriftForPortfolio(portfolioId: number, userId: number) {
+  const p = await requirePortfolio(portfolioId, userId);
+  const c = await computeLiquidDriftContext(p);
+  return {
+    totalDrift: c.drift.totalDrift,
+    thresholdValue: c.drift.thresholdValue,
+    thresholdPct: c.driftThresholdPct,
+    breached: c.drift.breached,
+  };
+}
+
+/**
  * R67 — after a reconcile changes balances, snapshot the new drift for the
  * sparkline and notify the owner ONCE on a fresh transition into breach
  * (respecting the drift snooze). Re-reads the portfolio so freshly-saved
@@ -547,25 +566,33 @@ async function snapshotAndMaybeNotifyDrift(
   const snoozed = typeof snoozeUntil === "number" && snoozeUntil > now;
   const lastNotified =
     (p as { driftLastNotifiedAt?: number | null }).driftLastNotifiedAt ?? null;
+  const digestMode =
+    (p as { driftDigestMode?: string }).driftDigestMode === "digest";
   // Notify only on a fresh transition: breached now, not snoozed, and either
   // never notified or the previous snapshot was within threshold. We treat
   // "last notified more than 6h ago" as a fresh event to avoid duplicate pings.
   const freshEvent =
     !lastNotified || now - lastNotified > 6 * 60 * 60 * 1000;
-  if (ctx.drift.breached && !snoozed && freshEvent) {
-    try {
-      await notifyOwner({
-        title: "Liquid drift exceeds your rebalancing threshold",
-        content: `Your recorded liquid balances have drifted KES ${Math.round(
-          ctx.drift.totalDrift,
-        ).toLocaleString()} from the recommended split (threshold KES ${Math.round(
-          ctx.drift.thresholdValue,
-        ).toLocaleString()}, ${ctx.driftThresholdPct}% of net worth). Open the dashboard to review the suggested transfers.`,
-      });
-    } catch {
-      // Notification is best-effort; never block the reconcile.
+  if (ctx.drift.breached && !snoozed) {
+    if (digestMode) {
+      // R68 — in digest mode we suppress the per-event ping and just flag a
+      // pending breach; the daily Heartbeat cron sends one summary.
+      await setDriftDigestPending(portfolioId, true);
+    } else if (freshEvent) {
+      try {
+        await notifyOwner({
+          title: "Liquid drift exceeds your rebalancing threshold",
+          content: `Your recorded liquid balances have drifted KES ${Math.round(
+            ctx.drift.totalDrift,
+          ).toLocaleString()} from the recommended split (threshold KES ${Math.round(
+            ctx.drift.thresholdValue,
+          ).toLocaleString()}, ${ctx.driftThresholdPct}% of net worth). Open the dashboard to review the suggested transfers.`,
+        });
+      } catch {
+        // Notification is best-effort; never block the reconcile.
+      }
+      await setDriftLastNotifiedAt(portfolioId, now);
     }
-    await setDriftLastNotifiedAt(portfolioId, now);
   }
   return ctx.drift;
 }
@@ -2950,6 +2977,10 @@ export const appRouter = router({
           driftBreached: c.drift.breached && !driftSnoozed,
           driftSnoozed,
           driftSnoozeUntil: driftSnoozed ? snoozeUntil : null,
+          driftDigestMode:
+            (p as { driftDigestMode?: string }).driftDigestMode === "digest"
+              ? "digest"
+              : "immediate",
         };
       }),
     // R67 — recent drift snapshots for the sparkline (chronological).
@@ -2997,6 +3028,79 @@ export const appRouter = router({
             : "Cleared liquid drift alert snooze",
         });
         return { ok: true };
+      }),
+    // R68 — switch the drift-breach notification mode. "digest" creates a daily
+    // Heartbeat cron that sends one summary; "immediate" deletes the cron and
+    // restores per-event pings. The cron task_uid is persisted on the portfolio.
+    setDriftDigest: protectedProcedure
+      .input(
+        z.object({
+          portfolioId: z.number().int().positive(),
+          mode: z.enum(["immediate", "digest"]),
+          // Daily send hour in UTC (0–23). Defaults to 06:00 UTC (~9am EAT).
+          hourUtc: z.number().int().min(0).max(23).optional(),
+        }),
+      )
+      .mutation(async ({ ctx, input }) => {
+        const p = await requirePortfolio(input.portfolioId, ctx.user.id);
+        const existingUid =
+          (p as { driftDigestCronTaskUid?: string | null }).driftDigestCronTaskUid ?? null;
+        const sessionToken =
+          parseCookie(ctx.req.headers.cookie ?? "")[COOKIE_NAME] ?? "";
+        const hour = input.hourUtc ?? 6;
+
+        if (input.mode === "digest") {
+          // Idempotent: update the existing cron's schedule, or create one.
+          let taskUid = existingUid;
+          const cron = `0 0 ${hour} * * *`;
+          if (taskUid) {
+            await updateHeartbeatJob(taskUid, { cron, enable: true }, sessionToken);
+          } else {
+            const job = await createHeartbeatJob(
+              {
+                name: `drift-digest-${input.portfolioId}`,
+                cron,
+                path: "/api/scheduled/driftDigest",
+                payload: { portfolioId: input.portfolioId },
+                description: `Daily liquid-drift digest for portfolio ${input.portfolioId}`,
+              },
+              sessionToken,
+            );
+            taskUid = job.taskUid;
+          }
+          await setDriftDigestConfig(input.portfolioId, {
+            mode: "digest",
+            cronTaskUid: taskUid,
+          });
+        } else {
+          if (existingUid) {
+            try {
+              await deleteHeartbeatJob(existingUid, sessionToken);
+            } catch {
+              // Best-effort: if the cron is already gone, proceed to clear locally.
+            }
+          }
+          await setDriftDigestConfig(input.portfolioId, {
+            mode: "immediate",
+            cronTaskUid: null,
+          });
+          await setDriftDigestPending(input.portfolioId, false);
+        }
+
+        await addAuditLog({
+          portfolioId: input.portfolioId,
+          entity: "liquid_home_balance",
+          action: "update",
+          field: "drift_digest_mode",
+          newValue: input.mode,
+          changedByOpenId: ctx.user.openId,
+          changedByName: ctx.user.name ?? null,
+          summary:
+            input.mode === "digest"
+              ? `Enabled daily drift digest (${String(hour).padStart(2, "0")}:00 UTC)`
+              : "Switched drift alerts back to immediate notifications",
+        });
+        return { ok: true, mode: input.mode };
       }),
     // R64 — record/clear the ACTUAL balance resting in a liquid home so the split
     // shows real drift (actual vs target) and survives reloads.

@@ -18,14 +18,21 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Scale, CheckCircle2, AlertTriangle, Info } from "lucide-react";
-import { formatKES } from "@/lib/format";
+import { Scale, CheckCircle2, AlertTriangle, Info, Activity, TrendingDown, TrendingUp } from "lucide-react";
+import { formatKES, formatRelativeTime } from "@/lib/format";
+import { Sparkline } from "@/components/Sparkline";
 
 export default function Reconciliation() {
   const { portfolioId, portfolio } = usePortfolio();
 
   const { data, isLoading } = trpc.projection.reconciliation.useQuery(
     { portfolioId: portfolioId! },
+    { enabled: !!portfolioId },
+  );
+
+  // R68.2 — full drift history for the drill-down panel (drt over time).
+  const { data: driftHistory } = trpc.bankHoldings.driftHistory.useQuery(
+    { portfolioId: portfolioId!, limit: 90 },
     { enabled: !!portfolioId },
   );
 
@@ -432,6 +439,101 @@ export default function Reconciliation() {
                     </p>
                   </div>
                 </div>
+              </CardContent>
+            </Card>
+
+            {/* R68.2: Liquid drift over time — drill-down for the Dashboard sparkline */}
+            <Card>
+              <CardHeader>
+                <div className="flex items-center gap-2">
+                  <Activity className="w-4 h-4 text-primary" />
+                  <CardTitle className="text-base">Liquid drift over time</CardTitle>
+                </div>
+                <CardDescription>
+                  Every time you reconcile a liquid home (set, bulk-set, or clear a
+                  balance) the tracker records the total drift from the recommended
+                  split. This is the history behind the Dashboard sparkline &mdash; a
+                  downward trend means your balances are converging back to target.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {!driftHistory || driftHistory.length < 2 ? (
+                  <p className="text-sm text-muted-foreground">
+                    Not enough history yet. Reconcile your liquid homes a few times
+                    (on the Dashboard) and the drift trend will appear here.
+                  </p>
+                ) : (
+                  (() => {
+                    const first = driftHistory[0].totalDrift;
+                    const last = driftHistory[driftHistory.length - 1].totalDrift;
+                    const converging = last <= first;
+                    const breachCount = driftHistory.filter((d) => d.breached).length;
+                    const recent = [...driftHistory].slice(-12).reverse();
+                    return (
+                      <div className="space-y-4">
+                        <div className="flex flex-wrap items-center gap-4">
+                          <Sparkline
+                            values={driftHistory.map((d) => d.totalDrift)}
+                            threshold={driftHistory[driftHistory.length - 1].thresholdValue}
+                            tone={converging ? "emerald" : "amber"}
+                            width={220}
+                            height={56}
+                          />
+                          <div className="min-w-0 text-sm">
+                            <p className="flex items-center gap-1.5 font-medium">
+                              {converging ? (
+                                <TrendingDown className="w-4 h-4 text-emerald-500" />
+                              ) : (
+                                <TrendingUp className="w-4 h-4 text-amber-500" />
+                              )}
+                              {converging ? "Converging toward target" : "Drifting further from target"}
+                            </p>
+                            <p className="text-xs text-muted-foreground">
+                              Latest drift {formatKES(last, 0)} · {driftHistory.length} snapshots ·{" "}
+                              {breachCount} over threshold
+                            </p>
+                          </div>
+                        </div>
+                        <div className="rounded-md border">
+                          <Table>
+                            <TableHeader>
+                              <TableRow>
+                                <TableHead>When</TableHead>
+                                <TableHead className="text-right">Total drift</TableHead>
+                                <TableHead className="text-right">Threshold</TableHead>
+                                <TableHead className="text-right">Status</TableHead>
+                              </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                              {recent.map((d, i) => (
+                                <TableRow key={`${d.at ?? i}-${i}`}>
+                                  <TableCell className="text-sm">
+                                    {d.at ? formatRelativeTime(d.at) : "—"}
+                                  </TableCell>
+                                  <TableCell className="text-right tabular-nums">
+                                    {formatKES(d.totalDrift, 0)}
+                                  </TableCell>
+                                  <TableCell className="text-right tabular-nums text-muted-foreground">
+                                    {formatKES(d.thresholdValue, 0)}
+                                  </TableCell>
+                                  <TableCell className="text-right">
+                                    {d.breached ? (
+                                      <Badge variant="destructive">Over</Badge>
+                                    ) : (
+                                      <Badge className="bg-emerald-500/15 text-emerald-600 hover:bg-emerald-500/15 border-0">
+                                        Within
+                                      </Badge>
+                                    )}
+                                  </TableCell>
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </div>
+                      </div>
+                    );
+                  })()
+                )}
               </CardContent>
             </Card>
 

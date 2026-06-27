@@ -446,3 +446,64 @@ export function evaluateDriftThreshold(args: {
     breached,
   };
 }
+
+
+/**
+ * R68 — drift-alert snooze duration choices. The user picks one of these from
+ * the Dashboard alert; `snoozeUntilFromDays` maps a day count to the absolute
+ * Unix-ms expiry the server persists. `null` clears the snooze.
+ */
+export const SNOOZE_OPTIONS: ReadonlyArray<{ days: number; label: string }> = [
+  { days: 1, label: "1 day" },
+  { days: 7, label: "7 days" },
+  { days: 30, label: "30 days" },
+];
+
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+export function snoozeUntilFromDays(days: number | null, now: number = Date.now()): number | null {
+  if (days == null) return null;
+  if (!Number.isFinite(days) || days <= 0) return null;
+  return now + Math.round(days) * MS_PER_DAY;
+}
+
+export function isSnoozeActive(snoozeUntil: number | null, now: number = Date.now()): boolean {
+  return typeof snoozeUntil === "number" && snoozeUntil > now;
+}
+
+
+/**
+ * R68 — daily-digest message + send decision.
+ *
+ * The digest fires once per day. It should send a summary only when there is
+ * something worth reporting: the drift is currently breaching the threshold,
+ * OR a breach was flagged as pending since the last digest (so a transient
+ * breach that was already resolved still gets one informational note). It must
+ * NOT send when nothing breached and nothing is pending.
+ */
+export function shouldSendDriftDigest(args: {
+  breached: boolean;
+  pending: boolean;
+}): boolean {
+  return args.breached || args.pending;
+}
+
+export function buildDriftDigestMessage(args: {
+  totalDrift: number;
+  thresholdValue: number;
+  thresholdPct: number;
+  breachedNow: boolean;
+}): { title: string; content: string } {
+  const drift = Math.round(args.totalDrift).toLocaleString();
+  const thr = Math.round(args.thresholdValue).toLocaleString();
+  if (args.breachedNow) {
+    return {
+      title: "Daily liquid-drift digest — still over threshold",
+      content: `Your liquid balances are KES ${drift} away from the recommended split, above your ${args.thresholdPct}% alert threshold (KES ${thr}). Open the dashboard to review the suggested transfers.`,
+    };
+  }
+  return {
+    title: "Daily liquid-drift digest — resolved",
+    content: `A liquid-drift breach occurred since the last digest but your balances are now within the ${args.thresholdPct}% threshold (KES ${thr}). No action needed.`,
+  };
+}

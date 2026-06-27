@@ -62,7 +62,7 @@ import { rateStaleness } from "@/lib/rateStaleness";
 import { currentSecurityValue, classifyDurationRisk, largestConcentration, classifyConcentration, isConcentrationSnoozed, DEFAULT_LIQUIDITY_HORIZON_DAYS, type CurrentValueSecurity } from "@shared/discount";
 import { whtRateForSecurity } from "@shared/securityTenor";
 import { Layers, TrendingDown, BellOff, Bell, Scale, ArrowRightLeft, Copy, Check } from "lucide-react";
-import { buildTransferPlan } from "@shared/liquidAllocator";
+import { buildTransferPlan, SNOOZE_OPTIONS, snoozeUntilFromDays } from "@shared/liquidAllocator";
 import { Sparkline } from "@/components/Sparkline";
 import {
   DropdownMenu,
@@ -234,8 +234,24 @@ export default function Dashboard() {
     if (!portfolioId) return;
     snoozeDriftMutation.mutate({
       portfolioId,
-      until: days == null ? null : Date.now() + days * 24 * 60 * 60 * 1000,
+      until: snoozeUntilFromDays(days),
     });
+  };
+  // R68 — switch drift-breach notifications between immediate pings and a daily digest.
+  const setDriftDigestMutation = trpc.bankHoldings.setDriftDigest.useMutation({
+    onSuccess: (r) => {
+      toast.success(
+        r.mode === "digest"
+          ? "Daily drift digest enabled"
+          : "Switched to immediate drift alerts",
+      );
+      utils.bankHoldings.liquidAllocation.invalidate({ portfolioId: portfolioId! });
+    },
+    onError: (e) => toast.error(e.message || "Could not update notification mode"),
+  });
+  const setDriftDigest = (mode: "immediate" | "digest") => {
+    if (!portfolioId) return;
+    setDriftDigestMutation.mutate({ portfolioId, mode });
   };
   const updatePortfolioMutation = trpc.portfolios.update.useMutation({
     onSuccess: () => {
@@ -988,14 +1004,24 @@ export default function Dashboard() {
                       {liquidAlloc.driftThresholdPct}% alert threshold ({formatKES(liquidAlloc.driftThresholdValue)} of net worth).
                       Use <span className="font-medium">Apply this split</span> below to bring each home back toward target.
                     </p>
-                    <button
-                      type="button"
-                      onClick={() => snoozeDrift(7)}
-                      disabled={snoozeDriftMutation.isPending}
-                      className="mt-1 inline-flex items-center gap-1 text-[10px] font-medium text-amber-200/90 underline underline-offset-2 hover:text-amber-100 disabled:opacity-50"
-                    >
-                      <BellOff className="w-3 h-3" /> Snooze this alert for 7 days
-                    </button>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <button
+                          type="button"
+                          disabled={snoozeDriftMutation.isPending}
+                          className="mt-1 inline-flex items-center gap-1 text-[10px] font-medium text-amber-200/90 underline underline-offset-2 hover:text-amber-100 disabled:opacity-50"
+                        >
+                          <BellOff className="w-3 h-3" /> Snooze this alert…
+                        </button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="start" className="min-w-[8rem]">
+                        {SNOOZE_OPTIONS.map((opt) => (
+                          <DropdownMenuItem key={opt.days} onClick={() => snoozeDrift(opt.days)}>
+                            {opt.label}
+                          </DropdownMenuItem>
+                        ))}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                   </div>
                 </div>
               )}
@@ -1015,6 +1041,26 @@ export default function Dashboard() {
                   </button>
                 </div>
               )}
+              <div className="mb-3 flex items-center justify-between gap-2 rounded-lg border border-border bg-muted/20 px-3 py-1.5">
+                <span className="text-[11px] text-muted-foreground">
+                  Breach alerts:{" "}
+                  <span className="font-medium text-foreground">
+                    {liquidAlloc.driftDigestMode === "digest" ? "Daily digest" : "Immediate"}
+                  </span>
+                </span>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setDriftDigest(liquidAlloc.driftDigestMode === "digest" ? "immediate" : "digest")
+                  }
+                  disabled={setDriftDigestMutation.isPending}
+                  className="shrink-0 text-[10px] font-medium text-sky-300 underline underline-offset-2 hover:text-sky-200 disabled:opacity-50"
+                >
+                  {liquidAlloc.driftDigestMode === "digest"
+                    ? "Switch to immediate"
+                    : "Batch into a daily digest"}
+                </button>
+              </div>
               {(() => {
                 const totalDrift = liquidAlloc.slices.reduce(
                   (sum, s) => sum + Math.abs(s.drift ?? 0),

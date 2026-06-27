@@ -119,6 +119,23 @@ export const portfolios = mysqlTable("portfolios", {
    * we only notify on a fresh transition INTO breach (not on every reload).
    */
   driftLastNotifiedAt: bigint("driftLastNotifiedAt", { mode: "number" }),
+  /**
+   * Round 68: drift-breach notification mode. "immediate" (default) pings the
+   * owner on each fresh breach transition; "digest" suppresses per-event pings
+   * and instead sends one daily summary via a Heartbeat cron.
+   */
+  driftDigestMode: varchar("driftDigestMode", { length: 16 }).notNull().default("immediate"),
+  /**
+   * Round 68: the Heartbeat cron task_uid backing the daily digest, so we can
+   * update/delete the job later. Null when digest mode is off. Looked up by
+   * task_uid in the /api/scheduled/driftDigest handler, never by name.
+   */
+  driftDigestCronTaskUid: varchar("driftDigestCronTaskUid", { length: 65 }),
+  /**
+   * Round 68: set true when a breach occurs while in digest mode (a ping is
+   * "pending" for the next daily summary); cleared once the digest fires.
+   */
+  driftDigestPending: boolean("driftDigestPending").notNull().default(false),
   // finalLiquidityFrac is implied: 1 - foundationFrac - growthFrac - deRiskingFrac
   /** Editable source URL for CBK T-Bills rates page */
   cbkSourceUrl: varchar("cbkSourceUrl", { length: 500 }).notNull().default("https://www.centralbank.go.ke/bills-bonds/treasury-bills/"),

@@ -1224,3 +1224,39 @@ export async function setDriftLastNotifiedAt(portfolioId: number, at: number) {
     .set({ driftLastNotifiedAt: at })
     .where(eq(portfolios.id, portfolioId));
 }
+
+/** R68 — set the drift digest mode ("immediate" | "digest") and cron task uid. */
+export async function setDriftDigestConfig(
+  portfolioId: number,
+  patch: { mode?: string; cronTaskUid?: string | null },
+) {
+  const db = await getDb();
+  if (!db) return;
+  const set: Record<string, unknown> = {};
+  if (patch.mode !== undefined) set.driftDigestMode = patch.mode;
+  if (patch.cronTaskUid !== undefined) set.driftDigestCronTaskUid = patch.cronTaskUid;
+  if (Object.keys(set).length === 0) return;
+  await db.update(portfolios).set(set).where(eq(portfolios.id, portfolioId));
+}
+
+/** R68 — mark (or clear) a pending digest breach for a portfolio. */
+export async function setDriftDigestPending(portfolioId: number, pending: boolean) {
+  const db = await getDb();
+  if (!db) return;
+  await db
+    .update(portfolios)
+    .set({ driftDigestPending: pending })
+    .where(eq(portfolios.id, portfolioId));
+}
+
+/** R68 — look up a portfolio by its drift-digest cron task uid (for the handler). */
+export async function getPortfolioByDriftDigestTaskUid(taskUid: string) {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db
+    .select()
+    .from(portfolios)
+    .where(eq(portfolios.driftDigestCronTaskUid, taskUid))
+    .limit(1);
+  return rows[0] ?? null;
+}

@@ -107,6 +107,18 @@ export const portfolios = mysqlTable("portfolios", {
    * a rebalancing alert. Default 5%.
    */
   driftAlertThresholdPct: decimal("driftAlertThresholdPct", { precision: 5, scale: 2 }).notNull().default("5.00"),
+  /**
+   * Round 67: optional snooze for the liquid drift-rebalancing alert. When set to
+   * a future Unix-ms timestamp, the Dashboard liquid card mutes the drift alert
+   * and the owner notification is suppressed until that time passes. Null means
+   * not snoozed. Stored as milliseconds since epoch (UTC).
+   */
+  driftSnoozeUntil: bigint("driftSnoozeUntil", { mode: "number" }),
+  /**
+   * Round 67: Unix-ms timestamp of the last drift-breach owner notification, so
+   * we only notify on a fresh transition INTO breach (not on every reload).
+   */
+  driftLastNotifiedAt: bigint("driftLastNotifiedAt", { mode: "number" }),
   // finalLiquidityFrac is implied: 1 - foundationFrac - growthFrac - deRiskingFrac
   /** Editable source URL for CBK T-Bills rates page */
   cbkSourceUrl: varchar("cbkSourceUrl", { length: 500 }).notNull().default("https://www.centralbank.go.ke/bills-bonds/treasury-bills/"),
@@ -741,3 +753,26 @@ export const liquidHomeBalances = mysqlTable("liquid_home_balances", {
 });
 export type LiquidHomeBalance = typeof liquidHomeBalances.$inferSelect;
 export type InsertLiquidHomeBalance = typeof liquidHomeBalances.$inferInsert;
+
+
+/**
+ * Round 67 — point-in-time snapshots of total liquid drift, captured each time a
+ * user reconciles (per-home, bulk, or clear). Powers the drift-history sparkline
+ * on the Dashboard liquid card so users can see whether actual placement is
+ * converging toward or diverging from the recommended split over time.
+ */
+export const liquidDriftHistory = mysqlTable("liquid_drift_history", {
+  id: int("id").autoincrement().primaryKey(),
+  portfolioId: int("portfolioId").notNull(),
+  /** Total drift = sum of |actual − target| across reconciled homes (KES). */
+  totalDrift: decimal("totalDrift", { precision: 14, scale: 2 }).notNull().default("0.00"),
+  /** Net worth at snapshot time (KES), so drift can be shown as a % later. */
+  netWorth: decimal("netWorth", { precision: 14, scale: 2 }).notNull().default("0.00"),
+  /** Drift-alert threshold value (KES) in effect at snapshot time. */
+  thresholdValue: decimal("thresholdValue", { precision: 14, scale: 2 }).notNull().default("0.00"),
+  /** Whether the drift breached the threshold at snapshot time. */
+  breached: boolean("breached").notNull().default(false),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+export type LiquidDriftHistory = typeof liquidDriftHistory.$inferSelect;
+export type InsertLiquidDriftHistory = typeof liquidDriftHistory.$inferInsert;

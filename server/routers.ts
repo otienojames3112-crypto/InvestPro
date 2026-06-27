@@ -71,7 +71,12 @@ import {
   getLiquidHomeBalances,
   upsertLiquidHomeBalance,
   clearLiquidHomeBalance,
+  recordDriftSnapshot,
+  getDriftHistory,
+  setDriftSnoozeUntil,
+  setDriftLastNotifiedAt,
 } from "./db";
+import { notifyOwner } from "./_core/notification";
 import {
   runProjection,
   runScenarios,
@@ -124,6 +129,8 @@ import {
   isLiquidBankKind,
   evaluateDriftThreshold,
   type LiquidHome,
+  type LiquidAllocationSlice,
+  type LiquidAllocationResult,
 } from "../shared/liquidAllocator";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -334,6 +341,233 @@ async function requirePortfolio(portfolioId: number, userId: number) {
   const p = await getPortfolio(portfolioId, userId);
   if (!p) throw new TRPCError({ code: "FORBIDDEN", message: "Portfolio not found or access denied." });
   return p;
+}
+
+/**
+ * R67 — shared liquid-drift context. Rebuilds the eligible liquid homes exactly
+ * like the `liquidAllocation` query, overlays user-recorded actuals, runs the
+ * allocator, and evaluates the drift threshold. Returned to the query for the UI
+ * and reused by the reconcile mutations to snapshot drift + decide whether to
+ * notify the owner. Single source of truth so the two never diverge.
+ */
+type DriftSlice = LiquidAllocationSlice & {
+  currentBalance: number;
+  reconciled: boolean;
+  reconciledAt: number | null;
+  drift: number;
+};
+function emptyAllocResult(): LiquidAllocationResult {
+  return {
+    state: "too_small",
+    liquidPot: 0,
+    netWorth: 0,
+    effectiveIssuerCapFrac: 0,
+    homeCount: 0,
+    issuerCount: 0,
+    slices: [],
+    message: "No eligible liquid homes yet.",
+  };
+}
+async function computeLiquidDriftContext(
+  p: Awaited<ReturnType<typeof getPortfolio>>,
+): Promise<{
+  netWorth: number;
+  slices: DriftSlice[];
+  result: LiquidAllocationResult;
+  hasActuals: boolean;
+  reconciledCount: number;
+  driftThresholdPct: number;
+  drift: { totalDrift: number; thresholdValue: number; breached: boolean };
+}> {
+  if (!p) {
+    return {
+      netWorth: 0,
+      slices: [],
+      result: emptyAllocResult(),
+      hasActuals: false,
+      reconciledCount: 0,
+      driftThresholdPct: 5,
+      drift: { totalDrift: 0, thresholdValue: 0, breached: false },
+    };
+  }
+  const rates = await getRateSettings(p.id);
+  const fundEar = await getSelectedFundEar(p);
+  const settings = dbToEngine(rates, p, fundEar);
+  const summary = await getActualsSummary(
+    p.id,
+    settings.targetAmount,
+    settings.withholdingTax,
+    settings.fxdCouponRate,
+    settings.mmfYield,
+    settings.tbill364Rate,
+  );
+  const netWorth = summary ? summary.totalContributed : 0;
+  const primaryMmfBalance = summary ? summary.depositsContributed : 0;
+
+  const homes: LiquidHome[] = [];
+  const primaryFund = p.mmfFundId ? await getMmfFund(p.mmfFundId) : null;
+  if (primaryFund) {
+    homes.push({
+      id: `mmf:${primaryFund.id}`,
+      label: primaryFund.fundName,
+      kind: "primary_mmf",
+      issuer: primaryFund.company || primaryFund.fundName,
+      grossYieldPct: parseFloat(String(primaryFund.grossYield)) || 0,
+      whtRatePct: parseFloat(String(primaryFund.whtRate)) || 15,
+      currentBalance: primaryMmfBalance,
+      minBalance: parseFloat(String(primaryFund.minInvestment)) || 0,
+    });
+  }
+  const secs = await getSecondaryMmfs(p.id);
+  for (const s of secs) {
+    homes.push({
+      id: `mmf:${s.mmfFundId}`,
+      label: s.label || s.fundName || "Secondary MMF",
+      kind: "secondary_mmf",
+      issuer: s.company || s.fundName || s.label || `fund-${s.mmfFundId}`,
+      grossYieldPct: parseFloat(String(s.ear)) || 0,
+      whtRatePct: parseFloat(String(s.whtRate)) || 15,
+      currentBalance: parseFloat(String(s.currentBalance)) || 0,
+      minBalance: 0,
+    });
+  }
+  const bank = await getBankInstrumentHoldings(p.id);
+  for (const b of bank) {
+    if (!b.isActive) continue;
+    if (!isLiquidBankKind(String(b.instrumentType))) continue;
+    homes.push({
+      id: `bank:${b.id}`,
+      label: b.label || `${b.bankName} ${String(b.instrumentType).replace(/_/g, " ")}`,
+      kind: String(b.instrumentType) as LiquidHome["kind"],
+      issuer: b.bankName,
+      grossYieldPct: parseFloat(String(b.interestRate)) || 0,
+      whtRatePct: parseFloat(String(b.whtRate)) || 15,
+      currentBalance: Math.max(
+        parseFloat(String(b.currentValue)) || 0,
+        parseFloat(String(b.principal)) || 0,
+      ),
+      minBalance: 0,
+    });
+  }
+
+  const issuerCapPct = parseFloat(
+    String((p as { concentrationCapPct?: string }).concentrationCapPct ?? "25"),
+  );
+  const issuerCapFrac =
+    (Number.isFinite(issuerCapPct) && issuerCapPct > 0 ? issuerCapPct : 25) / 100;
+  const allocationPolicy =
+    ((p as { allocationPolicy?: string }).allocationPolicy as
+      | "balanced"
+      | "yield_first"
+      | "custom"
+      | undefined) ?? "balanced";
+
+  const recorded = await getLiquidHomeBalances(p.id);
+  const actualById = new Map(
+    recorded.map((r) => [r.homeId, parseFloat(String(r.actualBalance)) || 0]),
+  );
+  const reconciledAtById = new Map<string, number>(
+    recorded
+      .filter((r) => r.updatedAt instanceof Date)
+      .map((r) => [r.homeId, (r.updatedAt as Date).getTime()]),
+  );
+  const reconciledIds: string[] = [];
+  for (const h of homes) {
+    if (actualById.has(h.id)) {
+      h.currentBalance = actualById.get(h.id) ?? 0;
+      reconciledIds.push(h.id);
+    }
+  }
+  const hasActuals = reconciledIds.length > 0;
+  const liquidPot = homes.reduce((sum, h) => sum + h.currentBalance, 0);
+
+  const result = allocateLiquidReserve({
+    homes,
+    netWorth,
+    liquidPot,
+    issuerCapFrac,
+    safetyFloor: settings.safetyFloor,
+    allocationPolicy,
+  });
+
+  const currentById = new Map(homes.map((h) => [h.id, h.currentBalance]));
+  const slices = result.slices.map((s) => {
+    const current = currentById.get(s.id) ?? 0;
+    return {
+      ...s,
+      currentBalance: Math.round(current * 100) / 100,
+      reconciled: actualById.has(s.id),
+      reconciledAt: reconciledAtById.get(s.id) ?? null,
+      drift: Math.round((current - s.targetBalance) * 100) / 100,
+    };
+  });
+  const driftThresholdPct = parseFloat(
+    String((p as { driftAlertThresholdPct?: string }).driftAlertThresholdPct ?? "5"),
+  );
+  const drift = evaluateDriftThreshold({
+    drifts: slices.map((s) => s.drift ?? 0),
+    netWorth,
+    thresholdPct: driftThresholdPct,
+    hasActuals,
+  });
+  return {
+    netWorth,
+    slices,
+    result,
+    hasActuals,
+    reconciledCount: reconciledIds.length,
+    driftThresholdPct,
+    drift,
+  };
+}
+
+/**
+ * R67 — after a reconcile changes balances, snapshot the new drift for the
+ * sparkline and notify the owner ONCE on a fresh transition into breach
+ * (respecting the drift snooze). Re-reads the portfolio so freshly-saved
+ * balances and notify timestamps are seen.
+ */
+async function snapshotAndMaybeNotifyDrift(
+  portfolioId: number,
+  userId: number,
+) {
+  const p = await requirePortfolio(portfolioId, userId);
+  const ctx = await computeLiquidDriftContext(p);
+  await recordDriftSnapshot({
+    portfolioId,
+    totalDrift: ctx.drift.totalDrift,
+    netWorth: ctx.netWorth,
+    thresholdValue: ctx.drift.thresholdValue,
+    breached: ctx.drift.breached,
+  });
+
+  const now = Date.now();
+  const snoozeUntil =
+    (p as { driftSnoozeUntil?: number | null }).driftSnoozeUntil ?? null;
+  const snoozed = typeof snoozeUntil === "number" && snoozeUntil > now;
+  const lastNotified =
+    (p as { driftLastNotifiedAt?: number | null }).driftLastNotifiedAt ?? null;
+  // Notify only on a fresh transition: breached now, not snoozed, and either
+  // never notified or the previous snapshot was within threshold. We treat
+  // "last notified more than 6h ago" as a fresh event to avoid duplicate pings.
+  const freshEvent =
+    !lastNotified || now - lastNotified > 6 * 60 * 60 * 1000;
+  if (ctx.drift.breached && !snoozed && freshEvent) {
+    try {
+      await notifyOwner({
+        title: "Liquid drift exceeds your rebalancing threshold",
+        content: `Your recorded liquid balances have drifted KES ${Math.round(
+          ctx.drift.totalDrift,
+        ).toLocaleString()} from the recommended split (threshold KES ${Math.round(
+          ctx.drift.thresholdValue,
+        ).toLocaleString()}, ${ctx.driftThresholdPct}% of net worth). Open the dashboard to review the suggested transfers.`,
+      });
+    } catch {
+      // Notification is best-effort; never block the reconcile.
+    }
+    await setDriftLastNotifiedAt(portfolioId, now);
+  }
+  return ctx.drift;
 }
 
 // ─── Zod schemas ─────────────────────────────────────────────────────────────
@@ -2695,152 +2929,74 @@ export const appRouter = router({
       .input(z.object({ portfolioId: z.number().int().positive() }))
       .query(async ({ ctx, input }) => {
         const p = await requirePortfolio(input.portfolioId, ctx.user.id);
-        const rates = await getRateSettings(input.portfolioId);
-        const fundEar = await getSelectedFundEar(p);
-        const settings = dbToEngine(rates, p, fundEar);
-        const summary = await getActualsSummary(
-          input.portfolioId,
-          settings.targetAmount,
-          settings.withholdingTax,
-          settings.fxdCouponRate,
-          settings.mmfYield,
-          settings.tbill364Rate,
-        );
-        const netWorth = summary ? summary.totalContributed : 0;
-        const primaryMmfBalance = summary ? summary.depositsContributed : 0;
-
-        const homes: LiquidHome[] = [];
-        // Primary MMF.
-        const primaryFund = p.mmfFundId ? await getMmfFund(p.mmfFundId) : null;
-        if (primaryFund) {
-          homes.push({
-            id: `mmf:${primaryFund.id}`,
-            label: primaryFund.fundName,
-            kind: "primary_mmf",
-            issuer: primaryFund.company || primaryFund.fundName,
-            grossYieldPct: parseFloat(String(primaryFund.grossYield)) || 0,
-            whtRatePct: parseFloat(String(primaryFund.whtRate)) || 15,
-            currentBalance: primaryMmfBalance,
-            minBalance: parseFloat(String(primaryFund.minInvestment)) || 0,
-          });
-        }
-        // Secondary MMFs.
-        const secs = await getSecondaryMmfs(input.portfolioId);
-        for (const s of secs) {
-          homes.push({
-            id: `mmf:${s.mmfFundId}`,
-            label: s.label || s.fundName || "Secondary MMF",
-            kind: "secondary_mmf",
-            issuer: s.company || s.fundName || s.label || `fund-${s.mmfFundId}`,
-            grossYieldPct: parseFloat(String(s.ear)) || 0,
-            whtRatePct: parseFloat(String(s.whtRate)) || 15,
-            currentBalance: parseFloat(String(s.currentBalance)) || 0,
-            minBalance: 0,
-          });
-        }
-        // LIQUID bank instruments only (exclude locked fixed/target deposits).
-        const bank = await getBankInstrumentHoldings(input.portfolioId);
-        for (const b of bank) {
-          if (!b.isActive) continue;
-          if (!isLiquidBankKind(String(b.instrumentType))) continue;
-          homes.push({
-            id: `bank:${b.id}`,
-            label: b.label || `${b.bankName} ${String(b.instrumentType).replace(/_/g, " ")}`,
-            kind: String(b.instrumentType) as LiquidHome["kind"],
-            issuer: b.bankName,
-            grossYieldPct: parseFloat(String(b.interestRate)) || 0,
-            whtRatePct: parseFloat(String(b.whtRate)) || 15,
-            currentBalance: Math.max(
-              parseFloat(String(b.currentValue)) || 0,
-              parseFloat(String(b.principal)) || 0,
-            ),
-            minBalance: 0,
-          });
-        }
-
-        const issuerCapPct = parseFloat(
-          String((p as { concentrationCapPct?: string }).concentrationCapPct ?? "25"),
-        );
-        const issuerCapFrac =
-          (Number.isFinite(issuerCapPct) && issuerCapPct > 0 ? issuerCapPct : 25) / 100;
-        const allocationPolicy =
-          ((p as { allocationPolicy?: string }).allocationPolicy as
-            | "balanced"
-            | "yield_first"
-            | "custom"
-            | undefined) ?? "balanced";
-
-        // R64 — overlay user-recorded ACTUAL balances. When the user has confirmed
-        // what is really resting in a home, that figure overrides the computed
-        // balance, so the recommended split (and its drift) reflects reality.
-        const recorded = await getLiquidHomeBalances(input.portfolioId);
-        const actualById = new Map(
-          recorded.map((r) => [r.homeId, parseFloat(String(r.actualBalance)) || 0]),
-        );
-        // R66 — when each home was last reconciled (epoch ms), so the UI can flag
-        // stale balances.
-        const reconciledAtById = new Map<string, number>(
-          recorded
-            .filter((r) => r.updatedAt instanceof Date)
-            .map((r) => [r.homeId, (r.updatedAt as Date).getTime()]),
-        );
-        const reconciledIds: string[] = [];
-        for (const h of homes) {
-          if (actualById.has(h.id)) {
-            h.currentBalance = actualById.get(h.id) ?? 0;
-            reconciledIds.push(h.id);
-          }
-        }
-        const hasActuals = reconciledIds.length > 0;
-
-        // Liquid pot = primary MMF + secondary MMFs + liquid bank balances
-        // (using actuals where the user has reconciled them).
-        const liquidPot = homes.reduce((sum, h) => sum + h.currentBalance, 0);
-
-        const result = allocateLiquidReserve({
-          homes,
-          netWorth,
-          liquidPot,
-          issuerCapFrac,
-          safetyFloor: settings.safetyFloor,
-          allocationPolicy,
-        });
-
-        // Attach per-home reconcile context: the current (actual-or-computed)
-        // balance, whether it was user-reconciled, and the drift vs target.
-        const currentById = new Map(homes.map((h) => [h.id, h.currentBalance]));
-        const slices = result.slices.map((s) => {
-          const current = currentById.get(s.id) ?? 0;
-          return {
-            ...s,
-            currentBalance: Math.round(current * 100) / 100,
-            reconciled: actualById.has(s.id),
-            reconciledAt: reconciledAtById.get(s.id) ?? null,
-            drift: Math.round((current - s.targetBalance) * 100) / 100,
-          };
-        });
-        // R66 — drift-threshold alert. When total drift exceeds the configured %
-        // of net worth (and the user has reconciled at least one home), flag it so
-        // the UI can prompt a rebalance.
-        const driftThresholdPct = parseFloat(
-          String((p as { driftAlertThresholdPct?: string }).driftAlertThresholdPct ?? "5"),
-        );
-        const driftEval = evaluateDriftThreshold({
-          drifts: slices.map((s) => s.drift ?? 0),
-          netWorth,
-          thresholdPct: driftThresholdPct,
-          hasActuals,
-        });
+        const c = await computeLiquidDriftContext(p);
+        const now = Date.now();
+        const snoozeUntil =
+          (p as { driftSnoozeUntil?: number | null }).driftSnoozeUntil ?? null;
+        const driftSnoozed =
+          typeof snoozeUntil === "number" && snoozeUntil > now;
         return {
-          ...result,
-          slices,
-          hasActuals,
-          reconciledCount: reconciledIds.length,
-          totalDrift: driftEval.totalDrift,
-          driftThresholdPct,
-          driftThresholdValue: driftEval.thresholdValue,
-          driftBreached: driftEval.breached,
+          ...c.result,
+          slices: c.slices,
+          hasActuals: c.hasActuals,
+          reconciledCount: c.reconciledCount,
+          totalDrift: c.drift.totalDrift,
+          driftThresholdPct: c.driftThresholdPct,
+          driftThresholdValue: c.drift.thresholdValue,
+          // The raw breach (drift > threshold) and the effective alert (breach AND
+          // not snoozed). The UI mutes the alert when snoozed but can still show
+          // the badge/value.
+          driftBreachedRaw: c.drift.breached,
+          driftBreached: c.drift.breached && !driftSnoozed,
+          driftSnoozed,
+          driftSnoozeUntil: driftSnoozed ? snoozeUntil : null,
         };
+      }),
+    // R67 — recent drift snapshots for the sparkline (chronological).
+    driftHistory: protectedProcedure
+      .input(
+        z.object({
+          portfolioId: z.number().int().positive(),
+          limit: z.number().int().min(2).max(90).optional(),
+        }),
+      )
+      .query(async ({ ctx, input }) => {
+        await requirePortfolio(input.portfolioId, ctx.user.id);
+        const rows = await getDriftHistory(input.portfolioId, input.limit ?? 30);
+        return rows.map((r) => ({
+          totalDrift: parseFloat(String(r.totalDrift)) || 0,
+          netWorth: parseFloat(String(r.netWorth)) || 0,
+          thresholdValue: parseFloat(String(r.thresholdValue)) || 0,
+          breached: Boolean(r.breached),
+          at: r.createdAt instanceof Date ? r.createdAt.getTime() : null,
+        }));
+      }),
+    // R67 — snooze (or clear) the drift-rebalancing alert. Mirrors the
+    // concentration snooze: a future Unix-ms timestamp mutes the alert and
+    // suppresses owner notifications until it passes. Pass until=null to clear.
+    snoozeDrift: protectedProcedure
+      .input(
+        z.object({
+          portfolioId: z.number().int().positive(),
+          until: z.number().int().nullable(),
+        }),
+      )
+      .mutation(async ({ ctx, input }) => {
+        await requirePortfolio(input.portfolioId, ctx.user.id);
+        await setDriftSnoozeUntil(input.portfolioId, input.until);
+        await addAuditLog({
+          portfolioId: input.portfolioId,
+          entity: "liquid_home_balance",
+          action: "update",
+          field: "drift_snooze",
+          newValue: input.until ? new Date(input.until).toISOString() : "cleared",
+          changedByOpenId: ctx.user.openId,
+          changedByName: ctx.user.name ?? null,
+          summary: input.until
+            ? `Snoozed liquid drift alert until ${new Date(input.until).toLocaleDateString()}`
+            : "Cleared liquid drift alert snooze",
+        });
+        return { ok: true };
       }),
     // R64 — record/clear the ACTUAL balance resting in a liquid home so the split
     // shows real drift (actual vs target) and survives reloads.
@@ -2867,7 +3023,8 @@ export const appRouter = router({
           changedByName: ctx.user.name ?? null,
           summary: `Reconciled liquid balance: ${input.homeLabel ?? input.homeId} → KES ${Math.round(input.actualBalance).toLocaleString()}`,
         });
-        return { ok: true };
+        const drift = await snapshotAndMaybeNotifyDrift(input.portfolioId, ctx.user.id);
+        return { ok: true, drift };
       }),
     clearLiquidBalance: protectedProcedure
       .input(
@@ -2889,7 +3046,8 @@ export const appRouter = router({
           changedByName: ctx.user.name ?? null,
           summary: `Reverted liquid balance to estimate: ${input.homeLabel ?? input.homeId}`,
         });
-        return { ok: true };
+        const drift = await snapshotAndMaybeNotifyDrift(input.portfolioId, ctx.user.id);
+        return { ok: true, drift };
       }),
     // R65 — Reconcile-all: set every liquid home's actual balance in one action,
     // writing a single batch entry to Change History.
@@ -2925,7 +3083,8 @@ export const appRouter = router({
           changedByName: ctx.user.name ?? null,
           summary: `Reconciled all liquid balances (${input.balances.length} home${input.balances.length === 1 ? "" : "s"}, total KES ${Math.round(total).toLocaleString()})`,
         });
-        return { ok: true, count: input.balances.length };
+        const drift = await snapshotAndMaybeNotifyDrift(input.portfolioId, ctx.user.id);
+        return { ok: true, count: input.balances.length, drift };
       }),
     // R65 — log an applied transfer plan to Change History (audit trail of moves).
     recordAppliedTransfers: protectedProcedure

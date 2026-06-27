@@ -757,3 +757,12 @@
 - [x] R66.2 Last-reconciled timestamp: surface a small "last reconciled <relative time>" per liquid home on the Dashboard liquid card so stale balances are easy to spot.
 - [x] R66.3 Drift-threshold alert: when total drift exceeds a configurable % of net worth, show an alert on the liquid card prompting rebalancing. Threshold editable in Settings (with a sensible default).
 - [x] R66 tests: full suite green (548) + tsc clean; add/extend tests for the drift-threshold breach logic.
+
+
+## Round 67 (drift notification + snooze + sparkline)
+
+- [x] R67.1 Drift-history persistence: snapshot total drift + net worth on each reconcile (set/bulk/clear) into a new table; expose recent history via router.
+- [x] R67.2 Owner notification + in-app badge: when total drift breaches the configured threshold (transition into breach), notify the owner once and show an in-app badge on the liquid card / nav.
+- [x] R67.3 Snooze drift alert: dismiss the drift alert for 7 days, mirroring the existing Risk-limits snooze pattern (persisted per portfolio).
+- [x] R67.4 Total-drift sparkline: show a small drift-history sparkline on the liquid card so users see convergence/divergence over time.
+- [x] R67 tests: full suite green (563) + tsc clean; added driftSnooze.round67.test.ts (snooze-active logic + breach-transition dedup + drift-history snapshot fields).

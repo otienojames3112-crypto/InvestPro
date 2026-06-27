@@ -1093,7 +1093,7 @@ export async function updateMmfFundAccrualSettings(
 }
 
 /** ---------------- Round 64: actual liquid-home balances ---------------- */
-import { liquidHomeBalances } from "../drizzle/schema";
+import { liquidHomeBalances, liquidDriftHistory } from "../drizzle/schema";
 
 /** All user-recorded actual balances for a portfolio's liquid homes. */
 export async function getLiquidHomeBalances(portfolioId: number) {
@@ -1139,4 +1139,88 @@ export async function clearLiquidHomeBalance(portfolioId: number, homeId: string
         eq(liquidHomeBalances.homeId, homeId),
       ),
     );
+}
+
+
+/** ---------------- Round 67: liquid drift history ---------------- */
+
+/**
+ * Record a point-in-time drift snapshot. De-duplicates: skips the insert when
+ * the most recent snapshot has the same rounded totalDrift AND breached flag, so
+ * repeated reconciles that don't move drift don't bloat the sparkline.
+ */
+export async function recordDriftSnapshot(args: {
+  portfolioId: number;
+  totalDrift: number;
+  netWorth: number;
+  thresholdValue: number;
+  breached: boolean;
+}) {
+  const db = await getDb();
+  if (!db) return;
+  const last = await db
+    .select({
+      totalDrift: liquidDriftHistory.totalDrift,
+      breached: liquidDriftHistory.breached,
+    })
+    .from(liquidDriftHistory)
+    .where(eq(liquidDriftHistory.portfolioId, args.portfolioId))
+    .orderBy(desc(liquidDriftHistory.createdAt))
+    .limit(1);
+  const newDrift = args.totalDrift.toFixed(2);
+  if (
+    last.length > 0 &&
+    last[0].totalDrift === newDrift &&
+    Boolean(last[0].breached) === args.breached
+  ) {
+    return; // no meaningful change since the last snapshot
+  }
+  await db.insert(liquidDriftHistory).values({
+    portfolioId: args.portfolioId,
+    totalDrift: newDrift,
+    netWorth: args.netWorth.toFixed(2),
+    thresholdValue: args.thresholdValue.toFixed(2),
+    breached: args.breached,
+  });
+}
+
+/** Recent drift snapshots (oldest → newest) for the sparkline, capped at `limit`. */
+export async function getDriftHistory(portfolioId: number, limit = 30) {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db
+    .select({
+      totalDrift: liquidDriftHistory.totalDrift,
+      netWorth: liquidDriftHistory.netWorth,
+      thresholdValue: liquidDriftHistory.thresholdValue,
+      breached: liquidDriftHistory.breached,
+      createdAt: liquidDriftHistory.createdAt,
+    })
+    .from(liquidDriftHistory)
+    .where(eq(liquidDriftHistory.portfolioId, portfolioId))
+    .orderBy(desc(liquidDriftHistory.createdAt))
+    .limit(limit);
+  // Return chronological order for charting.
+  return rows.reverse();
+}
+
+
+/** R67 — set/clear the drift-alert snooze (Unix ms) for a portfolio. */
+export async function setDriftSnoozeUntil(portfolioId: number, until: number | null) {
+  const db = await getDb();
+  if (!db) return;
+  await db
+    .update(portfolios)
+    .set({ driftSnoozeUntil: until })
+    .where(eq(portfolios.id, portfolioId));
+}
+
+/** R67 — record when the owner was last notified of a drift breach (Unix ms). */
+export async function setDriftLastNotifiedAt(portfolioId: number, at: number) {
+  const db = await getDb();
+  if (!db) return;
+  await db
+    .update(portfolios)
+    .set({ driftLastNotifiedAt: at })
+    .where(eq(portfolios.id, portfolioId));
 }

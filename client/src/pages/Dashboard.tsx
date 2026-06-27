@@ -63,6 +63,7 @@ import { currentSecurityValue, classifyDurationRisk, largestConcentration, class
 import { whtRateForSecurity } from "@shared/securityTenor";
 import { Layers, TrendingDown, BellOff, Bell, Scale, ArrowRightLeft, Copy, Check } from "lucide-react";
 import { buildTransferPlan } from "@shared/liquidAllocator";
+import { Sparkline } from "@/components/Sparkline";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -217,6 +218,25 @@ export default function Dashboard() {
   const recordAppliedTransfersMutation = trpc.bankHoldings.recordAppliedTransfers.useMutation({
     onError: (e) => toast.error(e.message || "Could not log transfers"),
   });
+  // R67 — drift-history sparkline + snooze the drift-rebalancing alert.
+  const { data: driftHistory } = trpc.bankHoldings.driftHistory.useQuery(
+    { portfolioId: portfolioId! },
+    { enabled: !!portfolioId },
+  );
+  const snoozeDriftMutation = trpc.bankHoldings.snoozeDrift.useMutation({
+    onSuccess: (_r, vars) => {
+      toast.success(vars.until ? "Drift alert snoozed" : "Drift alert resumed");
+      utils.bankHoldings.liquidAllocation.invalidate({ portfolioId: portfolioId! });
+    },
+    onError: (e) => toast.error(e.message || "Could not update snooze"),
+  });
+  const snoozeDrift = (days: number | null) => {
+    if (!portfolioId) return;
+    snoozeDriftMutation.mutate({
+      portfolioId,
+      until: days == null ? null : Date.now() + days * 24 * 60 * 60 * 1000,
+    });
+  };
   const updatePortfolioMutation = trpc.portfolios.update.useMutation({
     onSuccess: () => {
       toast.success("Target updated — projection recalculated");
@@ -958,7 +978,7 @@ export default function Dashboard() {
                   {liquidAlloc.state === "too_small" && "Too small yet"}
                 </span>
               </div>
-              {liquidAlloc.driftBreached && (
+              {liquidAlloc.driftBreached && !liquidAlloc.driftSnoozed && (
                 <div className="mb-3 flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-amber-200">
                   <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
                   <div className="min-w-0 text-[11px] leading-relaxed">
@@ -968,7 +988,31 @@ export default function Dashboard() {
                       {liquidAlloc.driftThresholdPct}% alert threshold ({formatKES(liquidAlloc.driftThresholdValue)} of net worth).
                       Use <span className="font-medium">Apply this split</span> below to bring each home back toward target.
                     </p>
+                    <button
+                      type="button"
+                      onClick={() => snoozeDrift(7)}
+                      disabled={snoozeDriftMutation.isPending}
+                      className="mt-1 inline-flex items-center gap-1 text-[10px] font-medium text-amber-200/90 underline underline-offset-2 hover:text-amber-100 disabled:opacity-50"
+                    >
+                      <BellOff className="w-3 h-3" /> Snooze this alert for 7 days
+                    </button>
                   </div>
+                </div>
+              )}
+              {liquidAlloc.driftBreached && liquidAlloc.driftSnoozed && (
+                <div className="mb-3 flex items-center gap-2 rounded-lg border border-border bg-muted/30 px-3 py-1.5 text-[11px] text-muted-foreground">
+                  <BellOff className="w-3.5 h-3.5 shrink-0" />
+                  <span className="min-w-0">
+                    Drift alert snoozed{liquidAlloc.driftSnoozeUntil ? ` until ${new Date(liquidAlloc.driftSnoozeUntil).toLocaleDateString()}` : ""}.
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => snoozeDrift(null)}
+                    disabled={snoozeDriftMutation.isPending}
+                    className="ml-auto shrink-0 text-[10px] font-medium text-sky-300 underline underline-offset-2 hover:text-sky-200 disabled:opacity-50"
+                  >
+                    Resume now
+                  </button>
                 </div>
               )}
               {(() => {
@@ -1002,6 +1046,26 @@ export default function Dashboard() {
                           : "Reconcile your homes to see real drift vs the recommended split."}
                       </p>
                     </div>
+                    {driftHistory && driftHistory.length >= 2 && (
+                      <div className="hidden sm:flex flex-col items-end shrink-0">
+                        <Sparkline
+                          values={driftHistory.map((d) => d.totalDrift)}
+                          threshold={liquidAlloc.driftThresholdValue}
+                          tone={
+                            driftHistory[driftHistory.length - 1].totalDrift >
+                            driftHistory[0].totalDrift
+                              ? "amber"
+                              : "emerald"
+                          }
+                        />
+                        <span className="text-[10px] text-muted-foreground/70 mt-0.5">
+                          {driftHistory[driftHistory.length - 1].totalDrift >
+                          driftHistory[0].totalDrift
+                            ? "drifting further"
+                            : "converging"}
+                        </span>
+                      </div>
+                    )}
                     <Button
                       size="sm"
                       variant="outline"

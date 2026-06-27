@@ -11,6 +11,7 @@ import {
   largestConcentration,
   classifyConcentration,
   amountToShiftUnderCap,
+  analyzePerTypeBreach,
   buildDiversifyLink,
   DEFAULT_LIQUIDITY_HORIZON_DAYS,
   type CurrentValueSecurity,
@@ -353,6 +354,32 @@ export default function PortfolioReview() {
     ? amountToShiftUnderCap(concentration.topValue, concentration.totalValue, typeCapPct)
     : 0;
 
+  // R69.2 — maturity-aware per-type breach. The per-type cap is a duration /
+  // liquidity guardrail (single sovereign issuer), so a breach caused by held,
+  // un-matured lots self-corrects as they mature — we should NOT advise selling
+  // un-matured paper. This memo tells us whether/when the breach clears within the
+  // horizon and the net-worth-share denominator.
+  const typeBreach = useMemo(() => {
+    const lots = (securities ?? []).filter(
+      (s) => !s.isMatured && Number(s.faceValue ?? 0) > 0,
+    ) as unknown as CurrentValueSecurity[];
+    if (lots.length === 0) return null;
+    let horizonEndMs: number | null = null;
+    if (portfolio?.startDate && portfolio?.horizonMonths) {
+      const start = new Date(portfolio.startDate as unknown as string);
+      if (!Number.isNaN(start.getTime())) {
+        const end = new Date(start);
+        end.setMonth(end.getMonth() + Number(portfolio.horizonMonths));
+        horizonEndMs = end.getTime();
+      }
+    }
+    return analyzePerTypeBreach(lots, typeCapPct, netWorth, horizonEndMs, new Date());
+  }, [securities, typeCapPct, netWorth, portfolio?.startDate, portfolio?.horizonMonths]);
+
+  // Format a Unix-ms date as a short local date for breach-clear messaging.
+  const fmtDate = (ms: number) =>
+    new Date(ms).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+
   // CSV export: net-worth allocation, benchmark comparison and the liquidity
   // calendar, written as labelled sections in one file. Raw numbers so it opens
   // cleanly in spreadsheets.
@@ -616,16 +643,41 @@ export default function PortfolioReview() {
                 }
                 return (
                   <div className="space-y-2">
-                    {concentration && concentrationBreached && (
-                      <div className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-200">
+                    {concentration && concentrationBreached && typeBreach && (
+                      <div
+                        className={
+                          typeBreach.selfCorrects
+                            ? "flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-200"
+                            : "flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-200"
+                        }
+                      >
                         <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
                         <div>
                           <p className="font-medium text-foreground">
-                            Per-type cap breached: {concentration.topLabel}
+                            {concentration.topLabel} above your {Math.round(typeCapPct)}% type cap
                           </p>
-                          <p className="text-amber-200/90">
-                            {(concentration.topShare * 100).toFixed(1)}% of securities (cap {Math.round(typeCapPct)}%).
-                            {shiftToUnderCap > 0 && <> Shift about {kes(shiftToUnderCap)} to a different type to return under the cap.</>}
+                          <p className={typeBreach.selfCorrects ? "text-amber-200/90" : "text-red-200/90"}>
+                            {concentration.topLabel} is{" "}
+                            <strong>{(typeBreach.shareOfSecurities * 100).toFixed(1)}% of securities</strong>
+                            {typeBreach.shareOfNetWorth > 0 && (
+                              <> ({(typeBreach.shareOfNetWorth * 100).toFixed(1)}% of net worth)</>
+                            )}
+                            , above your {Math.round(typeCapPct)}% cap. This is a duration/liquidity
+                            limit, not credit risk — all CBK paper shares one sovereign issuer.
+                            {typeBreach.selfCorrects && typeBreach.clearsAtMs ? (
+                              <>
+                                {" "}These are held lots maturing within your horizon, so the breach
+                                clears on its own by <strong>{fmtDate(typeBreach.clearsAtMs)}</strong>.
+                                Until then the engine won&rsquo;t add more {concentration.topLabel};
+                                new contributions and maturing cash go to other types.
+                              </>
+                            ) : (
+                              <>
+                                {" "}This does <strong>not</strong> clear within your horizon. Selling
+                                before maturity means rediscounting on the secondary market — you may
+                                receive less than face if rates have risen, plus a dealer spread.
+                              </>
+                            )}
                           </p>
                         </div>
                       </div>
@@ -770,42 +822,55 @@ export default function PortfolioReview() {
                           </>
                         )}
                         {concentrationBreached && (
-                          <> Exceeds your <strong>{typeCapPct.toFixed(0)}%</strong> single-type cap — consider diversifying.</>
+                          <> Above your <strong>{typeCapPct.toFixed(0)}%</strong> single-type cap (a duration/liquidity limit).</>
                         )}
                       </span>
                     </div>
                   )}
-                  {/* R59 — diversification suggestion: how much value to move out of
-                      the dominant type to get back under the cap. */}
-                  {concentration && concentrationBreached && shiftToUnderCap > 0 && (
-                    <div className="mt-2 flex items-start gap-2.5 text-sm">
-                      <Lightbulb className="w-4 h-4 shrink-0 mt-0.5 text-amber-600 dark:text-amber-400" />
-                      <span className="text-foreground">
-                        <strong>Suggestion:</strong> shift about{" "}
-                        <strong>{kes(Math.round(shiftToUnderCap))}</strong>{" "}
-                        out of <strong>{concentration.topLabel}</strong> (into other instruments or MMF)
-                        to bring it to the {typeCapPct.toFixed(0)}% cap.
-                        {/* R61 — Diversify now offers a quick target choice: a liquid
-                            364-day T-bill (booked in the register) or a money-market
-                            top-up (recorded as a lump-sum contribution). Both deep-link
-                            with the suggested shift amount pre-filled. */}
-                        <span className="mt-1 inline-flex flex-wrap items-center gap-x-3 gap-y-1 print:hidden">
-                          <span className="text-xs text-muted-foreground">Diversify into:</span>
-                          <Link
-                            href={buildDiversifyLink(shiftToUnderCap, "tbill_364")}
-                            className="font-medium text-primary underline underline-offset-2 hover:opacity-80"
-                          >
-                            364-day T-bill →
-                          </Link>
-                          <Link
-                            href={buildDiversifyLink(shiftToUnderCap, "mmf")}
-                            className="font-medium text-primary underline underline-offset-2 hover:opacity-80"
-                          >
-                            Money Market Fund →
-                          </Link>
+                  {/* R69.2 — maturity-aware guidance. A breach from held, un-matured
+                      lots self-corrects as they mature; we tell the user when it
+                      clears and that the engine simply stops adding more — never
+                      "shift/sell KES X". An early-sale (rediscount) option only shows
+                      when the breach does NOT clear within the horizon, with its cost. */}
+                  {concentration && concentrationBreached && typeBreach && (
+                    typeBreach.selfCorrects && typeBreach.clearsAtMs ? (
+                      <div className="mt-2 flex items-start gap-2.5 text-sm">
+                        <Lightbulb className="w-4 h-4 shrink-0 mt-0.5 text-amber-600 dark:text-amber-400" />
+                        <span className="text-foreground">
+                          <strong>No action needed:</strong> this is held {concentration.topLabel}{" "}
+                          maturing within your horizon, so the breach clears on its own by{" "}
+                          <strong>{fmtDate(typeBreach.clearsAtMs)}</strong>. Until then the monthly
+                          sweep won&rsquo;t buy more {concentration.topLabel} — new contributions and
+                          maturing cash are directed to other types. Selling un-matured paper early
+                          would mean rediscounting at a cost, so it is not recommended here.
                         </span>
-                      </span>
-                    </div>
+                      </div>
+                    ) : (
+                      <div className="mt-2 flex items-start gap-2.5 text-sm">
+                        <Lightbulb className="w-4 h-4 shrink-0 mt-0.5 text-red-600 dark:text-red-400" />
+                        <span className="text-foreground">
+                          <strong>This breach won&rsquo;t self-correct within your horizon.</strong>{" "}
+                          The engine has already stopped adding {concentration.topLabel}. If you have a
+                          real liquidity need, you can sell early on the secondary market — but
+                          <strong> rediscounting may return less than face if rates have risen, plus a
+                          dealer spread</strong>. New cash diversifies into:
+                          <span className="mt-1 inline-flex flex-wrap items-center gap-x-3 gap-y-1 print:hidden">
+                            <Link
+                              href={buildDiversifyLink(shiftToUnderCap, "tbill_364")}
+                              className="font-medium text-primary underline underline-offset-2 hover:opacity-80"
+                            >
+                              364-day T-bill →
+                            </Link>
+                            <Link
+                              href={buildDiversifyLink(shiftToUnderCap, "mmf")}
+                              className="font-medium text-primary underline underline-offset-2 hover:opacity-80"
+                            >
+                              Money Market Fund →
+                            </Link>
+                          </span>
+                        </span>
+                      </div>
+                    )
                   )}
                   {/* R58 — per-type concentration bar: a compact stacked view of how
                       current value splits across instrument types. */}

@@ -773,3 +773,12 @@
 - [x] R68.2 Drift-history detail view: added a Reconciliation-page "Liquid drift over time" panel (sparkline + converging/drifting label + recent-snapshot table with breach status).
 - [x] R68.3 Daily digest: optional per-portfolio digest mode — toggle on the Dashboard, setDriftDigest mutation creates/updates/deletes a Heartbeat cron, /api/scheduled/driftDigest handler sends one daily summary; immediate-mode pings suppressed via driftDigestPending flag.
 - [x] R68 tests: full suite green (578) + tsc clean; added driftDigest.round68.test.ts (snooze-duration mapping, digest send-decision + message builder, digest-vs-immediate gating table).
+
+## Round 69 (reported fixes)
+
+- [x] R69.1 Custom allocation policy persists: add migration so portfolios.allocationPolicy enum includes 'custom'; round-trip Custom save/reload; update mutation onError surfaces the real server/DB error instead of generic message.
+- [x] R69.2 Maturity-aware per-type cap: passive breach from held un-matured securities shows amber "self-corrects on [earliest lot maturity that clears cap], won't add more" (never "shift/sell KES X"); engine refuses to buy more of an over-cap type; active breach (new purchase) warns with acknowledge-and-log parity to per-issuer (recordBreachAck + Change History); early-sale/rediscount option only when breach won't self-correct within horizon, with cost stated; show both "% of securities" and "% of net worth".
+- [x] R69.3 Liquid allocator in projection: import shared/liquidAllocator into server/engine.ts; split residual liquid cash across eligible homes per policy+caps in De-risking/Final phases; Dashboard end-state copy reflects actual projected split (policy-aware); keep one-home nudge + too-small state.
+- [x] R69.4 Glossary + tooltips: add Allocation policy, per-issuer vs per-type cap, liquid-reserve diversification, KDIC insurance, concentration-cap acknowledgment, corrected accrued-interest entry; reuse definitions as tooltips.
+- [x] R69.5 Stale-rates nag: stop "Rates updated never" red banner in Test/sample mode (seed sensible timestamp or suppress while sample/Test).
+- [x] R69 tests: full suite green (593) + tsc clean; round69.test.ts covers maturity-aware cap messaging + clear-date + both denominators, projected liquid split (balanced/yield-first/single/zero), snooze-duration 1/7/30 mapping, and glossary completeness for the new ids.

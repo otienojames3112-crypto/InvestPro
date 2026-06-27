@@ -84,6 +84,8 @@ import { parse as parseCookie } from "cookie";
 import {
   runProjection,
   runScenarios,
+  projectedLiquidSplit,
+  type ProjectedLiquidHomeInput,
   deriveStepUps,
   checkMilestones,
   getScheduledContribution,
@@ -1003,6 +1005,141 @@ export const appRouter = router({
       const currentStepUp = Number(p?.stepUpAmount ?? 0);
       const stepUps = deriveStepUps(currentStepUp);
       return runScenarios(settings, stepUps, rh, secondaryMmfs, bankHoldings, p.mmfFundId ?? null);
+    }),
+
+    /**
+     * R69.3 — projected END-STATE liquid split. Runs the same liquid-reserve
+     * allocator used for today's actuals, but on the PROJECTED horizon liquid pot
+     * (mmfEnd + secondaryMmfEnd + bankEnd of the final month). Lets the Dashboard
+     * say HOW the fully-liquid end-state is spread (Balanced/Custom diversify;
+     * Yield-first may concentrate) instead of assuming 100% primary MMF.
+     */
+    endStateLiquidSplit: protectedProcedure.input(portfolioIdInput).query(async ({ ctx, input }) => {
+      const p = await requirePortfolio(input.portfolioId, ctx.user.id);
+      const [rates, fundEar] = await Promise.all([getRateSettings(input.portfolioId), getSelectedFundEar(p)]);
+      const settings = dbToEngine(rates, p, fundEar);
+      const overrides = await getContributionOverrides(input.portfolioId);
+      const mappedOverrides = overrides.map((o) => ({
+        monthNumber: o.monthNumber,
+        overrideAmount: o.overrideAmount ? parseFloat(String(o.overrideAmount)) : undefined,
+        lumpSum: o.lumpSum ? parseFloat(String(o.lumpSum)) : undefined,
+      }));
+      const rh = mapRateHistory(await getRateHistory(input.portfolioId));
+      const depositRows = await getDepositEntries(input.portfolioId);
+      const withdrawalRows = await getWithdrawalEntries(input.portfolioId);
+      const actualDeposits = [
+        ...mapActualDeposits(depositRows),
+        ...mapPrimaryMmfWithdrawalsAsDeposits(withdrawalRows, p.mmfFundId ?? null),
+      ];
+      const actualSecurities = mapActualSecurities(await getSecurities(input.portfolioId));
+      const secondaryRows = await getSecondaryMmfs(input.portfolioId);
+      const secondaryMmfs = mapSecondaryMmfs(secondaryRows);
+      const bankRows = await getBankInstrumentHoldings(input.portfolioId);
+      const bankHoldings = mapActualBankHoldings(bankRows);
+
+      const series = runProjection(
+        settings,
+        mappedOverrides,
+        rh,
+        actualDeposits,
+        actualSecurities,
+        secondaryMmfs,
+        bankHoldings,
+        p.mmfFundId ?? null,
+      );
+      const finalMonth = series[series.length - 1];
+
+      // Build the eligible liquid homes (mirrors bankHoldings.liquidAllocation).
+      const homes: ProjectedLiquidHomeInput[] = [];
+      const primaryFund = p.mmfFundId ? await getMmfFund(p.mmfFundId) : null;
+      if (primaryFund) {
+        homes.push({
+          id: `mmf:${primaryFund.id}`,
+          label: primaryFund.fundName,
+          kind: "primary_mmf",
+          issuer: primaryFund.company || primaryFund.fundName,
+          grossYieldPct: parseFloat(String(primaryFund.grossYield)) || 0,
+          whtRatePct: parseFloat(String(primaryFund.whtRate)) || 15,
+          minBalance: parseFloat(String(primaryFund.minInvestment)) || 0,
+        });
+      } else {
+        // No fund selected — model the primary MMF generically so the pot still has a home.
+        homes.push({
+          id: "mmf:primary",
+          label: "Primary MMF",
+          kind: "primary_mmf",
+          issuer: "Primary MMF",
+          grossYieldPct: settings.mmfYield,
+          whtRatePct: settings.withholdingTax,
+          minBalance: 0,
+        });
+      }
+      for (const s of secondaryRows) {
+        homes.push({
+          id: `mmf:${s.mmfFundId}`,
+          label: s.label || s.fundName || "Secondary MMF",
+          kind: "secondary_mmf",
+          issuer: s.company || s.fundName || s.label || `fund-${s.mmfFundId}`,
+          grossYieldPct: parseFloat(String(s.ear)) || 0,
+          whtRatePct: parseFloat(String(s.whtRate)) || 15,
+          minBalance: 0,
+        });
+      }
+      for (const b of bankRows) {
+        if (!b.isActive) continue;
+        if (!isLiquidBankKind(String(b.instrumentType))) continue;
+        homes.push({
+          id: `bank:${b.id}`,
+          label: b.label || `${b.bankName} ${String(b.instrumentType).replace(/_/g, " ")}`,
+          kind: String(b.instrumentType) as ProjectedLiquidHomeInput["kind"],
+          issuer: b.bankName,
+          grossYieldPct: parseFloat(String(b.interestRate)) || 0,
+          whtRatePct: parseFloat(String(b.whtRate)) || 15,
+          minBalance: 0,
+        });
+      }
+
+      const issuerCapPct = parseFloat(
+        String((p as { concentrationCapPct?: string }).concentrationCapPct ?? "25"),
+      );
+      const issuerCapFrac =
+        (Number.isFinite(issuerCapPct) && issuerCapPct > 0 ? issuerCapPct : 25) / 100;
+      const allocationPolicy =
+        ((p as { allocationPolicy?: string }).allocationPolicy as
+          | "balanced"
+          | "yield_first"
+          | "custom"
+          | undefined) ?? "balanced";
+
+      const split = projectedLiquidSplit(finalMonth, homes, {
+        netWorth: finalMonth?.totalEnd ?? 0,
+        issuerCapFrac,
+        safetyFloor: settings.safetyFloor,
+        allocationPolicy,
+      });
+
+      return {
+        allocationPolicy,
+        liquidPot: split.liquidPot,
+        state: split.state,
+        isSplit: split.isSplit,
+        fundedHomeCount: split.fundedHomeCount,
+        homeCount: split.homeCount,
+        issuerCount: split.issuerCount,
+        effectiveIssuerCapFrac: split.effectiveIssuerCapFrac,
+        message: split.message,
+        slices: split.slices
+          .filter((s) => s.targetBalance >= 1)
+          .map((s) => ({
+            id: s.id,
+            label: s.label,
+            kind: s.kind,
+            issuer: s.issuer,
+            targetBalance: s.targetBalance,
+            targetShare: s.targetShare,
+            netYieldPct: s.netYieldPct,
+          })),
+      };
     }),
 
     milestones: protectedProcedure.input(portfolioIdInput).query(async ({ ctx, input }) => {

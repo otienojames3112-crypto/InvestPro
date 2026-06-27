@@ -59,7 +59,7 @@ import { Plus, Compass, ArrowUpRight } from "lucide-react";
 import { useMemo, useState, useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { rateStaleness } from "@/lib/rateStaleness";
-import { currentSecurityValue, classifyDurationRisk, largestConcentration, classifyConcentration, isConcentrationSnoozed, DEFAULT_LIQUIDITY_HORIZON_DAYS, type CurrentValueSecurity } from "@shared/discount";
+import { currentSecurityValue, classifyDurationRisk, largestConcentration, classifyConcentration, analyzePerTypeBreach, isConcentrationSnoozed, DEFAULT_LIQUIDITY_HORIZON_DAYS, type CurrentValueSecurity } from "@shared/discount";
 import { whtRateForSecurity } from "@shared/securityTenor";
 import { Layers, TrendingDown, BellOff, Bell, Scale, ArrowRightLeft, Copy, Check } from "lucide-react";
 import { buildTransferPlan, SNOOZE_OPTIONS, snoozeUntilFromDays } from "@shared/liquidAllocator";
@@ -136,7 +136,7 @@ function ChartTooltip({ active, payload, label }: { active?: boolean; payload?: 
 }
 
 export default function Dashboard() {
-  const { portfolioId, portfolio, portfolios, isLoading: portfoliosLoading } = usePortfolio();
+  const { portfolioId, portfolio, portfolios, mode, isLoading: portfoliosLoading } = usePortfolio();
   const [createOpen, setCreateOpen] = useState(false);
   const utils = trpc.useUtils();
   const { data: projection, isLoading: projLoading } = trpc.projection.run.useQuery(
@@ -144,6 +144,10 @@ export default function Dashboard() {
     { enabled: !!portfolioId }
   );
   const { data: milestones } = trpc.projection.milestones.useQuery(
+    { portfolioId: portfolioId! },
+    { enabled: !!portfolioId }
+  );
+  const { data: endStateSplit } = trpc.projection.endStateLiquidSplit.useQuery(
     { portfolioId: portfolioId! },
     { enabled: !!portfolioId }
   );
@@ -377,6 +381,53 @@ export default function Dashboard() {
   // "Fully liquid" if <0.5% is locked in securities maturing past the goal.
   const landsFullyLiquid = lockedAtGoal < projectedFinalValue * 0.005;
 
+  // R69.3 — describe HOW the projected liquid end-state is spread, per the
+  // active allocation policy (Balanced/Custom diversify; Yield-first may
+  // concentrate), matching the liquid-reserve allocator instead of assuming
+  // everything lands in the primary MMF.
+  const endStateLiquidCopy = useMemo(() => {
+    if (!endStateSplit || endStateSplit.liquidPot <= 0) return null;
+    const policyLabel =
+      endStateSplit.allocationPolicy === "yield_first"
+        ? "Yield-first"
+        : endStateSplit.allocationPolicy === "custom"
+          ? "Custom"
+          : "Balanced";
+    const funded = endStateSplit.slices;
+    if (funded.length === 0) return null;
+    // Single home: either only one eligible account, or policy concentrated it.
+    if (!endStateSplit.isSplit || funded.length === 1) {
+      const only = funded[0];
+      if (endStateSplit.homeCount <= 1) {
+        // One-home nudge — encourage adding a second liquid account.
+        return {
+          tone: "nudge" as const,
+          text: `spread can't diversify yet — it all sits in ${only.label}. Add a second liquid account (MMF or call deposit) to split it under your ${(endStateSplit.effectiveIssuerCapFrac * 100).toFixed(0)}% issuer cap.`,
+        };
+      }
+      if (endStateSplit.allocationPolicy === "yield_first") {
+        return {
+          tone: "ok" as const,
+          text: `concentrated in ${only.label} (net ${only.netYieldPct.toFixed(2)}%) — your Yield-first policy is intentionally chasing the top net yield.`,
+        };
+      }
+      return {
+        tone: "ok" as const,
+        text: `held in ${only.label}, within your ${(endStateSplit.effectiveIssuerCapFrac * 100).toFixed(0)}% issuer cap.`,
+      };
+    }
+    // Genuine multi-home split.
+    const names = funded
+      .slice(0, 3)
+      .map((s) => `${s.label} (${(s.targetShare * 100).toFixed(0)}%)`)
+      .join(", ");
+    const extra = funded.length > 3 ? ` +${funded.length - 3} more` : "";
+    return {
+      tone: "ok" as const,
+      text: `spread across ${names}${extra} per your ${policyLabel} policy, each within your ${(endStateSplit.effectiveIssuerCapFrac * 100).toFixed(0)}% issuer cap.`,
+    };
+  }, [endStateSplit]);
+
   const chartData = useMemo(() => {
     if (!projection) return [];
     return projection.map((r) => ({
@@ -528,6 +579,33 @@ export default function Dashboard() {
     ? classifyConcentration(typeConcentration.topShare, typeCapPct) === "breached"
     : false;
 
+  // R69.2 — maturity-aware per-type breach for the Dashboard warning card. The
+  // per-type cap is a duration/liquidity guardrail (single sovereign issuer), so a
+  // breach from held, un-matured lots self-corrects as they mature. We surface
+  // when it clears and whether an early-sale option is even warranted, and (like
+  // the per-issuer card) offer an Acknowledge action that logs to Change History.
+  const typeBreach = useMemo(() => {
+    const lots = (securities ?? []).filter(
+      (s: Record<string, unknown>) =>
+        !(s.isMatured as boolean) && Number(s.faceValue ?? 0) > 0,
+    ) as unknown as CurrentValueSecurity[];
+    if (lots.length === 0) return null;
+    const nw = concentration?.netWorth ?? 0;
+    let horizonEndMs: number | null = null;
+    if (portfolio?.startDate && portfolio?.horizonMonths) {
+      const start = new Date(portfolio.startDate as unknown as string);
+      if (!Number.isNaN(start.getTime())) {
+        const end = new Date(start);
+        end.setMonth(end.getMonth() + Number(portfolio.horizonMonths));
+        horizonEndMs = end.getTime();
+      }
+    }
+    return analyzePerTypeBreach(lots, typeCapPct, nw, horizonEndMs, new Date());
+  }, [securities, typeCapPct, concentration?.netWorth, portfolio?.startDate, portfolio?.horizonMonths]);
+
+  const fmtBreachDate = (ms: number) =>
+    new Date(ms).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+
   // R60 — concentration-warning snooze. When the portfolio carries a future
   // snooze timestamp, the per-issuer warning banner is muted and the Risk-limits
   // cards show an "un-snooze" affordance. Re-evaluated each render against now.
@@ -564,6 +642,27 @@ export default function Dashboard() {
         capPct: concentration.cap * 100,
       });
       // Snooze for a long window (1 year) — the user has accepted this breach.
+      snoozeMutation.mutate({ portfolioId, until: Date.now() + 365 * 24 * 60 * 60 * 1000 });
+      toast.success("Breach acknowledged and logged to Change History");
+    } catch {
+      toast.error("Could not record acknowledgment");
+    }
+  };
+
+  // ── R69.2: acknowledge an ACTUAL per-instrument-type cap breach ──────────────
+  // Parity with the per-issuer flow above: logs acceptance to Change History (as
+  // capKind "type") and snoozes the per-type warning card so it stops nagging
+  // until a new breach appears or the snooze is cleared.
+  const acknowledgeTypeBreach = async () => {
+    if (!portfolioId || !typeConcentration || !typeBreach || !typeBreach.breached) return;
+    try {
+      await recordBreachAckMutation.mutateAsync({
+        portfolioId,
+        capKind: "type",
+        label: typeConcentration.topLabel,
+        sharePct: typeBreach.shareOfSecurities * 100,
+        capPct: typeCapPct,
+      });
       snoozeMutation.mutate({ portfolioId, until: Date.now() + 365 * 24 * 60 * 60 * 1000 });
       toast.success("Breach acknowledged and logged to Change History");
     } catch {
@@ -962,6 +1061,68 @@ export default function Dashboard() {
                   {recordBreachAckMutation.isPending ? "Recording…" : "Acknowledge this breach"}
                 </button>
                 <span className="ml-2 text-[10px] text-amber-200/50">Logs your acceptance to Change History and mutes this warning.</span>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── R69.2: Per-instrument-type cap warning (maturity-aware) ────── */}
+        {/* Parity with the per-issuer card: a real warning + Acknowledge/log
+            action, not just a risk-limit tile. The per-type cap is a duration/
+            liquidity guardrail (single sovereign issuer), so a breach from held,
+            un-matured lots self-corrects as they mature — we say WHEN it clears and
+            never advise selling un-matured paper. Suppressed while snoozed. */}
+        {typeConcentrationBreached && typeBreach && typeConcentration && !concentrationSnoozed && (
+          <div
+            className={
+              typeBreach.selfCorrects
+                ? "rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 flex gap-3"
+                : "rounded-xl border border-red-500/30 bg-red-500/10 p-4 flex gap-3"
+            }
+          >
+            <Layers className={`w-4 h-4 shrink-0 mt-0.5 ${typeBreach.selfCorrects ? "text-amber-400" : "text-red-400"}`} />
+            <div className="text-xs leading-relaxed space-y-1">
+              <p className={typeBreach.selfCorrects ? "text-amber-200/90" : "text-red-200/90"}>
+                <strong className={typeBreach.selfCorrects ? "text-amber-100" : "text-red-100"}>
+                  Per-type cap —
+                </strong>{" "}
+                <GlossaryTerm id="per-type-cap">{typeConcentration.topLabel}</GlossaryTerm> is{" "}
+                <span className="font-mono">{(typeBreach.shareOfSecurities * 100).toFixed(1)}%</span> of your
+                securities
+                {typeBreach.shareOfNetWorth > 0 && (
+                  <> (<span className="font-mono">{(typeBreach.shareOfNetWorth * 100).toFixed(1)}%</span> of net worth)</>
+                )}
+                , above the {typeCapPct.toFixed(0)}% cap. This is a duration/liquidity limit, not credit
+                risk — all CBK paper shares one sovereign issuer.
+              </p>
+              {typeBreach.selfCorrects && typeBreach.clearsAtMs ? (
+                <p className="text-amber-200/80">
+                  These are held lots maturing within your horizon, so it clears on its own by{" "}
+                  <strong className="text-amber-100">{fmtBreachDate(typeBreach.clearsAtMs)}</strong>. Until
+                  then the monthly sweep won&rsquo;t buy more {typeConcentration.topLabel}. No action needed.
+                </p>
+              ) : (
+                <p className="text-red-200/80">
+                  This won&rsquo;t self-correct within your horizon. The engine has already stopped adding
+                  {" "}{typeConcentration.topLabel}; selling early means rediscounting on the secondary
+                  market (you may get less than face if rates rose, plus a dealer spread).
+                </p>
+              )}
+              <div className="pt-1">
+                <button
+                  type="button"
+                  onClick={acknowledgeTypeBreach}
+                  disabled={recordBreachAckMutation.isPending || snoozeMutation.isPending}
+                  className={
+                    typeBreach.selfCorrects
+                      ? "inline-flex items-center gap-1 rounded-md border border-amber-400/40 bg-amber-500/10 px-2.5 py-1 text-[11px] font-medium text-amber-100 hover:bg-amber-500/20 transition-colors disabled:opacity-50"
+                      : "inline-flex items-center gap-1 rounded-md border border-red-400/40 bg-red-500/10 px-2.5 py-1 text-[11px] font-medium text-red-100 hover:bg-red-500/20 transition-colors disabled:opacity-50"
+                  }
+                  title="Record that you accept this concentration and stop the warning"
+                >
+                  {recordBreachAckMutation.isPending ? "Recording…" : "Acknowledge this breach"}
+                </button>
+                <span className="ml-2 text-[10px] text-muted-foreground">Logs your acceptance to Change History and mutes this warning.</span>
               </div>
             </div>
           </div>
@@ -1558,9 +1719,17 @@ export default function Dashboard() {
                 {!projLoading && projectedFinalValue > 0 && (
                   <p className="text-xs mt-1">
                     {landsFullyLiquid ? (
-                      <span className="text-emerald-400 inline-flex items-center gap-1">
-                        <CheckCircle2 className="w-3 h-3" /> Lands fully liquid at goal —
-                        {" "}{liquidPctAtGoal.toFixed(0)}% in cash/MMF, withdrawable on the goal date
+                      <span className={`inline-flex items-start gap-1 ${endStateLiquidCopy?.tone === "nudge" ? "text-amber-400" : "text-emerald-400"}`}>
+                        {endStateLiquidCopy?.tone === "nudge" ? (
+                          <AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" />
+                        ) : (
+                          <CheckCircle2 className="w-3 h-3 mt-0.5 shrink-0" />
+                        )}
+                        <span>
+                          Lands fully liquid at goal — {endStateLiquidCopy
+                            ? endStateLiquidCopy.text
+                            : `${liquidPctAtGoal.toFixed(0)}% in cash/MMF, withdrawable on the goal date`}
+                        </span>
                       </span>
                     ) : (
                       <span className="text-amber-400 inline-flex items-center gap-1">
@@ -2451,7 +2620,13 @@ export default function Dashboard() {
                   </span>
                 </Link>
               </div>
-              {(() => {
+              {mode === "sandbox" ? (
+                <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+                  <Clock className="w-3.5 h-3.5 shrink-0" />
+                  <span className="font-medium">Sample rates (Test mode)</span>
+                  <span className="opacity-90">— these are sample figures for trying the tracker; rate freshness is only tracked on your live portfolio.</span>
+                </div>
+              ) : (() => {
                 const s = rateStaleness((settings as any).ratesLastUpdatedAt);
                 const tone = s.isVeryStale
                   ? "bg-red-500/10 text-red-400 border-red-500/30"

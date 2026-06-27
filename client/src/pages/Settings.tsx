@@ -285,7 +285,10 @@ export default function Settings() {
       utils.projection.milestones.invalidate({ portfolioId: portfolioId! });
       utils.projection.scenarios.invalidate({ portfolioId: portfolioId! });
     },
-    onError: () => toast.error("Failed to update portfolio"),
+    // R69.1 — surface the real server/DB error (e.g. a missing enum value) instead
+    // of a generic message, so silent persistence failures are visible.
+    onError: (e) =>
+      toast.error(e.message ? `Couldn't save settings: ${e.message}` : "Failed to update portfolio"),
   });
 
   // ── Round 62: Yield-first acknowledgment gate ──────────────────────────────

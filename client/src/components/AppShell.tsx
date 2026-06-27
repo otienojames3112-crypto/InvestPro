@@ -54,11 +54,33 @@ function SidebarRateStaleness({
   portfolioId: number | null | undefined;
   onNavClick?: () => void;
 }) {
+  const { mode } = usePortfolio();
   const { data } = trpc.settings.get.useQuery(
     { portfolioId: portfolioId as number },
     { enabled: !!portfolioId }
   );
   if (!portfolioId || !data) return null;
+
+  // R69.5 — In Test/sandbox mode the data is sample data, not a real
+  // rate-keeping record, so the red "Rates updated never" alarm is a false
+  // nag. Show a neutral, non-actionable "sample rates" badge instead.
+  if (mode === "sandbox") {
+    return (
+      <Link href="/settings" onClick={onNavClick}>
+        <div
+          className={cn(
+            "flex items-center gap-2 rounded-lg border px-3 py-2 text-xs transition-colors cursor-pointer hover:brightness-110",
+            "border-border bg-muted/40 text-muted-foreground"
+          )}
+          title="Sample rates — Test mode uses sample data, so rate freshness is not tracked here."
+        >
+          <Clock className="w-3.5 h-3.5 shrink-0" />
+          <span className="flex-1 min-w-0 truncate">Sample rates (Test mode)</span>
+        </div>
+      </Link>
+    );
+  }
+
   const s = rateStaleness((data as { ratesLastUpdatedAt?: Date | string | null }).ratesLastUpdatedAt ?? null);
   const tone = s.isVeryStale
     ? "border-red-500/40 bg-red-500/10 text-red-400"

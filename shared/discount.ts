@@ -535,3 +535,117 @@ export function buildDiversifyLink(
   if (!(face > 0)) return `/securities?add=1&addType=${encodeURIComponent(addType)}`;
   return `/securities?add=1&addType=${encodeURIComponent(addType)}&face=${face}`;
 }
+
+/**
+ * R69.2 — maturity-aware per-type concentration analysis.
+ *
+ * The per-type cap (T-bills / IFB / FXD) is a DURATION / liquidity guardrail, not
+ * credit diversification — every lot is the same sovereign issuer. A held bond
+ * cannot be "shifted" without rediscounting it on the secondary market at a cost,
+ * so when the dominant type is over the cap purely because of held, un-matured
+ * lots, the correct guidance is: the breach self-corrects when enough of those
+ * lots mature, and until then the engine simply stops buying more of that type.
+ *
+ * This analyzer walks the over-cap type's lots in maturity order and finds the
+ * earliest maturity date at which the type's share drops back to (or below) the
+ * cap. It also reports the net-worth share (the denominator that actually matters
+ * for whether duration threatens the goal) alongside the "% of securities" share.
+ */
+export interface PerTypeBreachAnalysis {
+  /** Over-cap dominant type key (grouped, e.g. "fxd", "tbill"). */
+  type: string;
+  /** Friendly label, e.g. "FXD bonds". */
+  label: string;
+  /** Dominant type's share of total *securities* value, 0..1. */
+  shareOfSecurities: number;
+  /** Dominant type's share of *net worth*, 0..1 (0 when netWorth unknown/0). */
+  shareOfNetWorth: number;
+  /** Current value held in the dominant type (KES). */
+  topValue: number;
+  /** Total securities value (KES). */
+  totalSecurities: number;
+  /** True when the share strictly exceeds the cap. */
+  breached: boolean;
+  /**
+   * True when the breach resolves on its own as held lots mature within the
+   * horizon (i.e. there exists a future maturity date — on/before the horizon —
+   * after which the type is back under cap). False means it does NOT self-correct
+   * within the horizon, so an early-sale / rediscount option is warranted.
+   */
+  selfCorrects: boolean;
+  /**
+   * Earliest maturity date (ms, UTC) at which the type returns under cap, or null
+   * if it never does within the supplied lots (and thus within the horizon).
+   */
+  clearsAtMs: number | null;
+}
+
+/**
+ * Analyze the dominant per-type breach with maturity awareness.
+ *
+ * @param lots         all current (held) security lots
+ * @param capPct       per-type cap as a percentage (e.g. 60)
+ * @param netWorth     total net worth (KES) for the net-worth-share denominator; pass 0/undefined to skip
+ * @param horizonEndMs end of the plan horizon (ms, UTC); maturities after this do NOT count as self-correcting
+ * @param today        valuation date
+ */
+export function analyzePerTypeBreach(
+  lots: CurrentValueSecurity[],
+  capPct: number,
+  netWorth: number | undefined,
+  horizonEndMs: number | null,
+  today: Date = new Date(),
+): PerTypeBreachAnalysis | null {
+  const conc = largestConcentration(lots, today);
+  if (!conc) return null;
+  const breached = classifyConcentration(conc.topShare, capPct) === "breached";
+
+  const nw = Number(netWorth) || 0;
+  const shareOfNetWorth = nw > 0 ? conc.topValue / nw : 0;
+
+  const base: PerTypeBreachAnalysis = {
+    type: conc.topType,
+    label: conc.topLabel,
+    shareOfSecurities: conc.topShare,
+    shareOfNetWorth,
+    topValue: conc.topValue,
+    totalSecurities: conc.totalValue,
+    breached,
+    selfCorrects: false,
+    clearsAtMs: null,
+  };
+  if (!breached) return base;
+
+  const cap = capPct > 0 ? capPct / 100 : 0;
+  if (!(cap > 0) || cap >= 1) return base; // cap disabled → treat as not self-correcting
+
+  // Gather the over-cap type's un-matured lots with their maturity time + current value.
+  const groupKey = (t: string) => (t.startsWith("tbill") ? "tbill" : t);
+  const now = today.getTime();
+  const topLots = lots
+    .filter((l) => !l.isMatured && groupKey(l.securityType) === conc.topType)
+    .map((l) => ({
+      mat: toTime(l.maturityDate),
+      cv: currentSecurityValue(l, today),
+    }))
+    .filter((l) => l.cv > 0 && Number.isFinite(l.mat) && l.mat > now)
+    .sort((a, b) => a.mat - b.mat);
+
+  // Walk maturities in order. When a lot matures it leaves BOTH the type value and
+  // the securities base (it becomes cash, then redeploys elsewhere). After each
+  // maturity, recompute the type share; the first date it is <= cap is the clear date.
+  let topRemaining = conc.topValue;
+  let totalRemaining = conc.totalValue;
+  for (const lot of topLots) {
+    topRemaining -= lot.cv;
+    totalRemaining -= lot.cv;
+    const share = totalRemaining > 0 ? topRemaining / totalRemaining : 0;
+    if (share <= cap) {
+      const withinHorizon = horizonEndMs == null || lot.mat <= horizonEndMs;
+      return { ...base, selfCorrects: withinHorizon, clearsAtMs: lot.mat };
+    }
+  }
+  // Never clears via maturity (e.g. a single huge lot maturing after the goal, or
+  // lots that don't bring it under cap) → does not self-correct.
+  return base;
+}

@@ -5,6 +5,11 @@ import {
   whtOnDiscount,
   accretedValue,
 } from "../shared/discount";
+import {
+  allocateLiquidReserve,
+  type LiquidHome,
+  type LiquidAllocationResult,
+} from "../shared/liquidAllocator";
 /**
  * KES Investment Compounding Engine — v3
  *
@@ -1818,6 +1823,92 @@ export function runProjection(
   }
 
   return results;
+}
+
+// ─── R69.3: projected end-state liquid split ───────────────────────────────────
+
+export interface ProjectedLiquidHomeInput {
+  id: string;
+  label: string;
+  kind: LiquidHome["kind"];
+  issuer: string;
+  grossYieldPct: number;
+  whtRatePct: number;
+  minBalance?: number;
+}
+
+export interface ProjectedLiquidSplitResult extends LiquidAllocationResult {
+  /** True when more than one eligible liquid home received a slice. */
+  isSplit: boolean;
+  /** Number of homes that end up holding a non-trivial slice (>= KES 1). */
+  fundedHomeCount: number;
+}
+
+/**
+ * Run the liquid-reserve allocator on the PROJECTED end-state liquid pot.
+ *
+ * At the horizon the De-risking / Final-liquidity phases have already drained the
+ * term securities (T-bills / IFB / FXD) back into cash, so the projected liquid
+ * pot is mmfEnd + secondaryMmfEnd + the liquid portion of bankEnd. We feed that
+ * pot through the SAME `allocateLiquidReserve` used for today's actuals so the
+ * Dashboard end-state copy reflects the real policy-aware split (Balanced /
+ * Custom diversify; Yield-first may legitimately concentrate) rather than
+ * assuming everything sits in the primary MMF.
+ *
+ * Pure and deterministic — does not mutate the projection.
+ */
+export function projectedLiquidSplit(
+  finalMonth: MonthResult | undefined,
+  homes: ProjectedLiquidHomeInput[],
+  opts: {
+    netWorth: number;
+    issuerCapFrac?: number;
+    safetyFloor?: number;
+    allocationPolicy?: "balanced" | "yield_first" | "custom";
+    /** Liquid pot to place. Defaults to mmfEnd + secondaryMmfEnd + bankEnd. */
+    liquidPot?: number;
+  },
+): ProjectedLiquidSplitResult {
+  const pot =
+    typeof opts.liquidPot === "number"
+      ? Math.max(0, opts.liquidPot)
+      : Math.max(
+          0,
+          (finalMonth?.mmfEnd ?? 0) +
+            (finalMonth?.secondaryMmfEnd ?? 0) +
+            (finalMonth?.bankEnd ?? 0),
+        );
+
+  // Seed each home's starting balance to zero; the allocator distributes `pot`
+  // across them by net yield and caps. The projection's per-home detail isn't
+  // tracked month-by-month, so a clean redistribution of the pot is the right
+  // model for the end-state target split.
+  const allocHomes: LiquidHome[] = homes.map((h) => ({
+    id: h.id,
+    label: h.label,
+    kind: h.kind,
+    issuer: h.issuer,
+    grossYieldPct: h.grossYieldPct,
+    whtRatePct: h.whtRatePct,
+    currentBalance: 0,
+    minBalance: h.minBalance ?? 0,
+  }));
+
+  const result = allocateLiquidReserve({
+    homes: allocHomes,
+    netWorth: Math.max(opts.netWorth, pot),
+    liquidPot: pot,
+    issuerCapFrac: opts.issuerCapFrac,
+    safetyFloor: opts.safetyFloor,
+    allocationPolicy: opts.allocationPolicy ?? "balanced",
+  });
+
+  const fundedHomeCount = result.slices.filter((s) => s.targetBalance >= 1).length;
+  return {
+    ...result,
+    fundedHomeCount,
+    isSplit: fundedHomeCount > 1,
+  };
 }
 
 // ─── Scenarios ────────────────────────────────────────────────────────────────

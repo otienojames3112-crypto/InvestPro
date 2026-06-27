@@ -188,6 +188,35 @@ export interface SimStep {
   mode: MaterializeMode;
   /** Deposit-entry ids this step materialised (empty for accrue_only). */
   depositIds: number[];
+  // ── Optional display detail (added R74). Older entries may omit these; the
+  //    history UI must tolerate undefined. They are purely informational and
+  //    never used by the undo math (which relies only on fromMs/depositIds). ──
+  /** Real wall-clock time the step was performed (Unix-ms). */
+  createdAt?: number;
+  /** Whole simulated months that newly elapsed in this step. */
+  monthsElapsed?: number;
+  /** Count of contribution deposits materialised this step. */
+  contributionsWritten?: number;
+  /** Total KES of contributions materialised this step. */
+  contributionTotal?: number;
+  /** How the target was chosen: a fixed step, the next event, or a date jump. */
+  targetKind?: "step" | "nextEvent" | "date";
+  /** For targetKind === "step": the unit + count (e.g. "month" x3). */
+  stepUnit?: StepUnit;
+  stepCount?: number;
+  /** Rate-shock active at the time of this step, if any. */
+  rateShock?: { effectiveDate: string; deltaPct: number } | null;
+}
+
+/** A short human label describing how a step's target was chosen. */
+export function describeStepTarget(s: SimStep): string {
+  if (s.targetKind === "step" && s.stepUnit) {
+    const n = s.stepCount ?? 1;
+    return n === 1 ? `+1 ${s.stepUnit}` : `+${n} ${s.stepUnit}s`;
+  }
+  if (s.targetKind === "nextEvent") return "Jump to next event";
+  if (s.targetKind === "date") return "Jump to date";
+  return "Advance";
 }
 
 /** Safely parse a persisted step log (JSON string) into a typed array. */

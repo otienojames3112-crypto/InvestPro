@@ -145,6 +145,7 @@ import {
   formatUtcDate,
   parseStepLog,
   popLastStep,
+  describeStepTarget,
   type SimEvent,
   type SimStep,
   type StepUnit,
@@ -857,6 +858,24 @@ export const appRouter = router({
       const stepLog = parseStepLog((p as { simStepLog?: string | null }).simStepLog);
       const last = stepLog.length > 0 ? stepLog[stepLog.length - 1] : null;
       const rateShock = simulatedRateShock(p) ?? null;
+      // Full audit trail of every advance, newest-first. The last item in the
+      // raw (oldest-first) log is the next-undoable step.
+      const lastIdx = stepLog.length - 1;
+      const history = stepLog
+        .map((s, idx) => ({
+          index: idx,
+          fromLabel: formatUtcDate(s.fromMs),
+          toLabel: formatUtcDate(s.toMs),
+          mode: s.mode,
+          targetLabel: describeStepTarget(s),
+          monthsElapsed: s.monthsElapsed ?? null,
+          contributionsWritten: s.contributionsWritten ?? s.depositIds.length,
+          contributionTotal: s.contributionTotal ?? null,
+          rateShock: s.rateShock ?? null,
+          createdAt: s.createdAt ?? null,
+          isNextUndoable: idx === lastIdx,
+        }))
+        .reverse();
       return {
         isSandbox,
         active: sim != null,
@@ -869,6 +888,7 @@ export const appRouter = router({
         nextEvent: next,
         canUndo: stepLog.length > 0,
         stepsRemaining: stepLog.length,
+        history,
         lastStep: last
           ? { fromLabel: formatUtcDate(last.fromMs), toLabel: formatUtcDate(last.toMs), deposits: last.depositIds.length }
           : null,
@@ -1010,10 +1030,22 @@ export const appRouter = router({
         // Append this advance to the step log so Undo-last-step can rewind exactly
         // this boundary and delete only the rows it created.
         const priorLog = parseStepLog((p as { simStepLog?: string | null }).simStepLog);
-        const newLog: SimStep[] = [
-          ...priorLog,
-          { fromMs, toMs: targetMs, mode, depositIds: stepDepositIds },
-        ];
+        const activeShock = simulatedRateShock(p) ?? null;
+        const newStep: SimStep = {
+          fromMs,
+          toMs: targetMs,
+          mode,
+          depositIds: stepDepositIds,
+          createdAt: Date.now(),
+          monthsElapsed: nextIdx - prevIdx,
+          contributionsWritten: written.deposits,
+          contributionTotal: written.totalContribution,
+          targetKind: input.target.type,
+          stepUnit: input.target.type === "step" ? (input.target.unit as StepUnit) : undefined,
+          stepCount: input.target.type === "step" ? input.target.count ?? 1 : undefined,
+          rateShock: activeShock ? { effectiveDate: activeShock.effectiveDate, deltaPct: activeShock.deltaPct } : null,
+        };
+        const newLog: SimStep[] = [...priorLog, newStep];
 
         // Commit the new clock (and session, if just created).
         await updatePortfolio(input.portfolioId, ctx.user.id, {

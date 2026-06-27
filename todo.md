@@ -824,4 +824,11 @@
 - [x] TM.18 SimulatedDateChip component (uses useSimulatedNow) added to Dashboard and Ledger headers; renders only when a sandbox simulation is active.
 - [x] TM.19 Rate-shock stress test: applyRateShock in engine shifts MMF + all CBK yields by ±pp from an effective date (floored at 0, WHT untouched), threaded via EngineSettings.rateShock through getRatesForMonth. Persisted on portfolios.sim_rate_shock so ALL projection reads (dashboard/ledger/reconciliation) reflect it; setRateShock mutation + UI card; cleared by Reset.
 - [x] TM.20 round73.test.ts (16 cases): applyRateShock (before/on/after boundary, floor-at-0, positive shock, WHT untouched), getRatesForMonth honouring shock, and parseStepLog/popLastStep undo-log math. Full suite 647 green + tsc clean.
-- [ ] TM.21 Package full project as a ZIP for download.
+- [x] TM.21 Packaged full project as kes5m-tracker.zip (1.1M; excludes node_modules/dist/.git/logs).
+
+## Time Machine: history log + tooltips (round 74)
+- [ ] TM.22 Extend simStepLog entries to carry display detail (fromMs, toMs, mode, contributionsWritten, contributionTotal, monthsElapsed, rateShock snapshot, createdAt) so a full audit of each advance survives reloads.
+- [ ] TM.23 Expose the ordered step history in timeMachine.status (newest-first) with labels; keep undo popping the LAST step.
+- [ ] TM.24 History-log UI on the Time Machine page: chronological list of every advance (date range, mode badge, contributions added, months elapsed), empty state, and a marker when a step is the next-undoable one.
+- [ ] TM.25 Tooltips across the Time Machine: materialisation modes, each step button, jump-to-next-event, jump-to-date, rate-shock fields, Undo, Reset, and the status metrics — concise plain-language explanations.
+- [ ] TM.26 Tests for the richer step-log shape (parse/round-trip/back-compat with old minimal entries) + full suite green + tsc clean.

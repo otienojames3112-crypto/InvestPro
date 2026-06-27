@@ -8,6 +8,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -33,6 +35,9 @@ import {
   Sparkles,
   Layers,
   Activity,
+  History,
+  HelpCircle,
+  CornerUpLeft,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -253,22 +258,35 @@ export function TimeMachine() {
         {active && (
           <div className="flex items-center gap-2">
           {status?.canUndo && (
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={busy}
-              onClick={() => portfolioId && undo.mutate({ portfolioId })}
-              title={status?.lastStep ? `Rewind ${status.lastStep.fromLabel} \u2192 ${status.lastStep.toLabel}` : undefined}
-            >
-              <Undo2 className="w-4 h-4" /> Undo last step
-            </Button>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={busy}
+                  onClick={() => portfolioId && undo.mutate({ portfolioId })}
+                >
+                  <Undo2 className="w-4 h-4" /> Undo last step
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent className="max-w-[16rem] text-xs leading-relaxed">
+                Rewinds only the most recent jump{status?.lastStep ? ` (${status.lastStep.fromLabel} → ${status.lastStep.toLabel})` : ""} and deletes just the records that step created. Earlier steps stay intact.
+              </TooltipContent>
+            </Tooltip>
           )}
           <AlertDialog>
-            <AlertDialogTrigger asChild>
-              <Button variant="outline" size="sm" disabled={busy} className="text-destructive border-destructive/30 hover:bg-destructive/10">
-                <RotateCcw className="w-4 h-4" /> Reset to today
-              </Button>
-            </AlertDialogTrigger>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <AlertDialogTrigger asChild>
+                  <Button variant="outline" size="sm" disabled={busy} className="text-destructive border-destructive/30 hover:bg-destructive/10">
+                    <RotateCcw className="w-4 h-4" /> Reset to today
+                  </Button>
+                </AlertDialogTrigger>
+              </TooltipTrigger>
+              <TooltipContent className="max-w-[16rem] text-xs leading-relaxed">
+                Clears the simulated clock, deletes every record this session created, and restores the exact pre-simulation state. Hand-entered data is untouched.
+              </TooltipContent>
+            </Tooltip>
             <AlertDialogContent>
               <AlertDialogHeader>
                 <AlertDialogTitle>Reset the simulation?</AlertDialogTitle>
@@ -297,7 +315,13 @@ export function TimeMachine() {
       <Card className={cn(active && "border-primary/40 bg-primary/[0.03]")}>
         <CardContent className="flex flex-wrap items-center justify-between gap-4 py-5">
           <div className="space-y-1">
-            <div className="text-xs uppercase tracking-wide text-muted-foreground">Simulated today</div>
+            <div className="text-xs uppercase tracking-wide text-muted-foreground flex items-center gap-1.5">
+              Simulated today
+              <InfoHint
+                label="What is simulated today?"
+                text="The pretend 'current date' the whole app reads while you simulate. Dashboards, the ledger and reconciliation all behave as if this were today. It never affects your Live portfolio."
+              />
+            </div>
             <div className="flex items-center gap-2">
               <span className="text-2xl font-bold tabular-nums">{dateLabel}</span>
               {active ? (
@@ -313,14 +337,28 @@ export function TimeMachine() {
             )}
           </div>
           <div className="flex items-center gap-4 text-sm">
-            <div className="text-center">
-              <div className="font-semibold tabular-nums">{mat.deposits}</div>
-              <div className="text-xs text-muted-foreground">deposits</div>
-            </div>
-            <div className="text-center">
-              <div className="font-semibold tabular-nums">{mat.securities}</div>
-              <div className="text-xs text-muted-foreground">securities</div>
-            </div>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <div className="text-center cursor-help">
+                  <div className="font-semibold tabular-nums">{mat.deposits}</div>
+                  <div className="text-xs text-muted-foreground">deposits</div>
+                </div>
+              </TooltipTrigger>
+              <TooltipContent className="max-w-[15rem] text-xs leading-relaxed">
+                Simulated deposit records created this session (e.g. materialised monthly contributions). All are removed on Reset.
+              </TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <div className="text-center cursor-help">
+                  <div className="font-semibold tabular-nums">{mat.securities}</div>
+                  <div className="text-xs text-muted-foreground">securities</div>
+                </div>
+              </TooltipTrigger>
+              <TooltipContent className="max-w-[15rem] text-xs leading-relaxed">
+                Simulated securities created this session. All are removed on Reset.
+              </TooltipContent>
+            </Tooltip>
             {status?.nextEvent && (
               <div className="text-left max-w-[14rem]">
                 <div className="text-xs text-muted-foreground">Next event</div>
@@ -337,7 +375,13 @@ export function TimeMachine() {
         {/* Materialization mode */}
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">How elapsed months settle</CardTitle>
+            <CardTitle className="text-base flex items-center gap-1.5">
+              How elapsed months settle
+              <InfoHint
+                label="About settle modes"
+                text="Controls what the clock does to months it passes. Accrue only just lets balances grow (no records). Accept plan writes each month's planned contribution as a real deposit. Inject variance does the same but scaled, to stress under- or over-funding."
+              />
+            </CardTitle>
             <CardDescription>Choose what happens to projected rows as the clock passes them.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-2">
@@ -365,7 +409,13 @@ export function TimeMachine() {
             })}
             {matMode === "inject_variance" && (
               <div className="pt-2 space-y-1.5">
-                <Label htmlFor="cf" className="text-xs">Contribution realised (% of plan)</Label>
+                <Label htmlFor="cf" className="text-xs flex items-center gap-1.5">
+                  Contribution realised (% of plan)
+                  <InfoHint
+                    label="About contribution factor"
+                    text="Scales each materialised contribution. 100% records the full planned amount; 50% models under-funding; 150% models topping up. Yields and maturities still follow the plan."
+                  />
+                </Label>
                 <Input
                   id="cf"
                   type="number"
@@ -387,6 +437,10 @@ export function TimeMachine() {
             <div className="flex items-center gap-2">
               <Zap className="w-4 h-4 text-amber-500" />
               <CardTitle className="text-base">Rate-shock stress test</CardTitle>
+              <InfoHint
+                label="About rate-shock"
+                text="Shifts every yield (MMF + all CBK families) by a fixed number of percentage points from a chosen date, so you can model a CBK rate cut or hike. Withholding tax is unchanged and rates never go below 0%. The shock applies across the whole app until you clear it."
+              />
             </div>
             <CardDescription>
               Shift every yield (MMF + all CBK families) by a fixed amount from a chosen date to stress projected returns. WHT is unchanged; rates floor at 0%.
@@ -455,22 +509,42 @@ export function TimeMachine() {
                 ["month", "+1 month"],
                 ["year", "+1 year"],
               ] as const).map(([unit, lbl]) => (
-                <Button key={unit} variant="outline" size="sm" disabled={busy} onClick={() => doStep(unit)} className="h-9">
-                  {lbl}
-                </Button>
+                <Tooltip key={unit}>
+                  <TooltipTrigger asChild>
+                    <Button variant="outline" size="sm" disabled={busy} onClick={() => doStep(unit)} className="h-9">
+                      {lbl}
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent className="text-xs">
+                    Move the clock forward one {unit}, settling any months it crosses under the selected mode.
+                  </TooltipContent>
+                </Tooltip>
               ))}
             </div>
 
-            <Button variant="secondary" disabled={busy || !status?.nextEvent} onClick={doNextEvent} className="w-full">
-              <SkipForward className="w-4 h-4" />
-              {status?.nextEvent
-                ? `Jump to next event · ${status.nextEvent.label}`
-                : "No upcoming events"}
-            </Button>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="block">
+                  <Button variant="secondary" disabled={busy || !status?.nextEvent} onClick={doNextEvent} className="w-full">
+                    <SkipForward className="w-4 h-4" />
+                    {status?.nextEvent
+                      ? `Jump to next event · ${status.nextEvent.label}`
+                      : "No upcoming events"}
+                  </Button>
+                </span>
+              </TooltipTrigger>
+              <TooltipContent className="max-w-[16rem] text-xs leading-relaxed">
+                Skips straight to the next scheduled milestone — the soonest security maturity or planned contribution — instead of stepping day by day.
+              </TooltipContent>
+            </Tooltip>
 
             <div className="space-y-1.5">
               <Label htmlFor="jd" className="text-xs flex items-center gap-1.5">
                 <CalendarClock className="w-3.5 h-3.5" /> Jump to a specific date
+                <InfoHint
+                  label="About jump to date"
+                  text="Advances the simulated clock to any future calendar date in one move, settling every month in between. You can't travel earlier than the current simulated date — use Undo or Reset for that."
+                />
               </Label>
               <div className="flex gap-2">
                 <Input id="jd" type="date" value={jumpDate} onChange={(e) => setJumpDate(e.target.value)} className="h-9" />
@@ -515,8 +589,133 @@ export function TimeMachine() {
           </CardContent>
         </Card>
       )}
+
+      {/* Simulation history log */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <History className="w-4 h-4 text-muted-foreground" />
+              <CardTitle className="text-base">Simulation history</CardTitle>
+              <InfoHint
+                label="About the history log"
+                text="Every clock advance this session, newest first. The most recent step is marked 'next undo' — that's the one Undo last step will rewind. Reset to today clears the whole log."
+              />
+            </div>
+            {status?.history && status.history.length > 0 && (
+              <Badge variant="secondary" className="tabular-nums">
+                {status.history.length} step{status.history.length === 1 ? "" : "s"}
+              </Badge>
+            )}
+          </div>
+          <CardDescription>A step-by-step trail of how this simulation reached the current date.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {status?.history && status.history.length > 0 ? (
+            <ScrollArea className={cn(status.history.length > 6 && "h-[20rem] pr-3")}>
+              <div>
+                {(status.history as HistoryItem[]).map((item) => (
+                  <HistoryRow key={item.index} item={item} stepNumber={item.index + 1} />
+                ))}
+              </div>
+            </ScrollArea>
+          ) : (
+            <div className="flex flex-col items-center text-center gap-2 py-8 text-muted-foreground">
+              <History className="w-7 h-7 opacity-40" />
+              <p className="text-sm">No steps yet. Advance the clock above and each jump will be logged here.</p>
+            </div>
+          )}
+        </CardContent>
+      </Card>
     </div>
     </AppShell>
+  );
+}
+
+/** Small inline "?" icon that reveals an explanation on hover/focus/tap. */
+function InfoHint({ text, label }: { text: string; label?: string }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          aria-label={label ?? "More information"}
+          className="inline-flex items-center text-muted-foreground/70 hover:text-foreground focus-visible:text-foreground focus-visible:outline-none transition-colors"
+          onClick={(e) => e.preventDefault()}
+        >
+          <HelpCircle className="w-3.5 h-3.5" />
+        </button>
+      </TooltipTrigger>
+      <TooltipContent className="max-w-[16rem] text-xs leading-relaxed">{text}</TooltipContent>
+    </Tooltip>
+  );
+}
+
+type HistoryItem = {
+  index: number;
+  fromLabel: string;
+  toLabel: string;
+  mode: Mode;
+  targetLabel: string;
+  monthsElapsed: number | null;
+  contributionsWritten: number;
+  contributionTotal: number | null;
+  rateShock: { effectiveDate: string; deltaPct: number } | null;
+  createdAt: number | null;
+  isNextUndoable: boolean;
+};
+
+const MODE_SHORT: Record<Mode, string> = {
+  accrue_only: "Accrue only",
+  accept_plan: "Accept plan",
+  inject_variance: "Inject variance",
+};
+
+function HistoryRow({ item, stepNumber }: { item: HistoryItem; stepNumber: number }) {
+  return (
+    <div className="relative pl-6 pb-4 last:pb-0">
+      {/* timeline rail + dot */}
+      <span className="absolute left-[5px] top-1.5 bottom-0 w-px bg-border" aria-hidden />
+      <span
+        className={cn(
+          "absolute left-0 top-1 w-[11px] h-[11px] rounded-full border-2",
+          item.isNextUndoable ? "border-primary bg-primary/30" : "border-muted-foreground/40 bg-background",
+        )}
+        aria-hidden
+      />
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <span className="text-xs font-medium text-muted-foreground">#{stepNumber}</span>
+        <span className="text-sm font-semibold tabular-nums">{item.fromLabel}</span>
+        <ArrowRight className="w-3.5 h-3.5 text-muted-foreground" />
+        <span className="text-sm font-semibold tabular-nums">{item.toLabel}</span>
+        <Badge variant="secondary" className="text-[10px] px-1.5 py-0">{MODE_SHORT[item.mode]}</Badge>
+        {item.isNextUndoable && (
+          <Badge className="text-[10px] px-1.5 py-0 bg-primary/15 text-primary hover:bg-primary/20">
+            <CornerUpLeft className="w-3 h-3 mr-0.5" /> next undo
+          </Badge>
+        )}
+      </div>
+      <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
+        <span>{item.targetLabel}</span>
+        {item.monthsElapsed != null && item.monthsElapsed > 0 && (
+          <span>· {item.monthsElapsed} month{item.monthsElapsed === 1 ? "" : "s"} elapsed</span>
+        )}
+        {item.contributionsWritten > 0 && (
+          <span className="text-foreground">
+            · {item.contributionsWritten} contribution{item.contributionsWritten === 1 ? "" : "s"}
+            {item.contributionTotal != null ? ` (${formatKES(item.contributionTotal)})` : ""}
+          </span>
+        )}
+        {item.rateShock && (
+          <span className="text-amber-600 dark:text-amber-400">
+            · shock {item.rateShock.deltaPct >= 0 ? "+" : ""}{item.rateShock.deltaPct}% from {item.rateShock.effectiveDate}
+          </span>
+        )}
+        {item.createdAt && (
+          <span className="opacity-70">· {new Date(item.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+        )}
+      </div>
+    </div>
   );
 }
 

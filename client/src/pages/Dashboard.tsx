@@ -153,7 +153,7 @@ export default function Dashboard() {
   // sandbox session is active, else the real clock. Threading this into every
   // client-side security valuation keeps these cards in lock-step with the
   // server's reconciliation (which uses getNow), so no client/server drift.
-  const { simulatedDate } = useSimulatedNow();
+  const { simulatedDate, active: simActive, label: simLabel } = useSimulatedNow();
   const effectiveNowMs = simulatedDate ?? Date.now();
   const [createOpen, setCreateOpen] = useState(false);
   const utils = trpc.useUtils();
@@ -789,9 +789,12 @@ export default function Dashboard() {
           }[risk];
           const RiskIcon = riskMeta.icon;
           // R52 — "as of" timestamp so the mark-to-model figures are clearly dated.
-          const asOf = new Date().toLocaleString(undefined, {
+          // R77 — date from the EFFECTIVE clock (simulated when the Time Machine is
+          // active) so the basis of the figure is explicit and consistent with the
+          // valuation, which is itself computed at effectiveNowMs.
+          const asOf = new Date(effectiveNowMs).toLocaleString(undefined, {
             dateStyle: "medium",
-            timeStyle: "short",
+            ...(simActive ? {} : { timeStyle: "short" as const }),
           });
           return (
             <div className="space-y-3">
@@ -805,6 +808,11 @@ export default function Dashboard() {
                   <p className="text-xs text-muted-foreground mt-0.5">
                     Mark-to-model value of {v.lots} active {v.lots === 1 ? "lot" : "lots"} today
                   </p>
+                  {simActive && simLabel && (
+                    <p className="mt-1 inline-flex items-center gap-1 text-[10px] font-medium text-amber-500/90">
+                      <Clock className="h-2.5 w-2.5" /> as of simulated date · {simLabel}
+                    </p>
+                  )}
                 </div>
                 <div className="rounded-xl border border-white/10 bg-white/[0.02] p-4">
                   <div className="flex items-center gap-2 text-muted-foreground">
@@ -1704,6 +1712,11 @@ export default function Dashboard() {
                 <p className="text-xs text-muted-foreground mt-1.5">
                   This is the total portfolio value you will <strong className="text-foreground">hold in your accounts</strong> at the end of Month {horizonMonths} — not what you put in, but what you will have.
                 </p>
+                {simActive && simLabel && (
+                  <p className="mt-1.5 inline-flex items-center gap-1 text-[10px] font-medium text-amber-500/90">
+                    <Clock className="h-2.5 w-2.5" /> projected from simulated date · {simLabel}
+                  </p>
+                )}
               </div>
 
               {/* Target amount — editable */}

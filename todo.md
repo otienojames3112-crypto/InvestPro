@@ -846,3 +846,14 @@
 - [x] TM.34 "As of simulated date" stamp on Securities valuation cards (Active Holdings header badge + per-row current-value stamp), shown only when a simulation is active.
 - [x] TM.35 Settled/projected flag column in the Ledger CSV export — already present ("Basis" = Actual/Projected); verified, no change needed.
 - [x] TM.36 Tests for new pure helpers (server/round76.test.ts, 11 cases) + full suite 678 green + tsc clean.
+
+## Round 77 — Actual-vs-planned ledger narration + TM consistency (bank tab, dashboard tiles)
+- [x] TM.37 Audited Main Action builder; added pure helpers buildActualSavingClause + UNEXECUTED_SWEEP_NOTE next to pastTensifyMainAction.
+- [x] TM.38 Settled-month contribution narration branches implemented: matched / skipped / under / over, all past tense, with an offPlan divergence flag.
+- [x] TM.39 Unexecuted projected sweep on a settled month narrates UNEXECUTED_SWEEP_NOTE instead of a fake "Moved KES"; date-driven maturities still narrate.
+- [x] TM.40 Forward (projected) rows unchanged — branch gated on isActualMonth; verified by test (forward rows never offPlan, keep future tense).
+- [x] TM.41 Off-plan divergence marker (amber dot + tooltip) on diverged settled Ledger rows; matched months unmarked; CSV gains an "Off-plan" column.
+- [x] TM.42 Settled Main Action composes from materialized actuals (real deposits via actualMmfByMonth, real balances); sweeps never execute in actual months.
+- [x] TM.43 Tense-aware status badge on Daily Accrual Bank instruments tab: bankRowStatus + isLiveBank, effectiveNow threaded into buildBankIncome/buildBankDailySchedule, generic badge renders for bank rows.
+- [x] TM.44 "As of simulated date" stamp on Dashboard projected-value card + Total Current Value tile; existing mark-to-model asOf now derives from effectiveNowMs (was real clock).
+- [x] TM.45 Tests added (server/round77.test.ts, 17 cases): skipped/under/over/matched clause, bankRowStatus, buildBankIncome now-threading, settled-month integration (skipped contribution narration + offPlan), forward-tense guard, sweep-note constant. Full suite 695 green, tsc clean.

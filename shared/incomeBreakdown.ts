@@ -194,14 +194,56 @@ const BANK_LABELS: Record<BankInstrumentType, string> = {
   tiered_savings: "Tiered savings",
 };
 
+/**
+ * Tense-aware status of a bank instrument relative to the effective "now". Call
+ * deposits, ordinary/target/tiered savings have no fixed maturity, so they are
+ * always "Accruing". Fixed deposits follow the same matured/maturing/accruing
+ * rule as securities, reading "Matured (returned to cash)" once settled.
+ */
+export function bankRowStatus(
+  h: Pick<BankIncomeInput, "maturityDate" | "instrumentType">,
+  now: number = Date.now(),
+): SecurityRowStatusInfo {
+  if (!h.maturityDate) {
+    return { status: "accruing", isPast: false, label: "Accruing" };
+  }
+  const m = new Date(h.maturityDate);
+  m.setHours(0, 0, 0, 0);
+  const today = new Date(now);
+  today.setHours(0, 0, 0, 0);
+  if (m.getTime() < today.getTime()) {
+    return { status: "matured", isPast: true, label: "Matured (returned to cash)" };
+  }
+  if (m.getTime() === today.getTime()) {
+    return { status: "maturing", isPast: false, label: "Maturing today" };
+  }
+  return { status: "accruing", isPast: false, label: "Accruing" };
+}
+
+/**
+ * A bank instrument is "live" (still earning, shown in the breakdown) unless it
+ * is a fixed deposit whose maturity date has strictly passed in the effective
+ * timeline. Open-ended deposits (call/savings) are always live.
+ */
+function isLiveBank(h: BankIncomeInput, now: number = Date.now()): boolean {
+  if (h.isActive === false) return false;
+  if (!h.maturityDate) return true;
+  const m = new Date(h.maturityDate);
+  m.setHours(0, 0, 0, 0);
+  const today = new Date(now);
+  today.setHours(0, 0, 0, 0);
+  return m.getTime() >= today.getTime();
+}
+
 /** Build the bank-instrument income breakdown over `days`. */
 export function buildBankIncome(
   holdings: BankIncomeInput[],
   days: number,
+  now: number = Date.now(),
 ): IncomeSummary {
   const rows: IncomeRow[] = [];
   for (const h of holdings) {
-    if (h.isActive === false) continue;
+    if (!isLiveBank(h, now)) continue;
     const base = Math.max(0, h.principal);
     const ratePct = Math.max(0, h.interestRate);
     const dayCount = h.dayCountBasis && h.dayCountBasis > 0 ? h.dayCountBasis : 365;
@@ -223,6 +265,8 @@ export function buildBankIncome(
       whtHorizon: proRata(whtAnnual, days),
       netHorizon: proRata(netAnnual, days),
       taxExempt: false,
+      status: bankRowStatus(h, now).status,
+      statusLabel: bankRowStatus(h, now).label,
     });
   }
   return summarize(rows);
@@ -403,13 +447,14 @@ export function buildSecurityDailySchedule(
 export function buildBankDailySchedule(
   holdings: BankIncomeInput[],
   days: number,
+  now: number = Date.now(),
 ): DailyAccrualSchedule {
   const n = Math.max(1, Math.floor(days));
   let grossPerDay = 0;
   let whtPerDay = 0;
   let base = 0;
   for (const h of holdings) {
-    if (h.isActive === false) continue;
+    if (!isLiveBank(h, now)) continue;
     const principal = Math.max(0, h.principal);
     const ratePct = Math.max(0, h.interestRate);
     const dayCount = h.dayCountBasis && h.dayCountBasis > 0 ? h.dayCountBasis : 365;

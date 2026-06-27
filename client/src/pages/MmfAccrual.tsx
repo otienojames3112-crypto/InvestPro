@@ -232,8 +232,9 @@ export default function MmfAccrual() {
           } satisfies BankIncomeInput;
         }),
         days,
+        effectiveNow,
       ),
-    [bankHoldingsData, days],
+    [bankHoldingsData, days, effectiveNow],
   );
 
   const securityDaily = useMemo(
@@ -276,8 +277,9 @@ export default function MmfAccrual() {
           } satisfies BankIncomeInput;
         }),
         days,
+        effectiveNow,
       ),
-    [bankHoldingsData, days],
+    [bankHoldingsData, days, effectiveNow],
   );
 
   const selectedAccount = useMemo(
@@ -929,10 +931,10 @@ function IncomeBreakdownSection({
                                 }
                                 title={
                                   r.status === "matured"
-                                    ? "This security has matured as of the current (simulated) date — its principal and final coupon have settled."
+                                    ? "This holding has matured as of the current (simulated) date — its principal has settled and returned to cash."
                                     : r.status === "maturing"
-                                      ? "This security matures on the current (simulated) date."
-                                      : "This security is still live and accruing toward a future maturity."
+                                      ? "This holding matures on the current (simulated) date."
+                                      : "This holding is still live and accruing toward a future maturity."
                                 }
                               >
                                 {r.statusLabel}

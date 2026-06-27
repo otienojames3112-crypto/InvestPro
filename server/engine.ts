@@ -370,6 +370,14 @@ export interface MonthResult {
   whtThisMonth: number;
   /** True if this month's data comes from actual deposits/securities. */
   isActual: boolean;
+  /**
+   * R77: only meaningful on settled (actual) months. True when the recorded
+   * reality diverged from the plan — a skipped, under-funded, or over-funded
+   * contribution, or a sweep the plan projected that the real balance couldn't
+   * fund. Drives the ledger's quiet "off-plan" row marker. Always false on
+   * forward (projected) rows.
+   */
+  offPlan: boolean;
   /** True when the short-horizon strategy is active (MMF + T-bills only). */
   isShortHorizon: boolean;
   /**
@@ -989,6 +997,78 @@ export function pastTensifyMainAction(s: string): string {
     .replace(/\bAdd KES/g, "Added KES")
     .replace(/Add this month's saving/g, "Added this month's saving");
 }
+
+/**
+ * How a settled month's REAL contribution compared to what the step-up schedule
+ * had planned for it. Drives both the past-tense saving clause and the row's
+ * off-plan marker. "none" means there was nothing planned and nothing recorded.
+ */
+export type ContributionDivergence = "matched" | "skipped" | "under" | "over" | "none";
+
+export interface ActualSavingClause {
+  /** Past-tense narration of what was (or wasn't) saved vs the plan. */
+  text: string;
+  divergence: ContributionDivergence;
+}
+
+/** Rounding tolerance (KES) within which actual ≈ planned counts as "matched". */
+export const CONTRIBUTION_MATCH_TOLERANCE = 1;
+
+const kesInt = (n: number) => Math.round(n).toLocaleString();
+
+/**
+ * Build the past-tense saving clause for a SETTLED (actual) month by comparing
+ * the real recorded contribution against the originally-planned amount.
+ *
+ *  - matched  : "Added KES 20,000 of savings to the MMF"
+ *  - skipped  : "No contribution recorded this month (KES 20,000 was planned)"
+ *  - under    : "Added KES 12,000 to the MMF — KES 8,000 short of the KES 20,000 planned"
+ *  - over     : "Added KES 60,000 to the MMF — KES 40,000 above the KES 20,000 planned"
+ *
+ * `planned <= 0` with no actual yields "none" (nothing was expected). The caller
+ * composes maturities/sweeps around this clause; this function only narrates the
+ * contribution leg.
+ */
+export function buildActualSavingClause(actual: number, planned: number): ActualSavingClause {
+  const a = Math.max(0, actual);
+  const p = Math.max(0, planned);
+  const diff = a - p;
+
+  if (p <= CONTRIBUTION_MATCH_TOLERANCE && a <= CONTRIBUTION_MATCH_TOLERANCE) {
+    return { text: "", divergence: "none" };
+  }
+  if (Math.abs(diff) <= CONTRIBUTION_MATCH_TOLERANCE) {
+    return {
+      text: `Added KES ${kesInt(a)} of savings to the MMF`,
+      divergence: "matched",
+    };
+  }
+  if (a <= CONTRIBUTION_MATCH_TOLERANCE) {
+    return {
+      text: `No contribution recorded this month (KES ${kesInt(p)} was planned)`,
+      divergence: "skipped",
+    };
+  }
+  if (diff < 0) {
+    return {
+      text: `Added KES ${kesInt(a)} to the MMF — KES ${kesInt(-diff)} short of the KES ${kesInt(p)} planned`,
+      divergence: "under",
+    };
+  }
+  return {
+    text: `Added KES ${kesInt(a)} to the MMF — KES ${kesInt(diff)} above the KES ${kesInt(p)} planned`,
+    divergence: "over",
+  };
+}
+
+/**
+ * Narration used when the plan projected a sweep into securities for a settled
+ * month but the REAL MMF balance couldn't fund it (e.g. the contribution was
+ * skipped). Date-driven maturities are unaffected and narrate separately.
+ */
+export const UNEXECUTED_SWEEP_NOTE =
+  "no sweep this month — MMF balance below the sweep threshold after the missed contribution";
+
 
 /** Human-readable tenor label for a swept lot, e.g. "364-day T-bill". */
 export function tenorLabel(bucket: "tbill" | "ifb" | "fxd", tenorMonths: number): string {
@@ -1865,18 +1945,57 @@ export function runProjection(
     const maturityActions = [...cbkActions, ...bankMaturityActions];
     // Did any cash mature into the MMF this month (CBK or bank term deposit)?
     const maturedCashThisMonth = cbkCashIn + bankMaturedCashIn > 0;
-    if (maturityActions.length > 0 && sweepDesc) {
+
+    // R77 — off-plan tracking for SETTLED months: a settled row narrates what
+    // REALLY happened (real deposit vs the planned step-up) and flags rows that
+    // diverged so a scanner can spot them without reading every Main Action.
+    let offPlan = false;
+
+    if (isActualMonth) {
+      // ── SETTLED MONTH (actuals) ──────────────────────────────────────────
+      // Compose entirely from the materialized record: date-driven maturities
+      // (which still occur regardless of contributions) + the real contribution
+      // compared to what the plan had scheduled, and a note when a sweep the
+      // plan would have made couldn't be funded by the real balance.
+      const planned = getScheduledContribution(m, settings)
+        + (override?.overrideAmount !== undefined ? override.overrideAmount - getScheduledContribution(m, settings) : 0)
+        + (override?.lumpSum ?? 0);
+      const saving = buildActualSavingClause(contribution, planned);
+      offPlan = saving.divergence === "skipped" || saving.divergence === "under" || saving.divergence === "over";
+
+      // Would the plan have swept this month, but the real balance couldn't fund
+      // it? In a sweeping phase, had the planned contribution landed, the
+      // investable surplus would have cleared one lot; with the real (skipped or
+      // short) deposit it does not. Maturities are unaffected and narrate above.
+      const actualSurplus = mmf - settings.safetyFloor;
+      const plannedSurplus = mmf - contribution + planned - settings.safetyFloor;
+      const sweepWouldHaveRun =
+        guard.allowed &&
+        (saving.divergence === "skipped" || saving.divergence === "under") &&
+        plannedSurplus >= SWEEP_LOT_SIZE &&
+        actualSurplus < SWEEP_LOT_SIZE;
+
+      const clauses: string[] = [];
+      if (maturityActions.length > 0) clauses.push(capitalise(maturityActions.join("; ")));
+      if (saving.text) {
+        clauses.push(maturityActions.length > 0 ? lowerFirst(saving.text) : saving.text);
+      }
+      if (sweepWouldHaveRun) {
+        clauses.push(UNEXECUTED_SWEEP_NOTE);
+        offPlan = true;
+      }
+      if (clauses.length === 0) {
+        // Nothing planned and nothing recorded — a genuinely quiet month.
+        clauses.push("No new saving recorded this month; balance kept in the MMF");
+      }
+      mainAction = clauses.join("; ");
+    } else if (maturityActions.length > 0 && sweepDesc) {
       mainAction = `${capitalise(maturityActions.join("; "))}, then ${lowerFirst(sweepDesc)}`;
     } else if (maturityActions.length > 0) {
       // Cash matured but nothing was re-deployed — say so explicitly and why.
       mainAction = `${capitalise(maturityActions.join("; "))}; kept in the MMF (no instrument matures before your goal date)`;
     } else if (sweepDesc) {
       mainAction = sweepDesc;
-    } else if (isActualMonth && contribution > 0) {
-      // R75 — settled month with a recorded contribution: state the ACTUAL KES
-      // that went in (this is the materialized deposit, e.g. an injected-variance
-      // amount), not the originally-scheduled figure.
-      mainAction = `Add KES ${Math.round(contribution).toLocaleString()} of savings to the MMF; nothing swept into securities this month`;
     } else {
       mainAction = "Add this month's saving to the MMF; nothing swept into securities this month";
     }
@@ -1917,6 +2036,7 @@ export function runProjection(
       sweepTarget,
       whtThisMonth: Math.round(whtThisMonth * 100) / 100,
       isActual: isActualMonth,
+      offPlan,
       isShortHorizon,
       sweepRationale,
       maturityBreakdown: [...maturityBreakdown, ...bankMaturityBreakdown],

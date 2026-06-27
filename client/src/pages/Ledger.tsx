@@ -144,12 +144,13 @@ export default function Ledger() {
       return;
     }
     const headers = [
-      "Month", "Basis", "Date", "Save", "CBK In", "Bank In", "MMF->Securities",
+      "Month", "Basis", "Off-plan", "Date", "Save", "CBK In", "Bank In", "MMF->Securities",
       "Main Action", "MMF End", "T-Bill 91d", "T-Bill 182d", "T-Bill 364d", "IFB", "FXD", "Bank", "Total", "Phase",
     ];
     const rows = rowsSrc.map((r) => [
       r.monthNumber,
       r.isActual ? "Actual" : "Projected",
+      r.isActual && r.offPlan ? "Off-plan" : "",
       getMonthLabel(startDate, r.monthNumber),
       r.contribution,
       r.cbkCashIn,
@@ -170,7 +171,7 @@ export default function Ledger() {
     const flowSum = (sel: (r: (typeof rowsSrc)[number]) => number) =>
       rowsSrc.reduce((s, r) => s + (sel(r) || 0), 0);
     const totalRow = [
-      "TOTAL", "", `${rowsSrc.length} months`,
+      "TOTAL", "", "", `${rowsSrc.length} months`,
       flowSum((r) => r.contribution),
       flowSum((r) => r.cbkCashIn),
       flowSum((r) => r.bankCashIn),
@@ -371,11 +372,28 @@ export default function Ledger() {
                         >
                           <td className="px-4 py-2.5 font-semibold text-foreground">{r.monthNumber}</td>
                           <td className="px-4 py-2.5">
-                            {r.isActual ? (
-                              <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-emerald-500/40 text-emerald-300">Actual</Badge>
-                            ) : (
-                              <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-border text-muted-foreground">Proj.</Badge>
-                            )}
+                            <div className="flex items-center gap-1.5">
+                              {r.isActual ? (
+                                <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-emerald-500/40 text-emerald-300">Actual</Badge>
+                              ) : (
+                                <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-border text-muted-foreground">Proj.</Badge>
+                              )}
+                              {r.offPlan && (
+                                <TooltipProvider delayDuration={150}>
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <span
+                                        className="inline-block h-1.5 w-1.5 rounded-full bg-amber-400 ring-2 ring-amber-400/20"
+                                        aria-label="Off-plan month"
+                                      />
+                                    </TooltipTrigger>
+                                    <TooltipContent side="right" className="max-w-[220px] text-xs">
+                                      Off-plan: this settled month diverged from the plan (skipped, short, over, or a sweep the balance couldn&rsquo;t fund). See Main Action.
+                                    </TooltipContent>
+                                  </Tooltip>
+                                </TooltipProvider>
+                              )}
+                            </div>
                           </td>
                           <td className="px-4 py-2.5 text-muted-foreground whitespace-nowrap">
                             {getMonthLabel(startDate, r.monthNumber)}

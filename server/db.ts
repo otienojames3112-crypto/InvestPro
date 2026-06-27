@@ -1277,3 +1277,66 @@ export async function getPortfolioByDriftDigestTaskUid(taskUid: string) {
     .limit(1);
   return rows[0] ?? null;
 }
+
+// ─── Time Machine (sandbox only) ────────────────────────────────────────────────
+
+/**
+ * Delete every record tagged with a given simulation session id for one
+ * portfolio. This is the single, surgical "Reset to today" cleanup: because the
+ * time machine tags every row it creates with the active `simSessionId`, dropping
+ * exactly those rows restores the portfolio to its pre-simulation state without
+ * touching any record the user entered by hand. Cascades through the same linked
+ * deposit/withdrawal rows as a manual delete so no orphans survive.
+ *
+ * Returns per-table counts so the caller can report what was rolled back.
+ */
+export async function deleteSimSessionRecords(
+  portfolioId: number,
+  simSessionId: string,
+): Promise<{ securities: number; deposits: number; withdrawals: number }> {
+  const db = await getDb();
+  if (!db) return { securities: 0, deposits: 0, withdrawals: 0 };
+
+  // Snapshot counts first (mysql2 driver doesn't reliably return affectedRows here).
+  const simSecs = await db
+    .select()
+    .from(securities)
+    .where(and(eq(securities.portfolioId, portfolioId), eq(securities.simSessionId, simSessionId)));
+  const simDeps = await db
+    .select()
+    .from(depositEntries)
+    .where(and(eq(depositEntries.portfolioId, portfolioId), eq(depositEntries.simSessionId, simSessionId)));
+  const simWds = await db
+    .select()
+    .from(withdrawalEntries)
+    .where(and(eq(withdrawalEntries.portfolioId, portfolioId), eq(withdrawalEntries.simSessionId, simSessionId)));
+
+  // Order matters: drop withdrawals + deposits first, then securities, so the
+  // generic security cascade can't double-remove a row we already counted.
+  await db
+    .delete(withdrawalEntries)
+    .where(and(eq(withdrawalEntries.portfolioId, portfolioId), eq(withdrawalEntries.simSessionId, simSessionId)));
+  await db
+    .delete(depositEntries)
+    .where(and(eq(depositEntries.portfolioId, portfolioId), eq(depositEntries.simSessionId, simSessionId)));
+  await db
+    .delete(securities)
+    .where(and(eq(securities.portfolioId, portfolioId), eq(securities.simSessionId, simSessionId)));
+
+  return { securities: simSecs.length, deposits: simDeps.length, withdrawals: simWds.length };
+}
+
+/** Count records tagged with a session id (for the post-advance summary). */
+export async function countSimSessionRecords(
+  portfolioId: number,
+  simSessionId: string,
+): Promise<{ securities: number; deposits: number; withdrawals: number }> {
+  const db = await getDb();
+  if (!db) return { securities: 0, deposits: 0, withdrawals: 0 };
+  const [secs, deps, wds] = await Promise.all([
+    db.select().from(securities).where(and(eq(securities.portfolioId, portfolioId), eq(securities.simSessionId, simSessionId))),
+    db.select().from(depositEntries).where(and(eq(depositEntries.portfolioId, portfolioId), eq(depositEntries.simSessionId, simSessionId))),
+    db.select().from(withdrawalEntries).where(and(eq(withdrawalEntries.portfolioId, portfolioId), eq(withdrawalEntries.simSessionId, simSessionId))),
+  ]);
+  return { securities: secs.length, deposits: deps.length, withdrawals: wds.length };
+}

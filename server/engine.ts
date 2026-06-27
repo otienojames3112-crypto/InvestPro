@@ -122,6 +122,13 @@ export interface EngineSettings {
    * concentrates in the highest net-yield home; "custom" uses the user-set caps.
    */
   allocationPolicy?: "balanced" | "yield_first" | "custom";
+  /**
+   * Time Machine (sandbox only): override for "today" as Unix-ms (UTC). When
+   * provided, the engine treats this as the current date for the actual/projected
+   * boundary, lot ages, maturity checks, and coupon timing — letting a simulated
+   * clock fast-forward the ledger. Undefined = real clock (new Date()).
+   */
+  nowOverride?: number;
 }
 
 /** An individual security lot held in the DhowCSD portfolio. */
@@ -528,6 +535,26 @@ export function netYield(grossPct: number, whtPct: number): number {
 /** Monthly compounding factor from a net annual yield percentage. */
 export function monthlyRate(netAnnualPct: number): number {
   return Math.pow(1 + netAnnualPct / 100, 1 / 12) - 1;
+}
+
+/**
+ * Compute the engine's elapsed-month index (`currentMonth`) for a given clock
+ * instant, mirroring the exact formula runProjection uses internally. Exposed so
+ * the Time Machine can ask "how many whole months have elapsed at boundary X?"
+ * with the same month-granularity arithmetic the projection boundary uses.
+ */
+export function computeCurrentMonth(
+  startDateIso: string,
+  nowMs: number,
+  horizonMonths: number,
+): number {
+  const startDate = new Date((startDateIso ?? new Date().toISOString().split("T")[0]) + "T12:00:00Z");
+  const today = new Date(nowMs);
+  const monthsSinceStart = Math.floor(
+    (today.getFullYear() - startDate.getFullYear()) * 12 +
+    (today.getMonth() - startDate.getMonth()),
+  );
+  return Math.max(0, Math.min(monthsSinceStart, horizonMonths));
 }
 
 export function getScheduledContribution(
@@ -999,7 +1026,7 @@ export function runProjection(
   const startDate = new Date(
     (settings.startDate ?? new Date().toISOString().split("T")[0]) + "T12:00:00Z"
   );
-  const today = new Date();
+  const today = settings.nowOverride != null ? new Date(settings.nowOverride) : new Date();
   const monthsSinceStart = Math.floor(
     (today.getFullYear() - startDate.getFullYear()) * 12 +
     (today.getMonth() - startDate.getMonth())

@@ -78,6 +78,8 @@ import {
   setDriftLastNotifiedAt,
   setDriftDigestConfig,
   setDriftDigestPending,
+  deleteSimSessionRecords,
+  countSimSessionRecords,
 } from "./db";
 import { notifyOwner } from "./_core/notification";
 import { createHeartbeatJob, updateHeartbeatJob, deleteHeartbeatJob } from "./_core/heartbeat";
@@ -90,6 +92,7 @@ import {
   deriveStepUps,
   checkMilestones,
   getScheduledContribution,
+  computeCurrentMonth,
   generateMilestones,
   solveForContribution,
   solveForStepUp,
@@ -131,6 +134,20 @@ import {
 } from "../shared/securityTenor";
 import { buildAllocation, blendedYield } from "../shared/actuals";
 import { discountPriceForSecurity, tbillPrice, parseBreachAckRow } from "../shared/discount";
+import {
+  advance as advanceClock,
+  toUtcMidnight,
+  todayUtcMidnight,
+  nextEventAfter,
+  clampTarget,
+  parseDateToUtcMidnight,
+  formatUtcDate,
+  type SimEvent,
+  type StepUnit,
+  type MaterializeMode,
+} from "../shared/timeMachine";
+import { buildMaterializePlan } from "./timeMachineEngine";
+import { randomUUID } from "crypto";
 import {
   allocateLiquidReserve,
   isLiquidBankKind,
@@ -212,7 +229,33 @@ function dbToEngine(
         | "yield_first"
         | "custom"
         | undefined) ?? "balanced",
+    // Time Machine (sandbox only): a simulated "today" overrides the real clock
+    // for the whole projection (actual/projected boundary, lot ages, maturity &
+    // coupon timing). Only honoured for sandbox portfolios; Live always real.
+    nowOverride: simulatedNow(p),
   };
+}
+
+/**
+ * Time Machine source of truth for "now" (Unix-ms). Returns the portfolio's
+ * simulatedDate when it is a SANDBOX portfolio with the clock set, otherwise
+ * undefined (engine falls back to the real clock). Live portfolios always read
+ * the real clock, even if a stray simulatedDate were ever present.
+ */
+function simulatedNow(
+  p: Awaited<ReturnType<typeof getPortfolio>>,
+): number | undefined {
+  if (!p) return undefined;
+  const sandbox = (p as { isSandbox?: boolean }).isSandbox === true;
+  const sim = (p as { simulatedDate?: number | null }).simulatedDate;
+  return sandbox && sim != null ? sim : undefined;
+}
+
+/** As {@link simulatedNow} but always returns a concrete ms (real clock fallback). */
+export function getNow(
+  p: Awaited<ReturnType<typeof getPortfolio>>,
+): number {
+  return simulatedNow(p) ?? Date.now();
 }
 
 function normaliseDate(d: Date | string | null | undefined): string {
@@ -628,6 +671,91 @@ const portfolioCreateInput = z.object({
   driftAlertThresholdPct: z.number().min(1).max(50).optional(),
 });
 
+/**
+ * Assemble the full input bundle runProjection needs for a portfolio. Centralised
+ * so the projection.run procedure AND the Time Machine share one identical path —
+ * any divergence would let a fast-forward disagree with the live projection.
+ */
+async function loadProjectionInputs(
+  portfolioId: number,
+  p: Awaited<ReturnType<typeof getPortfolio>>,
+) {
+  const [rates, fundEar] = await Promise.all([getRateSettings(portfolioId), getSelectedFundEar(p)]);
+  const settings = dbToEngine(rates, p, fundEar);
+  const overrides = await getContributionOverrides(portfolioId);
+  const mappedOverrides = overrides.map((o) => ({
+    monthNumber: o.monthNumber,
+    overrideAmount: o.overrideAmount ? parseFloat(String(o.overrideAmount)) : undefined,
+    lumpSum: o.lumpSum ? parseFloat(String(o.lumpSum)) : undefined,
+  }));
+  const rh = mapRateHistory(await getRateHistory(portfolioId));
+  const depositRows = await getDepositEntries(portfolioId);
+  const withdrawalRows = await getWithdrawalEntries(portfolioId);
+  const actualDeposits = [
+    ...mapActualDeposits(depositRows),
+    ...mapPrimaryMmfWithdrawalsAsDeposits(withdrawalRows, p?.mmfFundId ?? null),
+  ];
+  const actualSecurities = mapActualSecurities(await getSecurities(portfolioId));
+  const secondaryMmfs = mapSecondaryMmfs(await getSecondaryMmfs(portfolioId));
+  const bankHoldings = mapActualBankHoldings(await getBankInstrumentHoldings(portfolioId));
+  return { settings, mappedOverrides, rh, actualDeposits, actualSecurities, secondaryMmfs, bankHoldings };
+}
+
+/** Run the projection for a portfolio with an OPTIONAL explicit clock override. */
+async function projectAt(
+  portfolioId: number,
+  p: Awaited<ReturnType<typeof getPortfolio>>,
+  nowOverride?: number,
+) {
+  const inp = await loadProjectionInputs(portfolioId, p);
+  const settings = nowOverride != null ? { ...inp.settings, nowOverride } : inp.settings;
+  const months = runProjection(
+    settings,
+    inp.mappedOverrides,
+    inp.rh,
+    inp.actualDeposits,
+    inp.actualSecurities,
+    inp.secondaryMmfs,
+    inp.bankHoldings,
+    p?.mmfFundId ?? null,
+  );
+  return { months, settings };
+}
+
+/**
+ * Build the list of upcoming simulated events (maturities + future contributions)
+ * the Time Machine can "jump to next". Maturities come from the live securities;
+ * contributions come from the engine's projected months strictly after the
+ * current boundary. All instants are UTC-midnight.
+ */
+function buildUpcomingEvents(
+  securities: Awaited<ReturnType<typeof getSecurities>>,
+  startDateIso: string,
+  currentMonthIdx: number,
+  horizonMonths: number,
+): SimEvent[] {
+  const events: SimEvent[] = [];
+  for (const s of securities) {
+    if ((s as { isMatured?: boolean }).isMatured) continue;
+    const md = (s as { maturityDate?: Date | string | null }).maturityDate;
+    if (!md) continue;
+    const at = toUtcMidnight(new Date(md as string | Date).getTime());
+    const face = parseFloat(String((s as { faceValue?: unknown }).faceValue ?? "0")) || 0;
+    events.push({
+      at,
+      kind: "maturity",
+      label: `${String((s as { securityType?: string }).securityType ?? "security").toUpperCase()} matures (KES ${face.toLocaleString()})`,
+    });
+  }
+  // Next few month-boundary contributions (cap at +24 for a tidy menu).
+  const start = new Date(startDateIso + "T00:00:00Z");
+  for (let m = currentMonthIdx + 1; m <= Math.min(currentMonthIdx + 24, horizonMonths); m++) {
+    const at = Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + (m - 1), start.getUTCDate());
+    events.push({ at: toUtcMidnight(at), kind: "contribution", label: `Month ${m} contribution` });
+  }
+  return events.sort((a, b) => a.at - b.at);
+}
+
 const rateOnlyInput = z.object({
   portfolioId: z.number().int().positive(),
   mmfYield: z.number().min(0).max(100),
@@ -656,6 +784,257 @@ export const appRouter = router({
       const cookieOptions = getSessionCookieOptions(ctx.req);
       ctx.res.clearCookie(COOKIE_NAME, { ...cookieOptions, maxAge: -1 });
       return { success: true } as const;
+    }),
+  }),
+
+  // ─── Time Machine (sandbox only) ───────────────────────────────────────────
+  // Advances a SIMULATED clock so projected ledger rows materialise into
+  // actuals. Every write is tagged with a session id and is fully reversible via
+  // `reset`. Hard-guarded to sandbox portfolios so Live data can never be touched.
+  timeMachine: router({
+    /**
+     * Current simulation state: the simulated "today" (or null = real clock),
+     * the real-clock anchor, whether a session is active, how many records the
+     * session has materialised, and the next jump-to event.
+     */
+    status: protectedProcedure.input(portfolioIdInput).query(async ({ ctx, input }) => {
+      const p = await requirePortfolio(input.portfolioId, ctx.user.id);
+      const isSandbox = (p as { isSandbox?: boolean }).isSandbox === true;
+      const sim = (p as { simulatedDate?: number | null }).simulatedDate ?? null;
+      const session = (p as { simSessionId?: string | null }).simSessionId ?? null;
+      const anchor = todayUtcMidnight();
+      const startIso = normaliseDate(p?.startDate);
+      const horizon = p?.horizonMonths ?? 120;
+      const simNow = sim ?? anchor;
+      const currentMonthIdx = computeCurrentMonth(startIso, simNow, horizon);
+      let materialised = { securities: 0, deposits: 0, withdrawals: 0 };
+      if (session) materialised = await countSimSessionRecords(input.portfolioId, session);
+      let next: SimEvent | null = null;
+      if (isSandbox) {
+        const securities = await getSecurities(input.portfolioId);
+        const events = buildUpcomingEvents(securities, startIso, currentMonthIdx, horizon);
+        next = nextEventAfter(simNow, events);
+      }
+      return {
+        isSandbox,
+        active: sim != null,
+        simulatedDate: sim,
+        anchorDate: anchor,
+        simulatedDateLabel: formatUtcDate(simNow),
+        currentMonthIndex: currentMonthIdx,
+        materialised,
+        nextEvent: next,
+      };
+    }),
+
+    /** Upcoming jump-to events for the menu (maturities + contributions). */
+    upcomingEvents: protectedProcedure.input(portfolioIdInput).query(async ({ ctx, input }) => {
+      const p = await requirePortfolio(input.portfolioId, ctx.user.id);
+      if ((p as { isSandbox?: boolean }).isSandbox !== true) return [] as SimEvent[];
+      const startIso = normaliseDate(p?.startDate);
+      const horizon = p?.horizonMonths ?? 120;
+      const sim = (p as { simulatedDate?: number | null }).simulatedDate ?? todayUtcMidnight();
+      const currentMonthIdx = computeCurrentMonth(startIso, sim, horizon);
+      const securities = await getSecurities(input.portfolioId);
+      return buildUpcomingEvents(securities, startIso, currentMonthIdx, horizon)
+        .filter((e) => e.at > toUtcMidnight(sim))
+        .slice(0, 30);
+    }),
+
+    /**
+     * Begin a simulation session. Stamps a fresh session id and sets the
+     * simulated clock to real "today" (the anchor). Idempotent: re-starting keeps
+     * the existing session id so prior materialised rows stay owned by it.
+     */
+    start: protectedProcedure.input(portfolioIdInput).mutation(async ({ ctx, input }) => {
+      const p = await requirePortfolio(input.portfolioId, ctx.user.id);
+      if ((p as { isSandbox?: boolean }).isSandbox !== true) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "The Time Machine is available in Test mode only. Switch to a sandbox portfolio to simulate the future.",
+        });
+      }
+      const existingSession = (p as { simSessionId?: string | null }).simSessionId ?? null;
+      const session = existingSession ?? randomUUID();
+      const anchor = todayUtcMidnight();
+      await updatePortfolio(input.portfolioId, ctx.user.id, {
+        simulatedDate: anchor,
+        simSessionId: session,
+      } as never);
+      return { ok: true, simulatedDate: anchor, simSessionId: session };
+    }),
+
+    /**
+     * Advance the simulated clock. Target is one of: a fixed step (unit+count), a
+     * jump to the next event, or an explicit YYYY-MM-DD date. Then, per `mode`,
+     * materialise the newly-elapsed months' contributions as tagged actuals and
+     * re-project. Returns a before/after summary of what changed.
+     */
+    advance: protectedProcedure
+      .input(
+        z.object({
+          portfolioId: z.number().int().positive(),
+          target: z.discriminatedUnion("type", [
+            z.object({ type: z.literal("step"), unit: z.enum(["day", "week", "month", "year"]), count: z.number().int().min(1).max(120).optional() }),
+            z.object({ type: z.literal("nextEvent") }),
+            z.object({ type: z.literal("date"), date: z.string() }),
+          ]),
+          mode: z.enum(["accrue_only", "accept_plan", "inject_variance"]).optional(),
+          contributionFactor: z.number().min(0).max(5).optional(),
+          yieldFactor: z.number().min(0).max(5).optional(),
+        }),
+      )
+      .mutation(async ({ ctx, input }) => {
+        const p = await requirePortfolio(input.portfolioId, ctx.user.id);
+        if ((p as { isSandbox?: boolean }).isSandbox !== true) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "The Time Machine is available in Test mode only." });
+        }
+        const mode: MaterializeMode = input.mode ?? "accrue_only";
+        const startIso = normaliseDate(p?.startDate);
+        const horizon = p?.horizonMonths ?? 120;
+        const anchor = todayUtcMidnight();
+        // Ensure a session exists (auto-start on first advance).
+        let session = (p as { simSessionId?: string | null }).simSessionId ?? null;
+        const fromMs = (p as { simulatedDate?: number | null }).simulatedDate ?? anchor;
+
+        // Resolve the requested target instant.
+        let targetMs: number;
+        if (input.target.type === "step") {
+          targetMs = advanceClock(fromMs, input.target.unit as StepUnit, input.target.count ?? 1);
+        } else if (input.target.type === "date") {
+          const parsed = parseDateToUtcMidnight(input.target.date);
+          if (parsed == null) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: "Invalid date. Use YYYY-MM-DD." });
+          }
+          targetMs = parsed;
+        } else {
+          const securities = await getSecurities(input.portfolioId);
+          const curIdx = computeCurrentMonth(startIso, fromMs, horizon);
+          const events = buildUpcomingEvents(securities, startIso, curIdx, horizon);
+          const next = nextEventAfter(fromMs, events);
+          if (!next) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: "No upcoming events to jump to." });
+          }
+          targetMs = next.at;
+        }
+        targetMs = clampTarget(targetMs, anchor);
+        if (toUtcMidnight(targetMs) <= toUtcMidnight(fromMs)) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "That target is not in the future. Pick a later date or step." });
+        }
+
+        // Before snapshot (at the current boundary).
+        const before = await projectAt(input.portfolioId, p, fromMs);
+        const prevIdx = computeCurrentMonth(startIso, fromMs, horizon);
+        const nextIdx = computeCurrentMonth(startIso, targetMs, horizon);
+
+        // Materialise contributions for newly-elapsed months (accept_plan / variance).
+        let written = { deposits: 0, totalContribution: 0 };
+        if (mode !== "accrue_only" && nextIdx > prevIdx) {
+          if (!session) session = randomUUID();
+          // Project at the NEW boundary so contribution amounts reflect the plan there.
+          const plan = buildMaterializePlan(
+            (await projectAt(input.portfolioId, p, targetMs)).months,
+            startIso,
+            prevIdx,
+            nextIdx,
+            mode,
+            { contributionFactor: input.contributionFactor, yieldFactor: input.yieldFactor },
+          );
+          for (const spec of plan.specs) {
+            await addDepositEntry({
+              portfolioId: input.portfolioId,
+              bucket: "mmf",
+              institutionType: "mmf_fund",
+              mmfFundId: p?.mmfFundId ?? null,
+              bankHoldingId: null,
+              amount: String(spec.amount),
+              depositDate: new Date(spec.depositDate + "T12:00:00Z"),
+              notes: spec.notes,
+              simSessionId: session,
+            } as never);
+          }
+          written = { deposits: plan.specs.length, totalContribution: plan.totalContribution };
+        }
+
+        // Commit the new clock (and session, if just created).
+        await updatePortfolio(input.portfolioId, ctx.user.id, {
+          simulatedDate: targetMs,
+          simSessionId: session,
+        } as never);
+
+        // After snapshot (re-projected at the new boundary, including any writes).
+        const afterP = await getPortfolio(input.portfolioId, ctx.user.id);
+        const after = await projectAt(input.portfolioId, afterP, targetMs);
+        const beforeFinal = before.months[before.months.length - 1]?.totalEnd ?? 0;
+        const afterFinal = after.months[after.months.length - 1]?.totalEnd ?? 0;
+        const beforeToday = before.months[prevIdx]?.totalEnd ?? before.months[0]?.totalEnd ?? 0;
+        const afterToday = after.months[nextIdx]?.totalEnd ?? 0;
+
+        // Maturities that the jump passed through (for the summary surface).
+        const maturedThrough = (await getSecurities(input.portfolioId)).filter((s) => {
+          const md = (s as { maturityDate?: Date | string | null }).maturityDate;
+          if (!md || (s as { isMatured?: boolean }).isMatured) return false;
+          const at = toUtcMidnight(new Date(md as string | Date).getTime());
+          return at > toUtcMidnight(fromMs) && at <= toUtcMidnight(targetMs);
+        }).length;
+
+        await addAuditLog({
+          portfolioId: input.portfolioId,
+          entity: "portfolio",
+          action: "update",
+          field: "time_machine_advance",
+          newValue: formatUtcDate(targetMs),
+          changedByOpenId: ctx.user.openId,
+          changedByName: ctx.user.name ?? null,
+          summary: `Time Machine: advanced ${formatUtcDate(fromMs)} → ${formatUtcDate(targetMs)} (${mode}), ${written.deposits} contribution(s) materialised`,
+        });
+
+        return {
+          ok: true,
+          mode,
+          fromDate: formatUtcDate(fromMs),
+          toDate: formatUtcDate(targetMs),
+          monthsElapsed: nextIdx - prevIdx,
+          contributionsWritten: written.deposits,
+          contributionTotal: written.totalContribution,
+          maturitiesSettled: maturedThrough,
+          todayValueBefore: Math.round(beforeToday),
+          todayValueAfter: Math.round(afterToday),
+          endValueBefore: Math.round(beforeFinal),
+          endValueAfter: Math.round(afterFinal),
+        };
+      }),
+
+    /**
+     * Reset to today: clear the simulated clock and DELETE every record the
+     * session materialised, restoring the exact pre-simulation state. Records the
+     * user entered by hand (untagged) are never touched.
+     */
+    reset: protectedProcedure.input(portfolioIdInput).mutation(async ({ ctx, input }) => {
+      const p = await requirePortfolio(input.portfolioId, ctx.user.id);
+      if ((p as { isSandbox?: boolean }).isSandbox !== true) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "The Time Machine is available in Test mode only." });
+      }
+      const session = (p as { simSessionId?: string | null }).simSessionId ?? null;
+      let removed = { securities: 0, deposits: 0, withdrawals: 0 };
+      if (session) {
+        removed = await deleteSimSessionRecords(input.portfolioId, session);
+      }
+      await updatePortfolio(input.portfolioId, ctx.user.id, {
+        simulatedDate: null,
+        simSessionId: null,
+      } as never);
+      await addAuditLog({
+        portfolioId: input.portfolioId,
+        entity: "portfolio",
+        action: "update",
+        field: "time_machine_reset",
+        newValue: "today",
+        changedByOpenId: ctx.user.openId,
+        changedByName: ctx.user.name ?? null,
+        summary: `Time Machine: reset to today, removed ${removed.deposits} deposit(s), ${removed.securities} security(ies), ${removed.withdrawals} withdrawal(s)`,
+      });
+      return { ok: true, removed };
     }),
   }),
 
@@ -1160,6 +1539,8 @@ export const appRouter = router({
       const p = await requirePortfolio(input.portfolioId, ctx.user.id);
       const [rates, fundEar] = await Promise.all([getRateSettings(input.portfolioId), getSelectedFundEar(p)]);
       const settings = dbToEngine(rates, p, fundEar);
+      // Time Machine: reconciliation's "today" must follow the simulated clock too.
+      const reconNow = getNow(p);
 
       // ── Principal-basis sources (the same path the Dashboard uses) ──
       const summary = await getActualsSummary(
@@ -1355,7 +1736,7 @@ export const appRouter = router({
           maturityDate: s.maturityDate,
           isMatured: s.isMatured,
         }));
-      const govSchedule = buildSecurityDailySchedule(govIncomeInputs, ACCRUAL_WINDOW_DAYS);
+      const govSchedule = buildSecurityDailySchedule(govIncomeInputs, ACCRUAL_WINDOW_DAYS, reconNow);
       // Expectation uses the same tiered WHT model the engine encodes.
       const govReconItems: AccrualReconItem[] = govIncomeInputs
         .filter((s) => {
@@ -1364,7 +1745,7 @@ export const appRouter = router({
           if (!s.maturityDate) return true;
           const m = new Date(s.maturityDate);
           m.setHours(0, 0, 0, 0);
-          const today = new Date();
+          const today = new Date(reconNow);
           today.setHours(0, 0, 0, 0);
           return m.getTime() >= today.getTime();
         })
@@ -3181,6 +3562,16 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         const p = await requirePortfolio(input.portfolioId, ctx.user.id);
+        // Time Machine: a sandbox portfolio runs on a SIMULATED clock, so a daily
+        // real-clock Heartbeat cron would fire on the wrong day and pollute Live
+        // owner notifications. Never schedule digests for sandbox portfolios.
+        if ((p as { isSandbox?: boolean }).isSandbox === true) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message:
+              "Drift digests are disabled in Test mode — sandbox portfolios run on the Time Machine's simulated clock, not the real calendar.",
+          });
+        }
         const existingUid =
           (p as { driftDigestCronTaskUid?: string | null }).driftDigestCronTaskUid ?? null;
         const sessionToken =

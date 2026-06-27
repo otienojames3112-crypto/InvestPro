@@ -13,8 +13,10 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "./ui/alert-dialog";
-import { FlaskConical, Sparkles, Trash2, Loader2 } from "lucide-react";
+import { FlaskConical, Sparkles, Trash2, Loader2, Clock, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
+import { useSimulatedNow } from "@/hooks/useSimulatedNow";
+import { Link } from "wouter";
 
 /**
  * Live / Test (sandbox) mode toggle plus sandbox-only seed & reset controls.
@@ -156,6 +158,52 @@ export function SandboxBanner() {
         className="underline underline-offset-2 hover:no-underline font-semibold"
       >
         Switch to Live
+      </button>
+    </div>
+  );
+}
+
+/**
+ * Persistent simulated-date banner. Shown only while a Time Machine session is
+ * active (sandbox + simulatedDate set), so the whole app makes clear that "today"
+ * is a simulated date and offers a one-click reset back to the real clock.
+ */
+export function TimeMachineBanner() {
+  const { mode, portfolioId } = usePortfolio();
+  const utils = trpc.useUtils();
+  const { active, label, materialised } = useSimulatedNow();
+  const reset = trpc.timeMachine.reset.useMutation({
+    onSuccess: async () => {
+      await Promise.all([
+        utils.timeMachine.status.invalidate(),
+        utils.projection.invalidate(),
+        utils.deposits.invalidate(),
+        utils.securities.invalidate(),
+        utils.ledger.invalidate(),
+      ]);
+      toast.success("Reset to today");
+    },
+    onError: (e) => toast.error("Could not reset", { description: e.message }),
+  });
+  if (mode !== "sandbox" || !active) return null;
+  const created = materialised.deposits + materialised.securities + materialised.withdrawals;
+  return (
+    <div className="flex items-center justify-center gap-2 px-4 py-1.5 bg-primary/15 border-b border-primary/30 text-primary text-xs font-medium">
+      <Clock className="w-3.5 h-3.5 shrink-0" />
+      <span className="truncate">
+        Time Machine active — simulating <span className="font-bold tabular-nums">{label}</span>
+        {created > 0 ? ` · ${created} simulated record${created === 1 ? "" : "s"}` : ""}
+      </span>
+      <Link href="/time-machine" className="underline underline-offset-2 hover:no-underline font-semibold">
+        Open
+      </Link>
+      <button
+        onClick={() => portfolioId && reset.mutate({ portfolioId })}
+        disabled={reset.isPending}
+        className="inline-flex items-center gap-1 underline underline-offset-2 hover:no-underline font-semibold disabled:opacity-60"
+      >
+        {reset.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : <RotateCcw className="w-3 h-3" />}
+        Reset to today
       </button>
     </div>
   );

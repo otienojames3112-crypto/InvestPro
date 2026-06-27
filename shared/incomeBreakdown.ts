@@ -85,12 +85,12 @@ function proRata(annual: number, days: number): number {
   return (annual * days) / 365;
 }
 
-function isLiveSecurity(s: SecurityIncomeInput): boolean {
+function isLiveSecurity(s: SecurityIncomeInput, now: number = Date.now()): boolean {
   if (s.isMatured) return false;
   if (!s.maturityDate) return true;
   const m = new Date(s.maturityDate);
   m.setHours(0, 0, 0, 0);
-  const today = new Date();
+  const today = new Date(now);
   today.setHours(0, 0, 0, 0);
   return m.getTime() >= today.getTime();
 }
@@ -318,13 +318,14 @@ export interface DailyAccrualSchedule {
 export function buildSecurityDailySchedule(
   securities: SecurityIncomeInput[],
   days: number,
+  now: number = Date.now(),
 ): DailyAccrualSchedule {
   const n = Math.max(1, Math.floor(days));
   let grossPerDay = 0;
   let whtPerDay = 0;
   let base = 0;
   for (const s of securities) {
-    if (!isLiveSecurity(s)) continue;
+    if (!isLiveSecurity(s, now)) continue;
     const faceValue = Math.max(0, s.faceValue);
     const ratePct = Math.max(0, s.couponRate);
     const grossAnnual = faceValue * (ratePct / 100);

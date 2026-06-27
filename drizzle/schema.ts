@@ -155,6 +155,20 @@ export const portfolios = mysqlTable("portfolios", {
    * All portfolio-scoped queries filter by the active mode.
    */
   isSandbox: boolean("isSandbox").notNull().default(false),
+  /**
+   * Time Machine (sandbox only): a simulated "today" as Unix-ms (UTC). When set,
+   * every clock read (getNow) returns this instead of the real date, so the user
+   * can fast-forward and watch projected ledger rows materialise into actuals.
+   * Null = real clock. MUST stay null for Live (non-sandbox) portfolios.
+   */
+  simulatedDate: bigint("simulatedDate", { mode: "number" }),
+  /**
+   * Time Machine: the active simulation session id (a random string). Every
+   * record the time machine creates is tagged with this id so "Reset to today"
+   * can delete exactly the simulated rows for the current session. Null = no
+   * active session.
+   */
+  simSessionId: varchar("simSessionId", { length: 40 }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
@@ -269,6 +283,8 @@ export const securities = mysqlTable("securities", {
   /** When this lot was recycled via re-buy/split, points at the replacement security's id (audit trail). */
   rolledIntoId: int("rolledIntoId"),
   notes: text("notes"),
+  /** Time Machine: session id when this lot was materialised by a simulation (sandbox only). Null = real record. */
+  simSessionId: varchar("simSessionId", { length: 40 }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
@@ -324,6 +340,8 @@ export const depositEntries = mysqlTable("deposit_entries", {
   amount: decimal("amount", { precision: 14, scale: 2 }).notNull(),
   depositDate: date("depositDate").notNull(),
   notes: text("notes"),
+  /** Time Machine: session id when this deposit was materialised by a simulation (sandbox only). Null = real record. */
+  simSessionId: varchar("simSessionId", { length: 40 }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
@@ -365,6 +383,8 @@ export const withdrawalEntries = mysqlTable("withdrawal_entries", {
   /** Optional reason / destination note. */
   reason: text("reason"),
   notes: text("notes"),
+  /** Time Machine: session id when this withdrawal was materialised by a simulation (sandbox only). Null = real record. */
+  simSessionId: varchar("simSessionId", { length: 40 }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });

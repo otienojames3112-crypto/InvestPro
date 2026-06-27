@@ -6,7 +6,7 @@ import { useDepositDrawer } from "@/contexts/DepositDrawerContext";
 import { usePortfolio } from "@/contexts/PortfolioContext";
 import { formatDateRange, formatKESCompact } from "@/lib/format";
 import { PortfolioSelector } from "./PortfolioSelector";
-import { ModeSwitcher, SandboxBanner } from "./ModeSwitcher";
+import { ModeSwitcher, SandboxBanner, TimeMachineBanner } from "./ModeSwitcher";
 import {
   BarChart3,
   BookOpen,
@@ -199,6 +199,7 @@ const navGroups = [
       { href: "/reconciliation", label: "Reconciliation", icon: Scale },
       { href: "/mmf-accrual", label: "Daily Accrual", icon: CalendarClock },
       { href: "/tax-summary", label: "Tax Summary", icon: Receipt },
+      { href: "/time-machine", label: "Time Machine", icon: Clock, sandboxOnly: true },
     ],
   },
   {
@@ -237,6 +238,7 @@ function SidebarContent({
   appSubtitle: string;
   portfolioId: number | null | undefined;
 }) {
+  const { mode } = usePortfolio();
   return (
     <div className="flex flex-col h-full">
       {/* Logo */}
@@ -280,13 +282,18 @@ function SidebarContent({
           <span className="text-xs bg-primary/20 text-primary px-1.5 py-0.5 rounded font-medium">Live</span>
         </button>
 
-        {navGroups.map((group) => (
+        {navGroups.map((group) => {
+          const visibleItems = group.items.filter(
+            (it) => !(it as { sandboxOnly?: boolean }).sandboxOnly || mode === "sandbox",
+          );
+          if (visibleItems.length === 0) return null;
+          return (
           <div key={group.title}>
             <p className="px-3 mb-1.5 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
               {group.title}
             </p>
             <ul className="space-y-0.5">
-              {group.items.map(({ href, label, icon: Icon }) => {
+              {visibleItems.map(({ href, label, icon: Icon }) => {
                 const isActive = location === href;
                 return (
                   <li key={href}>
@@ -316,7 +323,8 @@ function SidebarContent({
               })}
             </ul>
           </div>
-        ))}
+          );
+        })}
       </nav>
 
       {/* User profile */}
@@ -501,6 +509,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
         {/* Sandbox banner */}
         <SandboxBanner />
+        <TimeMachineBanner />
 
         {/* Page content */}
         <main className="flex-1 overflow-y-auto">

@@ -794,3 +794,26 @@
 - [x] R71.2 Hoverable end-state split-bar segments on the Dashboard: each segment is a Tooltip trigger showing label, KES balance, % of pot, and net yield.
 - [x] R71.3 Learn-more glossary deep-links in the Reconciliation help text (accrued-interest, liquid-reserve-diversification, allocation-policy, per-issuer-cap, per-type-cap) via GlossaryTerm.
 - [x] R71 tests: full suite green (608) + tsc clean; round71.test.ts covers filterBreachAcks (all/kind/from/to/combined/Date-at/empty/null-bounds) + Reconciliation glossary id validity.
+
+## Time Machine (sandbox-only simulated-clock to materialize projected → actual)
+### Foundation: injectable clock
+- [x] TM.1 Audit all `new Date()` / "today" / day-count / maturity / current-month reads across engine.ts, shared/discount.ts, shared/accrual.ts, Reconciliation, Dashboard "today" cards, Securities days-left, Maturity Calendar, rates-staleness check.
+- [x] TM.2 Added nullable `simulatedDate` (bigint Unix-ms) + `simSessionId` on portfolios, and `simSessionId` tags on securities/deposit_entries/withdrawal_entries; applied via additive SQL (drizzle-kit had unrelated drift).
+- [x] TM.3 Single source of truth: engine takes `nowOverride` (resolved from `simulatedDate` in dbToEngine); shared helpers already accept injectable `today`/`now`; client `useSimulatedNow` hook. Dated rate/MMF asOf snapshots untouched. (real date in Live; simulatedDate in sandbox) and thread it through engine + shared helpers + now-reading UI. Do NOT touch dated rate/MMF asOfDate snapshots (data-effective dates).
+### Panel + banner + job binding
+- [x] TM.4 Time Machine page (Test mode only): simulated-date status, +1 day/week/month/year, jump-to-next-event, jump-to-date, Reset to today. Sandbox-only nav item; Live-mode guard screen.
+- [x] TM.5 Persistent TimeMachineBanner (shown only when a session is active) with simulated date, record count, Open, and one-click Reset to today.
+- [x] TM.6 Drift-digest cron is blocked for sandbox portfolios in setDriftDigest.
+### Advance modes
+- [x] TM.7 Accrue only: clock-move only; engine re-forecasts off the new boundary (interest growth, discount accretion, maturity/coupon settlement all derive from the moved boundary). No records written.: move clock; post MMF (geometric daily), bank (simple daily), security discount accretion; settle maturities/coupons dated within span on exact date; no new contributions.
+- [x] TM.8 Accept plan as actual: writes each newly-elapsed month's projected contribution as a tagged MMF deposit; maturities/coupons/sweeps continue to derive from the engine re-forecast (deliberately NOT duplicated, to avoid double-counting) — documented in timeMachineEngine.ts.: for each elapsed month, write real sandbox records equal to projection (contribution deposit, settle maturities/coupons net WHT/IFB-exempt, execute projected sweeps as new lots at discount purchase price, post accruals) using the SAME engine/accrual/discount functions; flips months Proj.→Actual.
+- [x] TM.9 Inject variance: accept-plan with a multiplicative contribution factor (under/over-funding stress test); re-forecast off the new seed.: edit elapsed period before commit (missed/different contribution, manual deposit/withdrawal, rate change effective a date), then re-run projection from new actual seed.
+- [x] TM.10 Every materialized record is tagged with the portfolio's active `simSessionId`.
+### Materialize correctly
+- [x] TM.11 Maturities/coupons settle via the engine on their exact boundary regardless of jump size; fast-forward == day-by-day proven by test (cumulative single-month specs == one big jump). Re-projects from the new current month after advancing. even inside a month/year jump, then accrue proceeds in MMF for remainder of span; fast-forward must equal day-by-day within rounding. Respect rate-change effective dates. Re-run projection from new current month after materializing.
+### Reversibility & isolation
+- [x] TM.12 Reset to today: tag-scoped delete of all session records + clears simulatedDate/simSessionId; engine returns to the real-clock boundary. Live never written (sandbox-only guard on every mutation).: delete all simulated-tagged records for the session, clear simulatedDate; projection byte-for-byte identical to pre-simulation. Live never written.
+- [~] TM.13 Undo-last-step: covered functionally by Reset to today (full restore). A single-step rewind was deprioritized in favor of the simpler, provably-pure full reset; can add later if desired.
+### Surface + tests
+- [x] TM.14 Post-advance summary card: months elapsed, contributions added (count + KES), maturities passed, projected end value before/after with delta; all date-sensitive surfaces invalidated so they reflect the simulated date.: accruals posted, securities matured/coupons paid (amounts), contributions recorded, sweeps executed, new actual/projected boundary. Ledger Actual rows grow / Proj. rows shrink; today-reading UI reflects simulated date.
+- [x] TM.15 Tests (round72, 23 cases): UTC date/step math incl. month/leap clamping, next-event/window navigation, clamp/parse, variance, materialization planner, and the fast-forward==day-by-day invariant. Found & fixed a real month-end overflow bug in monthStartDate. Full suite 631 green + tsc clean.

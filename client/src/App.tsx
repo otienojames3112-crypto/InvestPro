@@ -24,6 +24,7 @@ import PortfolioReview from "./pages/PortfolioReview";
 import Reconciliation from "./pages/Reconciliation";
 import Withdrawals from "./pages/Withdrawals";
 import Learn from "./pages/Learn";
+import { TimeMachine } from "./pages/TimeMachine";
 
 function Router() {
   return (
@@ -46,6 +47,7 @@ function Router() {
       <Route path="/portfolio-review" component={PortfolioReview} />
       <Route path="/reconciliation" component={Reconciliation} />
       <Route path="/other-assets" component={OtherAssets} />
+      <Route path="/time-machine" component={TimeMachine} />
       <Route path="/404" component={NotFound} />
       <Route component={NotFound} />
     </Switch>

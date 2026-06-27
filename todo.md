@@ -782,3 +782,9 @@
 - [x] R69.4 Glossary + tooltips: add Allocation policy, per-issuer vs per-type cap, liquid-reserve diversification, KDIC insurance, concentration-cap acknowledgment, corrected accrued-interest entry; reuse definitions as tooltips.
 - [x] R69.5 Stale-rates nag: stop "Rates updated never" red banner in Test/sample mode (seed sensible timestamp or suppress while sample/Test).
 - [x] R69 tests: full suite green (593) + tsc clean; round69.test.ts covers maturity-aware cap messaging + clear-date + both denominators, projected liquid split (balanced/yield-first/single/zero), snooze-duration 1/7/30 mapping, and glossary completeness for the new ids.
+
+## Round 70 (acknowledge history + visual split + glossary links)
+- [x] R70.1 Per-type breach acknowledge-history view on Portfolio Review: "Acknowledged breaches" table (cap kind badge, breached label, share% vs cap%, who, when), parsed from audit_log via shared parseBreachAckRow + breachAckHistory query; empty state when none.
+- [x] R70.2 Visual projected end-state split bar: stacked bar + legend under the "lands fully liquid" line, rendered from endStateLiquidSplit slices (shown only for a genuine multi-home split).
+- [x] R70.3 Tooltip "Learn more" link: GlossaryTerm now uses a hoverable HoverCard with a "Learn more →" link to /learn?term=<id>; Learn page reads the param to expand, scroll to, and briefly highlight the entry.
+- [x] R70 tests: full suite green (599) + tsc clean; round70.test.ts covers breach-ack parsing (issuer/type, label+pct extraction, exact recordBreachAck round-trip, malformed rows, labels containing "at").

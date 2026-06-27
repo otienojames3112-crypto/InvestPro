@@ -3,8 +3,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
-import { Link } from "wouter";
-import { useMemo, useState } from "react";
+import { Link, useSearch } from "wouter";
+import { useMemo, useState, useEffect, useRef } from "react";
 import { GraduationCap, ArrowLeft, BookOpen, Coins, Landmark, TrendingUp, Percent, Layers, Search } from "lucide-react";
 import { GLOSSARY } from "@/lib/glossary";
 import {
@@ -80,6 +80,32 @@ function Story({
 
 export default function Learn() {
   const [glossaryQuery, setGlossaryQuery] = useState("");
+
+  // R70.3 — deep-link support: /learn?term=<id> expands, scrolls to, and briefly
+  // highlights the matching glossary entry so tooltip "Learn more →" lands in place.
+  const search = useSearch();
+  const deepLinkTerm = useMemo(() => {
+    const params = new URLSearchParams(search);
+    const t = params.get("term");
+    return t && GLOSSARY.some((g) => g.id === t) ? t : null;
+  }, [search]);
+  const [openItems, setOpenItems] = useState<string[]>([]);
+  const [highlightId, setHighlightId] = useState<string | null>(null);
+  const termRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  useEffect(() => {
+    if (!deepLinkTerm) return;
+    setOpenItems((prev) => (prev.includes(deepLinkTerm) ? prev : [...prev, deepLinkTerm]));
+    setHighlightId(deepLinkTerm);
+    // Defer scroll until the accordion item has expanded/laid out.
+    const scrollTimer = window.setTimeout(() => {
+      termRefs.current[deepLinkTerm]?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 120);
+    const clearTimer = window.setTimeout(() => setHighlightId(null), 2400);
+    return () => {
+      window.clearTimeout(scrollTimer);
+      window.clearTimeout(clearTimer);
+    };
+  }, [deepLinkTerm]);
 
   // ── Worked examples — all numbers computed live from the shared engines, so
   // they can never drift from the unit tests that lock the same figures.
@@ -359,9 +385,25 @@ export default function Learn() {
               No terms match “{glossaryQuery}”.
             </p>
           ) : (
-            <Accordion type="multiple" className="w-full">
+            <Accordion
+              type="multiple"
+              className="w-full"
+              value={openItems}
+              onValueChange={setOpenItems}
+            >
               {filteredGlossary.map((g) => (
-                <AccordionItem key={g.id} value={g.id}>
+                <AccordionItem
+                  key={g.id}
+                  value={g.id}
+                  ref={(el) => {
+                    termRefs.current[g.id] = el;
+                  }}
+                  className={
+                    highlightId === g.id
+                      ? "rounded-md ring-2 ring-primary/60 ring-offset-2 ring-offset-background transition-shadow"
+                      : "transition-shadow"
+                  }
+                >
                   <AccordionTrigger className="text-sm font-semibold text-left">{g.term}</AccordionTrigger>
                   <AccordionContent className="text-sm text-muted-foreground leading-relaxed">
                     {g.def}

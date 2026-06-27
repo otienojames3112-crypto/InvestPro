@@ -55,6 +55,7 @@ import {
   AlertTriangle,
   Layers,
   Lightbulb,
+  ShieldAlert,
 } from "lucide-react";
 import { toCsv, downloadCsv, slugify } from "@shared/csv";
 
@@ -125,6 +126,11 @@ export default function PortfolioReview() {
   );
   const { data: audit } = trpc.audit.list.useQuery(
     { portfolioId: portfolioId!, limit: 60 },
+    { enabled: !!portfolioId }
+  );
+  // R70 — acknowledged concentration-cap breach history (auditable list).
+  const { data: breachAcks } = trpc.audit.breachAckHistory.useQuery(
+    { portfolioId: portfolioId!, limit: 50 },
     { enabled: !!portfolioId }
   );
   // R66 — Change History filter: All vs liquid (reconciles + transfers) vs other.
@@ -994,6 +1000,69 @@ export default function PortfolioReview() {
                       </TableRow>
                       );
                     })}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* R70 — Acknowledged concentration-cap breaches (auditable history) */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base flex items-center gap-2">
+              <ShieldAlert className="w-4 h-4 text-amber-400" /> Acknowledged breaches
+            </CardTitle>
+            <CardDescription>
+              A record of every concentration-cap breach you have explicitly accepted — the cap, the share at the time, and when. Acknowledging a breach does not change the cap; it just logs that you chose to hold through it.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {!breachAcks || breachAcks.length === 0 ? (
+              <p className="text-sm text-muted-foreground py-4 text-center">
+                No breaches acknowledged. When a recorded holding exceeds a cap and you accept it, it will be listed here.
+              </p>
+            ) : (
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Cap</TableHead>
+                      <TableHead>What was accepted</TableHead>
+                      <TableHead className="text-right">Share at the time</TableHead>
+                      <TableHead className="text-right">Cap</TableHead>
+                      <TableHead className="text-right">When</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {breachAcks.map((b) => (
+                      <TableRow key={b.id}>
+                        <TableCell>
+                          <span
+                            className={`shrink-0 rounded-full border px-2 py-px text-[10px] font-medium ${
+                              b.capKind === "issuer"
+                                ? "border-sky-500/30 bg-sky-500/10 text-sky-300"
+                                : "border-amber-500/30 bg-amber-500/10 text-amber-300"
+                            }`}
+                          >
+                            {b.capKind === "issuer" ? "Per-issuer (KDIC)" : "Per-type"}
+                          </span>
+                        </TableCell>
+                        <TableCell className="max-w-[280px]">
+                          <span className="text-sm">{b.label ?? b.summary ?? "—"}</span>
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {b.sharePct != null ? `${b.sharePct.toFixed(1)}%` : "—"}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums text-muted-foreground">
+                          {b.capPct != null ? `${b.capPct.toFixed(0)}%` : "—"}
+                        </TableCell>
+                        <TableCell className="text-right text-xs text-muted-foreground whitespace-nowrap">
+                          {b.changedByName ? `${b.changedByName} · ` : ""}
+                          {new Date(b.at).toLocaleString("en-KE")}
+                        </TableCell>
+                      </TableRow>
+                    ))}
                   </TableBody>
                 </Table>
               </div>

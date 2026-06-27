@@ -1078,6 +1078,23 @@ export async function getAuditLog(portfolioId: number, limit = 100) {
     .limit(limit);
 }
 
+/**
+ * Round 70: list acknowledged concentration-cap breaches for a portfolio.
+ * Breach acks are stored as audit_log rows with entity = "concentration_breach".
+ * The `field` column holds the cap kind ("issuer" | "type"); `newValue` holds the
+ * "X% vs Y% cap" snapshot; `summary` holds the human-readable line.
+ */
+export async function getBreachAcks(portfolioId: number, limit = 50) {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select()
+    .from(auditLog)
+    .where(and(eq(auditLog.portfolioId, portfolioId), eq(auditLog.entity, "concentration_breach")))
+    .orderBy(desc(auditLog.createdAt))
+    .limit(limit);
+}
+
 /** ---------------- MMF fund accrual settings ---------------- */
 
 export async function updateMmfFundAccrualSettings(

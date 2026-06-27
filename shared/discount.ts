@@ -649,3 +649,42 @@ export function analyzePerTypeBreach(
   // lots that don't bring it under cap) → does not self-correct.
   return base;
 }
+
+
+// ─── R70.1: parse an acknowledged-breach audit row into structured fields ────
+//
+// recordBreachAck writes audit_log rows shaped like:
+//   field   = "issuer" | "type"
+//   newValue = "67.5% vs 60% cap"
+//   summary  = "Acknowledged actual per-instrument-type concentration breach: FXD bonds at 67.5% (cap 60%)"
+// This pure helper extracts the cap kind, the breached label, and the
+// share/cap percentages so the history table (and its tests) stay in sync.
+
+export interface BreachAckRowInput {
+  field?: string | null;
+  newValue?: string | null;
+  summary?: string | null;
+}
+
+export interface ParsedBreachAck {
+  capKind: "issuer" | "type";
+  label: string | null;
+  sharePct: number | null;
+  capPct: number | null;
+}
+
+export function parseBreachAckRow(row: BreachAckRowInput): ParsedBreachAck {
+  const capKind: "issuer" | "type" = row.field === "issuer" ? "issuer" : "type";
+  const m = /([0-9.]+)%\s*vs\s*([0-9.]+)%/.exec(row.newValue ?? "");
+  const sharePct = m ? Number(m[1]) : null;
+  const capPct = m ? Number(m[2]) : null;
+  let label: string | null = null;
+  if (row.summary) {
+    // Anchor the label to the trailing " at <pct>% (cap ...)" so labels that
+    // themselves contain the word "at" are not truncated. Greedy up to the
+    // last " at <number>%".
+    const lm = /breach:\s*(.+)\s+at\s+[0-9.]+%/.exec(row.summary);
+    label = lm ? lm[1].trim() : null;
+  }
+  return { capKind, label, sharePct, capPct };
+}

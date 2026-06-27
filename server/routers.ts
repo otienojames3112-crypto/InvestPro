@@ -67,6 +67,7 @@ import {
   upsertBenchmarkInput,
   addAuditLog,
   getAuditLog,
+  getBreachAcks,
   updateMmfFundAccrualSettings,
   getLiquidHomeBalances,
   upsertLiquidHomeBalance,
@@ -129,7 +130,7 @@ import {
   type SecurityType as GovSecurityType,
 } from "../shared/securityTenor";
 import { buildAllocation, blendedYield } from "../shared/actuals";
-import { discountPriceForSecurity, tbillPrice } from "../shared/discount";
+import { discountPriceForSecurity, tbillPrice, parseBreachAckRow } from "../shared/discount";
 import {
   allocateLiquidReserve,
   isLiquidBankKind,
@@ -3743,6 +3744,34 @@ export const appRouter = router({
           summary: input.summary,
         });
         return { success: true };
+      }),
+    /**
+     * Round 70: parsed history of acknowledged concentration-cap breaches.
+     * Reads the audit_log rows written by recordBreachAck and parses the
+     * "X% vs Y% cap" snapshot into structured fields for an auditable table.
+     */
+    breachAckHistory: protectedProcedure
+      .input(z.object({ portfolioId: z.number().int().positive(), limit: z.number().int().min(1).max(200).default(50) }))
+      .query(async ({ ctx, input }) => {
+        await requirePortfolio(input.portfolioId, ctx.user.id);
+        const rows = await getBreachAcks(input.portfolioId, input.limit);
+        return rows.map((r) => {
+          const parsed = parseBreachAckRow({
+            field: r.field,
+            newValue: r.newValue,
+            summary: r.summary,
+          });
+          return {
+            id: r.id,
+            capKind: parsed.capKind,
+            label: parsed.label,
+            sharePct: parsed.sharePct,
+            capPct: parsed.capPct,
+            summary: r.summary ?? null,
+            changedByName: r.changedByName ?? null,
+            at: r.createdAt,
+          };
+        });
       }),
   }),
 

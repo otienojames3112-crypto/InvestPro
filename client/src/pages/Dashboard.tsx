@@ -135,6 +135,16 @@ function ChartTooltip({ active, payload, label }: { active?: boolean; payload?: 
   );
 }
 
+// R70.2 — stable color palette for the projected end-state split bar/legend.
+const END_STATE_SPLIT_COLORS = [
+  "#34d399", // emerald-400
+  "#60a5fa", // blue-400
+  "#fbbf24", // amber-400
+  "#a78bfa", // violet-400
+  "#f472b6", // pink-400
+  "#22d3ee", // cyan-400
+];
+
 export default function Dashboard() {
   const { portfolioId, portfolio, portfolios, mode, isLoading: portfoliosLoading } = usePortfolio();
   const [createOpen, setCreateOpen] = useState(false);
@@ -1739,6 +1749,40 @@ export default function Dashboard() {
                     )}
                   </p>
                 )}
+                {/* R70.2 — visual projected end-state split bar (policy-aware) */}
+                {landsFullyLiquid &&
+                  endStateSplit &&
+                  endStateSplit.slices.length > 1 && (
+                    <div className="mt-2">
+                      <div className="flex h-2 w-full overflow-hidden rounded-full bg-muted">
+                        {endStateSplit.slices.map((s, i) => (
+                          <div
+                            key={`${s.label}-${i}`}
+                            className="h-full"
+                            style={{
+                              width: `${(s.targetShare * 100).toFixed(2)}%`,
+                              backgroundColor: END_STATE_SPLIT_COLORS[i % END_STATE_SPLIT_COLORS.length],
+                            }}
+                            title={`${s.label}: ${(s.targetShare * 100).toFixed(0)}% · ${formatKES(s.targetBalance)}`}
+                          />
+                        ))}
+                      </div>
+                      <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1">
+                        {endStateSplit.slices.map((s, i) => (
+                          <span
+                            key={`legend-${s.label}-${i}`}
+                            className="inline-flex items-center gap-1 text-[10px] text-muted-foreground"
+                          >
+                            <span
+                              className="inline-block h-2 w-2 rounded-sm"
+                              style={{ backgroundColor: END_STATE_SPLIT_COLORS[i % END_STATE_SPLIT_COLORS.length] }}
+                            />
+                            {s.label} {(s.targetShare * 100).toFixed(0)}%
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
               </div>
             </div>
 

@@ -1,5 +1,6 @@
 import { usePortfolio } from "@/contexts/PortfolioContext";
 import { AppShell } from "@/components/AppShell";
+import { SimulatedDateChip } from "@/components/SimulatedDateChip";
 import { trpc } from "@/lib/trpc";
 import { formatKES, getMonthLabel, getPhaseName, getPhaseColorClass } from "@/lib/format";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -254,6 +255,7 @@ export default function Ledger() {
                 ? `Months 1–${lastActualMonth} reflect your recorded holdings; later months are a forward projection.`
                 : "Complete forward projection of your investment journey. Record deposits to anchor early months to actuals."}
             </p>
+            <SimulatedDateChip className="mt-2" />
           </div>
           <div className="flex items-center gap-2">
             <DropdownMenu>

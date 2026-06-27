@@ -1340,3 +1340,23 @@ export async function countSimSessionRecords(
   ]);
   return { securities: secs.length, deposits: deps.length, withdrawals: wds.length };
 }
+
+/**
+ * Time Machine — delete a specific set of deposit entries by id (used by
+ * Undo-last-step to remove ONLY the rows that step materialised, leaving every
+ * earlier step's rows intact). Reuses deleteDepositEntry so any linked gov
+ * security register row cascades away too. Returns the count actually removed.
+ */
+export async function deleteDepositEntriesByIds(
+  portfolioId: number,
+  ids: number[],
+): Promise<number> {
+  const db = await getDb();
+  if (!db || ids.length === 0) return 0;
+  let removed = 0;
+  for (const id of ids) {
+    await deleteDepositEntry(id, portfolioId);
+    removed += 1;
+  }
+  return removed;
+}

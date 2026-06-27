@@ -129,6 +129,39 @@ export interface EngineSettings {
    * clock fast-forward the ledger. Undefined = real clock (new Date()).
    */
   nowOverride?: number;
+  /**
+   * Round 73 — Time Machine rate-shock stress test. When set, every yield rate
+   * (MMF + all CBK families) is shifted by `deltaPct` percentage points for any
+   * projected month whose calendar date is on/after `effectiveDate` (YYYY-MM-DD).
+   * WHT is never shocked. Rates are floored at 0. This models a CBK rate move
+   * (e.g. -2%) from a chosen date so the user can stress projected RETURNS, not
+   * just contributions. Months before the effective date keep their base rates.
+   */
+  rateShock?: { effectiveDate: string; deltaPct: number };
+}
+
+/**
+ * Apply a Time Machine rate-shock to a resolved month's rate set. Shifts every
+ * yield rate by `deltaPct` (floored at 0) when `monthIso >= effectiveDate`;
+ * WHT is left untouched. Pure + exported for direct unit testing.
+ */
+export function applyRateShock<
+  T extends Pick<
+    EngineSettings,
+    "mmfYield" | "tbill91Rate" | "tbill182Rate" | "tbill364Rate" | "ifbCouponRate" | "fxdCouponRate" | "withholdingTax"
+  >,
+>(rates: T, monthIso: string, shock?: { effectiveDate: string; deltaPct: number }): T {
+  if (!shock || monthIso < shock.effectiveDate) return rates;
+  const bump = (v: number) => Math.max(0, v + shock.deltaPct);
+  return {
+    ...rates,
+    mmfYield: bump(rates.mmfYield),
+    tbill91Rate: bump(rates.tbill91Rate),
+    tbill182Rate: bump(rates.tbill182Rate),
+    tbill364Rate: bump(rates.tbill364Rate),
+    ifbCouponRate: bump(rates.ifbCouponRate),
+    fxdCouponRate: bump(rates.fxdCouponRate),
+  };
 }
 
 /** An individual security lot held in the DhowCSD portfolio. */
@@ -570,11 +603,20 @@ export function getRatesForMonth(
   rateHistory: RateSnapshot[],
   currentSettings: EngineSettings
 ): Pick<EngineSettings, "mmfYield" | "tbill91Rate" | "tbill182Rate" | "tbill364Rate" | "ifbCouponRate" | "fxdCouponRate" | "withholdingTax"> {
-  if (!rateHistory || rateHistory.length === 0) return currentSettings;
   const monthStr = monthDate.toISOString().split("T")[0];
-  const sorted = [...rateHistory].sort((a, b) => b.effectiveDate.localeCompare(a.effectiveDate));
-  const snapshot = sorted.find(s => s.effectiveDate <= monthStr);
-  return snapshot ?? currentSettings;
+  let base: Pick<
+    EngineSettings,
+    "mmfYield" | "tbill91Rate" | "tbill182Rate" | "tbill364Rate" | "ifbCouponRate" | "fxdCouponRate" | "withholdingTax"
+  >;
+  if (!rateHistory || rateHistory.length === 0) {
+    base = currentSettings;
+  } else {
+    const sorted = [...rateHistory].sort((a, b) => b.effectiveDate.localeCompare(a.effectiveDate));
+    const snapshot = sorted.find(s => s.effectiveDate <= monthStr);
+    base = snapshot ?? currentSettings;
+  }
+  // Round 73 — apply the Time Machine rate-shock (if any) on/after its date.
+  return applyRateShock(base, monthStr, currentSettings.rateShock);
 }
 
 /**

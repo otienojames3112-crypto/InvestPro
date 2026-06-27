@@ -817,3 +817,11 @@
 ### Surface + tests
 - [x] TM.14 Post-advance summary card: months elapsed, contributions added (count + KES), maturities passed, projected end value before/after with delta; all date-sensitive surfaces invalidated so they reflect the simulated date.: accruals posted, securities matured/coupons paid (amounts), contributions recorded, sweeps executed, new actual/projected boundary. Ledger Actual rows grow / Proj. rows shrink; today-reading UI reflects simulated date.
 - [x] TM.15 Tests (round72, 23 cases): UTC date/step math incl. month/leap clamping, next-event/window navigation, clamp/parse, variance, materialization planner, and the fast-forward==day-by-day invariant. Found & fixed a real month-end overflow bug in monthStartDate. Full suite 631 green + tsc clean.
+
+## Time Machine refinements (round 73)
+- [x] TM.16 Time Machine page now wraps both branches (Live guard + main) in <AppShell>, rendering with sidebar + header like every other page.
+- [x] TM.17 True Undo-last-step: each advance appends a step to portfolios.simStepLog ({fromMs,toMs,mode,depositIds}); undoStep pops the last step, rewinds the clock to fromMs, and deletes only that step's deposits via deleteDepositEntriesByIds. Status exposes canUndo/stepsRemaining/lastStep; Undo button beside Reset.
+- [x] TM.18 SimulatedDateChip component (uses useSimulatedNow) added to Dashboard and Ledger headers; renders only when a sandbox simulation is active.
+- [x] TM.19 Rate-shock stress test: applyRateShock in engine shifts MMF + all CBK yields by ±pp from an effective date (floored at 0, WHT untouched), threaded via EngineSettings.rateShock through getRatesForMonth. Persisted on portfolios.sim_rate_shock so ALL projection reads (dashboard/ledger/reconciliation) reflect it; setRateShock mutation + UI card; cleared by Reset.
+- [x] TM.20 round73.test.ts (16 cases): applyRateShock (before/on/after boundary, floor-at-0, positive shock, WHT untouched), getRatesForMonth honouring shock, and parseStepLog/popLastStep undo-log math. Full suite 647 green + tsc clean.
+- [ ] TM.21 Package full project as a ZIP for download.

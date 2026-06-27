@@ -169,6 +169,21 @@ export const portfolios = mysqlTable("portfolios", {
    * active session.
    */
   simSessionId: varchar("simSessionId", { length: 40 }),
+  /**
+   * Time Machine: an append-only JSON log of each advance "step" so the user can
+   * Undo the LAST step precisely (rewind one boundary + delete only that step's
+   * materialised rows), distinct from a full Reset. Shape:
+   * Array<{ fromMs: number; toMs: number; mode: string; depositIds: number[] }>.
+   * Null/empty = nothing to undo.
+   */
+  simStepLog: text("simStepLog"),
+  /**
+   * Time Machine rate-shock stress test (sandbox only): JSON
+   * `{ effectiveDate: "YYYY-MM-DD"; deltaPct: number }` shifting all yield rates
+   * by deltaPct from effectiveDate onward in the projection. Null = no shock.
+   * Cleared by Reset to today.
+   */
+  simRateShock: text("sim_rate_shock"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });

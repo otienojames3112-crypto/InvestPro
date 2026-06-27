@@ -1,5 +1,6 @@
 import { usePortfolio } from "@/contexts/PortfolioContext";
 import { AppShell } from "@/components/AppShell";
+import { SimulatedDateChip } from "@/components/SimulatedDateChip";
 import { trpc } from "@/lib/trpc";
 import { formatKES, formatKESCompact, formatPct, getPhaseName, getPhaseColorClass, formatRelativeTime, isReconcileStale } from "@/lib/format";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -736,6 +737,7 @@ export default function Dashboard() {
             <p className="text-sm text-muted-foreground mt-0.5">
               {horizonYearsLabel}-year journey to {formatKES(targetAmount)} · {strategyDescriptor}
             </p>
+            <SimulatedDateChip className="mt-2" />
           </div>
           <div className="flex items-center gap-3 shrink-0">
             <Button

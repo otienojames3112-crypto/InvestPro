@@ -172,3 +172,48 @@ export function applyVariance(amount: number, factor: number | undefined): numbe
   if (factor == null || !Number.isFinite(factor)) return amount;
   return Math.max(0, amount * factor);
 }
+
+/**
+ * A single recorded advance "step" for the Undo-last-step feature. Each advance
+ * appends one of these to the portfolio's `simStepLog` so we can rewind exactly
+ * one boundary (back to `fromMs`) and delete only the deposit rows that step
+ * created (`depositIds`), without disturbing earlier steps.
+ */
+export interface SimStep {
+  /** Simulated instant BEFORE this step (UTC Unix-ms). */
+  fromMs: number;
+  /** Simulated instant AFTER this step (UTC Unix-ms). */
+  toMs: number;
+  /** Materialisation mode used for this step. */
+  mode: MaterializeMode;
+  /** Deposit-entry ids this step materialised (empty for accrue_only). */
+  depositIds: number[];
+}
+
+/** Safely parse a persisted step log (JSON string) into a typed array. */
+export function parseStepLog(raw: string | null | undefined): SimStep[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (s): s is SimStep =>
+        s != null &&
+        typeof s.fromMs === "number" &&
+        typeof s.toMs === "number" &&
+        typeof s.mode === "string" &&
+        Array.isArray(s.depositIds),
+    );
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Pop the last step off a log, returning the step to undo and the remaining log.
+ * Returns { step: null } when there is nothing to undo.
+ */
+export function popLastStep(log: SimStep[]): { step: SimStep | null; rest: SimStep[] } {
+  if (log.length === 0) return { step: null, rest: [] };
+  return { step: log[log.length - 1], rest: log.slice(0, -1) };
+}

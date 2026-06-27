@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { AppShell } from "@/components/AppShell";
 import { usePortfolio } from "@/contexts/PortfolioContext";
 import { trpc } from "@/lib/trpc";
 import { formatKES } from "@/lib/format";
@@ -24,6 +25,8 @@ import {
   CalendarClock,
   SkipForward,
   RotateCcw,
+  Undo2,
+  Zap,
   Loader2,
   TrendingUp,
   ArrowRight,
@@ -75,6 +78,8 @@ export function TimeMachine() {
   const [contribFactor, setContribFactor] = useState<number>(100);
   const [jumpDate, setJumpDate] = useState<string>("");
   const [summary, setSummary] = useState<AdvanceSummary | null>(null);
+  const [shockDelta, setShockDelta] = useState<number>(-2);
+  const [shockDate, setShockDate] = useState<string>("");
 
   const isSandbox = appMode === "sandbox";
 
@@ -111,6 +116,20 @@ export function TimeMachine() {
     onError: (e) => toast.error("Could not advance", { description: e.message }),
   });
 
+  const undo = trpc.timeMachine.undoStep.useMutation({
+    onSuccess: async (res) => {
+      setSummary(null);
+      await refresh();
+      toast.success(`Rewound to ${res.rewoundTo}`, {
+        description:
+          res.removedDeposits > 0
+            ? `Undid the step to ${res.undoneFrom}; removed ${res.removedDeposits} contribution(s)`
+            : `Undid the step to ${res.undoneFrom}`,
+      });
+    },
+    onError: (e) => toast.error("Could not undo", { description: e.message }),
+  });
+
   const reset = trpc.timeMachine.reset.useMutation({
     onSuccess: async (res) => {
       setSummary(null);
@@ -125,6 +144,33 @@ export function TimeMachine() {
     },
     onError: (e) => toast.error("Could not reset", { description: e.message }),
   });
+
+  const setRateShock = trpc.timeMachine.setRateShock.useMutation({
+    onSuccess: async (res) => {
+      await refresh();
+      toast.success(res.shock ? "Rate-shock applied" : "Rate-shock cleared", {
+        description: res.shock
+          ? `${res.shock.deltaPct >= 0 ? "+" : ""}${res.shock.deltaPct}% to all yields from ${res.shock.effectiveDate}`
+          : "Yields restored to base rates",
+      });
+    },
+    onError: (e) => toast.error("Could not update rate-shock", { description: e.message }),
+  });
+
+  const applyShock = () => {
+    if (!portfolioId) return;
+    const effectiveDate = shockDate || (status?.simulatedDateLabel ?? "");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(effectiveDate)) {
+      toast.error("Pick an effective date (YYYY-MM-DD)");
+      return;
+    }
+    setRateShock.mutate({ portfolioId, shock: { effectiveDate, deltaPct: shockDelta } });
+  };
+
+  const clearShock = () => {
+    if (!portfolioId) return;
+    setRateShock.mutate({ portfolioId, shock: null });
+  };
 
   const doStep = (unit: "day" | "week" | "month" | "year", count = 1) => {
     if (!portfolioId) return;
@@ -156,11 +202,12 @@ export function TimeMachine() {
     });
   };
 
-  const busy = advance.isPending || reset.isPending;
+  const busy = advance.isPending || reset.isPending || undo.isPending || setRateShock.isPending;
 
   // ── Live-mode guard ───────────────────────────────────────────────────────
   if (!isSandbox) {
     return (
+      <AppShell>
       <div className="container max-w-3xl py-10">
         <Card className="border-dashed">
           <CardContent className="flex flex-col items-center text-center gap-4 py-14">
@@ -178,6 +225,7 @@ export function TimeMachine() {
           </CardContent>
         </Card>
       </div>
+      </AppShell>
     );
   }
 
@@ -187,6 +235,7 @@ export function TimeMachine() {
   const mat = status?.materialised ?? { securities: 0, deposits: 0, withdrawals: 0 };
 
   return (
+    <AppShell>
     <div className="container max-w-5xl py-6 space-y-6">
       {/* Header */}
       <div className="flex items-start justify-between gap-4 flex-wrap">
@@ -202,6 +251,18 @@ export function TimeMachine() {
           </div>
         </div>
         {active && (
+          <div className="flex items-center gap-2">
+          {status?.canUndo && (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={busy}
+              onClick={() => portfolioId && undo.mutate({ portfolioId })}
+              title={status?.lastStep ? `Rewind ${status.lastStep.fromLabel} \u2192 ${status.lastStep.toLabel}` : undefined}
+            >
+              <Undo2 className="w-4 h-4" /> Undo last step
+            </Button>
+          )}
           <AlertDialog>
             <AlertDialogTrigger asChild>
               <Button variant="outline" size="sm" disabled={busy} className="text-destructive border-destructive/30 hover:bg-destructive/10">
@@ -228,6 +289,7 @@ export function TimeMachine() {
               </AlertDialogFooter>
             </AlertDialogContent>
           </AlertDialog>
+          </div>
         )}
       </div>
 
@@ -319,6 +381,66 @@ export function TimeMachine() {
           </CardContent>
         </Card>
 
+        {/* Rate-shock stress test */}
+        <Card className={cn(status?.rateShock && "border-amber-500/40 bg-amber-500/[0.04]")}>
+          <CardHeader>
+            <div className="flex items-center gap-2">
+              <Zap className="w-4 h-4 text-amber-500" />
+              <CardTitle className="text-base">Rate-shock stress test</CardTitle>
+            </div>
+            <CardDescription>
+              Shift every yield (MMF + all CBK families) by a fixed amount from a chosen date to stress projected returns. WHT is unchanged; rates floor at 0%.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {status?.rateShock ? (
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2">
+                <div className="text-sm">
+                  <span className="font-semibold text-amber-600 dark:text-amber-400 tabular-nums">
+                    {status.rateShock.deltaPct >= 0 ? "+" : ""}{status.rateShock.deltaPct}%
+                  </span>{" "}
+                  to all yields from <span className="tabular-nums">{status.rateShock.effectiveDate}</span>
+                </div>
+                <Button variant="outline" size="sm" disabled={busy} onClick={clearShock}>
+                  Clear shock
+                </Button>
+              </div>
+            ) : (
+              <div className="flex flex-wrap items-end gap-3">
+                <div className="space-y-1.5">
+                  <Label htmlFor="shockDelta" className="text-xs">Rate change (pp)</Label>
+                  <Input
+                    id="shockDelta"
+                    type="number"
+                    step={0.25}
+                    min={-20}
+                    max={20}
+                    value={shockDelta}
+                    onChange={(e) => setShockDelta(Math.max(-20, Math.min(20, Number(e.target.value) || 0)))}
+                    className="h-9 w-28 tabular-nums"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="shockDate" className="text-xs">Effective from</Label>
+                  <Input
+                    id="shockDate"
+                    type="date"
+                    value={shockDate}
+                    onChange={(e) => setShockDate(e.target.value)}
+                    className="h-9 w-44"
+                  />
+                </div>
+                <Button variant="outline" size="sm" disabled={busy} onClick={applyShock} className="border-amber-500/40">
+                  <Zap className="w-4 h-4" /> Apply shock
+                </Button>
+                <p className="w-full text-xs text-muted-foreground">
+                  Leave the date blank to apply from the current simulated date ({status?.simulatedDateLabel ?? "today"}). Example: −2 pp models a CBK rate cut.
+                </p>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
         {/* Advance controls */}
         <Card>
           <CardHeader>
@@ -394,6 +516,7 @@ export function TimeMachine() {
         </Card>
       )}
     </div>
+    </AppShell>
   );
 }
 

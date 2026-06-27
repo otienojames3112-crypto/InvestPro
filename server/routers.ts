@@ -79,6 +79,7 @@ import {
   setDriftDigestConfig,
   setDriftDigestPending,
   deleteSimSessionRecords,
+  deleteDepositEntriesByIds,
   countSimSessionRecords,
 } from "./db";
 import { notifyOwner } from "./_core/notification";
@@ -142,7 +143,10 @@ import {
   clampTarget,
   parseDateToUtcMidnight,
   formatUtcDate,
+  parseStepLog,
+  popLastStep,
   type SimEvent,
+  type SimStep,
   type StepUnit,
   type MaterializeMode,
 } from "../shared/timeMachine";
@@ -233,7 +237,39 @@ function dbToEngine(
     // for the whole projection (actual/projected boundary, lot ages, maturity &
     // coupon timing). Only honoured for sandbox portfolios; Live always real.
     nowOverride: simulatedNow(p),
+    // Time Machine rate-shock (sandbox only): persisted on the portfolio so EVERY
+    // projection read (dashboard, ledger, reconciliation) reflects the stress.
+    rateShock: simulatedRateShock(p),
   };
+}
+
+/**
+ * Time Machine rate-shock source of truth. Returns the parsed shock when the
+ * portfolio is a SANDBOX portfolio with a valid `simRateShock` JSON, else
+ * undefined. Live portfolios never honour it.
+ */
+function simulatedRateShock(
+  p: Awaited<ReturnType<typeof getPortfolio>>,
+): { effectiveDate: string; deltaPct: number } | undefined {
+  if (!p) return undefined;
+  if ((p as { isSandbox?: boolean }).isSandbox !== true) return undefined;
+  const raw = (p as { simRateShock?: string | null }).simRateShock;
+  if (!raw) return undefined;
+  try {
+    const parsed = JSON.parse(raw);
+    if (
+      parsed &&
+      typeof parsed.effectiveDate === "string" &&
+      /^\d{4}-\d{2}-\d{2}$/.test(parsed.effectiveDate) &&
+      typeof parsed.deltaPct === "number" &&
+      Number.isFinite(parsed.deltaPct)
+    ) {
+      return { effectiveDate: parsed.effectiveDate, deltaPct: parsed.deltaPct };
+    }
+  } catch {
+    /* ignore malformed */
+  }
+  return undefined;
 }
 
 /**
@@ -701,14 +737,17 @@ async function loadProjectionInputs(
   return { settings, mappedOverrides, rh, actualDeposits, actualSecurities, secondaryMmfs, bankHoldings };
 }
 
-/** Run the projection for a portfolio with an OPTIONAL explicit clock override. */
+/** Run the projection for a portfolio with an OPTIONAL explicit clock override and rate-shock. */
 async function projectAt(
   portfolioId: number,
   p: Awaited<ReturnType<typeof getPortfolio>>,
   nowOverride?: number,
+  rateShock?: { effectiveDate: string; deltaPct: number },
 ) {
   const inp = await loadProjectionInputs(portfolioId, p);
-  const settings = nowOverride != null ? { ...inp.settings, nowOverride } : inp.settings;
+  let settings = inp.settings;
+  if (nowOverride != null) settings = { ...settings, nowOverride };
+  if (rateShock) settings = { ...settings, rateShock };
   const months = runProjection(
     settings,
     inp.mappedOverrides,
@@ -815,15 +854,24 @@ export const appRouter = router({
         const events = buildUpcomingEvents(securities, startIso, currentMonthIdx, horizon);
         next = nextEventAfter(simNow, events);
       }
+      const stepLog = parseStepLog((p as { simStepLog?: string | null }).simStepLog);
+      const last = stepLog.length > 0 ? stepLog[stepLog.length - 1] : null;
+      const rateShock = simulatedRateShock(p) ?? null;
       return {
         isSandbox,
         active: sim != null,
+        rateShock,
         simulatedDate: sim,
         anchorDate: anchor,
         simulatedDateLabel: formatUtcDate(simNow),
         currentMonthIndex: currentMonthIdx,
         materialised,
         nextEvent: next,
+        canUndo: stepLog.length > 0,
+        stepsRemaining: stepLog.length,
+        lastStep: last
+          ? { fromLabel: formatUtcDate(last.fromMs), toLabel: formatUtcDate(last.toMs), deposits: last.depositIds.length }
+          : null,
       };
     }),
 
@@ -929,6 +977,7 @@ export const appRouter = router({
 
         // Materialise contributions for newly-elapsed months (accept_plan / variance).
         let written = { deposits: 0, totalContribution: 0 };
+        const stepDepositIds: number[] = [];
         if (mode !== "accrue_only" && nextIdx > prevIdx) {
           if (!session) session = randomUUID();
           // Project at the NEW boundary so contribution amounts reflect the plan there.
@@ -941,7 +990,7 @@ export const appRouter = router({
             { contributionFactor: input.contributionFactor, yieldFactor: input.yieldFactor },
           );
           for (const spec of plan.specs) {
-            await addDepositEntry({
+            const row = await addDepositEntry({
               portfolioId: input.portfolioId,
               bucket: "mmf",
               institutionType: "mmf_fund",
@@ -952,14 +1001,25 @@ export const appRouter = router({
               notes: spec.notes,
               simSessionId: session,
             } as never);
+            const newId = (row as { id?: number } | null)?.id;
+            if (typeof newId === "number") stepDepositIds.push(newId);
           }
           written = { deposits: plan.specs.length, totalContribution: plan.totalContribution };
         }
+
+        // Append this advance to the step log so Undo-last-step can rewind exactly
+        // this boundary and delete only the rows it created.
+        const priorLog = parseStepLog((p as { simStepLog?: string | null }).simStepLog);
+        const newLog: SimStep[] = [
+          ...priorLog,
+          { fromMs, toMs: targetMs, mode, depositIds: stepDepositIds },
+        ];
 
         // Commit the new clock (and session, if just created).
         await updatePortfolio(input.portfolioId, ctx.user.id, {
           simulatedDate: targetMs,
           simSessionId: session,
+          simStepLog: JSON.stringify(newLog),
         } as never);
 
         // After snapshot (re-projected at the new boundary, including any writes).
@@ -1006,6 +1066,94 @@ export const appRouter = router({
       }),
 
     /**
+     * Undo the LAST advance step: rewind the simulated clock back to that step's
+     * `fromMs` boundary and delete ONLY the deposit rows that step materialised
+     * (earlier steps' rows are left intact). This is the fine-grained counterpart
+     * to Reset. When the log becomes empty after undo, the clock returns to the
+     * anchor (real today) but the session id is kept so any still-present rows
+     * stay owned by it.
+     */
+    undoStep: protectedProcedure.input(portfolioIdInput).mutation(async ({ ctx, input }) => {
+      const p = await requirePortfolio(input.portfolioId, ctx.user.id);
+      if ((p as { isSandbox?: boolean }).isSandbox !== true) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "The Time Machine is available in Test mode only." });
+      }
+      const log = parseStepLog((p as { simStepLog?: string | null }).simStepLog);
+      const { step, rest } = popLastStep(log);
+      if (!step) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Nothing to undo \u2014 no recorded steps." });
+      }
+      // Remove only the rows this step created.
+      const removedDeposits = await deleteDepositEntriesByIds(input.portfolioId, step.depositIds);
+      // Rewind the clock to before this step. If the log is now empty, the clock
+      // returns to the anchor (today); keep the session id either way.
+      const session = (p as { simSessionId?: string | null }).simSessionId ?? null;
+      const newSimDate = rest.length > 0 ? rest[rest.length - 1].toMs : step.fromMs;
+      await updatePortfolio(input.portfolioId, ctx.user.id, {
+        simulatedDate: newSimDate,
+        simSessionId: session,
+        simStepLog: rest.length > 0 ? JSON.stringify(rest) : null,
+      } as never);
+      await addAuditLog({
+        portfolioId: input.portfolioId,
+        entity: "portfolio",
+        action: "update",
+        field: "time_machine_undo",
+        newValue: formatUtcDate(newSimDate),
+        changedByOpenId: ctx.user.openId,
+        changedByName: ctx.user.name ?? null,
+        summary: `Time Machine: undid step ${formatUtcDate(step.fromMs)} \u2192 ${formatUtcDate(step.toMs)}, removed ${removedDeposits} contribution(s)`,
+      });
+      return {
+        ok: true,
+        rewoundTo: formatUtcDate(newSimDate),
+        undoneFrom: formatUtcDate(step.toMs),
+        removedDeposits,
+        stepsRemaining: rest.length,
+      };
+    }),
+
+    /**
+     * Set or clear the Time Machine rate-shock stress test. Pass `shock: null` to
+     * clear. Sandbox only. The shock is persisted and honoured by every projection
+     * read so the whole app reflects the stressed yields from the chosen date.
+     */
+    setRateShock: protectedProcedure
+      .input(
+        z.object({
+          portfolioId: z.number().int().positive(),
+          shock: z
+            .object({
+              effectiveDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD"),
+              deltaPct: z.number().min(-20).max(20),
+            })
+            .nullable(),
+        }),
+      )
+      .mutation(async ({ ctx, input }) => {
+        const p = await requirePortfolio(input.portfolioId, ctx.user.id);
+        if ((p as { isSandbox?: boolean }).isSandbox !== true) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "The Time Machine is available in Test mode only." });
+        }
+        await updatePortfolio(input.portfolioId, ctx.user.id, {
+          simRateShock: input.shock ? JSON.stringify(input.shock) : null,
+        } as never);
+        await addAuditLog({
+          portfolioId: input.portfolioId,
+          entity: "portfolio",
+          action: "update",
+          field: "time_machine_rate_shock",
+          newValue: input.shock ? `${input.shock.deltaPct >= 0 ? "+" : ""}${input.shock.deltaPct}% from ${input.shock.effectiveDate}` : "cleared",
+          changedByOpenId: ctx.user.openId,
+          changedByName: ctx.user.name ?? null,
+          summary: input.shock
+            ? `Time Machine: rate-shock ${input.shock.deltaPct >= 0 ? "+" : ""}${input.shock.deltaPct}% applied from ${input.shock.effectiveDate}`
+            : "Time Machine: rate-shock cleared",
+        });
+        return { ok: true, shock: input.shock };
+      }),
+
+    /**
      * Reset to today: clear the simulated clock and DELETE every record the
      * session materialised, restoring the exact pre-simulation state. Records the
      * user entered by hand (untagged) are never touched.
@@ -1023,6 +1171,8 @@ export const appRouter = router({
       await updatePortfolio(input.portfolioId, ctx.user.id, {
         simulatedDate: null,
         simSessionId: null,
+        simStepLog: null,
+        simRateShock: null,
       } as never);
       await addAuditLog({
         portfolioId: input.portfolioId,

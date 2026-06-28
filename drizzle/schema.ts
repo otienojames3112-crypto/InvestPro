@@ -184,6 +184,22 @@ export const portfolios = mysqlTable("portfolios", {
    * Cleared by Reset to today.
    */
   simRateShock: text("sim_rate_shock"),
+  /**
+   * Part A1 — Inflation-link the GOAL (the liability), not just the portfolio.
+   * When true, the target is treated as today's-shilling price and the engine
+   * compares the projection against the FUTURE (nominal) goal
+   * `targetAmount * (1 + inflationRate)^horizonYears`, expressing surplus in real
+   * (today's-shilling) terms. Default false — the goal stays nominal and the
+   * Dashboard labels it "not inflation-adjusted" so the margin is not overstated.
+   */
+  inflationLinked: boolean("inflationLinked").notNull().default(false),
+  /**
+   * Part A1 — optional per-portfolio override for the goal inflation rate (% p.a.).
+   * Null means "use the global inflation benchmark already shown on the Dashboard"
+   * (benchmark_inputs.inflation), so we never introduce a second source of truth.
+   * Only consulted when inflationLinked = true.
+   */
+  inflationOverrideRate: decimal("inflationOverrideRate", { precision: 6, scale: 4 }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });

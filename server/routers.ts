@@ -134,6 +134,12 @@ import {
   type SecurityType as GovSecurityType,
 } from "../shared/securityTenor";
 import { buildAllocation, blendedYield } from "../shared/actuals";
+import {
+  buildProjectionRange,
+  assessPace,
+  assessBackloading,
+  assessLiquidityCushion,
+} from "../shared/decisionSurface";
 import { discountPriceForSecurity, tbillPrice, parseBreachAckRow } from "../shared/discount";
 import {
   advance as advanceClock,
@@ -1710,6 +1716,132 @@ export const appRouter = router({
       const settings = dbToEngine(rates, p, fundEar);
       const secondaryMmfs = mapSecondaryMmfs(await getSecondaryMmfs(input.portfolioId));
       return generateMilestones(settings, secondaryMmfs);
+    }),
+
+    /**
+     * Part 3 — Dashboard DECISION SURFACE. One query that turns the bare headline
+     * number into the investor's real answers, reusing the SAME engine path as
+     * projection.run so nothing can disagree:
+     *   - range {base, low, high}: base (current rates, on-schedule), low/high
+     *     from a -2pp rate shock and a missed-contributions case.
+     *   - pace: base vs the goal target band + a concrete step-up lever
+     *     (solveForStepUp) to get back on pace when behind.
+     *   - backloading: share of total contributions in the final quarter.
+     *   - liquidity: liquid+spendable at the goal date, % of total, and the
+     *     cushion margin to the latest security maturity.
+     */
+    decisionSurface: protectedProcedure.input(portfolioIdInput).query(async ({ ctx, input }) => {
+      const p = await requirePortfolio(input.portfolioId, ctx.user.id);
+      const inp = await loadProjectionInputs(input.portfolioId, p);
+      const settings = inp.settings;
+      const horizonMonths = settings.horizonMonths ?? 120;
+      const target = settings.targetAmount;
+      const mmfFundId = p?.mmfFundId ?? null;
+
+      const startIso = settings.startDate ?? "2026-07-01";
+      const project = (override: Partial<EngineSettings>) => {
+        const s: EngineSettings = { ...settings, ...override };
+        return runProjection(
+          s,
+          inp.mappedOverrides,
+          inp.rh,
+          inp.actualDeposits,
+          inp.actualSecurities,
+          inp.secondaryMmfs,
+          inp.bankHoldings,
+          mmfFundId,
+        );
+      };
+
+      // Base case — current rates, contributions on schedule (the headline number).
+      const baseMonths = project({});
+      const baseFinal = baseMonths[baseMonths.length - 1];
+      const base = Math.round(baseFinal?.totalEnd ?? 0);
+
+      // Downside A — a -2pp CBK rate shock effective from the start date.
+      const rateShockCase = Math.round(
+        project({ rateShock: { effectiveDate: startIso, deltaPct: -2 } }).slice(-1)[0]?.totalEnd ?? 0,
+      );
+
+      // Upside — a +1pp CBK rate tailwind, the symmetric counterpart to the shock.
+      const rateUpCase = Math.round(
+        project({ rateShock: { effectiveDate: startIso, deltaPct: 1 } }).slice(-1)[0]?.totalEnd ?? 0,
+      );
+
+      // The headline band is RATE-driven only (a clean, defensible "if CBK rates
+      // move" range). Contribution-slip risk is surfaced separately in the
+      // back-loading caution, where it can be explained, rather than collapsing
+      // the headline band on plans that still depend on future contributions.
+      const range = buildProjectionRange(base, rateUpCase, rateShockCase);
+
+      // Downside B — a realistic contribution slip (step-ups never happen) +
+      // the rate shock, exposed as a discrete figure for the caution copy.
+      const slipCase = Math.round(
+        project({
+          stepUpAmount: 0,
+          rateShock: { effectiveDate: startIso, deltaPct: -2 },
+        }).slice(-1)[0]?.totalEnd ?? 0,
+      );
+
+      // Pace vs target (1% tolerance band for an explicit "on pace" middle ground).
+      const pace = assessPace(base, target, Math.round(target * 0.01));
+
+      // Step-up lever to get back on pace when behind.
+      let stepUp: { recommendedStepUp: number; feasible: boolean; projectedEndingValue: number } | null = null;
+      if (pace.status === "behind") {
+        const solverSettings: EngineSettings = { ...settings, stepUpAmount: 0 };
+        const res = solveForStepUp(
+          solverSettings,
+          settings.startingContribution,
+          inp.rh,
+          inp.secondaryMmfs,
+        );
+        stepUp = {
+          recommendedStepUp: res.recommendedStepUp,
+          feasible: res.feasible,
+          projectedEndingValue: res.projectedEndingValue,
+        };
+      }
+
+      // Back-loading — per-month contributions over the full horizon.
+      const monthlyContributions = baseMonths.map((m) => m.contribution ?? 0);
+      const backloading = assessBackloading(monthlyContributions, 3);
+
+      // Goal-date liquidity — final-month liquid pot vs locked securities.
+      const liquidAtGoal =
+        (baseFinal?.mmfEnd ?? 0) + (baseFinal?.secondaryMmfEnd ?? 0) + (baseFinal?.bankEnd ?? 0);
+      const goalDate = new Date(startIso + "T00:00:00Z");
+      const goalDateMs = Date.UTC(
+        goalDate.getUTCFullYear(),
+        goalDate.getUTCMonth() + (horizonMonths - 1),
+        goalDate.getUTCDate(),
+      );
+      // Latest UN-matured security maturity (the cushion-defining instrument).
+      const securityRows = await getSecurities(input.portfolioId);
+      let latestMaturityMs: number | null = null;
+      for (const s of securityRows) {
+        if ((s as { isMatured?: boolean }).isMatured) continue;
+        const md = (s as { maturityDate?: Date | string | null }).maturityDate;
+        if (!md) continue;
+        const ms = new Date(md as string | Date).getTime();
+        if (Number.isFinite(ms) && (latestMaturityMs == null || ms > latestMaturityMs)) {
+          latestMaturityMs = ms;
+        }
+      }
+      const liquidity = assessLiquidityCushion(liquidAtGoal, base, goalDateMs, latestMaturityMs);
+
+      return {
+        target,
+        horizonMonths,
+        goalDateMs,
+        range,
+        cases: { base, rateShockCase, rateUpCase, slipCase },
+        pace,
+        stepUp,
+        stepUpMonths: settings.stepUpMonths,
+        backloading,
+        liquidity,
+      };
     }),
 
     /**

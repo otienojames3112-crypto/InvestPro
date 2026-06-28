@@ -55,6 +55,7 @@ import { Link } from "wouter";
 import { GlossaryTerm } from "@/components/GlossaryTerm";
 import { useDepositDrawer } from "@/contexts/DepositDrawerContext";
 import { useSelectedFund } from "@/hooks/useSelectedFund";
+import { useBlendedYield } from "@/hooks/useBlendedYield";
 import { CreatePortfolioDialog } from "@/components/PortfolioSelector";
 import { MaturityTimeline } from "@/components/MaturityTimeline";
 import { Plus, Compass, ArrowUpRight } from "lucide-react";
@@ -169,6 +170,13 @@ export default function Dashboard() {
     { portfolioId: portfolioId! },
     { enabled: !!portfolioId }
   );
+  // Part 3 — decision surface: projection range, pace/lever, back-loading, goal-date liquidity.
+  const { data: decision } = trpc.projection.decisionSurface.useQuery(
+    { portfolioId: portfolioId! },
+    { enabled: !!portfolioId }
+  );
+  // Part 3 — front-page net & real yield (same computation as Portfolio Review).
+  const yieldSummary = useBlendedYield(portfolioId);
     const { data: actualsSummary } = trpc.deposits.summary.useQuery(
     { portfolioId: portfolioId! },
     { enabled: !!portfolioId }
@@ -1813,6 +1821,15 @@ export default function Dashboard() {
                     {formatKES(projectedFinalValue)}
                   </p>
                 )}
+                {/* Part 3: explicit range driven by the rate-shock / missed-contributions engine */}
+                {!projLoading && decision && decision.range.low < decision.range.high && (
+                  <p className="text-sm text-muted-foreground mt-1 tabular-nums">
+                    range <span className="font-medium text-foreground">{formatKESCompact(decision.range.low)}</span>
+                    {" – "}
+                    <span className="font-medium text-foreground">{formatKESCompact(decision.range.high)}</span>
+                    <span className="text-muted-foreground"> if CBK rates move ±1–2pp</span>
+                  </p>
+                )}
                 <p className="text-xs text-muted-foreground mt-1.5">
                   This is the total portfolio value you will <strong className="text-foreground">hold in your accounts</strong> at the end of Month {horizonMonths} — not what you put in, but what you will have.
                 </p>
@@ -1842,17 +1859,43 @@ export default function Dashboard() {
                     <Pencil className="w-3 h-3 text-muted-foreground" />
                   </button>
                 </div>
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  {willHitTarget ? (
-                    <span className="text-emerald-400">
-                      ✓ On track — surplus of {formatKES(surplusOrShortfall)}
-                    </span>
-                  ) : (
-                    <span className="text-red-400">
-                      ✗ Shortfall of {formatKES(Math.abs(surplusOrShortfall))}
-                    </span>
-                  )}
-                </p>
+                {/* Part 3: pace-aware status reconciled with the projection range. */}
+                {(() => {
+                  const status = decision?.pace.status ?? (willHitTarget ? "ahead" : "behind");
+                  if (status === "ahead") {
+                    return (
+                      <p className="text-xs mt-0.5 text-emerald-400">
+                        ✓ On pace — surplus of {formatKES(decision?.pace.surplusOrShortfall ?? surplusOrShortfall)}
+                      </p>
+                    );
+                  }
+                  if (status === "on_pace") {
+                    return (
+                      <p className="text-xs mt-0.5 text-emerald-400">
+                        ✓ On pace — within 1% of your {formatKESCompact(targetAmount)} target
+                      </p>
+                    );
+                  }
+                  // behind
+                  const shortfall = decision?.pace.shortfall ?? Math.abs(surplusOrShortfall);
+                  const lever = decision?.stepUp;
+                  const stepEvery = decision?.stepUpMonths ?? 12;
+                  return (
+                    <div className="text-xs mt-0.5 space-y-0.5">
+                      <p className="text-red-400">✗ Behind — shortfall of {formatKES(shortfall)}</p>
+                      {lever && lever.feasible && lever.recommendedStepUp > 0 && (
+                        <p className="text-amber-400">
+                          Lever: raise your step-up to {formatKES(lever.recommendedStepUp)} every {stepEvery} months to get back on pace.
+                        </p>
+                      )}
+                      {lever && !lever.feasible && (
+                        <p className="text-amber-400">
+                          Even at the maximum step-up the plan stays short — consider a higher starting contribution or a longer horizon.
+                        </p>
+                      )}
+                    </div>
+                  );
+                })()}
                 {!projLoading && projectedFinalValue > 0 && (
                   <p className="text-xs mt-1">
                     {landsFullyLiquid ? (
@@ -1993,6 +2036,69 @@ export default function Dashboard() {
                       Consider increasing your step-up amount or adjusting your goal. Use the{" "}
                       <Link href="/scenarios"><span className="underline cursor-pointer">Scenarios</span></Link> page to find the right step-up.
                     </>
+                  )}
+                </span>
+              </div>
+            )}
+
+            {/* Part 3: front-page net & real yield (same computation as Portfolio Review). */}
+            {yieldSummary.ready && yieldSummary.totalBalance > 0 && (
+              <div className="mt-4 grid grid-cols-2 gap-3">
+                <div className="rounded-lg border border-border/60 bg-muted/30 px-4 py-3">
+                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">Net yield (after tax)</p>
+                  <p className="text-lg font-bold text-foreground tabular-nums inline-flex items-center gap-1">
+                    <TrendingUp className="w-4 h-4 text-primary" />{yieldSummary.netYield.toFixed(2)}%
+                  </p>
+                  <p className="text-[10px] text-muted-foreground mt-0.5">
+                    blended across {yieldSummary.partCount} holding{yieldSummary.partCount === 1 ? "" : "s"} · gross {yieldSummary.grossYield.toFixed(2)}%
+                  </p>
+                </div>
+                <div className="rounded-lg border border-border/60 bg-muted/30 px-4 py-3">
+                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">Real yield (after inflation)</p>
+                  <p className={`text-lg font-bold tabular-nums inline-flex items-center gap-1 ${yieldSummary.realYield >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+                    {yieldSummary.realYield >= 0 ? <TrendingUp className="w-4 h-4" /> : <TrendingDown className="w-4 h-4" />}
+                    {yieldSummary.realYield >= 0 ? "+" : ""}{yieldSummary.realYield.toFixed(2)}%
+                  </p>
+                  <p className="text-[10px] text-muted-foreground mt-0.5">
+                    {yieldSummary.displayYield.toFixed(2)}% yield − {yieldSummary.inflation.toFixed(1)}% inflation
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* Part 3: contribution back-loading caution. */}
+            {decision?.backloading.isBackloaded && (
+              <div className="mt-3 rounded-lg px-4 py-3 text-xs flex items-start gap-2 bg-amber-500/10 border border-amber-500/20 text-amber-300">
+                <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                <span>
+                  <strong>Your plan is back-loaded.</strong>{" "}
+                  {(decision.backloading.share * 100).toFixed(0)}% of your total contributions
+                  ({formatKES(decision.backloading.finalWindowTotal)}) fall in the final {decision.backloading.windowMonths} months
+                  (about {formatKES(decision.backloading.finalWindowMonthly)}/month). Slipping those last contributions
+                  would hit the goal hard — the plan leans on money you have not saved yet.
+                </span>
+              </div>
+            )}
+
+            {/* Part 3: liquidity on the goal date + cushion margin to the last maturity. */}
+            {!projLoading && decision && projectedFinalValue > 0 && (
+              <div className="mt-3 rounded-lg px-4 py-3 text-xs flex items-start gap-2 bg-muted/30 border border-border/60 text-muted-foreground">
+                <CalendarClock className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                <span>
+                  <strong className="text-foreground">{formatKES(decision.liquidity.liquidAtGoal)}</strong>{" "}
+                  ({(decision.liquidity.liquidShare * 100).toFixed(0)}% of the projected total) is{" "}
+                  <strong className="text-foreground">liquid and spendable on the goal date</strong>.{" "}
+                  {decision.liquidity.cushionDays == null ? (
+                    <>No securities are locked at the horizon — the full amount is withdrawable.</>
+                  ) : decision.liquidity.cushionDays >= 0 ? (
+                    <span className={decision.liquidity.maturesNearOrAfterGoal ? "text-amber-400" : ""}>
+                      Your last security matures {decision.liquidity.cushionDays} day{decision.liquidity.cushionDays === 1 ? "" : "s"} before the goal
+                      {decision.liquidity.maturesNearOrAfterGoal ? " — a tight cushion; a delayed auction settlement could push it past your goal date." : " — a comfortable cushion."}
+                    </span>
+                  ) : (
+                    <span className="text-amber-400">
+                      Your last security matures {Math.abs(decision.liquidity.cushionDays)} day{Math.abs(decision.liquidity.cushionDays) === 1 ? "" : "s"} AFTER the goal date — that portion will not be spendable in time.
+                    </span>
                   )}
                 </span>
               </div>

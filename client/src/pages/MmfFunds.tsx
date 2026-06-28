@@ -10,7 +10,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
-import { ArrowUpDown, ArrowUp, ArrowDown, Search, Plus, Pencil, Trash2, CheckCircle2, Circle, Info, PlusCircle, X, Star } from "lucide-react";
+import { ArrowUpDown, ArrowUp, ArrowDown, Search, Plus, Pencil, Trash2, CheckCircle2, Circle, Info, PlusCircle, X, Star, AlertTriangle } from "lucide-react";
 import { formatKES } from "@/lib/format";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
@@ -104,8 +104,32 @@ function FundFormDialog({
             <Input type="number" step="0.01" value={form.grossYield} onChange={set("grossYield")} placeholder="e.g. 16.0" />
           </div>
           <div>
-            <Label>EAR net of fee (% p.a.) *</Label>
+            <Label>Published EAR — net of fee (% p.a.) *</Label>
             <Input type="number" step="0.01" value={form.ear} onChange={set("ear")} placeholder="e.g. 13.9" />
+            <p className="text-[11px] text-muted-foreground mt-1 leading-snug">
+              Enter the <strong>daily/effective yield the fund publishes</strong> — Kenyan MMF yields are
+              <strong> already net of the manager&rsquo;s fee</strong>. This is the figure the engine compounds (it does
+              <strong> not</strong> deduct a fee on top). It should be <strong>below</strong> the gross yield above. WHT is applied separately.
+            </p>
+            {(() => {
+              const ear = parseFloat(form.ear);
+              const gross = parseFloat(form.grossYield);
+              if (isNaN(ear) || isNaN(gross) || gross <= 0) return null;
+              // Guard: net-of-fee EAR can never EXCEED the gross yield (net = gross
+              // minus fee). Many Kenyan funds publish the two as effectively equal,
+              // so only warn when EAR sits ABOVE gross by a clear margin — the
+              // tell-tale sign a pre-fee "gross" rate was pasted into the net field
+              // (which overstates returns ~1.5–2%).
+              if (ear > gross + 0.05) {
+                return (
+                  <p className="text-[11px] text-amber-600 dark:text-amber-400 mt-1 flex items-start gap-1 leading-snug">
+                    <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                    This net-of-fee EAR is higher than the gross yield, which isn&rsquo;t possible — net = gross minus the manager&rsquo;s fee. Check you haven&rsquo;t entered a pre-fee gross rate here (that would overstate returns).
+                  </p>
+                );
+              }
+              return null;
+            })()}
           </div>
           <div>
             <Label>Management Fee (% p.a.)</Label>

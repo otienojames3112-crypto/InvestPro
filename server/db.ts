@@ -616,6 +616,8 @@ export async function getActualsSummary(
     remainingToTarget,
     taxLiability: agg.taxLiability,
     taxBreakdown: agg.taxBreakdown,
+    forwardGrossIncome12mo: agg.forwardGrossIncome12mo,
+    forwardNetIncome12mo: agg.forwardNetIncome12mo,
     annualFxdCouponIncome,
     byBucket: agg.byBucket,
     secondaryCount: secondaries.length,

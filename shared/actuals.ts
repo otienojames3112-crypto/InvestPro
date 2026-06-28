@@ -175,6 +175,12 @@ export function computeActualsTotals(
   let securitiesValue = 0;
   let tbillTax = 0;
   let fxdTax = 0;
+  // Part 5 (line-item #8): forward-12-month GROSS income per source, so the
+  // Dashboard's "Est. Interest Earned" card can show a figure on the SAME
+  // forward basis as "Est. Annual Tax" (which is the WHT on this very income).
+  let grossIncomeTbill = 0;
+  let grossIncomeFxd = 0;
+  let grossIncomeIfb = 0;
   for (const s of securities) {
     if (s.isMatured) continue;
     securitiesValue += s.faceValue;
@@ -196,9 +202,14 @@ export function computeActualsTotals(
       const discount = price != null && price < s.faceValue
         ? s.faceValue - price
         : s.faceValue * (rates.tbillRate / 100);
+      grossIncomeTbill += discount;
       tbillTax += whtOn(discount, govWht);
     } else if (isIfb) {
       byBucket.ifb += s.faceValue; // IFB coupons are tax-exempt in Kenya
+      {
+        const ifbCoupon = s.couponRate > 0 ? s.couponRate : rates.fxdCouponRate;
+        grossIncomeIfb += s.faceValue * (ifbCoupon / 100);
+      }
       if (s.faceValue > ifbDominantFace) {
         ifbDominantFace = s.faceValue;
         ifbTenorYears = s.tenorYears != null ? Math.round(Number(s.tenorYears) * 10) / 10 : 0;
@@ -207,6 +218,7 @@ export function computeActualsTotals(
       // FXD bond
       byBucket.fxd += s.faceValue;
       const coupon = s.couponRate > 0 ? s.couponRate : rates.fxdCouponRate;
+      grossIncomeFxd += s.faceValue * (coupon / 100);
       fxdTax += whtOn(s.faceValue * (coupon / 100), govWht);
     }
   }
@@ -214,19 +226,23 @@ export function computeActualsTotals(
   // ── Secondary MMF accounts ───────────────────────────────────────────────────
   let secondaryMmfBalance = 0;
   let secondaryMmfTax = 0;
+  let grossIncomeSecondary = 0;
   for (const s of secondaries) {
     const sWht = s.whtRate ?? WHT_RATES.mmfInterest;
     secondaryMmfBalance += s.currentBalance;
+    grossIncomeSecondary += s.currentBalance * (s.ear / 100);
     secondaryMmfTax += whtOn(s.currentBalance * (s.ear / 100), sWht);
   }
 
   // ── Bank instruments ─────────────────────────────────────────────────────────
   let bankBalance = 0;
   let bankTax = 0;
+  let grossIncomeBank = 0;
   for (const b of bankHoldings) {
     if (b.isActive === false) continue;
     const bWht = b.whtRate ?? WHT_RATES.bankInterest;
     bankBalance += b.principal;
+    grossIncomeBank += b.principal * (b.interestRate / 100);
     bankTax += whtOn(b.principal * (b.interestRate / 100), bWht);
   }
 
@@ -244,6 +260,7 @@ export function computeActualsTotals(
 
   const mmfTax = whtOn(netPrimaryMmf * (rates.mmfYield / 100), rates.withholdingTax || WHT_RATES.mmfInterest);
   const ifbTax = 0; // IFB coupons are tax-exempt in Kenya
+  const grossIncomeMmf = netPrimaryMmf * (rates.mmfYield / 100);
 
   // Tax bases for secondary/bank scale down proportionally to the remaining balance.
   const secScale = secondaryMmfBalance > 0 ? netSecondaryMmf / secondaryMmfBalance : 0;
@@ -254,6 +271,18 @@ export function computeActualsTotals(
   const totalContributed =
     netPrimaryMmf + netSecurities + netSecondaryMmf + netBank;
   const taxLiability = mmfTax + tbillTax + ifbTax + fxdTax + secondaryMmfTax + bankTax;
+
+  // Part 5 (line-item #8): forward-12-month income on TODAY's balances, on the
+  // SAME basis as taxLiability. Secondary/bank gross income scale down with the
+  // same withdrawal factors applied to their tax bases above.
+  const forwardGrossIncome12mo =
+    grossIncomeMmf +
+    grossIncomeTbill +
+    grossIncomeIfb +
+    grossIncomeFxd +
+    grossIncomeSecondary * secScale +
+    grossIncomeBank * bankScale;
+  const forwardNetIncome12mo = Math.max(0, forwardGrossIncome12mo - taxLiability);
 
   return {
     totalContributed,
@@ -277,6 +306,9 @@ export function computeActualsTotals(
       bank: Math.round(bankTax * 100) / 100,
     },
     taxLiability,
+    /** Part 5: forward-12-month income on today's balances (same basis as tax). */
+    forwardGrossIncome12mo: Math.round(forwardGrossIncome12mo * 100) / 100,
+    forwardNetIncome12mo: Math.round(forwardNetIncome12mo * 100) / 100,
   };
 }
 

@@ -14,6 +14,7 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog";
 import {
@@ -64,7 +65,7 @@ import { toast } from "sonner";
 import { rateStaleness } from "@/lib/rateStaleness";
 import { currentSecurityValue, securityYieldContribution, isDiscountSecurityType, classifyDurationRisk, largestConcentration, classifyConcentration, analyzePerTypeBreach, isConcentrationSnoozed, formatConcentrationPct, splitEndStateBuckets, DEFAULT_LIQUIDITY_HORIZON_DAYS, type CurrentValueSecurity } from "@shared/discount";
 import { whtRateForSecurity } from "@shared/securityTenor";
-import { Layers, TrendingDown, BellOff, Bell, Scale, ArrowRightLeft, Copy, Check } from "lucide-react";
+import { Layers, TrendingDown, BellOff, Bell, Scale, ArrowRightLeft, Copy, Check, ChevronUp, ChevronDown } from "lucide-react";
 import { buildTransferPlan, SNOOZE_OPTIONS, snoozeUntilFromDays } from "@shared/liquidAllocator";
 import {
   classifyBreachSeverity,
@@ -373,6 +374,20 @@ export default function Dashboard() {
   const { openDrawer } = useDepositDrawer();
   const [targetDialogOpen, setTargetDialogOpen] = useState(false);
   const [targetInput, setTargetInput] = useState("");
+  // Part 5 (line-item #14): the "Record a Deposit" CTA writes into LIVE tracking.
+  // On a Test/sandbox dashboard, intercept the click with a deliberate confirm
+  // step so a user exploring sample data cannot accidentally record real money.
+  const [liveDepositConfirmOpen, setLiveDepositConfirmOpen] = useState(false);
+  // Part 5: progressive disclosure — the deep detailed analytics collapse by
+  // default so the page opens with the investor strip + manager band only.
+  const [showDetails, setShowDetails] = useState(false);
+  const handleRecordDeposit = () => {
+    if (mode === "sandbox") {
+      setLiveDepositConfirmOpen(true);
+      return;
+    }
+    openDrawer();
+  };
 
   function openTargetDialog() {
     setTargetInput(String(Number(portfolio?.targetAmount) || 0));
@@ -599,6 +614,32 @@ export default function Dashboard() {
     [projection]
   );
   const strategyDescriptor = usesGovSecurities ? `${fundLabel} + CBK securities` : fundLabel;
+
+  // Part 5: goal date label (start + horizon months) for the investor strip.
+  const goalDateLabel = useMemo(() => {
+    if (!portfolio?.startDate || !horizonMonths) return null;
+    const start = new Date(String(portfolio.startDate));
+    const goal = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + horizonMonths, 1));
+    return goal.toLocaleDateString(undefined, { month: "short", year: "numeric" });
+  }, [portfolio?.startDate, horizonMonths]);
+
+  // Part 5: maturities falling within the next 90 days (manager exceptions band).
+  const maturitiesNext90 = useMemo(() => {
+    const now = effectiveNowMs;
+    const horizon = now + 90 * 86_400_000;
+    let count = 0;
+    let faceTotal = 0;
+    for (const s of securities as Array<{ maturityDate?: unknown; isMatured?: unknown; faceValue?: unknown }>) {
+      if (s?.isMatured) continue;
+      if (!s?.maturityDate) continue;
+      const mt = new Date(String(s.maturityDate)).getTime();
+      if (mt >= now && mt <= horizon) {
+        count += 1;
+        faceTotal += parseFloat(String(s.faceValue ?? "0")) || 0;
+      }
+    }
+    return { count, faceTotal };
+  }, [securities, effectiveNowMs]);
 
   // Phase legend derived from the actual projection so band ranges match this
   // portfolio's horizon and phase fractions (not a hardcoded 120-month layout).
@@ -968,14 +1009,14 @@ export default function Dashboard() {
           </div>
           <div className="flex items-center gap-3 shrink-0">
             <Button
-              onClick={openDrawer}
+              onClick={handleRecordDeposit}
               size="lg"
               className="font-semibold shadow-lg shadow-primary/20 bg-primary text-primary-foreground hover:bg-primary/90 active:scale-[0.97] transition-transform"
             >
               <ArrowDownCircle className="w-4 h-4 mr-2" />
               Record a Deposit
-              <span className="ml-2 inline-flex items-center rounded-full bg-primary-foreground/20 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide">
-                Live
+              <span className={`ml-2 inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide ${mode === "sandbox" ? "bg-amber-500/25 text-amber-100" : "bg-primary-foreground/20"}`}>
+                {mode === "sandbox" ? "Live → from Test" : "Live"}
               </span>
             </Button>
             <Badge variant="outline" className={`text-xs px-3 py-1 border ${getPhaseColorClass(currentPhase)}`}>
@@ -983,6 +1024,130 @@ export default function Dashboard() {
             </Badge>
           </div>
         </div>
+
+        {/* ── Part 5: Role-aware top — investor strip + manager band ───────── */}
+        {decision && (() => {
+          const liveNetWorth = concentration?.netWorth ?? (actualsSummary?.totalContributed ?? 0);
+          const paceStatus = decision.pace.status;
+          const realYield = yieldSummary?.realYield ?? null;
+          const hasYield = (yieldSummary?.partCount ?? 0) > 0 && yieldSummary != null;
+          // The single "Next:" action — the most important thing to do today.
+          const nextAction =
+            paceStatus === "behind" && decision.stepUp?.feasible
+              ? `Raise step-up by ${formatKES(decision.stepUp.recommendedStepUp)}/mo to stay on pace`
+              : (settings as any)?.ratesLastUpdatedAt && rateStaleness((settings as any).ratesLastUpdatedAt).isStale
+                ? "Refresh your CBK rate snapshot"
+                : "Nothing today — you're on track";
+          const onTrack = paceStatus !== "behind";
+          return (
+            <div className="rounded-xl border border-primary/25 bg-gradient-to-br from-primary/10 via-card to-card p-5 shadow-sm">
+              <div className="flex items-center justify-between gap-2 mb-3">
+                <span className="text-[11px] font-semibold uppercase tracking-wider text-primary/80">At a glance</span>
+                {onTrack ? (
+                  <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-600 dark:text-emerald-400"><CheckCircle2 className="w-3.5 h-3.5" /> On track</span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-amber-600 dark:text-amber-400"><AlertTriangle className="w-3.5 h-3.5" /> Needs attention</span>
+                )}
+              </div>
+              <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-base leading-relaxed text-foreground">
+                <span>You have <strong className="kes-amount text-lg">{formatKES(liveNetWorth)}</strong>.</span>
+                <span className="text-muted-foreground">·</span>
+                <span>
+                  Projected ≈ <strong className="kes-amount text-lg">{formatKESCompact(decision.range.base)}</strong>
+                  {goalDateLabel ? <> by {goalDateLabel}</> : null}
+                  {decision.range.high > decision.range.low && (
+                    <span className="text-muted-foreground text-sm"> (range {formatKESCompact(decision.range.low)}–{formatKESCompact(decision.range.high)})</span>
+                  )}
+                </span>
+                {hasYield && realYield != null && (
+                  <>
+                    <span className="text-muted-foreground">·</span>
+                    <span className={realYield >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}>
+                      ≈{realYield >= 0 ? "+" : ""}{realYield.toFixed(1)}% {realYield >= 0 ? "above" : "below"} inflation
+                    </span>
+                  </>
+                )}
+              </div>
+              <div className="mt-3 flex items-center gap-2 text-sm">
+                <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Next</span>
+                <span className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-sm font-medium ${onTrack ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300" : "bg-amber-500/15 text-amber-700 dark:text-amber-300"}`}>
+                  {onTrack ? <CheckCircle2 className="w-3.5 h-3.5" /> : <ArrowRight className="w-3.5 h-3.5" />}
+                  {nextAction}
+                </span>
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* ── Part 5: Manager band — exceptions & posture ──────────────────── */}
+        {decision && (() => {
+          const exceptions: Array<{ key: string; label: string; tone: "amber" | "red" }> = [];
+          if (issuerSeverity === "action") exceptions.push({ key: "issuer", label: "Issuer cap breach needs action", tone: "red" });
+          else if (issuerBreachActive) exceptions.push({ key: "issuer", label: "Issuer cap breach (acknowledged)", tone: "amber" });
+          if (typeSeverity === "action") exceptions.push({ key: "type", label: "Type cap breach needs action", tone: "red" });
+          else if (typeBreach?.breached) exceptions.push({ key: "type", label: "Type cap breach (self-correcting)", tone: "amber" });
+          const rateStale = (settings as any)?.ratesLastUpdatedAt ? rateStaleness((settings as any).ratesLastUpdatedAt) : null;
+          if (rateStale?.isVeryStale) exceptions.push({ key: "rates", label: `Rates last updated ${rateStale.label}`, tone: "red" });
+          else if (rateStale?.isStale) exceptions.push({ key: "rates", label: `Rates ${rateStale.label} — consider refresh`, tone: "amber" });
+          if (maturitiesNext90.count > 0) exceptions.push({ key: "mat", label: `${maturitiesNext90.count} maturit${maturitiesNext90.count === 1 ? "y" : "ies"} in next 90 days (${formatKESCompact(maturitiesNext90.faceTotal)})`, tone: "amber" });
+          if (decision.pace.status === "behind") exceptions.push({ key: "pace", label: `Behind pace by ${formatKESCompact(decision.pace.shortfall)}`, tone: "red" });
+          const hasYield = (yieldSummary?.partCount ?? 0) > 0 && yieldSummary != null;
+          return (
+            <div className="rounded-xl border border-border bg-card p-4">
+              <div className="flex items-center justify-between mb-3">
+                <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Posture & exceptions</span>
+                <span className="text-[11px] text-muted-foreground">{exceptions.length === 0 ? "No exceptions" : `${exceptions.length} to review`}</span>
+              </div>
+              <div className="grid gap-3 md:grid-cols-3">
+                {/* Exceptions */}
+                <div className="md:col-span-2">
+                  {exceptions.length === 0 ? (
+                    <div className="flex items-center gap-2 rounded-lg bg-emerald-500/10 border border-emerald-500/25 p-3 text-sm text-emerald-700 dark:text-emerald-300">
+                      <CheckCircle2 className="w-4 h-4 shrink-0" /> Nothing needs attention right now.
+                    </div>
+                  ) : (
+                    <ul className="space-y-1.5">
+                      {exceptions.map((e) => (
+                        <li key={e.key} className={`flex items-center gap-2 rounded-lg border p-2.5 text-sm ${e.tone === "red" ? "bg-red-500/10 border-red-500/25 text-red-700 dark:text-red-300" : "bg-amber-500/10 border-amber-500/25 text-amber-700 dark:text-amber-300"}`}>
+                          <AlertTriangle className="w-4 h-4 shrink-0" /> {e.label}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+                {/* Posture: yield vs benchmark */}
+                <div className="rounded-lg bg-muted/40 border border-border p-3">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground mb-1.5">Yield posture</p>
+                  {hasYield && yieldSummary ? (
+                    <div className="space-y-1 text-sm">
+                      <div className="flex items-center justify-between"><span className="text-muted-foreground">Net yield</span><strong className="tabular-nums">{yieldSummary.netYield.toFixed(1)}%</strong></div>
+                      <div className="flex items-center justify-between"><span className="text-muted-foreground">Real (vs infl.)</span><strong className={`tabular-nums ${yieldSummary.realYield >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}`}>{yieldSummary.realYield >= 0 ? "+" : ""}{yieldSummary.realYield.toFixed(1)}%</strong></div>
+                      <div className="flex items-center justify-between text-xs text-muted-foreground"><span>Inflation</span><span className="tabular-nums">{yieldSummary.inflation.toFixed(1)}%</span></div>
+                    </div>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">Record deposits to see your blended net &amp; real yield.</p>
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* ── Part 5: progressive disclosure toggle for deep analytics ─────── */}
+        <div className="flex items-center justify-center">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setShowDetails((v) => !v)}
+            className="bg-card text-sm"
+          >
+            {showDetails ? <ChevronUp className="w-4 h-4 mr-1.5" /> : <ChevronDown className="w-4 h-4 mr-1.5" />}
+            {showDetails ? "Hide detailed analytics" : "Show detailed analytics"}
+          </Button>
+        </div>
+
+        {/* Deep analytics below collapse behind the toggle. */}
+        <div className={showDetails ? "space-y-6" : "hidden"}>
 
         {/* ── R50/R51: Securities portfolio summary (current vs face vs gain) ── */}
         {portfolioValuation.lots > 0 && (() => {
@@ -2773,7 +2938,7 @@ export default function Dashboard() {
                   These figures are based on the deposits you have actually recorded. They reflect real money, not projections.
                 </p>
               </div>
-              <button onClick={openDrawer} className="text-xs text-primary hover:underline flex items-center gap-1">
+              <button onClick={handleRecordDeposit} className="text-xs text-primary hover:underline flex items-center gap-1">
                 Record a deposit <ArrowRight className="w-3 h-3" />
               </button>
             </div>
@@ -2784,7 +2949,7 @@ export default function Dashboard() {
                 <PiggyBank className="w-5 h-5 shrink-0 opacity-50" />
                 <span>
                   No deposits recorded yet.{" "}
-                  <button onClick={openDrawer} className="text-primary underline">Record your first deposit</button>{" "}
+                  <button onClick={handleRecordDeposit} className="text-primary underline">Record your first deposit</button>{" "}
                   to see your live actuals here.
                 </span>
               </div>
@@ -2855,6 +3020,13 @@ export default function Dashboard() {
                   <p className="text-[11px] font-medium text-sky-300/80">
                     Accrued to today (not annualised)
                   </p>
+                  {/* Part 5 (line-item #8): also show the SAME forward-12-month basis as
+                      the Est. Annual Tax card so the two are directly comparable. The
+                      tax above is the WHT on roughly this forward net income. */}
+                  <div className="mt-2 flex items-baseline justify-between rounded-lg bg-sky-500/10 px-2.5 py-1.5">
+                    <span className="text-[11px] text-sky-300/80">Forward 12-month (net, today&rsquo;s balances)</span>
+                    <span className="text-sm font-semibold text-sky-100 kes-amount">{formatKES(actualsSummary?.forwardNetIncome12mo ?? 0)}</span>
+                  </div>
                   <p className="text-xs text-muted-foreground mt-2">
                     <GlossaryTerm id="net-yield">Net of WHT</GlossaryTerm>,{" "}
                     <GlossaryTerm id="accrued-interest">accrued</GlossaryTerm> to today across your MMF (primary + secondary), bank deposits and government securities (T-bill / IFB / FXD coupons). MMF &amp; bank use{" "}
@@ -3342,6 +3514,9 @@ export default function Dashboard() {
           }
         />
 
+        </div>
+        {/* end deep-analytics progressive-disclosure wrapper (Part 5) */}
+
       </div>
 
       {/* ── Change Target Dialog ─────────────────────────────────────────── */}
@@ -3406,6 +3581,37 @@ export default function Dashboard() {
               className="bg-primary text-primary-foreground"
             >
               {updatePortfolioMutation.isPending ? "Saving…" : "Update Target & Recalculate"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Part 5 (line-item #14): Test → Live deposit safety gate. */}
+      <Dialog open={liveDepositConfirmOpen} onOpenChange={setLiveDepositConfirmOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="w-5 h-5 text-amber-500" />
+              Record into LIVE tracking?
+            </DialogTitle>
+            <DialogDescription className="pt-1 leading-relaxed">
+              You're currently on the <strong className="text-amber-600 dark:text-amber-400">Test (sandbox)</strong> dashboard,
+              but “Record a Deposit” writes into your <strong className="text-foreground">real, live</strong> portfolio tracking —
+              not the sandbox. Sample data you're exploring here will not be affected, but the deposit you enter
+              <strong className="text-foreground"> will be recorded as real money</strong>.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="rounded-lg bg-amber-500/10 border border-amber-500/30 p-3 text-xs text-amber-700 dark:text-amber-300 leading-relaxed">
+            If you only want to experiment, cancel and use the Time Machine on the sandbox instead. Continue only if you
+            intend to log an actual deposit.
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setLiveDepositConfirmOpen(false)}>Cancel — stay in Test</Button>
+            <Button
+              onClick={() => { setLiveDepositConfirmOpen(false); openDrawer(); }}
+              className="bg-amber-600 text-white hover:bg-amber-600/90"
+            >
+              Continue to Live deposit
             </Button>
           </DialogFooter>
         </DialogContent>

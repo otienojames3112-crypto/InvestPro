@@ -173,3 +173,98 @@ export function assessLiquidityCushion(
     maturesNearOrAfterGoal,
   };
 }
+
+// ─── Part 4 — Risk severity + primary-risk classification ───────────────────
+//
+// The Dashboard risk section must (a) lead with the risks that actually matter
+// for a goal-matched sovereign-paper ladder and (b) colour a breach by its
+// MESSAGE, not its mere existence. A self-correcting or acknowledged breach is
+// "caution" (amber), never "action" (red). These pure helpers keep the colour
+// ↔ message contract in one tested place so the tiles, banners, and the new
+// primary panel can never drift apart again.
+
+/**
+ * Severity of a single risk row.
+ *  - "ok"      : within tolerance, no attention needed (neutral / primary green).
+ *  - "caution" : worth knowing but self-correcting, acknowledged, or modelled —
+ *                renders AMBER. Reserve this for breaches that do NOT require the
+ *                user to do anything right now.
+ *  - "action"  : genuinely requires a decision — renders RED.
+ */
+export type RiskSeverity = "ok" | "caution" | "action";
+
+/** Rank so callers can sort/escalate: action > caution > ok. */
+export function severityRank(s: RiskSeverity): number {
+  return s === "action" ? 2 : s === "caution" ? 1 : 0;
+}
+
+/**
+ * Resolve the severity of a concentration/cap breach by its message.
+ *
+ * The brief (line-item #13): once a breach is self-correcting OR has been
+ * acknowledged, it must render amber — red is reserved for breaches that
+ * genuinely require action.
+ *
+ *  - not breached            → "ok"
+ *  - breached + acknowledged → "caution"  (user already accepted it)
+ *  - breached + selfCorrects → "caution"  (clears on its own by a known date)
+ *  - breached, neither       → "action"   (needs a decision)
+ */
+export function classifyBreachSeverity(opts: {
+  breached: boolean;
+  selfCorrects?: boolean;
+  acknowledged?: boolean;
+}): RiskSeverity {
+  if (!opts.breached) return "ok";
+  if (opts.acknowledged) return "caution";
+  if (opts.selfCorrects) return "caution";
+  return "action";
+}
+
+/**
+ * Resolve the severity of the rate / reinvestment risk from the projection band.
+ * A bigger modelled downside (low case far below base) is a louder caution, but
+ * rate risk is inherent to a re-rolling ladder and is never "action" on its own —
+ * it is information the plan already prices in. We escalate to "caution" only when
+ * the downside would actually MISS the target.
+ */
+export function classifyRateRisk(opts: {
+  base: number;
+  low: number;
+  target: number;
+}): RiskSeverity {
+  if (!(opts.base > 0)) return "ok";
+  // If even the modelled rate-shock low still clears the target, this is benign.
+  if (opts.low >= opts.target) return "ok";
+  return "caution";
+}
+
+/**
+ * Resolve the severity of the contribution-shortfall risk.
+ *  - behind on pace            → "action" (a decision is needed: step up / extend)
+ *  - on pace but back-loaded   → "caution" (the plan leans on future escalation)
+ *  - otherwise                 → "ok"
+ */
+export function classifyContributionRisk(opts: {
+  paceStatus: PaceStatus;
+  isBackloaded: boolean;
+}): RiskSeverity {
+  if (opts.paceStatus === "behind") return "action";
+  if (opts.isBackloaded) return "caution";
+  return "ok";
+}
+
+/**
+ * Resolve the severity of liquidity-timing risk (cash locked at/after the goal).
+ *  - a security matures AFTER the goal date           → "action" (cash is locked late)
+ *  - a security matures uncomfortably near the goal    → "caution"
+ *  - otherwise                                         → "ok"
+ */
+export function classifyLiquidityTimingRisk(opts: {
+  cushionDays: number | null;
+  maturesNearOrAfterGoal: boolean;
+}): RiskSeverity {
+  if (opts.cushionDays != null && opts.cushionDays < 0) return "action";
+  if (opts.maturesNearOrAfterGoal) return "caution";
+  return "ok";
+}

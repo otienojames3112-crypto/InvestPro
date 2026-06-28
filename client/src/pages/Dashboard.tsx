@@ -66,6 +66,14 @@ import { currentSecurityValue, securityYieldContribution, isDiscountSecurityType
 import { whtRateForSecurity } from "@shared/securityTenor";
 import { Layers, TrendingDown, BellOff, Bell, Scale, ArrowRightLeft, Copy, Check } from "lucide-react";
 import { buildTransferPlan, SNOOZE_OPTIONS, snoozeUntilFromDays } from "@shared/liquidAllocator";
+import {
+  classifyBreachSeverity,
+  classifyRateRisk,
+  classifyContributionRisk,
+  classifyLiquidityTimingRisk,
+  severityRank,
+  type RiskSeverity,
+} from "@shared/decisionSurface";
 import { Sparkline } from "@/components/Sparkline";
 import {
   DropdownMenu,
@@ -74,6 +82,73 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
+
+// ── Part 4: severity → styling map (one place so colour matches the message) ──
+// "action" = red (a decision is genuinely needed); "caution" = amber
+// (self-correcting, acknowledged, or modelled downside — worth knowing, no
+// action right now); "ok" = neutral/green.
+const RISK_SEVERITY_STYLES: Record<
+  RiskSeverity,
+  { dot: string; text: string; border: string; bg: string; chip: string; label: string }
+> = {
+  action: {
+    dot: "bg-red-500",
+    text: "text-red-600 dark:text-red-400",
+    border: "border-red-500/40",
+    bg: "bg-red-500/5",
+    chip: "bg-red-500/15 text-red-300 border-red-500/30",
+    label: "Action needed",
+  },
+  caution: {
+    dot: "bg-amber-500",
+    text: "text-amber-600 dark:text-amber-400",
+    border: "border-amber-500/40",
+    bg: "bg-amber-500/5",
+    chip: "bg-amber-500/15 text-amber-300 border-amber-500/30",
+    label: "Monitor",
+  },
+  ok: {
+    dot: "bg-emerald-500",
+    text: "text-emerald-600 dark:text-emerald-400",
+    border: "border-border",
+    bg: "bg-card",
+    chip: "bg-emerald-500/15 text-emerald-300 border-emerald-500/30",
+    label: "OK",
+  },
+};
+
+function RiskRow({
+  icon: Icon,
+  title,
+  severity,
+  detail,
+  okLabel,
+}: {
+  icon: React.ElementType;
+  title: string;
+  severity: RiskSeverity;
+  detail: React.ReactNode;
+  okLabel?: string;
+}) {
+  const s = RISK_SEVERITY_STYLES[severity];
+  return (
+    <div className={cn("rounded-lg border p-3 flex gap-3 transition-colors", s.border, s.bg)}>
+      <span className={cn("mt-0.5 shrink-0 w-7 h-7 rounded-lg flex items-center justify-center", severity === "ok" ? "bg-muted" : s.bg)}>
+        <Icon className={cn("w-4 h-4", severity === "ok" ? "text-muted-foreground" : s.text)} />
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-sm font-semibold text-foreground">{title}</p>
+          <span className={cn("shrink-0 inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium", s.chip)}>
+            <span className={cn("w-1.5 h-1.5 rounded-full", s.dot)} />
+            {severity === "ok" && okLabel ? okLabel : s.label}
+          </span>
+        </div>
+        <p className="mt-1 text-xs text-muted-foreground leading-relaxed">{detail}</p>
+      </div>
+    </div>
+  );
+}
 
 function StatCard({
   title,
@@ -778,6 +853,61 @@ export default function Dashboard() {
     }
   };
 
+  // ── Part 4: Key-risks model ──────────────────────────────────────────────
+  // Lead the risk section with the risks that actually matter for a ladder of
+  // sovereign paper matched to a dated goal, in priority order:
+  //   (1) rate / reinvestment risk — the ladder re-rolls; falling CBK rates lower
+  //       each reinvestment and the projection's downside band shows the gap.
+  //   (2) contribution shortfall — behind on pace (action) or a back-loaded plan
+  //       that leans on future escalation (caution).
+  //   (3) liquidity-timing — cash locked at/after the goal date.
+  // Concentration is demoted to a secondary, correctly-scoped duration/liquidity
+  // note below — for single-issuer sovereign paper it is NOT credit risk.
+  // `acknowledged` here = the user has snoozed/accepted the cap breach.
+  const breachAcknowledged = concentrationSnoozed;
+  const keyRisks = useMemo(() => {
+    if (!decision) return null;
+    const target = decision.target ?? 0;
+
+    // (1) Rate / reinvestment risk — from the modelled downside band.
+    const rateSeverity = classifyRateRisk({
+      base: decision.range.base,
+      low: decision.range.low,
+      target,
+    });
+    const rateDownsideGap = Math.max(0, decision.range.base - decision.range.low);
+
+    // (2) Contribution shortfall — pace + back-loading.
+    const contributionSeverity = classifyContributionRisk({
+      paceStatus: decision.pace.status,
+      isBackloaded: decision.backloading.isBackloaded,
+    });
+
+    // (3) Liquidity-timing — goal-date cushion.
+    const liquiditySeverity = classifyLiquidityTimingRisk({
+      cushionDays: decision.liquidity.cushionDays,
+      maturesNearOrAfterGoal: decision.liquidity.maturesNearOrAfterGoal,
+    });
+
+    return {
+      rate: { severity: rateSeverity, downsideGap: rateDownsideGap },
+      contribution: { severity: contributionSeverity },
+      liquidity: { severity: liquiditySeverity, cushionDays: decision.liquidity.cushionDays },
+    };
+  }, [decision]);
+
+  // Concentration severity — amber once self-correcting OR acknowledged.
+  const issuerBreachActive = !!concentration && concentration.breaches.length > 0;
+  const issuerSeverity: RiskSeverity = classifyBreachSeverity({
+    breached: issuerBreachActive,
+    acknowledged: breachAcknowledged,
+  });
+  const typeSeverity: RiskSeverity = classifyBreachSeverity({
+    breached: !!typeBreach?.breached,
+    selfCorrects: !!typeBreach?.selfCorrects,
+    acknowledged: breachAcknowledged,
+  });
+
   // ── Onboarding empty state: authenticated but no portfolios yet ──────────
   if (!portfoliosLoading && portfolios.length === 0) {
     return (
@@ -1041,15 +1171,115 @@ export default function Dashboard() {
           );
         })()}
 
-        {/* ── R59: Risk limits mini-panel — surfaces the per-issuer (KDIC) and
-            per-type caps together with current-vs-cap status. ──────────── */}
+        {/* ── Part 4: Key risks — the risks that actually matter for a ladder of
+            sovereign paper matched to a dated goal, in priority order. Concentration
+            is intentionally NOT here; it is a secondary duration/liquidity note
+            below. ─────────────────────────────────────────────────────────── */}
+        {keyRisks && decision && (
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                <Shield className="w-4 h-4 text-primary" />
+                Key risks
+              </CardTitle>
+              <p className="text-[11px] text-muted-foreground mt-0.5">
+                For a goal-dated ladder of sovereign paper, these are the risks that move whether you hit {formatKESCompact(decision.target)}.
+              </p>
+            </CardHeader>
+            <CardContent className="grid gap-2.5">
+              {/* (1) Rate / reinvestment risk */}
+              <RiskRow
+                icon={TrendingDown}
+                title="Rate / reinvestment risk"
+                severity={keyRisks.rate.severity}
+                okLabel="Cushioned"
+                detail={
+                  keyRisks.rate.severity === "ok" ? (
+                    <>
+                      Your 91-day ladder re-rolls at prevailing CBK rates. Even in a modelled rate-shock the plan still clears
+                      the target, so falling rates are cushioned (downside ≈ {formatKESCompact(keyRisks.rate.downsideGap)} below base).
+                    </>
+                  ) : (
+                    <>
+                      Your ladder re-rolls at prevailing CBK rates — each reinvestment resets to whatever rate is on offer. A modelled
+                      rate-shock pulls the projection down to{" "}
+                      <span className="font-medium text-foreground">{formatKESCompact(decision.range.low)}</span> (about{" "}
+                      {formatKESCompact(keyRisks.rate.downsideGap)} below base), which would miss the target. Update rates after each
+                      auction so the projection stays honest.
+                    </>
+                  )
+                }
+              />
+              {/* (2) Contribution shortfall */}
+              <RiskRow
+                icon={PiggyBank}
+                title="Contribution shortfall"
+                severity={keyRisks.contribution.severity}
+                okLabel="On pace"
+                detail={
+                  decision.pace.status === "behind" ? (
+                    <>
+                      At current contributions the plan lands{" "}
+                      <span className="font-medium text-foreground">{formatKESCompact(decision.pace.shortfall)}</span> short.
+                      {decision.stepUp?.feasible && (
+                        <> Stepping up by ~{formatKESCompact(decision.stepUp.recommendedStepUp)}/yr closes the gap.</>
+                      )}
+                    </>
+                  ) : decision.backloading.isBackloaded ? (
+                    <>
+                      The plan leans on later, larger contributions — about{" "}
+                      {formatPct(decision.backloading.share)} of all saving falls in the final stretch. Front-loading reduces the
+                      reliance on future escalation actually happening.
+                    </>
+                  ) : (
+                    <>
+                      Contributions are on schedule and not back-loaded — the plan does not depend on a late surge of saving.
+                    </>
+                  )
+                }
+              />
+              {/* (3) Liquidity-timing risk */}
+              <RiskRow
+                icon={CalendarClock}
+                title="Liquidity-timing"
+                severity={keyRisks.liquidity.severity}
+                okLabel="Clear by goal"
+                detail={
+                  keyRisks.liquidity.cushionDays != null && keyRisks.liquidity.cushionDays < 0 ? (
+                    <>
+                      A security matures{" "}
+                      <span className="font-medium text-foreground">{Math.abs(keyRisks.liquidity.cushionDays)} days after</span>{" "}
+                      your goal date — that cash would be locked past when you need it. Cap tenors at the goal date.
+                    </>
+                  ) : decision.liquidity.maturesNearOrAfterGoal ? (
+                    <>
+                      Your latest maturity lands close to the goal date ({keyRisks.liquidity.cushionDays} days of cushion). Keep a
+                      margin so a late auction or settlement delay doesn&rsquo;t leave you short on the day.
+                    </>
+                  ) : (
+                    <>
+                      All paper matures comfortably before the goal date
+                      {keyRisks.liquidity.cushionDays != null && <> ({keyRisks.liquidity.cushionDays} days of cushion)</>} — the money
+                      is liquid when you need it.
+                    </>
+                  )
+                }
+              />
+            </CardContent>
+          </Card>
+        )}
+
+        {/* ── R59: Concentration note (SECONDARY) — surfaces the per-issuer (KDIC) and
+            per-type caps. For single-issuer sovereign paper this is a DURATION /
+            LIQUIDITY proxy, not credit risk, so it sits below the key risks. ─── */}
         {(concentration || typeConcentration) && (
           <Card>
             <CardHeader className="pb-2">
               <div className="flex items-center justify-between gap-2">
                 <CardTitle className="text-sm font-semibold flex items-center gap-2">
-                  <ShieldCheck className="w-4 h-4 text-primary" />
-                  Risk limits
+                  <ShieldCheck className="w-4 h-4 text-muted-foreground" />
+                  Concentration limits
+                  <span className="text-[10px] font-normal text-muted-foreground/70 uppercase tracking-wider">secondary</span>
                 </CardTitle>
                 {/* R60: snooze / un-snooze concentration warnings. */}
                 <DropdownMenu>
@@ -1073,6 +1303,9 @@ export default function Dashboard() {
                   </DropdownMenuContent>
                 </DropdownMenu>
               </div>
+              <p className="mt-1 text-[11px] text-muted-foreground leading-relaxed">
+                For single-issuer CBK paper this is a <span className="text-foreground/80">duration / liquidity</span> guardrail, not credit risk — all government securities share one sovereign issuer.
+              </p>
               {concentrationSnoozed && snoozeUntil != null && (
                 <p className="mt-1 text-[11px] text-muted-foreground">
                   Warnings snoozed until {new Date(snoozeUntil).toLocaleDateString()}.
@@ -1084,25 +1317,36 @@ export default function Dashboard() {
               {(() => {
                 const issuerBreached = !!concentration && concentration.breaches.length > 0;
                 const issuerCapPct = concentration ? Math.round(concentration.cap * 100) : 25;
+                // Colour by severity, not by the mere existence of a breach: an
+                // acknowledged breach is amber (caution), not alarm-red.
+                const sev = RISK_SEVERITY_STYLES[issuerSeverity];
+                const isAction = issuerSeverity === "action";
+                const isCaution = issuerSeverity === "caution";
                 return (
                   <Link
                     href="/deposits"
-                    className={`group rounded-lg border p-3 transition-colors ${issuerBreached ? "border-red-500/40 bg-red-500/5 hover:bg-red-500/10" : "border-border bg-card hover:bg-muted/40"}`}
+                    className={cn(
+                      "group rounded-lg border p-3 transition-colors",
+                      issuerBreached ? cn(sev.border, sev.bg, "hover:bg-muted/20") : "border-border bg-card hover:bg-muted/40",
+                    )}
                   >
                     <div className="flex items-center justify-between gap-2">
                       <span className="text-xs font-medium text-muted-foreground">Per-issuer cap (KDIC)</span>
                       <span className="text-[11px] tabular-nums text-muted-foreground">{issuerCapPct}% cap</span>
                     </div>
-                    <p className={`mt-1 text-sm font-semibold ${issuerBreached ? "text-red-600 dark:text-red-400" : "text-foreground"}`}>
+                    <p className={cn("mt-1 text-sm font-semibold", issuerBreached ? sev.text : "text-foreground")}>
                       {issuerBreached
-                        ? `${concentration!.breaches.length} ${concentration!.breaches.length === 1 ? "issuer" : "issuers"} over cap`
+                        ? `${concentration!.breaches.length} ${concentration!.breaches.length === 1 ? "issuer" : "issuers"} over cap${isCaution ? " (acknowledged)" : ""}`
                         : "Within cap"}
                     </p>
                     {/* R60: share-vs-cap progress bar. Width = share as a % of
                         net worth; the cap tick marks the {issuerCapPct}% limit. */}
                     <div className="mt-2 relative h-1.5 w-full rounded-full bg-muted overflow-hidden">
                       <div
-                        className={`h-full rounded-full transition-[width] duration-300 ${issuerBreached ? "bg-red-500" : "bg-primary"}`}
+                        className={cn(
+                          "h-full rounded-full transition-[width] duration-300",
+                          !issuerBreached ? "bg-primary" : isAction ? "bg-red-500" : "bg-amber-500",
+                        )}
                         style={{ width: `${Math.min(100, Math.round((concentration?.topShare ?? 0) * 100))}%` }}
                       />
                     </div>
@@ -1124,24 +1368,43 @@ export default function Dashboard() {
                 const topShareFrac = typeConcentration ? typeConcentration.topShare : 0;
                 const topPct = Math.round(topShareFrac * 100); // bar WIDTH only (visual)
                 const topPctLabel = formatConcentrationPct(topShareFrac); // text (one decimal)
+                // Line-item #13: colour by severity. A self-correcting OR acknowledged
+                // breach is amber (caution), matching the "self-corrects — no action
+                // needed" banner below; red is reserved for action-required breaches.
+                const sev = RISK_SEVERITY_STYLES[typeSeverity];
+                const isAction = typeSeverity === "action";
+                const isCaution = typeSeverity === "caution";
+                const breachSuffix = typeConcentrationBreached
+                  ? isCaution
+                    ? typeBreach?.selfCorrects
+                      ? " — over cap (self-correcting)"
+                      : " — over cap (acknowledged)"
+                    : " — over cap"
+                  : "";
                 return (
                   <Link
                     href={typeConcentration ? `/securities?type=${encodeURIComponent(typeConcentration.topType)}` : "/securities"}
-                    className={`group rounded-lg border p-3 transition-colors ${typeConcentrationBreached ? "border-red-500/40 bg-red-500/5 hover:bg-red-500/10" : "border-border bg-card hover:bg-muted/40"}`}
+                    className={cn(
+                      "group rounded-lg border p-3 transition-colors",
+                      typeConcentrationBreached ? cn(sev.border, sev.bg, "hover:bg-muted/20") : "border-border bg-card hover:bg-muted/40",
+                    )}
                   >
                     <div className="flex items-center justify-between gap-2">
                       <span className="text-xs font-medium text-muted-foreground">Per-type cap</span>
                       <span className="text-[11px] tabular-nums text-muted-foreground">{typeCapPct.toFixed(0)}% cap</span>
                     </div>
-                    <p className={`mt-1 text-sm font-semibold ${typeConcentrationBreached ? "text-red-600 dark:text-red-400" : "text-foreground"}`}>
+                    <p className={cn("mt-1 text-sm font-semibold", typeConcentrationBreached ? sev.text : "text-foreground")}>
                       {typeConcentration
-                        ? `${topPctLabel} in ${typeConcentration.topLabel}${typeConcentrationBreached ? " — over cap" : ""}`
+                        ? `${topPctLabel} in ${typeConcentration.topLabel}${breachSuffix}`
                         : "No securities yet"}
                     </p>
                     {/* R60: share-vs-cap progress bar for the per-type limit. */}
                     <div className="mt-2 relative h-1.5 w-full rounded-full bg-muted overflow-hidden">
                       <div
-                        className={`h-full rounded-full transition-[width] duration-300 ${typeConcentrationBreached ? "bg-red-500" : "bg-primary"}`}
+                        className={cn(
+                          "h-full rounded-full transition-[width] duration-300",
+                          !typeConcentrationBreached ? "bg-primary" : isAction ? "bg-red-500" : "bg-amber-500",
+                        )}
                         style={{ width: `${Math.min(100, topPct)}%` }}
                       />
                     </div>

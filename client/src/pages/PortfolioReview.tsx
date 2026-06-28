@@ -15,6 +15,7 @@ import {
   analyzePerTypeBreach,
   buildDiversifyLink,
   filterBreachAcks,
+  formatConcentrationPct,
   DEFAULT_LIQUIDITY_HORIZON_DAYS,
   type CurrentValueSecurity,
   type BreachAckCapFilter,
@@ -574,7 +575,7 @@ export default function PortfolioReview() {
                       key={a.label}
                       className={ALLOC_COLORS[i % ALLOC_COLORS.length]}
                       style={{ width: `${(a.value / netWorth) * 100}%` }}
-                      title={`${a.label}: ${((a.value / netWorth) * 100).toFixed(1)}%`}
+                      title={`${a.label}: ${formatConcentrationPct(a.value / netWorth)}`}
                     />
                   ))}
                 </div>
@@ -591,7 +592,7 @@ export default function PortfolioReview() {
                         {a.label}
                       </span>
                       <span className="font-medium tabular-nums">
-                        {((a.value / netWorth) * 100).toFixed(1)}%
+                        {formatConcentrationPct(a.value / netWorth)}
                       </span>
                     </div>
                   ))}
@@ -683,9 +684,9 @@ export default function PortfolioReview() {
                           </p>
                           <p className={typeBreach.selfCorrects ? "text-amber-200/90" : "text-red-200/90"}>
                             {concentration.topLabel} is{" "}
-                            <strong>{(typeBreach.shareOfSecurities * 100).toFixed(1)}% of securities</strong>
+                            <strong>{formatConcentrationPct(typeBreach.shareOfSecurities)} of securities</strong>
                             {typeBreach.shareOfNetWorth > 0 && (
-                              <> ({(typeBreach.shareOfNetWorth * 100).toFixed(1)}% of net worth)</>
+                              <> ({formatConcentrationPct(typeBreach.shareOfNetWorth)} of net worth)</>
                             )}
                             , above your {Math.round(typeCapPct)}% cap. This is a duration/liquidity
                             limit, not credit risk — all CBK paper shares one sovereign issuer.
@@ -713,7 +714,7 @@ export default function PortfolioReview() {
                         <div>
                           <p className="font-medium text-foreground">Per-issuer cap breached: {b.issuer}</p>
                           <p className="text-amber-200/90">
-                            {(b.share * 100).toFixed(1)}% of net worth ({kes(b.value)}) — cap {Math.round((issuerConc?.cap ?? 0.25) * 100)}%.
+                            {formatConcentrationPct(b.share)} of net worth ({kes(b.value)}) — cap {Math.round((issuerConc?.cap ?? 0.25) * 100)}%.
                           </p>
                         </div>
                       </div>

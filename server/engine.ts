@@ -420,6 +420,12 @@ export interface YearMilestone {
   month: number;
   projectedTotal: number;
   minHealthyCheckpoint: number;
+  /**
+   * The fraction of projectedTotal used as the min-healthy checkpoint for THIS
+   * row (0.9 in foundation/growth, 0.95 once de-risking/final-liquidity begins).
+   * Exposed so the UI can label the actual fraction instead of a flat "90%".
+   */
+  checkpointFrac: number;
   label: string;
 }
 
@@ -2214,6 +2220,7 @@ export function generateMilestones(
       month,
       projectedTotal: Math.round(projected),
       minHealthyCheckpoint: Math.round(projected * checkpointFrac),
+      checkpointFrac,
       label: phaseMilestoneLabel(phase, isFinalYear),
     });
   }

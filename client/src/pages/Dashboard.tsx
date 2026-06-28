@@ -61,7 +61,7 @@ import { Plus, Compass, ArrowUpRight } from "lucide-react";
 import { useMemo, useState, useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { rateStaleness } from "@/lib/rateStaleness";
-import { currentSecurityValue, securityYieldContribution, isDiscountSecurityType, classifyDurationRisk, largestConcentration, classifyConcentration, analyzePerTypeBreach, isConcentrationSnoozed, DEFAULT_LIQUIDITY_HORIZON_DAYS, type CurrentValueSecurity } from "@shared/discount";
+import { currentSecurityValue, securityYieldContribution, isDiscountSecurityType, classifyDurationRisk, largestConcentration, classifyConcentration, analyzePerTypeBreach, isConcentrationSnoozed, formatConcentrationPct, splitEndStateBuckets, DEFAULT_LIQUIDITY_HORIZON_DAYS, type CurrentValueSecurity } from "@shared/discount";
 import { whtRateForSecurity } from "@shared/securityTenor";
 import { Layers, TrendingDown, BellOff, Bell, Scale, ArrowRightLeft, Copy, Check } from "lucide-react";
 import { buildTransferPlan, SNOOZE_OPTIONS, snoozeUntilFromDays } from "@shared/liquidAllocator";
@@ -382,9 +382,20 @@ export default function Dashboard() {
   }, []);
 
   const projectedFinalValue = lastData?.totalEnd ?? 0;
-  const progressPct = targetAmount > 0 ? Math.min((projectedFinalValue / targetAmount) * 100, 100) : 0;
   const surplusOrShortfall = projectedFinalValue - targetAmount;
   const willHitTarget = projectedFinalValue >= targetAmount;
+  // Part 2 fix #5: the bar must be honest on its own when the plan overshoots.
+  // We scale the bar to the LARGER of target and projected so the goal line sits
+  // at a real position and any surplus is shown as a distinct overshoot segment
+  // beyond it (instead of silently clamping the fill at 100%).
+  const rawProgressFrac = targetAmount > 0 ? projectedFinalValue / targetAmount : 0;
+  const barMaxFrac = Math.max(1, rawProgressFrac); // 1 = exactly on target
+  // Goal line position (%) within the bar; <100 only when overshooting.
+  const goalLinePct = barMaxFrac > 0 ? (1 / barMaxFrac) * 100 : 100;
+  // Width of the "to target" fill (capped at the goal line).
+  const progressPct = Math.min(rawProgressFrac, 1) / barMaxFrac * 100;
+  // Width of the overshoot fill, measured from the goal line to the projected end.
+  const overshootPct = willHitTarget ? (rawProgressFrac - 1) / barMaxFrac * 100 : 0;
 
   // ── End-state liquidity at the goal date (Fix #1 UI) ──
   // Liquid = cash-equivalent at the horizon: primary MMF + secondary MMFs +
@@ -446,18 +457,50 @@ export default function Dashboard() {
     };
   }, [endStateSplit]);
 
+  // ── Part 2 Fix #1: policy-aware end-state bucket split ──────────────────────
+  // The projection's final-month mmfEnd/bankEnd are RAW un-split balances (the
+  // engine pools the swept liquid pot in the primary MMF), so the bucket cards
+  // read ~96% MMF while the callout/split-bar say e.g. 50/50. projectedLiquidSplit
+  // already computes the real policy-aware split; here we reallocate the FINAL
+  // month's liquid pot across MMF vs Bank from those same slices so the cards,
+  // the growth-chart endpoint and the callout all tell one story. This is a
+  // presentation-only reallocation of the goal-date pot — earlier months and the
+  // Month Ledger are untouched.
+  const endStateBuckets = useMemo(() => {
+    if (!lastData) return null;
+    const rawMmf = (lastData.mmfEnd ?? 0) + (lastData.secondaryMmfEnd ?? 0);
+    const rawBank = lastData.bankEnd ?? 0;
+    return splitEndStateBuckets(
+      rawMmf,
+      rawBank,
+      endStateSplit?.slices,
+      !!endStateSplit?.isSplit,
+    );
+  }, [lastData, endStateSplit]);
+
   const chartData = useMemo(() => {
     if (!projection) return [];
-    return projection.map((r) => ({
-      month: r.monthNumber,
-      total: r.totalEnd,
-      mmf: r.mmfEnd,
-      tbill: r.tbillEnd,
-      ifb: r.ifbEnd,
-      fxd: r.fxdEnd,
-      bank: r.bankEnd ?? 0,
-    }));
-  }, [projection]);
+    const lastIdx = projection.length - 1;
+    return projection.map((r, i) => {
+      // Final point: show the policy-aware split so the chart endpoint matches
+      // the bucket cards and callout (chart MMF = primary + secondary MMF).
+      const isLast = i === lastIdx;
+      const useSplit = isLast && endStateBuckets?.applied;
+      // endStateBuckets.mmf already folds in secondary MMF; the raw per-month
+      // series stays r.mmfEnd so non-final months are visually unchanged.
+      const mmf = useSplit ? endStateBuckets!.mmf : r.mmfEnd;
+      const bank = useSplit ? endStateBuckets!.bank : r.bankEnd ?? 0;
+      return {
+        month: r.monthNumber,
+        total: r.totalEnd,
+        mmf,
+        tbill: r.tbillEnd,
+        ifb: r.ifbEnd,
+        fxd: r.fxdEnd,
+        bank,
+      };
+    });
+  }, [projection, endStateBuckets]);
 
   // Whether this portfolio holds any bank instrument (call/fixed deposit). Bank
   // deposits are user-recorded actuals, so the band/card only appear when present.
@@ -928,7 +971,7 @@ export default function Dashboard() {
                           {typeConcentration.topShare >= 0.999 ? (
                             <>100% {typeConcentration.topLabel}</>
                           ) : (
-                            <>{(typeConcentration.topShare * 100).toFixed(0)}% in {typeConcentration.topLabel}</>
+                            <>{formatConcentrationPct(typeConcentration.topShare)} in {typeConcentration.topLabel}</>
                           )}
                           {typeConcentrationBreached && <> · over {typeCapPct.toFixed(0)}% cap</>}
                         </p>
@@ -1070,7 +1113,9 @@ export default function Dashboard() {
               })()}
               {/* Per-instrument-type limit */}
               {(() => {
-                const topPct = typeConcentration ? Math.round(typeConcentration.topShare * 100) : 0;
+                const topShareFrac = typeConcentration ? typeConcentration.topShare : 0;
+                const topPct = Math.round(topShareFrac * 100); // bar WIDTH only (visual)
+                const topPctLabel = formatConcentrationPct(topShareFrac); // text (one decimal)
                 return (
                   <Link
                     href={typeConcentration ? `/securities?type=${encodeURIComponent(typeConcentration.topType)}` : "/securities"}
@@ -1082,7 +1127,7 @@ export default function Dashboard() {
                     </div>
                     <p className={`mt-1 text-sm font-semibold ${typeConcentrationBreached ? "text-red-600 dark:text-red-400" : "text-foreground"}`}>
                       {typeConcentration
-                        ? `${topPct}% in ${typeConcentration.topLabel}${typeConcentrationBreached ? " — over cap" : ""}`
+                        ? `${topPctLabel} in ${typeConcentration.topLabel}${typeConcentrationBreached ? " — over cap" : ""}`
                         : "No securities yet"}
                     </p>
                     {/* R60: share-vs-cap progress bar for the per-type limit. */}
@@ -1130,7 +1175,7 @@ export default function Dashboard() {
                       title={`View ${b.issuer} holdings`}
                     >
                       <span className="text-amber-100 font-medium">{b.issuer}</span>: {formatKES(b.value)}{" "}
-                      (<span className="font-mono">{(b.share * 100).toFixed(1)}%</span> of {formatKES(concentration.netWorth)} net worth)
+                      (<span className="font-mono">{formatConcentrationPct(b.share)}</span> of {formatKES(concentration.netWorth)} net worth)
                       <ArrowUpRight className="w-3 h-3 text-amber-300/70 group-hover:text-amber-200" />
                     </Link>
                   </li>
@@ -1174,10 +1219,10 @@ export default function Dashboard() {
                   Per-type cap —
                 </strong>{" "}
                 <GlossaryTerm id="per-type-cap">{typeConcentration.topLabel}</GlossaryTerm> is{" "}
-                <span className="font-mono">{(typeBreach.shareOfSecurities * 100).toFixed(1)}%</span> of your
+                <span className="font-mono">{formatConcentrationPct(typeBreach.shareOfSecurities)}</span> of your
                 securities
                 {typeBreach.shareOfNetWorth > 0 && (
-                  <> (<span className="font-mono">{(typeBreach.shareOfNetWorth * 100).toFixed(1)}%</span> of net worth)</>
+                  <> (<span className="font-mono">{formatConcentrationPct(typeBreach.shareOfNetWorth)}</span> of net worth)</>
                 )}
                 , above the {typeCapPct.toFixed(0)}% cap. This is a duration/liquidity limit, not credit
                 risk — all CBK paper shares one sovereign issuer.
@@ -1877,22 +1922,50 @@ export default function Dashboard() {
               </div>
             </div>
 
-            {/* Progress bar */}
+            {/* Progress bar (Part 2 fix #5: honest overshoot rendering). The bar
+                scales to the larger of target/projected; the "to target" fill is
+                capped at the goal line, any surplus is a distinct emerald
+                overshoot segment, and a labelled marker sits on the goal line. */}
             <div className="relative h-3 bg-muted rounded-full overflow-hidden">
+              {/* base fill: progress toward the goal (capped at the goal line) */}
               <div
-                className="absolute inset-y-0 left-0 bg-gradient-to-r from-primary/80 to-primary rounded-full transition-all duration-1000"
+                className="absolute inset-y-0 left-0 bg-gradient-to-r from-primary/80 to-primary transition-all duration-1000"
                 style={{ width: `${progressPct}%` }}
               />
+              {/* overshoot fill beyond the goal line, distinct emerald colour */}
+              {overshootPct > 0 && (
+                <div
+                  className="absolute inset-y-0 bg-gradient-to-r from-emerald-500/70 to-emerald-400 transition-all duration-1000"
+                  style={{ left: `${goalLinePct}%`, width: `${overshootPct}%` }}
+                />
+              )}
+              {/* quarter ticks scaled to the goal (not the full bar) */}
               {[25, 50, 75].map((pct) => (
-                <div key={pct} className="absolute top-0 bottom-0 w-px bg-border/50" style={{ left: `${pct}%` }} />
+                <div key={pct} className="absolute top-0 bottom-0 w-px bg-border/50" style={{ left: `${(goalLinePct * pct) / 100}%` }} />
               ))}
+              {/* goal-line marker */}
+              {overshootPct > 0 && (
+                <div
+                  className="absolute top-0 bottom-0 w-0.5 bg-foreground/70"
+                  style={{ left: `${goalLinePct}%` }}
+                  aria-hidden
+                />
+              )}
             </div>
-            <div className="flex justify-between text-xs text-muted-foreground mt-1.5">
-              <span>KES 0</span>
-              <span>{formatKESCompact(targetAmount * 0.25)}</span>
-              <span>{formatKESCompact(targetAmount * 0.5)}</span>
-              <span>{formatKESCompact(targetAmount * 0.75)}</span>
-              <span>{formatKESCompact(targetAmount)}</span>
+            <div className="relative mt-1.5 h-4 text-xs text-muted-foreground">
+              <span className="absolute left-0">KES 0</span>
+              {/* the goal label tracks the goal line so it stays honest when the bar overshoots */}
+              <span
+                className="absolute -translate-x-1/2 font-medium text-foreground/80"
+                style={{ left: `${Math.min(goalLinePct, 92)}%` }}
+              >
+                {formatKESCompact(targetAmount)} goal
+              </span>
+              {overshootPct >= 6 && (
+                <span className="absolute right-0 text-emerald-400">
+                  {formatKESCompact(projectedFinalValue)}
+                </span>
+              )}
             </div>
             {/* Surplus / shortfall callout */}
             {!projLoading && projectedFinalValue > 0 && (
@@ -1946,8 +2019,23 @@ export default function Dashboard() {
                 { title: "FXD Bonds", key: "fxdEnd" as const, subtitle: "Fixed coupon bonds", icon: Landmark, accent: false, tooltip: `Your total invested in Fixed Coupon Bonds at Year ${horizonYearsLabel}. FXDs pay a semi-annual coupon (e.g. 12.35% gross, ~10.5% net after 15% WHT). They provide predictable income but the WHT is deducted before you receive the coupon.` },
                 ...(usesBankInstruments ? [{ title: "Bank Deposits", key: "bankEnd" as const, subtitle: "All bank instruments", icon: Landmark, accent: false, tooltip: `Your recorded bank deposits of EVERY type — call deposits, fixed deposits, ordinary savings, target/goal savings and tiered savings — projected forward at their own rates (net of WHT) at Year ${horizonYearsLabel}. Liquid kinds (call, ordinary savings, tiered savings) stay withdrawable and accrue in place; term kinds (fixed deposit, target savings) lock for a tenor, then return principal + net interest to the MMF at maturity.` }] : []),
               ].map(({ title, key, subtitle, icon, accent, tooltip }) => {
-                const bucketValue = lastData?.[key] ?? 0;
-                const pctOfTarget = targetAmount > 0 ? ((bucketValue / targetAmount) * 100).toFixed(1) : "0.0";
+                // Part 2 fix #1: MMF and Bank buckets read the policy-aware end-
+                // state split (folds the swept liquid pot back into its homes) so
+                // they agree with the callout and split-bar; other buckets use the
+                // raw projection figure.
+                const bucketValue =
+                  endStateBuckets?.applied && key === "mmfEnd"
+                    ? endStateBuckets.mmf
+                    : endStateBuckets?.applied && key === "bankEnd"
+                      ? endStateBuckets.bank
+                      : lastData?.[key] ?? 0;
+                // Part 2 fix #4: percentage is share of the PROJECTED TOTAL so the
+                // buckets sum to 100% (the old denominator was the goal, which
+                // overshot to ~119% and read "114.5% of goal" on a single bucket).
+                const pctOfPot =
+                  projectedFinalValue > 0
+                    ? ((bucketValue / projectedFinalValue) * 100).toFixed(1)
+                    : "0.0";
                 return (
                   <Card key={title} className={`card-hover ${accent ? "border-primary/30 gold-glow" : ""}`}>
                     <CardContent className="p-5">
@@ -1967,7 +2055,7 @@ export default function Dashboard() {
                           </p>
                           <p className="text-xs text-muted-foreground mt-1">{subtitle}</p>
                           <p className="text-xs text-muted-foreground/70 mt-0.5">
-                            {pctOfTarget}% of {formatKESCompact(targetAmount)} goal
+                            {pctOfPot}% of projected total
                           </p>
                         </div>
                         <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ml-3 ${accent ? "bg-primary/15" : "bg-muted"}`}>
@@ -2112,7 +2200,7 @@ export default function Dashboard() {
             </CardTitle>
             <p className="text-xs text-muted-foreground mt-1">
               <strong>Projected Total</strong> = the plan’s expected balance for your {formatKES(targetAmount)} goal at that year-end.{" "}
-              <strong>Min. Healthy</strong> = the lowest acceptable balance (90% of projected) — if you fall below this, catch-up action is needed.{" "}
+              <strong>Min. Healthy</strong> = the lowest acceptable balance for that year — <strong>90%</strong> of projected in the early Foundation/Growth phases (more variance is fine while building) tightening to <strong>95%</strong> once De-risking begins, since the plan should be converging on target. Each row shows the fraction it uses. If you fall below it, catch-up action is needed.{" "}
               <strong>Engine Value</strong> = what the simulator calculates with your current rate settings. Both columns scale automatically when you change your goal.
             </p>
           </CardHeader>
@@ -2154,6 +2242,9 @@ export default function Dashboard() {
                         </td>
                         <td className="py-2.5 pr-4 text-right text-muted-foreground kes-amount">
                           {formatKES(m.minHealthyCheckpoint)}
+                          <span className="ml-1 text-[10px] text-muted-foreground/60">
+                            ({Math.round((m.checkpointFrac ?? 0.9) * 100)}%)
+                          </span>
                         </td>
                         <td className="py-2.5 text-right">
                           <div className="flex items-center justify-end gap-1.5">

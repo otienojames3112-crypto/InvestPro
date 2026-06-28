@@ -788,3 +788,92 @@ export function filterBreachAcks<T extends BreachAckFilterRow>(
     return true;
   });
 }
+
+// ─── Concentration percentage formatter (single source of truth) ───────────────
+//
+// Part 2 fix #2: the per-type / per-issuer concentration share was rendered with
+// three different precisions across the app — the Dashboard risk-limits bar/chip
+// used Math.round / toFixed(0) ("68%"), while the breach banner and Portfolio
+// Review used toFixed(1) ("67.5%"). That made the same number look like two
+// different values on one screen. Route EVERY concentration-share display through
+// this one helper so the figure is identical everywhere, at one decimal.
+//
+// Input is a FRACTION (0..1). A fully-concentrated 100% share is shown as a clean
+// "100%" (no trailing ".0") because that reads as a categorical state rather than
+// a measured share; everything else keeps one decimal.
+
+/**
+ * Format a concentration share (fraction 0..1) as a percentage string at one
+ * decimal place, e.g. 0.675 → "67.5%". Exactly 1.0 (>= 0.9995) renders as
+ * "100%". The percentage is clamped to [0, 100] so a transient over-100 share
+ * (rounding noise) never prints something nonsensical.
+ */
+export function formatConcentrationPct(shareFrac: number): string {
+  if (!Number.isFinite(shareFrac)) return "0.0%";
+  const pct = Math.max(0, Math.min(100, shareFrac * 100));
+  if (pct >= 99.95) return "100%";
+  return `${pct.toFixed(1)}%`;
+}
+
+// ─── End-state bucket split (Part 2 fix #1) ────────────────────────────────────
+//
+// The projection's final-month mmfEnd/bankEnd are RAW un-split balances: the
+// engine sweeps the de-risked liquid pot into the primary MMF, so the Dashboard
+// bucket cards read ~96% MMF while the policy-aware callout/split-bar say e.g.
+// 50/50. `projectedLiquidSplit` already computes the real per-home split; this
+// helper folds those slices back into the MMF-vs-Bank buckets the cards show, so
+// the cards, the growth-chart endpoint and the callout all agree. It is a
+// presentation-only reallocation of the goal-date liquid pot — it never touches
+// earlier months or the Month Ledger.
+
+export interface EndStateSplitSlice {
+  kind: string;
+  targetBalance: number;
+}
+
+export interface EndStateBucketSplit {
+  /** True when the policy-aware split was applied (multi-home); false = raw. */
+  applied: boolean;
+  /** MMF bucket balance at the goal date (KES). */
+  mmf: number;
+  /** Bank-deposit bucket balance at the goal date (KES). */
+  bank: number;
+}
+
+/**
+ * Reallocate the final-month liquid pot (rawMmf + rawBank) across the MMF and
+ * Bank buckets using a policy-aware set of slices. MMF kinds (primary_mmf /
+ * secondary_mmf) roll into `mmf`; every other kind (call_deposit, savings, …)
+ * rolls into `bank`. The result is rescaled to the exact liquid pot so the
+ * buckets still sum to the projection total. When there is no genuine split
+ * (one home or empty slices) the raw figures are returned unchanged.
+ */
+export function splitEndStateBuckets(
+  rawMmf: number,
+  rawBank: number,
+  slices: EndStateSplitSlice[] | null | undefined,
+  isSplit: boolean,
+): EndStateBucketSplit {
+  const liquidPot = Math.max(0, rawMmf) + Math.max(0, rawBank);
+  if (!slices || !isSplit || slices.length <= 1 || liquidPot <= 0) {
+    return { applied: false, mmf: rawMmf, bank: rawBank };
+  }
+  let mmf = 0;
+  let bank = 0;
+  for (const s of slices) {
+    if (s.kind === "primary_mmf" || s.kind === "secondary_mmf") mmf += s.targetBalance;
+    else bank += s.targetBalance;
+  }
+  const placed = mmf + bank;
+  if (placed <= 0) return { applied: false, mmf: rawMmf, bank: rawBank };
+  if (Math.abs(placed - liquidPot) > 0.5) {
+    const k = liquidPot / placed;
+    mmf *= k;
+    bank *= k;
+  }
+  return {
+    applied: true,
+    mmf: Math.round(mmf * 100) / 100,
+    bank: Math.round(bank * 100) / 100,
+  };
+}

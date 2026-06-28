@@ -61,7 +61,7 @@ import { Plus, Compass, ArrowUpRight } from "lucide-react";
 import { useMemo, useState, useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { rateStaleness } from "@/lib/rateStaleness";
-import { currentSecurityValue, classifyDurationRisk, largestConcentration, classifyConcentration, analyzePerTypeBreach, isConcentrationSnoozed, DEFAULT_LIQUIDITY_HORIZON_DAYS, type CurrentValueSecurity } from "@shared/discount";
+import { currentSecurityValue, securityYieldContribution, isDiscountSecurityType, classifyDurationRisk, largestConcentration, classifyConcentration, analyzePerTypeBreach, isConcentrationSnoozed, DEFAULT_LIQUIDITY_HORIZON_DAYS, type CurrentValueSecurity } from "@shared/discount";
 import { whtRateForSecurity } from "@shared/securityTenor";
 import { Layers, TrendingDown, BellOff, Bell, Scale, ArrowRightLeft, Copy, Check } from "lucide-react";
 import { buildTransferPlan, SNOOZE_OPTIONS, snoozeUntilFromDays } from "@shared/liquidAllocator";
@@ -519,7 +519,14 @@ export default function Dashboard() {
     // gain (face - current) over its remaining life, weighted by current value.
     let dtmWeight = 0; // sum of current values used as DTM weight
     let dtmWeighted = 0; // sum of (days * currentValue)
-    let ytmWeighted = 0; // sum of (annualizedYield * currentValue)
+    let ytmWeighted = 0; // sum of (yieldFraction * currentValue)
+    let ytmWeight = 0; // sum of current values that contributed a yield
+    // Part 1: split the book so the value-vs-face bar reflects DISCOUNT lots only
+    // (they accrete price -> face), while coupon bonds (which sit ~par and pay
+    // coupons out) are reported via a separately-signed coupon-accrued figure.
+    let discountFace = 0; // face of discount lots only (tbill / zero)
+    let discountCurrent = 0; // current value of those discount lots
+    let couponAccrued = 0; // sum of (current - face) for coupon bonds (the accrued dirty premium)
     for (const s of rows) {
       if (s?.isMatured) continue;
       const face = parseFloat(String(s?.faceValue ?? "0")) || 0;
@@ -551,17 +558,41 @@ export default function Dashboard() {
       totalCost += cost;
       lots += 1;
 
+      if (isDiscountSecurityType(t)) {
+        discountFace += face;
+        discountCurrent += current;
+      } else {
+        // Coupon bond: the part of current value above face is accrued coupon
+        // (the dirty-price premium). Floored at 0 so a clean coupon bond at par
+        // contributes nothing rather than a spurious negative.
+        couponAccrued += Math.max(0, current - face);
+      }
+
       if (s?.maturityDate) {
         const mt = new Date(String(s.maturityDate)).getTime();
         const days = Math.max(0, Math.round((mt - now) / DAY));
         if (current > 0) {
           dtmWeight += current;
           dtmWeighted += days * current;
-          // Simple annualized yield-to-maturity from today's value to face.
-          if (days > 0 && current > 0) {
-            const periodReturn = (face - current) / current;
-            const annualized = periodReturn * (365 / days);
-            ytmWeighted += annualized * current;
+          // Part 1: value-weighted blended yield via the SHARED single source of
+          // truth. Coupon bonds (fxd/ifb/floating) contribute their NET COUPON
+          // yield (couponRate x (1 - whtFrac)); discount lots (tbill/zero) keep
+          // accretion-to-face. This removes the negative-FXD-yield bug that
+          // collapsed the blend to 1.40%.
+          const yld = securityYieldContribution({
+            securityType: t,
+            faceValue: face,
+            currentValue: current,
+            couponRate: parseFloat(String(s?.couponRate ?? "0")) || 0,
+            whtRatePct: whtRateForSecurity(
+              t as never,
+              parseFloat(String(s?.tenorYears ?? "")) || null,
+            ),
+            daysToMaturity: days,
+          });
+          if (yld != null) {
+            ytmWeighted += yld * current;
+            ytmWeight += current;
           }
         }
       }
@@ -569,7 +600,10 @@ export default function Dashboard() {
     const unrealizedGain = totalCurrent - totalCost;
     const gainPct = totalCost > 0 ? (unrealizedGain / totalCost) * 100 : 0;
     const wAvgDays = dtmWeight > 0 ? Math.round(dtmWeighted / dtmWeight) : 0;
-    const wAvgYtmPct = dtmWeight > 0 ? (ytmWeighted / dtmWeight) * 100 : 0;
+    const wAvgYtmPct = ytmWeight > 0 ? (ytmWeighted / ytmWeight) * 100 : 0;
+    // Discount accretion still owed to maturity (never negative): the gap between
+    // discount-lot face and their current accreted value.
+    const discountToAccrue = Math.max(0, discountFace - discountCurrent);
     return {
       totalFace,
       totalCurrent,
@@ -579,6 +613,10 @@ export default function Dashboard() {
       lots,
       wAvgDays,
       wAvgYtmPct,
+      discountFace,
+      discountCurrent,
+      discountToAccrue,
+      couponAccrued,
     };
   }, [securities, effectiveNowMs]);
 
@@ -772,7 +810,12 @@ export default function Dashboard() {
           const GainIcon = positive ? TrendingUp : TrendingDown;
           // R51 — Face → Current delta bar. Fraction of total face already
           // realised as current value (how close the book sits to redemption).
-          const facePct = v.totalFace > 0 ? Math.min(1, Math.max(0, v.totalCurrent / v.totalFace)) : 0;
+          // Part 1: the value-vs-face accretion bar reflects DISCOUNT lots only
+          // (T-bills / zero-coupon accrete price -> face). Coupon bonds sit ~par
+          // and are reported via the separate coupon-accrued figure, so they are
+          // excluded here — this is why "to accrue" can no longer go negative.
+          const facePct = v.discountFace > 0 ? Math.min(1, Math.max(0, v.discountCurrent / v.discountFace)) : 0;
+          const hasDiscountLots = v.discountFace > 0;
           // Friendly weighted-avg days-to-maturity label.
           const d = v.wAvgDays;
           const dtmLabel =
@@ -910,19 +953,35 @@ export default function Dashboard() {
                   );
                 })()}
               </div>
-              {/* R51 — Face → Current delta bar (book progress toward redemption). */}
+              {/* R51 — Discount-paper accretion bar (T-bill / zero-coupon progress
+                  toward redemption). Part 1: discount lots ONLY, so "to accrue"
+                  is never negative; coupon-bond accrued interest is shown as a
+                  separate line below. */}
               <div className="rounded-xl border border-white/10 bg-white/[0.02] px-4 py-3">
-                <div className="flex items-center justify-between text-[11px] text-muted-foreground mb-1.5">
-                  <span>Current value vs face</span>
-                  <span className="tabular-nums">{(facePct * 100).toFixed(1)}% of face · {formatKESCompact(v.totalFace - v.totalCurrent)} to accrue</span>
-                </div>
-                <div className="h-2 w-full rounded-full bg-muted/50 overflow-hidden">
-                  <div
-                    className="h-full rounded-full bg-gradient-to-r from-sky-500 to-emerald-400 transition-[width] duration-500"
-                    style={{ width: `${facePct * 100}%` }}
-                    title={`${formatKES(v.totalCurrent)} current of ${formatKES(v.totalFace)} face`}
-                  />
-                </div>
+                {hasDiscountLots ? (
+                  <>
+                    <div className="flex items-center justify-between text-[11px] text-muted-foreground mb-1.5">
+                      <span>Discount paper: value vs face</span>
+                      <span className="tabular-nums">{(facePct * 100).toFixed(1)}% of face · {formatKESCompact(v.discountToAccrue)} to accrue</span>
+                    </div>
+                    <div className="h-2 w-full rounded-full bg-muted/50 overflow-hidden">
+                      <div
+                        className="h-full rounded-full bg-gradient-to-r from-sky-500 to-emerald-400 transition-[width] duration-500"
+                        style={{ width: `${facePct * 100}%` }}
+                        title={`${formatKES(v.discountCurrent)} current of ${formatKES(v.discountFace)} face (discount paper)`}
+                      />
+                    </div>
+                  </>
+                ) : (
+                  <div className="text-[11px] text-muted-foreground">
+                    No discount paper (T-bills / zero-coupon) held — coupon bonds sit at par.
+                  </div>
+                )}
+                {v.couponAccrued > 0 && (
+                  <p className="text-[11px] text-emerald-300/90 mt-2 tabular-nums">
+                    + {formatKESCompact(v.couponAccrued)} coupon accrued on bonds (paid out at each coupon date)
+                  </p>
+                )}
                 <p className="text-[10px] text-muted-foreground/70 mt-2 text-right">
                   Mark-to-model values as of {asOf}
                 </p>
@@ -2479,11 +2538,21 @@ export default function Dashboard() {
               const totalFace = segs.reduce((sum, s) => sum + s.face, 0);
               const totalCurrent = segs.reduce((sum, s) => sum + s.current, 0);
               const total = holdingsBasis === "current" ? totalCurrent : totalFace;
+              // Part 1: report discount accretion and coupon accrued as SEPARATE,
+              // correctly-signed figures rather than one netted number (which
+              // mixed T-bill below-face accretion against FXD above-face coupon).
+              const discountAccretion = ["tbill", "zero_coupon"].reduce(
+                (sum, k) => sum + ((groups[k]?.current ?? 0) - (groups[k]?.face ?? 0)),
+                0,
+              );
+              const couponAccruedSeg = ["ifb", "fxd", "floating_rate", "other"].reduce(
+                (sum, k) => sum + Math.max(0, (groups[k]?.current ?? 0) - (groups[k]?.face ?? 0)),
+                0,
+              );
               // Only worth showing once the user holds at least two instrument
               // kinds, or any of the newer (zero/floating) types.
               const hasExotic = (groups.zero_coupon?.face ?? 0) > 0 || (groups.floating_rate?.face ?? 0) > 0;
               if (totalFace <= 0 || (segs.length < 2 && !hasExotic)) return null;
-              const gain = totalCurrent - totalFace;
               return (
                 <div className="mt-4 rounded-xl border border-white/10 bg-white/[0.02] p-4 space-y-3">
                   <div className="flex items-start justify-between gap-3">
@@ -2528,14 +2597,25 @@ export default function Dashboard() {
                       </div>
                     ))}
                   </div>
-                  {Math.abs(gain) >= 1 && (
-                    <p className="text-[11px] text-muted-foreground/80">
-                      {gain >= 0 ? "Accrued so far" : "Below face"}:{" "}
-                      <span className={cn("font-semibold", gain >= 0 ? "text-emerald-400" : "text-amber-400")}>
-                        {gain >= 0 ? "+" : "−"}{formatKES(Math.abs(gain))}
-                      </span>{" "}
-                      ({formatKES(totalCurrent)} current vs {formatKES(totalFace)} face). Discount paper accretes toward
-                      face; coupon bonds carry pro-rata accrued interest.
+                  {(Math.abs(discountAccretion) >= 1 || couponAccruedSeg >= 1) && (
+                    <p className="text-[11px] text-muted-foreground/80 leading-relaxed">
+                      {Math.abs(discountAccretion) >= 1 && (
+                        <>
+                          Discount accretion to date:{" "}
+                          <span className={cn("font-semibold", discountAccretion >= 0 ? "text-emerald-400" : "text-amber-400")}>
+                            {discountAccretion >= 0 ? "+" : "−"}{formatKES(Math.abs(discountAccretion))}
+                          </span>
+                          {" "}(T-bills / zero-coupon accreting toward face).
+                        </>
+                      )}
+                      {couponAccruedSeg >= 1 && (
+                        <>
+                          {Math.abs(discountAccretion) >= 1 ? <br /> : null}
+                          Coupon accrued on bonds:{" "}
+                          <span className="font-semibold text-emerald-400">+{formatKES(couponAccruedSeg)}</span>
+                          {" "}(pro-rata since last coupon, paid out at each coupon date).
+                        </>
+                      )}
                     </p>
                   )}
                   <p className="text-[11px] text-muted-foreground/70">

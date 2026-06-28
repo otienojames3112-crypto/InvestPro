@@ -914,16 +914,55 @@ export function govAccruedInterestToDate(
   let endISO = todayISO;
   if (maturity && maturity < todayISO) endISO = maturity;
 
-  const from = new Date(`${issue}T12:00:00.000Z`).getTime();
-  const to = new Date(`${endISO}T12:00:00.000Z`).getTime();
-  if (!Number.isFinite(from) || !Number.isFinite(to)) return 0;
-  const days = Math.floor((to - from) / 86_400_000);
-  if (days <= 0) return 0;
-
-  const grossAnnual = face * (rate / 100);
-  const gross = (grossAnnual * days) / dayCount;
+  const issueTime = new Date(`${issue}T12:00:00.000Z`).getTime();
+  const nowTime = new Date(`${endISO}T12:00:00.000Z`).getTime();
+  if (!Number.isFinite(issueTime) || !Number.isFinite(nowTime)) return 0;
+  if (nowTime <= issueTime) return 0;
+  const MS_PER_DAY = 86_400_000;
   const wht = govWhtPct(sec.securityType, sec.tenorYears, sec.isTaxExempt);
-  const net = gross * (1 - wht / 100);
+
+  // Yield-quoted DISCOUNT instruments (T-bill / zero-coupon supplied with a
+  // yield in `couponRate` but no explicit purchase price): they earn a single,
+  // monotonic discount accretion over the holding window — NOT a resetting
+  // coupon. Accrue the simple prorated return face × yield × days/365 (net of
+  // WHT), capped at maturity. This is the genuine return on a zero-coupon bill.
+  if (isDiscount) {
+    const days = Math.floor((nowTime - issueTime) / MS_PER_DAY);
+    if (days <= 0) return 0;
+    const grossAnnual = face * (rate / 100);
+    const gross = (grossAnnual * days) / dayCount;
+    const net = gross * (1 - wht / 100);
+    return Math.max(0, Math.round(net * 100) / 100);
+  }
+
+  // Part 1 (Dashboard brief): COUPON BONDS (FXD / IFB / floating-rate) must scope
+  // their accrued interest to the CURRENT coupon period only — the value actually
+  // sitting inside the bond today — NOT issue→today, which counts every coupon
+  // already PAID OUT before tracking began and inflates the "Est. Interest Earned"
+  // figure so it no longer reconciles with tracked net-worth growth.
+  //
+  // This mirrors `accruedCouponSinceLastCoupon` / `currentSecurityValue` in
+  // shared/discount.ts (the single source of truth for a coupon bond's dirty
+  // value): accrued resets at each ~182.5-day coupon date and grows linearly to
+  // one half-year coupon, capped at a single period. The formula is inlined here
+  // (identical to discount.ts) to keep shared/actuals.ts free of an import cycle.
+  const maturityTime = maturity
+    ? new Date(`${maturity}T12:00:00.000Z`).getTime()
+    : Number.POSITIVE_INFINITY;
+  const COUPON_PERIOD_DAYS = 182.5;
+  const halfYearCoupon = (face * (rate / 100)) / 2;
+  let grossAccrued: number;
+  if (Number.isFinite(maturityTime) && nowTime >= maturityTime) {
+    // At/after maturity the final coupon is paid in full.
+    grossAccrued = halfYearCoupon;
+  } else {
+    const daysSinceIssue = (nowTime - issueTime) / MS_PER_DAY;
+    const fractionIntoPeriod =
+      (daysSinceIssue % COUPON_PERIOD_DAYS) / COUPON_PERIOD_DAYS;
+    grossAccrued = halfYearCoupon * fractionIntoPeriod;
+  }
+
+  const net = grossAccrued * (1 - wht / 100);
   return Math.max(0, Math.round(net * 100) / 100);
 }
 

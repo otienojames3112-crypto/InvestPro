@@ -316,6 +316,69 @@ export function accretionProgress(
 
 
 /**
+ * Public predicate: is this security a DISCOUNT instrument (T-bill / zero-coupon)
+ * that accretes price -> face, as opposed to a coupon bond that sits at par and
+ * pays coupons out? Exposed so the Dashboard can split the two consistently
+ * (value-vs-face bar, holdings +accrued split) without re-implementing the test.
+ */
+export function isDiscountSecurityType(t: string): boolean {
+  return isDiscountType(t);
+}
+
+/**
+ * Part 1 (Dashboard brief): the ANNUALISED yield a single live lot contributes to
+ * the portfolio YTM card, expressed as a fraction (0.095 = 9.5%). This is the
+ * single source of truth for the blended-yield card so coupon bonds are never run
+ * through discount-accretion math (the bug that produced a negative FXD yield and
+ * collapsed the blend to 1.40%).
+ *
+ *   - COUPON bonds (fxd / ifb / floating_rate): the yield is the NET COUPON yield
+ *     = couponRate x (1 - whtFrac). IFB is tax-exempt (whtFrac 0); FXD / floating
+ *     use the tiered WHT passed in `whtRatePct`. A coupon bond sitting above face
+ *     therefore contributes a healthy positive yield, not a negative accretion.
+ *
+ *   - DISCOUNT lots (tbill / zero_coupon): keep the simple accretion-to-face
+ *     annualised yield = ((face - current) / current) x (365 / daysToMaturity),
+ *     which is the genuine remaining return on a sub-par instrument.
+ *
+ * Returns null when the lot cannot yield a meaningful figure (no maturity, no
+ * remaining days, zero current value) so callers can skip it from the weight.
+ */
+export interface YieldContributionInput {
+  securityType: string;
+  /** Face (redemption) value. */
+  faceValue: number;
+  /** Mark-to-model current value today (from currentSecurityValue). */
+  currentValue: number;
+  /** Gross annual coupon rate (%) — coupon bonds only. */
+  couponRate?: number | null;
+  /** Tiered WHT rate (%) for coupon bonds (0 for IFB). */
+  whtRatePct?: number | null;
+  /** Whole days from today to maturity (discount lots only). */
+  daysToMaturity?: number | null;
+}
+
+export function securityYieldContribution(input: YieldContributionInput): number | null {
+  const face = Number(input.faceValue) || 0;
+  const current = Number(input.currentValue) || 0;
+  if (face <= 0 || current <= 0) return null;
+
+  if (isDiscountType(input.securityType)) {
+    const days = Number(input.daysToMaturity) || 0;
+    if (days <= 0) return null;
+    const periodReturn = (face - current) / current;
+    return periodReturn * (365 / days);
+  }
+
+  // Coupon bond: net coupon yield = couponRate x (1 - whtFrac).
+  const couponPct = Number(input.couponRate) || 0;
+  if (couponPct <= 0) return null;
+  const exempt = isTaxExemptCoupon(input.securityType);
+  const whtFrac = exempt ? 0 : (Number(input.whtRatePct) || 0) / 100;
+  return (couponPct / 100) * (1 - whtFrac);
+}
+
+/**
  * Duration-risk classification (Round 52).
  *
  * Given a value-weighted average days-to-maturity and a liquidity horizon (the

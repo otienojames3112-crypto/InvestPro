@@ -1120,7 +1120,16 @@ export default function Dashboard() {
                   <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground mb-1.5">Yield posture</p>
                   {hasYield && yieldSummary ? (
                     <div className="space-y-1 text-sm">
-                      <div className="flex items-center justify-between"><span className="text-muted-foreground">Net yield</span><strong className="tabular-nums">{yieldSummary.netYield.toFixed(1)}%</strong></div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-muted-foreground flex items-center gap-1">
+                          Net yield
+                          <Tooltip>
+                            <TooltipTrigger asChild><HelpCircle className="w-3 h-3 text-muted-foreground/60 cursor-help shrink-0" /></TooltipTrigger>
+                            <TooltipContent side="top" className="max-w-xs text-xs">After-tax income yield: the blended interest your holdings actually earn each year, after Withholding Tax. This measures the income your money throws off — distinct from the YTM shown on bonds, which is a gross return-to-maturity.</TooltipContent>
+                          </Tooltip>
+                        </span>
+                        <strong className="tabular-nums">{yieldSummary.netYield.toFixed(1)}%</strong>
+                      </div>
                       <div className="flex items-center justify-between"><span className="text-muted-foreground">Real (vs infl.)</span><strong className={`tabular-nums ${yieldSummary.realYield >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}`}>{yieldSummary.realYield >= 0 ? "+" : ""}{yieldSummary.realYield.toFixed(1)}%</strong></div>
                       <div className="flex items-center justify-between text-xs text-muted-foreground"><span>Inflation</span><span className="tabular-nums">{yieldSummary.inflation.toFixed(1)}%</span></div>
                     </div>
@@ -1256,8 +1265,12 @@ export default function Dashboard() {
                         )}
                       </div>
                       <p className={cn("mt-2 text-2xl font-bold kes-amount", riskMeta.value)}>{dtmLabel}</p>
-                      <p className="text-xs text-muted-foreground mt-0.5">
+                      <p className="text-xs text-muted-foreground mt-0.5 flex items-center justify-center gap-1">
                         {v.wAvgDays} days weighted · {v.wAvgYtmPct >= 0 ? "" : "−"}{Math.abs(v.wAvgYtmPct).toFixed(2)}% YTM
+                        <Tooltip>
+                          <TooltipTrigger asChild><HelpCircle className="w-3 h-3 text-muted-foreground/60 cursor-help shrink-0" /></TooltipTrigger>
+                          <TooltipContent side="top" className="max-w-xs text-xs">Yield-to-maturity: the gross annualised return if these securities are held to maturity (before Withholding Tax). It is a return-to-maturity measure for the bond/bill ladder, so it reads higher than the portfolio's after-tax Net yield income figure — they are not the same metric.</TooltipContent>
+                        </Tooltip>
                       </p>
                       <p className={cn("text-[11px] mt-1.5 flex items-center gap-1 font-medium", riskMeta.color)}>
                         <RiskIcon className="w-3 h-3 shrink-0" /> {riskMeta.label}
@@ -2473,7 +2486,13 @@ export default function Dashboard() {
             {yieldSummary.ready && yieldSummary.totalBalance > 0 && (
               <div className="mt-4 grid grid-cols-2 gap-3">
                 <div className="rounded-lg border border-border/60 bg-muted/30 px-4 py-3">
-                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">Net yield (after tax)</p>
+                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5 flex items-center gap-1">
+                    Net yield (after tax)
+                    <Tooltip>
+                      <TooltipTrigger asChild><HelpCircle className="w-3 h-3 text-muted-foreground/60 cursor-help shrink-0" /></TooltipTrigger>
+                      <TooltipContent side="top" className="max-w-xs text-xs">After-tax income yield — the blended interest your money earns each year across all holdings, after Withholding Tax. This is an income measure and is different from a bond's gross Yield-to-Maturity (YTM), which is the return if held to maturity before tax; YTM normally reads higher.</TooltipContent>
+                    </Tooltip>
+                  </p>
                   <p className="text-lg font-bold text-foreground tabular-nums inline-flex items-center gap-1">
                     <TrendingUp className="w-4 h-4 text-primary" />{yieldSummary.netYield.toFixed(2)}%
                   </p>
@@ -2482,7 +2501,13 @@ export default function Dashboard() {
                   </p>
                 </div>
                 <div className="rounded-lg border border-border/60 bg-muted/30 px-4 py-3">
-                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">Real yield (after inflation)</p>
+                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5 flex items-center gap-1">
+                    Real yield (after inflation)
+                    <Tooltip>
+                      <TooltipTrigger asChild><HelpCircle className="w-3 h-3 text-muted-foreground/60 cursor-help shrink-0" /></TooltipTrigger>
+                      <TooltipContent side="top" className="max-w-xs text-xs">Your net yield minus inflation — the real growth in your purchasing power. A positive figure means your savings are outpacing the rising cost of living; a negative one means inflation is eroding them.</TooltipContent>
+                    </Tooltip>
+                  </p>
                   <p className={`text-lg font-bold tabular-nums inline-flex items-center gap-1 ${yieldSummary.realYield >= 0 ? "text-emerald-400" : "text-red-400"}`}>
                     {yieldSummary.realYield >= 0 ? <TrendingUp className="w-4 h-4" /> : <TrendingDown className="w-4 h-4" />}
                     {yieldSummary.realYield >= 0 ? "+" : ""}{yieldSummary.realYield.toFixed(2)}%
@@ -2993,6 +3018,10 @@ export default function Dashboard() {
                   <div className="flex items-center gap-1.5">
                     <Receipt className="w-3.5 h-3.5 text-red-400" />
                     <p className="text-xs font-medium uppercase tracking-widest text-red-400">Est. Annual Tax</p>
+                    <Tooltip>
+                      <TooltipTrigger asChild><HelpCircle className="w-3 h-3 text-red-400/60 cursor-help shrink-0" /></TooltipTrigger>
+                      <TooltipContent side="top" className="max-w-xs text-xs">A forward-looking estimate: the Withholding Tax you would owe over the NEXT 12 months if today's balances stayed put. It is on the same forward-12-month basis as the “Forward 12-month” figure on the Interest card next to it, so the two are directly comparable.</TooltipContent>
+                    </Tooltip>
                   </div>
                   <p className="text-2xl font-serif font-bold text-red-300 kes-amount">
                     {formatKES(actualsSummary?.taxLiability ?? 0)}
@@ -3013,6 +3042,10 @@ export default function Dashboard() {
                   <div className="flex items-center gap-1.5">
                     <TrendingUp className="w-3.5 h-3.5 text-sky-400" />
                     <p className="text-xs font-medium uppercase tracking-widest text-sky-400">Est. Interest Earned</p>
+                    <Tooltip>
+                      <TooltipTrigger asChild><HelpCircle className="w-3 h-3 text-sky-400/60 cursor-help shrink-0" /></TooltipTrigger>
+                      <TooltipContent side="top" className="max-w-xs text-xs">The big number is interest ACCRUED so far (since you started tracking, not annualised). The smaller “Forward 12-month” line below puts it on the same next-12-months basis as the Est. Annual Tax card, so you can compare income against tax side by side.</TooltipContent>
+                    </Tooltip>
                   </div>
                   <p className="text-2xl font-serif font-bold text-sky-200 kes-amount">
                     {formatKES(actualsSummary?.estInterestEarned ?? 0)}
@@ -3399,7 +3432,7 @@ export default function Dashboard() {
                 <div>
                   <CardTitle className="text-sm font-semibold text-foreground">Current Rate Assumptions</CardTitle>
                   <p className="text-xs text-muted-foreground mt-1">
-                    These are the gross rates used in the projection. The engine deducts 15% WHT on MMF, T-Bill, and FXD income automatically.
+                    Rates used in the projection, quoted gross of the 15% Withholding Tax (WHT), which the engine deducts automatically on MMF, T-Bill and FXD income. The MMF figure is also already net of the fund manager's fee, so no second fee is taken off.
                   </p>
                 </div>
                 <Link href="/settings">
@@ -3447,15 +3480,25 @@ export default function Dashboard() {
             <CardContent className="p-4 pt-0">
               <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
                 {[
-                  { label: `${fundLabel} Yield (gross)`, value: formatPct((settings as any).selectedFundEar ?? settings.mmfYield), note: "net ~" + formatPct(((settings as any).selectedFundEar ?? settings.mmfYield) * 0.85) },
-                  { label: "91-Day T-Bill", value: formatPct(settings.tbill91Rate), note: "net ~" + formatPct(settings.tbill91Rate * 0.85) },
-                  { label: "364-Day T-Bill", value: formatPct(settings.tbill364Rate), note: "net ~" + formatPct(settings.tbill364Rate * 0.85) },
-                  { label: "IFB Coupon", value: formatPct(settings.ifbCouponRate), note: "tax-exempt" },
-                  { label: "FXD Coupon (gross)", value: formatPct(settings.fxdCouponRate), note: "net ~" + formatPct(settings.fxdCouponRate * 0.85) },
-                  { label: "WHT Rate", value: formatPct(settings.withholdingTax), note: "MMF, T-Bill, FXD" },
-                ].map(({ label, value, note }) => (
+                  { label: `${fundLabel} Yield`, value: formatPct((settings as any).selectedFundEar ?? settings.mmfYield), note: "net ~" + formatPct(((settings as any).selectedFundEar ?? settings.mmfYield) * 0.85), tooltip: "This is the fund's published EAR, which Kenyan MMFs quote already net of the manager's fee but gross of Withholding Tax. The engine deducts 15% WHT on top (shown as the 'net ~' figure); it does NOT deduct a second manager fee." },
+                  { label: "91-Day T-Bill", value: formatPct(settings.tbill91Rate), note: "net ~" + formatPct(settings.tbill91Rate * 0.85), tooltip: "The Central Bank of Kenya auction yield for the 91-day Treasury Bill, quoted gross of the 15% Withholding Tax that is deducted at maturity. 'net ~' shows the after-WHT figure used in the projection." },
+                  { label: "364-Day T-Bill", value: formatPct(settings.tbill364Rate), note: "net ~" + formatPct(settings.tbill364Rate * 0.85), tooltip: "The CBK auction yield for the 364-day Treasury Bill, quoted gross of 15% WHT. 'net ~' is the after-tax figure the engine uses." },
+                  { label: "IFB Coupon", value: formatPct(settings.ifbCouponRate), note: "tax-exempt", tooltip: "The coupon rate on Infrastructure Bonds. IFB interest is tax-exempt in Kenya, so no WHT is deducted — the gross and net rates are the same." },
+                  { label: "FXD Coupon", value: formatPct(settings.fxdCouponRate), note: "net ~" + formatPct(settings.fxdCouponRate * 0.85), tooltip: "The annual coupon on Fixed-Coupon Treasury Bonds, quoted gross of the 15% WHT withheld before each semi-annual payment. 'net ~' is the after-tax figure." },
+                  { label: "WHT Rate", value: formatPct(settings.withholdingTax), note: "MMF, T-Bill, FXD", tooltip: "Withholding Tax — the tax deducted at source on most interest income in Kenya. It applies to MMF, T-Bill and FXD income, but NOT to tax-exempt Infrastructure Bonds." },
+                ].map(({ label, value, note, tooltip }) => (
                   <div key={label} className="bg-muted/50 rounded-lg p-3 text-center">
-                    <p className="text-xs text-muted-foreground mb-1">{label}</p>
+                    <div className="flex items-center justify-center gap-1 mb-1">
+                      <p className="text-xs text-muted-foreground">{label}</p>
+                      {tooltip && (
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <HelpCircle className="w-3 h-3 text-muted-foreground/60 cursor-help shrink-0" />
+                          </TooltipTrigger>
+                          <TooltipContent side="top" className="max-w-xs text-xs">{tooltip}</TooltipContent>
+                        </Tooltip>
+                      )}
+                    </div>
                     <p className="text-sm font-bold text-primary">{value}</p>
                     <p className="text-xs text-muted-foreground/70 mt-0.5">{note}</p>
                   </div>

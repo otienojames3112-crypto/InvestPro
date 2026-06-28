@@ -584,9 +584,14 @@ export async function getActualsSummary(
     const startISO = String((b as { startDate?: unknown; createdAt?: unknown }).startDate ?? (b as { createdAt?: unknown }).createdAt ?? todayISO).slice(0, 10);
     estInterestEarned += estInterestToDate(principal, rate, wht, startISO, todayISO);
   }
-  // Government securities (T-bill / IFB / FXD): pro-rata coupon accrued from issue
-  // date to today (capped at maturity), net of tiered WHT. This makes the
-  // Dashboard estimate cover ALL income-earning assets and tie to Daily Accrual.
+  // Government securities (T-bill / IFB / FXD), net of tiered WHT, so the Dashboard
+  // estimate covers ALL income-earning assets and ties to Daily Accrual. Note the
+  // accrual basis differs by instrument (see govAccruedInterestToDate):
+  //   - T-bills / zero-coupon: the DISCOUNT (face - price) accreted pro-rata over
+  //     the holding window (capped at maturity) - not a coupon.
+  //   - Coupon bonds (FXD / IFB / floating): only the CURRENT coupon period's
+  //     accrual (resets at each ~182.5-day coupon date), NOT issue->today, so it
+  //     excludes coupons already paid out before tracking began.
   estInterestEarned += govAccruedInterestTotal(
     securityRows.map((s) => ({
       securityType: String(s.securityType) as "tbill_91" | "tbill_182" | "tbill_364" | "ifb" | "fxd" | "zero_coupon" | "floating_rate",

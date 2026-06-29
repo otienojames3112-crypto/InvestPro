@@ -995,3 +995,19 @@
 - [x] visibility test (isAiProvisionalRow/hasAiExtractedFigure/countAiFigures)
 - [x] per-figure reject narrowness (rejectAiField drops ai_extracted only); confirm/correct reuse verifyField (covered by Part 7 suite)
 - [x] type gate clean; full suite 995 green; AI Review + AI Intake render; checkpoint next
+
+
+## Part 8 (items 6-7 + acceptance) — Cost, audit & rate discipline
+
+### Audit trail (item 6)
+- [x] ai_intake_audit table created (CREATE TABLE applied; mirrored in drizzle/schema.ts)
+- [x] DB helpers: insertAiIntakeAudit (best-effort, never throws), listAiIntakeAudit (newest first, capped)
+- [x] aiExtract logs one audit row per call via try/finally (maintainer, source, model, extracted fields, figure/flagged counts, errors) — even on failure
+- [x] aiDiscover logs one audit row per call (universe description, candidate count, model, errors)
+- [x] Accuracy-first LLM settings: temperature 0 on both calls + invokeLLM temperature passthrough; structured output already on; comment notes no latency pressure
+
+### Audit viewer + invariants (item 7 / acceptance)
+- [x] aiAuditLog admin query + AI Review "Audit trail" tab: action, document, model, extracted fields, counts, maintainer, timestamp, ok/error
+- [x] Confirm invariants: ai_extracted tier floor; AdapterResult has no score slot; nulls-over-guesses; discovery writes nothing; admin-gated; end-user catalog hides AI-only rows (all covered by tests)
+- [x] Fixture-document extraction test (aiFixtureDocument.test.ts, 5 tests): present fields verbatim, absent->null, quote-less dropped, verdict stripped, ai_extracted tier, sanity flag, discovery dedupe/no-rank
+- [x] Type gate clean (tsc 0); full suite 1000 green (105 files); checkpoint next

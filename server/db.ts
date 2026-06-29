@@ -34,6 +34,9 @@ import {
   aiCandidates,
   type AiCandidate,
   type InsertAiCandidate,
+  aiIntakeAudit,
+  type AiIntakeAuditRow,
+  type InsertAiIntakeAudit,
 } from "../drizzle/schema";
 import { ENV } from "./_core/env";
 import { computeActualsTotals, estInterestToDate, govAccruedInterestTotal } from "../shared/actuals";
@@ -1819,6 +1822,31 @@ export async function reviewAiCandidate(args: {
     })
     .where(eq(aiCandidates.id, args.id));
   return getAiCandidate(args.id);
+}
+
+/* ── Part 8 (item 6): AI intake audit trail ─────────────────────────────────
+ * Append-only: one row per AI intake call, written by the procedure regardless of
+ * success, so every billable LLM call and every figure that enters the catalog can be
+ * traced to its document, model, timestamp, and the maintainer who triggered it.
+ */
+
+/** Append one audit entry. Best-effort: never throws into the caller (audit must not break intake). */
+export async function insertAiIntakeAudit(entry: InsertAiIntakeAudit): Promise<void> {
+  try {
+    const db = await getDb();
+    if (!db) return;
+    await db.insert(aiIntakeAudit).values(entry);
+  } catch (err) {
+    // Logging the audit must never fail the intake itself; surface to server logs only.
+    console.error("[ai-intake-audit] failed to write audit entry", err);
+  }
+}
+
+/** List audit entries, newest first, capped (maintainer-only viewer). */
+export async function listAiIntakeAudit(limit = 100): Promise<AiIntakeAuditRow[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(aiIntakeAudit).orderBy(desc(aiIntakeAudit.createdAt)).limit(limit);
 }
 
 /** List ingestion conflicts (newest first), optionally only open ones. */

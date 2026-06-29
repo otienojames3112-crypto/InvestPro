@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Empty } from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import {
   Dialog,
   DialogContent,
@@ -31,6 +32,10 @@ import {
   EyeOff,
   CheckCircle2,
   FileText,
+  ScrollText,
+  Search,
+  AlertTriangle,
+  User as UserIcon,
 } from "lucide-react";
 import type { FieldProvenance, FieldProvenanceMap, FieldKey } from "@shared/provenance";
 
@@ -109,9 +114,186 @@ export default function AiReview() {
           </Link>
         </div>
 
-        <ReviewQueue />
+        <Tabs defaultValue="queue" className="w-full">
+          <TabsList>
+            <TabsTrigger value="queue">
+              <Bot className="w-3.5 h-3.5 mr-1.5" /> Review queue
+            </TabsTrigger>
+            <TabsTrigger value="audit">
+              <ScrollText className="w-3.5 h-3.5 mr-1.5" /> Audit trail
+            </TabsTrigger>
+          </TabsList>
+          <TabsContent value="queue" className="mt-5">
+            <ReviewQueue />
+          </TabsContent>
+          <TabsContent value="audit" className="mt-5">
+            <AuditTrail />
+          </TabsContent>
+        </Tabs>
       </div>
     </AppShell>
+  );
+}
+
+/**
+ * Part 8 (item 6) — the AI INTAKE AUDIT TRAIL. Every extraction and discovery call is
+ * logged: what document, what was extracted, which model, when, and by which maintainer.
+ * This gives cost visibility and lets a wrong figure be traced back to its origin call.
+ * Maintainer-only; end users never see this.
+ */
+function AuditTrail() {
+  const { data, isLoading } = trpc.opportunities.aiAuditLog.useQuery({ limit: 100 });
+  const entries = data?.entries ?? [];
+
+  if (isLoading) {
+    return (
+      <div className="space-y-3">
+        <Skeleton className="h-20 w-full" />
+        <Skeleton className="h-20 w-full" />
+        <Skeleton className="h-20 w-full" />
+      </div>
+    );
+  }
+
+  if (entries.length === 0) {
+    return (
+      <Empty className="border rounded-xl py-16">
+        <div className="flex flex-col items-center gap-2 text-center">
+          <ScrollText className="w-8 h-8 text-muted-foreground" />
+          <p className="text-sm text-muted-foreground">
+            No AI intake calls yet. Every extraction and discovery run will be logged here for cost visibility and
+            traceability.
+          </p>
+        </div>
+      </Empty>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      <p className="text-xs text-muted-foreground">
+        Showing the most recent {entries.length} AI intake call{entries.length === 1 ? "" : "s"}. Each row is one
+        billable model call, traceable to its document and the maintainer who triggered it.
+      </p>
+      <ul className="space-y-2.5">
+        {entries.map((e) => (
+          <AuditRow key={e.id} entry={e} />
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+type AuditEntry = {
+  id: number;
+  action: string;
+  maintainerName: string | null;
+  maintainerOpenId: string;
+  aiModel: string | null;
+  sourceKind: string | null;
+  sourceLabel: string | null;
+  sourceUrl: string | null;
+  hintName: string | null;
+  universeDescription: string | null;
+  resultName: string | null;
+  extractedFields: unknown;
+  figureCount: number | null;
+  flaggedCount: number | null;
+  candidateCount: number | null;
+  inputChars: number | null;
+  ok: boolean;
+  error: string | null;
+  createdAt: Date | string;
+};
+
+function AuditRow({ entry }: { entry: AuditEntry }) {
+  const isExtract = entry.action === "extract";
+  const when = new Date(entry.createdAt).toLocaleString();
+  const fields = Array.isArray(entry.extractedFields) ? (entry.extractedFields as string[]) : [];
+
+  return (
+    <li className="rounded-lg border border-border p-3 space-y-2">
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div className="flex items-center gap-2 min-w-0">
+          <Badge variant="secondary" className="text-[11px] shrink-0">
+            {isExtract ? (
+              <>
+                <FileText className="w-3 h-3 mr-1" /> extract
+              </>
+            ) : (
+              <>
+                <Search className="w-3 h-3 mr-1" /> discover
+              </>
+            )}
+          </Badge>
+          <span className="font-medium text-sm truncate">
+            {isExtract
+              ? entry.resultName ?? entry.sourceLabel ?? "(document)"
+              : entry.universeDescription ?? "(universe)"}
+          </span>
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          {entry.ok ? (
+            <Badge variant="outline" className="text-emerald-500 border-emerald-500/40 text-[10px]">
+              <CheckCircle2 className="w-3 h-3 mr-1" /> ok
+            </Badge>
+          ) : (
+            <Badge variant="outline" className="text-red-500 border-red-500/40 text-[10px]">
+              <AlertTriangle className="w-3 h-3 mr-1" /> failed
+            </Badge>
+          )}
+          <span className="text-[11px] text-muted-foreground whitespace-nowrap">{when}</span>
+        </div>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+        <span className="inline-flex items-center gap-1">
+          <UserIcon className="w-3 h-3" /> {entry.maintainerName ?? entry.maintainerOpenId}
+        </span>
+        {entry.aiModel && <span>model: {entry.aiModel}</span>}
+        {isExtract && entry.sourceKind && <span>source: {entry.sourceKind}</span>}
+        {typeof entry.inputChars === "number" && <span>{entry.inputChars.toLocaleString()} chars</span>}
+        {isExtract && typeof entry.figureCount === "number" && (
+          <span>
+            {entry.figureCount} figure{entry.figureCount === 1 ? "" : "s"}
+          </span>
+        )}
+        {isExtract && (entry.flaggedCount ?? 0) > 0 && (
+          <span className="text-orange-500">{entry.flaggedCount} flagged</span>
+        )}
+        {!isExtract && typeof entry.candidateCount === "number" && (
+          <span>{entry.candidateCount} candidates proposed</span>
+        )}
+      </div>
+
+      {isExtract && fields.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {fields.map((f) => (
+            <Badge key={f} variant="outline" className="text-[10px]">
+              {FIELD_LABELS[f] ?? f}
+            </Badge>
+          ))}
+        </div>
+      )}
+
+      {entry.sourceUrl && (
+        <a
+          href={entry.sourceUrl}
+          target="_blank"
+          rel="noreferrer"
+          className="text-[11px] text-primary inline-flex items-center gap-1 hover:underline"
+        >
+          <ExternalLink className="w-3 h-3" /> source document
+        </a>
+      )}
+
+      {!entry.ok && entry.error && (
+        <p className="text-[11px] text-red-500 flex items-start gap-1.5">
+          <AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" />
+          <span>{entry.error}</span>
+        </p>
+      )}
+    </li>
   );
 }
 

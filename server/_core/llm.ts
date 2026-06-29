@@ -67,6 +67,7 @@ export type InvokeParams = {
   responseFormat?: ResponseFormat;
   response_format?: ResponseFormat;
   model?: string;
+  temperature?: number;
   thinking?: Record<string, unknown>;
   reasoning?: Record<string, unknown>;
 };
@@ -352,6 +353,7 @@ export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
     responseFormat,
     response_format,
     model,
+    temperature,
     thinking,
     reasoning,
     maxTokens,
@@ -381,6 +383,10 @@ export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
   const resolvedMaxTokens = max_tokens ?? maxTokens;
   if (typeof resolvedMaxTokens === "number") {
     payload.max_tokens = resolvedMaxTokens;
+  }
+
+  if (typeof temperature === "number") {
+    payload.temperature = temperature;
   }
 
   if (thinking) {

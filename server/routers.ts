@@ -99,6 +99,8 @@ import {
   countPendingCandidates,
   getAiCandidate,
   reviewAiCandidate,
+  insertAiIntakeAudit,
+  listAiIntakeAudit,
 } from "./db";
 import { OPPORTUNITY_SEED } from "./opportunitySeed";
 import {
@@ -124,7 +126,7 @@ import {
   isAiProvisionalRow,
   countAiFigures,
 } from "../shared/provenance";
-import type { InsertOpportunity } from "../drizzle/schema";
+import type { InsertOpportunity, InsertAiIntakeAudit } from "../drizzle/schema";
 import { runAdapter } from "./ingestion/runner";
 import { ADAPTERS } from "./ingestion/adapters";
 import { SOURCE_IDS, AI_INTAKE_SOURCE_ID } from "../shared/ingestion";
@@ -1018,6 +1020,15 @@ export const appRouter = router({
         })
         .filter((x) => x.aiFigureCount > 0);
     }),
+
+    // Part 8 (item 6): maintainer-only audit trail of every AI intake call — what
+    // document, what was extracted, which model, when, and by which maintainer.
+    aiAuditLog: adminProcedure
+      .input(z.object({ limit: z.number().int().positive().max(500).optional() }).optional())
+      .query(async ({ input }) => {
+        const rows = await listAiIntakeAudit(input?.limit ?? 100);
+        return { entries: rows };
+      }),
     byRef: publicProcedure
       .input(z.object({ ref: z.string().min(1) }))
       .query(async ({ input }) => {
@@ -1206,84 +1217,122 @@ export const appRouter = router({
           hintName: z.string().max(200).optional(),
         }),
       )
-      .mutation(async ({ input }) => {
-        // Resolve the document source into what the model reads, and a default link to
-        // the source so a human can open and confirm against it.
-        let llmSource: ExtractionSource;
-        let defaultUrl: string | null = null;
-        if (input.source.kind === "text") {
-          llmSource = { kind: "text", text: input.source.text };
-        } else if (input.source.kind === "url") {
-          // Fetch + strip server-side (the model never browses; it reads the text we got).
-          const text = await fetchDocumentText(input.source.url);
-          llmSource = { kind: "text", text };
-          defaultUrl = input.source.url;
-        } else {
-          // PDF: hand the stored file to the model directly via a signed URL.
-          const signed = await storageGetSignedUrl(input.source.fileKey);
-          llmSource = { kind: "pdf", fileUrl: signed };
-        }
-
-        const { extraction, model } = await aiExtractInstrument({
-          source: llmSource,
-          hintName: input.hintName ?? null,
-        });
-        if (!extraction) {
-          throw new TRPCError({
-            code: "UNPROCESSABLE_CONTENT",
-            message:
-              "The AI could not read a specific instrument with confirmable figures from this document. Check the source and try again.",
-          });
-        }
-        const sourceUrl =
-          input.sourceUrl && input.sourceUrl !== "" ? input.sourceUrl : defaultUrl;
-        const at = Date.now();
-
-        // AI extraction is JUST ANOTHER ADAPTER behind the same wall: turn it into the
-        // exact AdapterResult shape the scrapers produce, then run the figures through
-        // the AI-tier provenance map (which stamps ai_extracted AND applies the numeric
-        // sanity gate, flagging implausible values for review rather than saving clean).
-        const adapterResult = extractionToAdapterResult({
-          extraction,
-          ref: input.ref ?? null,
+      .mutation(async ({ ctx, input }) => {
+        // One audit row per call, written regardless of outcome (item 6): every billable
+        // LLM call and every figure that enters the catalog is traceable to the document,
+        // the model, the timestamp, and the maintainer who triggered it. We build the row
+        // incrementally and flush it in a finally block so failures are logged too.
+        const audit: InsertAiIntakeAudit = {
+          action: "extract",
+          maintainerOpenId: ctx.user.openId ?? String(ctx.user.id),
+          maintainerName: ctx.user.name ?? null,
+          sourceKind: input.source.kind,
           sourceLabel: input.sourceLabel,
-          sourceUrl,
-        });
-        const inst = adapterResult.instruments[0];
-        const { map: aiMap, flagged } = aiInstrumentToProvenanceMap(inst, { at, model });
-        if (Object.keys(aiMap).length === 0) {
-          throw new TRPCError({
-            code: "UNPROCESSABLE_CONTENT",
-            message: "The AI found no confirmable figures (each figure needs a source quote).",
+          sourceUrl: input.sourceUrl && input.sourceUrl !== "" ? input.sourceUrl : null,
+          inputChars: input.source.kind === "text" ? input.source.text.length : null,
+          hintName: input.hintName ?? null,
+          ok: true,
+        };
+        try {
+          // Resolve the document source into what the model reads, and a default link to
+          // the source so a human can open and confirm against it.
+          let llmSource: ExtractionSource;
+          let defaultUrl: string | null = null;
+          if (input.source.kind === "text") {
+            llmSource = { kind: "text", text: input.source.text };
+          } else if (input.source.kind === "url") {
+            // Fetch + strip server-side (the model never browses; it reads the text we got).
+            const text = await fetchDocumentText(input.source.url);
+            llmSource = { kind: "text", text };
+            audit.inputChars = text.length;
+            defaultUrl = input.source.url;
+            if (!audit.sourceUrl) audit.sourceUrl = input.source.url;
+          } else {
+            // PDF: hand the stored file to the model directly via a signed URL.
+            const signed = await storageGetSignedUrl(input.source.fileKey);
+            llmSource = { kind: "pdf", fileUrl: signed };
+          }
+
+          const { extraction, model } = await aiExtractInstrument({
+            source: llmSource,
+            hintName: input.hintName ?? null,
           });
+          audit.aiModel = model;
+          if (!extraction) {
+            audit.ok = false;
+            audit.error = "No confirmable instrument/figures found in the document.";
+            throw new TRPCError({
+              code: "UNPROCESSABLE_CONTENT",
+              message:
+                "The AI could not read a specific instrument with confirmable figures from this document. Check the source and try again.",
+            });
+          }
+          const sourceUrl =
+            input.sourceUrl && input.sourceUrl !== "" ? input.sourceUrl : defaultUrl;
+          const at = Date.now();
+
+          // AI extraction is JUST ANOTHER ADAPTER behind the same wall: turn it into the
+          // exact AdapterResult shape the scrapers produce, then run the figures through
+          // the AI-tier provenance map (which stamps ai_extracted AND applies the numeric
+          // sanity gate, flagging implausible values for review rather than saving clean).
+          const adapterResult = extractionToAdapterResult({
+            extraction,
+            ref: input.ref ?? null,
+            sourceLabel: input.sourceLabel,
+            sourceUrl,
+          });
+          const inst = adapterResult.instruments[0];
+          const { map: aiMap, flagged } = aiInstrumentToProvenanceMap(inst, { at, model });
+          if (Object.keys(aiMap).length === 0) {
+            audit.ok = false;
+            audit.error = "No confirmable figures (each figure needs a source quote).";
+            throw new TRPCError({
+              code: "UNPROCESSABLE_CONTENT",
+              message: "The AI found no confirmable figures (each figure needs a source quote).",
+            });
+          }
+          const ref = inst.ref;
+          const base: InsertOpportunity = {
+            ref,
+            name: inst.name,
+            assetClass: inst.assetClass,
+            issuer: inst.issuer ?? null,
+            currency: inst.currency ?? "KES",
+            market: inst.market ?? null,
+            factNote: inst.factNote ?? null,
+            dataSource: input.sourceLabel,
+            dataAsOf: new Date(at),
+            unverified: true,
+            active: true,
+          };
+          // Same reconcile/upsert/conflicts machinery as a scrape — AI only fills blanks,
+          // never clobbers a human or scraped value (disagreements become conflicts).
+          const result = await ingestAiExtractedInstrument({ base, ai: aiMap, sourceId: AI_INTAKE_SOURCE_ID });
+          const saved = await getOpportunityByRef(ref);
+          // Record what entered the catalog for traceability.
+          audit.resultName = inst.name;
+          audit.extractedFields = Object.keys(aiMap);
+          audit.figureCount = Object.keys(aiMap).length;
+          audit.flaggedCount = flagged.length;
+          return {
+            ref,
+            created: result.created,
+            filled: result.filled,
+            conflicts: result.conflicts,
+            flagged, // figures that tripped a numeric sanity gate (shown loudly for review)
+            extraction, // returned so the UI can show what to confirm against the source
+            opportunity: saved,
+          };
+        } catch (err) {
+          if (audit.ok) {
+            // An unexpected failure (e.g. URL fetch error) not already recorded above.
+            audit.ok = false;
+            audit.error = (err instanceof Error ? err.message : String(err)).slice(0, 300);
+          }
+          throw err;
+        } finally {
+          await insertAiIntakeAudit(audit);
         }
-        const ref = inst.ref;
-        const base: InsertOpportunity = {
-          ref,
-          name: inst.name,
-          assetClass: inst.assetClass,
-          issuer: inst.issuer ?? null,
-          currency: inst.currency ?? "KES",
-          market: inst.market ?? null,
-          factNote: inst.factNote ?? null,
-          dataSource: input.sourceLabel,
-          dataAsOf: new Date(at),
-          unverified: true,
-          active: true,
-        };
-        // Same reconcile/upsert/conflicts machinery as a scrape — AI only fills blanks,
-        // never clobbers a human or scraped value (disagreements become conflicts).
-        const result = await ingestAiExtractedInstrument({ base, ai: aiMap, sourceId: AI_INTAKE_SOURCE_ID });
-        const saved = await getOpportunityByRef(ref);
-        return {
-          ref,
-          created: result.created,
-          filled: result.filled,
-          conflicts: result.conflicts,
-          flagged, // figures that tripped a numeric sanity gate (shown loudly for review)
-          extraction, // returned so the UI can show what to confirm against the source
-          opportunity: saved,
-        };
       }),
 
     // Upload a PDF source document, returning its storage key for `aiExtract`.
@@ -1312,25 +1361,45 @@ export const appRouter = router({
     // pending table for a human to approve. No ranking is produced or stored.
     aiDiscover: adminProcedure
       .input(z.object({ universe: z.string().min(4).max(500) }))
-      .mutation(async ({ input }) => {
-        const { candidates, model } = await aiDiscoverCandidates({ universeDescription: input.universe });
-        if (candidates.length === 0) {
-          return { proposed: 0, inserted: 0 };
+      .mutation(async ({ ctx, input }) => {
+        // Audit row per discovery run (item 6). Discovery writes NOTHING to the catalog;
+        // the row records the universe asked for and how many candidates were proposed.
+        const audit: InsertAiIntakeAudit = {
+          action: "discover",
+          maintainerOpenId: ctx.user.openId ?? String(ctx.user.id),
+          maintainerName: ctx.user.name ?? null,
+          universeDescription: input.universe.slice(0, 500),
+          inputChars: input.universe.length,
+          ok: true,
+        };
+        try {
+          const { candidates, model } = await aiDiscoverCandidates({ universeDescription: input.universe });
+          audit.aiModel = model;
+          audit.candidateCount = candidates.length;
+          if (candidates.length === 0) {
+            return { proposed: 0, inserted: 0 };
+          }
+          const inserted = await insertAiCandidates(
+            candidates.map((c) => ({
+              name: c.name,
+              issuer: c.issuer ?? null,
+              assetClass: c.assetClass ?? null,
+              currency: c.currency ?? null,
+              scopeReason: c.scopeReason ?? null,
+              sourceUrl: c.sourceUrl ?? null,
+              universe: input.universe.slice(0, 500),
+              aiModel: model,
+              status: "pending" as const,
+            })),
+          );
+          return { proposed: candidates.length, inserted };
+        } catch (err) {
+          audit.ok = false;
+          audit.error = (err instanceof Error ? err.message : String(err)).slice(0, 300);
+          throw err;
+        } finally {
+          await insertAiIntakeAudit(audit);
         }
-        const inserted = await insertAiCandidates(
-          candidates.map((c) => ({
-            name: c.name,
-            issuer: c.issuer ?? null,
-            assetClass: c.assetClass ?? null,
-            currency: c.currency ?? null,
-            scopeReason: c.scopeReason ?? null,
-            sourceUrl: c.sourceUrl ?? null,
-            universe: input.universe.slice(0, 500),
-            aiModel: model,
-            status: "pending" as const,
-          })),
-        );
-        return { proposed: candidates.length, inserted };
       }),
 
     // List AI candidates for the review surface (suggestions only, never ranked).

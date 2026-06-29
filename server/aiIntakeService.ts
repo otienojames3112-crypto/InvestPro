@@ -304,11 +304,15 @@ export async function aiExtractInstrument(args: {
           { type: "file_url" as const, file_url: { url: args.source.fileUrl, mime_type: "application/pdf" as const } },
         ]);
 
+  // Accuracy over speed: this is a maintainer tool with no latency pressure, so we run
+  // at temperature 0 with structured-output mode — we want the most faithful, repeatable
+  // read of the document, not a creative one.
   const res = await invokeLLM({
     messages: [
       { role: "system", content: EXTRACTION_SYSTEM_PROMPT },
       { role: "user", content: userContent },
     ],
+    temperature: 0,
     response_format: { type: "json_schema", json_schema: EXTRACTION_SCHEMA },
   });
   const text = contentToText(res.choices?.[0]?.message?.content);
@@ -318,6 +322,7 @@ export async function aiExtractInstrument(args: {
 export async function aiDiscoverCandidates(args: {
   universeDescription: string;
 }): Promise<{ candidates: AiCandidateInstrument[]; model: string | null }> {
+  // Same accuracy-first posture as extraction (temperature 0 + structured output).
   const res = await invokeLLM({
     messages: [
       { role: "system", content: DISCOVERY_SYSTEM_PROMPT },
@@ -326,6 +331,7 @@ export async function aiDiscoverCandidates(args: {
         content: `Propose candidate instruments for this tracking universe (suggestions only):\n${args.universeDescription}`,
       },
     ],
+    temperature: 0,
     response_format: { type: "json_schema", json_schema: DISCOVERY_SCHEMA },
   });
   const text = contentToText(res.choices?.[0]?.message?.content);

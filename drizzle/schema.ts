@@ -1097,3 +1097,54 @@ export const aiCandidates = mysqlTable("ai_candidates", {
 });
 export type AiCandidate = typeof aiCandidates.$inferSelect;
 export type InsertAiCandidate = typeof aiCandidates.$inferInsert;
+
+/**
+ * Part 8 (item 6): AI INTAKE AUDIT TRAIL.
+ *
+ * Every AI intake call — a document extraction or a universe-discovery run — writes
+ * exactly one row here, BEFORE the result is trusted by anyone. This exists for two
+ * reasons the brief calls out: cost visibility (every billable LLM call is logged with
+ * its model) and traceability (a wrong figure in the catalog can be traced back to the
+ * document, the model, the timestamp, and the maintainer who triggered it).
+ *
+ * This is an audit log, NOT a source of record: nothing here ranks, scores, or feeds the
+ * catalog. It only records what happened. Append-only in practice (no update path).
+ */
+export const aiIntakeAudit = mysqlTable("ai_intake_audit", {
+  id: int("id").autoincrement().primaryKey(),
+  /** "extract" (read one document) or "discover" (propose a candidate list). */
+  action: varchar("action", { length: 16 }).notNull(),
+  /** The maintainer who triggered the call (open id + display name for traceability). */
+  maintainerOpenId: varchar("maintainerOpenId", { length: 200 }).notNull(),
+  maintainerName: varchar("maintainerName", { length: 200 }),
+  /** The model that actually ran (echoed from the LLM response; audit/cost only). */
+  aiModel: varchar("aiModel", { length: 64 }),
+  /** For extract: "text" | "url" | "pdf". For discover: null. */
+  sourceKind: varchar("sourceKind", { length: 16 }),
+  /** The human-cited source label (extract) — what document was read. */
+  sourceLabel: varchar("sourceLabel", { length: 300 }),
+  /** Link to the source document, if any. */
+  sourceUrl: varchar("sourceUrl", { length: 500 }),
+  /** Size of the input the model saw (chars of text, or null for a PDF/file). */
+  inputChars: int("inputChars"),
+  /** Optional instrument-name hint the maintainer supplied (extract). */
+  hintName: varchar("hintName", { length: 200 }),
+  /** The universe description the maintainer asked to populate (discover). */
+  universeDescription: varchar("universeDescription", { length: 500 }),
+  /** Extract: the instrument name the AI returned. */
+  resultName: varchar("resultName", { length: 200 }),
+  /** Extract: which field keys were extracted (e.g. ["yield","expense"]) for at-a-glance audit. */
+  extractedFields: json("extractedFields").$type<string[]>(),
+  /** Extract: how many figures were returned, and how many were sanity-flagged for review. */
+  figureCount: int("figureCount"),
+  flaggedCount: int("flaggedCount"),
+  /** Discover: how many candidates were proposed (none are written to the catalog). */
+  candidateCount: int("candidateCount"),
+  /** Whether the call produced a usable result (false on parse failure / fetch error). */
+  ok: boolean("ok").notNull().default(true),
+  /** A short error reason when ok=false (e.g. "URL returned HTTP 404"). */
+  error: varchar("error", { length: 300 }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+export type AiIntakeAuditRow = typeof aiIntakeAudit.$inferSelect;
+export type InsertAiIntakeAudit = typeof aiIntakeAudit.$inferInsert;

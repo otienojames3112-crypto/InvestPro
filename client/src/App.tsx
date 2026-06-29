@@ -28,6 +28,7 @@ import { TimeMachine } from "./pages/TimeMachine";
 import Explore from "./pages/Explore";
 import OpportunityDetail from "./pages/OpportunityDetail";
 import SourceConflicts from "./pages/SourceConflicts";
+import AiIntake from "./pages/AiIntake";
 import AddInstrument from "./pages/AddInstrument";
 
 function Router() {
@@ -55,6 +56,7 @@ function Router() {
       <Route path="/explore/new" component={AddInstrument} />
       <Route path="/explore/:ref" component={OpportunityDetail} />
       <Route path="/source-conflicts" component={SourceConflicts} />
+      <Route path="/ai-intake" component={AiIntake} />
       <Route path="/time-machine" component={TimeMachine} />
       <Route path="/404" component={NotFound} />
       <Route component={NotFound} />

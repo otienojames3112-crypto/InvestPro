@@ -31,6 +31,9 @@ import {
   ingestionConflicts,
   type IngestionConflict,
   type InsertIngestionConflict,
+  aiCandidates,
+  type AiCandidate,
+  type InsertAiCandidate,
 } from "../drizzle/schema";
 import { ENV } from "./_core/env";
 import { computeActualsTotals, estInterestToDate, govAccruedInterestTotal } from "../shared/actuals";
@@ -38,6 +41,7 @@ import {
   applyVerification,
   summariseState,
   reconcileScrape,
+  reconcileAiExtraction,
   type FieldKey,
   type FieldProvenance,
   type FieldProvenanceMap,
@@ -1612,6 +1616,164 @@ export async function ingestScrapedInstrument(args: {
   }
 
   return { ref: args.base.ref, conflicts: conflicts.length, changed };
+}
+
+/**
+ * Part 8 — ingest an AI-extracted per-figure map for one instrument. AI enters at
+ * the LOWEST trust tier and can NEVER clobber anything:
+ *  - a NEW instrument is inserted with every figure as ai_extracted (provisional);
+ *  - an EXISTING instrument keeps all stored figures untouched — AI only fills blanks
+ *    (via reconcileAiExtraction). Any disagreement with a stored value becomes an
+ *    `ingestion_conflicts` row (status=open) for human review, never an overwrite.
+ *
+ * Returns how many figures were newly filled and how many conflicts were raised.
+ * There is no ranking column to write, and this never marks a row human-checked.
+ */
+export async function ingestAiExtractedInstrument(args: {
+  base: InsertOpportunity;
+  ai: FieldProvenanceMap;
+  sourceId: string;
+}): Promise<{ ref: string; filled: number; conflicts: number; changed: boolean; created: boolean }> {
+  const db = await getDb();
+  if (!db) return { ref: args.base.ref, filled: 0, conflicts: 0, changed: false, created: false };
+
+  const rows = await db
+    .select()
+    .from(opportunities)
+    .where(eq(opportunities.ref, args.base.ref))
+    .limit(1);
+  const existingRow = rows[0];
+
+  // New instrument: insert with the AI map straight in as ai_extracted (provisional).
+  if (!existingRow) {
+    const filled = Object.values(args.ai).filter((p) => !!p && p.value != null).length;
+    await db.insert(opportunities).values({
+      ...args.base,
+      unverified: true, // nobody has checked it; it is AI-provisional
+      fieldProvenance: args.ai,
+      verificationState: summariseState(args.ai),
+    });
+    return { ref: args.base.ref, filled, conflicts: 0, changed: true, created: true };
+  }
+
+  const existingMap: FieldProvenanceMap = (existingRow.fieldProvenance as FieldProvenanceMap | null) ?? {};
+  const before = Object.values(existingMap).filter((p) => !!p && p.value != null).length;
+  const { merged, conflicts, changed } = reconcileAiExtraction(existingMap, args.ai);
+  const after = Object.values(merged).filter((p) => !!p && p.value != null).length;
+  const filled = Math.max(0, after - before);
+
+  if (changed) {
+    await db
+      .update(opportunities)
+      .set({ fieldProvenance: merged, verificationState: summariseState(merged) })
+      .where(eq(opportunities.ref, args.base.ref));
+  }
+
+  // Persist any AI-vs-stored disagreements as open conflicts (idempotently).
+  for (const c of conflicts) {
+    const dupe = await db
+      .select({ id: ingestionConflicts.id })
+      .from(ingestionConflicts)
+      .where(
+        and(
+          eq(ingestionConflicts.opportunityRef, args.base.ref),
+          eq(ingestionConflicts.field, c.field),
+          eq(ingestionConflicts.status, "open"),
+        ),
+      )
+      .limit(1);
+    if (dupe[0]) {
+      await db
+        .update(ingestionConflicts)
+        .set({ scrapedValue: c.scrapedValue, scrapedSource: c.scrapedSource, scrapedAsOf: c.scrapedAsOf, sourceId: args.sourceId })
+        .where(eq(ingestionConflicts.id, dupe[0].id));
+      continue;
+    }
+    const insert: InsertIngestionConflict = {
+      opportunityRef: args.base.ref,
+      field: c.field,
+      humanValue: c.humanValue,
+      humanState: c.humanState,
+      scrapedValue: c.scrapedValue,
+      scrapedSource: c.scrapedSource,
+      sourceId: args.sourceId,
+      scrapedAsOf: c.scrapedAsOf,
+      status: "open",
+    };
+    await db.insert(ingestionConflicts).values(insert);
+  }
+
+  return { ref: args.base.ref, filled, conflicts: conflicts.length, changed, created: false };
+}
+
+/* ── Part 8: AI universe-discovery candidates (suggestions only) ──────────── */
+
+/** Insert a batch of AI-proposed candidates (status=pending). De-dupes by name within the call. */
+export async function insertAiCandidates(rows: InsertAiCandidate[]): Promise<number> {
+  const db = await getDb();
+  if (!db || rows.length === 0) return 0;
+  // Skip names that already have a pending/approved candidate so re-running discovery
+  // doesn't pile up duplicates.
+  const existing = await db
+    .select({ name: aiCandidates.name, status: aiCandidates.status })
+    .from(aiCandidates);
+  const blocked = new Set(
+    existing.filter((r) => r.status !== "dismissed").map((r) => r.name.trim().toLowerCase()),
+  );
+  const fresh = rows.filter((r) => !blocked.has(r.name.trim().toLowerCase()));
+  if (fresh.length === 0) return 0;
+  await db.insert(aiCandidates).values(fresh);
+  return fresh.length;
+}
+
+/** List candidates (newest first), optionally filtered by status. */
+export async function listAiCandidates(status?: "pending" | "approved" | "dismissed"): Promise<AiCandidate[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const base = db.select().from(aiCandidates);
+  return status
+    ? await base.where(eq(aiCandidates.status, status)).orderBy(desc(aiCandidates.createdAt))
+    : await base.orderBy(desc(aiCandidates.createdAt));
+}
+
+/** Count pending candidates (for a review badge). */
+export async function countPendingCandidates(): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  const rows = await db
+    .select({ n: sql<number>`count(*)` })
+    .from(aiCandidates)
+    .where(eq(aiCandidates.status, "pending"));
+  return Number(rows[0]?.n ?? 0);
+}
+
+/** Fetch one candidate by id. */
+export async function getAiCandidate(id: number): Promise<AiCandidate | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db.select().from(aiCandidates).where(eq(aiCandidates.id, id)).limit(1);
+  return rows[0] ?? null;
+}
+
+/** Mark a candidate reviewed. approvedRef is set only when the human created an instrument from it. */
+export async function reviewAiCandidate(args: {
+  id: number;
+  status: "approved" | "dismissed";
+  reviewedBy: string;
+  approvedRef?: string | null;
+}): Promise<AiCandidate | null> {
+  const db = await getDb();
+  if (!db) return null;
+  await db
+    .update(aiCandidates)
+    .set({
+      status: args.status,
+      reviewedBy: args.reviewedBy,
+      reviewedAt: Date.now(),
+      approvedRef: args.status === "approved" ? (args.approvedRef ?? null) : null,
+    })
+    .where(eq(aiCandidates.id, args.id));
+  return getAiCandidate(args.id);
 }
 
 /** List ingestion conflicts (newest first), optionally only open ones. */

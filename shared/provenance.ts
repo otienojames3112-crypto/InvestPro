@@ -576,6 +576,59 @@ export function reconcileScrape(
 }
 
 /**
+ * Part 8 — the AI counterpart of {@link reconcileScrape}. Reconcile a freshly
+ * AI-extracted per-figure map against the stored one. Because `ai_extracted` is the
+ * lowest stored trust of all, AI may ONLY fill an empty slot:
+ *
+ *  - For an EMPTY figure (no value yet): the AI value is written as ai_extracted.
+ *  - For a figure that already has ANY value — human, scrape, or a prior AI value —
+ *    the stored figure is NEVER touched. If the AI value AGREES we silently drop it
+ *    (no conflict, nothing to confirm). If it DISAGREES we keep the stored value AND
+ *    record a FigureConflict for the human review surface. AI can never overwrite or
+ *    become the source of record; at most it can ask a human to look.
+ *
+ * This is the structural guarantee, enforced in code rather than copy.
+ */
+export function reconcileAiExtraction(
+  existing: FieldProvenanceMap,
+  ai: FieldProvenanceMap,
+): ReconcileResult {
+  const merged: FieldProvenanceMap = { ...existing };
+  const conflicts: FigureConflict[] = [];
+  let changed = false;
+
+  for (const key of Object.keys(ai) as FieldKey[]) {
+    const fresh = ai[key];
+    if (!fresh || fresh.value == null) continue;
+    const prior = existing[key];
+
+    if (!prior || prior.value == null) {
+      // Empty slot: AI is allowed to fill it (as the lowest-trust ai_extracted).
+      merged[key] = fresh;
+      changed = true;
+      continue;
+    }
+
+    // Something is already here and is MORE trusted than AI. Never overwrite.
+    if (valuesAgree(prior.value, fresh.value)) {
+      // Agreement adds nothing — AI cannot RAISE trust, so we drop it silently.
+      continue;
+    }
+    // Disagreement: keep the stored value, route the AI claim to review.
+    conflicts.push({
+      field: key,
+      humanValue: prior.value,
+      humanState: prior.verificationState,
+      scrapedValue: fresh.value,
+      scrapedSource: fresh.source,
+      scrapedAsOf: fresh.asOf,
+    });
+  }
+
+  return { merged, conflicts, changed };
+}
+
+/**
  * Part 7.5 — per-asset-type staleness thresholds.
  *
  * A scraped figure goes "stale" at a cadence that matches how often its source

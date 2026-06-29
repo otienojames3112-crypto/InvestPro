@@ -89,6 +89,15 @@ export const SOURCE_IDS = ["cbk_dhowcsd", "nse", "fund_factsheet"] as const;
 export type SourceId = (typeof SOURCE_IDS)[number];
 
 /**
+ * Part 8: a NON-scraper source label used only to tag conflicts raised by AI
+ * extraction (so the conflicts surface can show that an AI claim, not a scraper,
+ * disagreed with a stored value). It is intentionally NOT part of SOURCE_IDS: there
+ * is no AI scraper adapter or pull policy — AI never runs on a schedule, it only
+ * ever fills blanks on demand and asks a human to look.
+ */
+export const AI_INTAKE_SOURCE_ID = "ai_intake";
+
+/**
  * What kind of raw payload an adapter parses. Used by the runner to set the right
  * Accept header and by tests to load the right fixture extension.
  */

@@ -1058,3 +1058,42 @@ export const ingestionConflicts = mysqlTable("ingestion_conflicts", {
 });
 export type IngestionConflict = typeof ingestionConflicts.$inferSelect;
 export type InsertIngestionConflict = typeof ingestionConflicts.$inferInsert;
+
+/**
+ * Part 8 — AI universe-discovery CANDIDATES. These are SUGGESTIONS ONLY: an AI
+ * proposed that an instrument MIGHT be worth tracking. A candidate is NEVER an
+ * opportunity and is NEVER shown in the catalog/Explore until a human approves it
+ * (at which point it is created as a normal human-authored instrument and the
+ * candidate is marked `approved`). There is deliberately NO score/rank/rating
+ * column here — a candidate cannot be ordered by quality, only listed for review.
+ */
+export const aiCandidates = mysqlTable("ai_candidates", {
+  id: int("id").autoincrement().primaryKey(),
+  /** Proposed instrument name (as the AI wrote it). */
+  name: varchar("name", { length: 200 }).notNull(),
+  /** Proposed issuer/manager, if known. */
+  issuer: varchar("issuer", { length: 200 }),
+  /** Proposed asset class (human-confirmed before any insert). */
+  assetClass: varchar("assetClass", { length: 32 }),
+  /** Proposed currency, if known. */
+  currency: varchar("currency", { length: 8 }),
+  /** NEUTRAL reason it fits the requested universe (never a quality judgement). */
+  scopeReason: text("scopeReason"),
+  /** Where the AI saw it, so a human can go look. */
+  sourceUrl: varchar("sourceUrl", { length: 500 }),
+  /** The universe description the human asked the AI to populate. */
+  universe: varchar("universe", { length: 500 }),
+  /** The model that proposed it (audit only, never a quality signal). */
+  aiModel: varchar("aiModel", { length: 64 }),
+  /** pending = awaiting review; approved = a human created the instrument; dismissed = rejected. */
+  status: varchar("status", { length: 16 }).notNull().default("pending"),
+  /** If approved, the opportunities.ref the human created from it. */
+  approvedRef: varchar("approvedRef", { length: 64 }),
+  /** Who acted on it + when (null while pending). */
+  reviewedBy: varchar("reviewedBy", { length: 200 }),
+  reviewedAt: bigint("reviewedAt", { mode: "number" }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+export type AiCandidate = typeof aiCandidates.$inferSelect;
+export type InsertAiCandidate = typeof aiCandidates.$inferInsert;

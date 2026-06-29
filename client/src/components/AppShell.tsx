@@ -32,6 +32,7 @@ import {
   Scale,
   Compass,
   GitCompareArrows,
+  Bot,
   X,
 } from "lucide-react";
 import { Link, useLocation } from "wouter";
@@ -197,6 +198,22 @@ function SidebarConflictsBadge() {
   );
 }
 
+function SidebarCandidatesBadge() {
+  const { data } = trpc.opportunities.pendingCandidateCount.useQuery(undefined, {
+    refetchInterval: 60_000,
+  });
+  const count = data?.count ?? 0;
+  if (count <= 0) return null;
+  return (
+    <span
+      className="shrink-0 rounded-full border border-orange-500/40 bg-orange-500/15 px-1.5 py-0.5 text-[10px] font-semibold leading-none tabular-nums text-orange-400"
+      title={`${count} AI-proposed candidate${count === 1 ? "" : "s"} awaiting your review`}
+    >
+      {count}
+    </span>
+  );
+}
+
 const navGroups = [
   {
     title: "Tracking",
@@ -214,6 +231,7 @@ const navGroups = [
     title: "Invest",
     items: [
       { href: "/explore", label: "Explore Opportunities", icon: Compass },
+      { href: "/ai-intake", label: "AI Intake", icon: Bot },
       { href: "/source-conflicts", label: "Source Conflicts", icon: GitCompareArrows },
     ],
   },
@@ -341,6 +359,7 @@ function SidebarContent({
                         <span className="flex-1">{label}</span>
                         {href === "/" && <SidebarDriftBadge portfolioId={portfolioId} onNavClick={onNavClick} />}
                         {href === "/securities" && <SidebarSecuritiesBadge portfolioId={portfolioId} />}
+                        {href === "/ai-intake" && <SidebarCandidatesBadge />}
                         {href === "/source-conflicts" && <SidebarConflictsBadge />}
                         {isActive && <ChevronRight className="w-3 h-3 text-primary" />}
                       </div>

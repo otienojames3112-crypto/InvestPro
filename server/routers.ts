@@ -92,8 +92,20 @@ import {
   listIngestionConflicts,
   countOpenConflicts,
   resolveIngestionConflict,
+  ingestAiExtractedInstrument,
+  insertAiCandidates,
+  listAiCandidates,
+  countPendingCandidates,
+  getAiCandidate,
+  reviewAiCandidate,
 } from "./db";
 import { OPPORTUNITY_SEED } from "./opportunitySeed";
+import {
+  aiExtractInstrument,
+  aiDiscoverCandidates,
+  extractionToProvenanceMap,
+} from "./aiIntakeService";
+import { stripVerdictFields } from "../shared/aiIntake";
 import {
   FIELD_KEYS,
   isFieldKey,
@@ -107,7 +119,7 @@ import { summariseState } from "../shared/provenance";
 import type { InsertOpportunity } from "../drizzle/schema";
 import { runAdapter } from "./ingestion/runner";
 import { ADAPTERS } from "./ingestion/adapters";
-import { SOURCE_IDS } from "../shared/ingestion";
+import { SOURCE_IDS, AI_INTAKE_SOURCE_ID } from "../shared/ingestion";
 import { notifyOwner } from "./_core/notification";
 import { createHeartbeatJob, updateHeartbeatJob, deleteHeartbeatJob } from "./_core/heartbeat";
 import { parse as parseCookie } from "cookie";
@@ -1104,6 +1116,197 @@ export const appRouter = router({
         const adapter = ADAPTERS[input.sourceId];
         const report = await runAdapter(adapter);
         return report;
+      }),
+
+    // ── Part 8: AI document extraction (librarian, not oracle) ───────────────
+    // Reads a messy source document (pasted text) and returns FACTUAL figures for
+    // ONE instrument, each at the LOWEST trust tier (ai_extracted) and carrying the
+    // verbatim quote it was read from so a human can confirm it against the source.
+    // It can only FILL BLANKS — it never overwrites a human/scrape figure (a
+    // disagreement becomes a conflict). It NEVER ranks, scores, or recommends: the
+    // schema has no such field and the result is passed through stripVerdictFields.
+    aiExtract: adminProcedure
+      .input(
+        z.object({
+          // The raw source text the human pasted (fact sheet, auction notice, etc.).
+          documentText: z.string().min(20).max(40000),
+          // The cited source document label (for the confirm-against-source UI).
+          sourceLabel: z.string().min(1).max(200),
+          // Link to the source document, so a human can open and confirm against it.
+          sourceUrl: z.string().url().max(500).optional().or(z.literal("")),
+          // Optional ref to attach the figures to. If omitted, a provisional ref is
+          // derived from the extracted name. Either way the row is AI-provisional.
+          ref: z.string().min(1).max(64).optional(),
+          // Optional name hint to steer the extractor.
+          hintName: z.string().max(200).optional(),
+        }),
+      )
+      .mutation(async ({ input }) => {
+        const { extraction, model } = await aiExtractInstrument({
+          documentText: input.documentText,
+          hintName: input.hintName ?? null,
+        });
+        if (!extraction) {
+          throw new TRPCError({
+            code: "UNPROCESSABLE_CONTENT",
+            message:
+              "The AI could not read a specific instrument with confirmable figures from this document. Check the source text and try again.",
+          });
+        }
+        const sourceUrl = input.sourceUrl === "" ? null : (input.sourceUrl ?? null);
+        const at = Date.now();
+        const aiMap = extractionToProvenanceMap({
+          extraction,
+          sourceLabel: input.sourceLabel,
+          sourceUrl,
+          model,
+          at,
+        });
+        if (Object.keys(aiMap).length === 0) {
+          throw new TRPCError({
+            code: "UNPROCESSABLE_CONTENT",
+            message: "The AI found no confirmable figures (each figure needs a source quote).",
+          });
+        }
+        // Derive a provisional ref from the extracted name when none was supplied.
+        const ref =
+          input.ref ??
+          `ai-${extraction.name
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, "-")
+            .replace(/^-+|-+$/g, "")
+            .slice(0, 56)}`;
+        const base: InsertOpportunity = {
+          ref,
+          name: extraction.name,
+          assetClass: (extraction.assetClass ?? "alt").slice(0, 32),
+          issuer: extraction.issuer ?? null,
+          currency: (extraction.currency ?? "KES").slice(0, 8),
+          market: extraction.market ?? null,
+          factNote: extraction.notes ?? null,
+          dataSource: input.sourceLabel,
+          dataAsOf: new Date(at),
+          unverified: true,
+          active: true,
+        };
+        const result = await ingestAiExtractedInstrument({ base, ai: aiMap, sourceId: AI_INTAKE_SOURCE_ID });
+        const saved = await getOpportunityByRef(ref);
+        return {
+          ref,
+          created: result.created,
+          filled: result.filled,
+          conflicts: result.conflicts,
+          extraction, // returned so the UI can show what to confirm against the source
+          opportunity: saved,
+        };
+      }),
+
+    // ── Part 8: universe discovery (suggestions only) ────────────────────────
+    // Asks the AI to PROPOSE candidate instruments that MIGHT belong in a tracking
+    // universe. Nothing is inserted into the catalog — candidates land in their own
+    // pending table for a human to approve. No ranking is produced or stored.
+    aiDiscover: adminProcedure
+      .input(z.object({ universe: z.string().min(4).max(500) }))
+      .mutation(async ({ input }) => {
+        const { candidates, model } = await aiDiscoverCandidates({ universeDescription: input.universe });
+        if (candidates.length === 0) {
+          return { proposed: 0, inserted: 0 };
+        }
+        const inserted = await insertAiCandidates(
+          candidates.map((c) => ({
+            name: c.name,
+            issuer: c.issuer ?? null,
+            assetClass: c.assetClass ?? null,
+            currency: c.currency ?? null,
+            scopeReason: c.scopeReason ?? null,
+            sourceUrl: c.sourceUrl ?? null,
+            universe: input.universe.slice(0, 500),
+            aiModel: model,
+            status: "pending" as const,
+          })),
+        );
+        return { proposed: candidates.length, inserted };
+      }),
+
+    // List AI candidates for the review surface (suggestions only, never ranked).
+    listCandidates: adminProcedure
+      .input(z.object({ status: z.enum(["pending", "approved", "dismissed"]).optional() }).optional())
+      .query(async ({ input }) => {
+        const rows = await listAiCandidates(input?.status);
+        return { candidates: rows };
+      }),
+
+    pendingCandidateCount: publicProcedure.query(async () => {
+      return { count: await countPendingCandidates() };
+    }),
+
+    // Review a candidate. APPROVE creates a normal human-authored instrument from it
+    // (the human is now the author/source of record — never the AI) and records the
+    // ref on the candidate. DISMISS just files it away. A candidate is NEVER shown
+    // as a tracked instrument until this human action runs.
+    reviewCandidate: adminProcedure
+      .input(
+        z.discriminatedUnion("action", [
+          z.object({ action: z.literal("dismiss"), id: z.number().int().positive() }),
+          z.object({
+            action: z.literal("approve"),
+            id: z.number().int().positive(),
+            // The human confirms/edits the identity before it becomes a real instrument.
+            ref: z.string().min(1).max(64),
+            name: z.string().min(1).max(200),
+            assetClass: z.string().min(1).max(32),
+            issuer: z.string().max(200).optional(),
+            currency: z.string().min(1).max(8).default("KES"),
+            source: z.string().min(1).max(200),
+            sourceUrl: z.string().url().max(500).optional().or(z.literal("")),
+          }),
+        ]),
+      )
+      .mutation(async ({ ctx, input }) => {
+        const candidate = await getAiCandidate(input.id);
+        if (!candidate) throw new TRPCError({ code: "NOT_FOUND", message: "Candidate not found." });
+        if (candidate.status !== "pending") {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "This candidate was already reviewed." });
+        }
+        const by = ctx.user.name ?? ctx.user.email ?? "You";
+
+        if (input.action === "dismiss") {
+          const reviewed = await reviewAiCandidate({ id: input.id, status: "dismissed", reviewedBy: by });
+          return { reviewed };
+        }
+
+        // APPROVE: the human authors a real instrument. No figures are copied from the
+        // AI suggestion (it carried none) — the human enters facts via the normal
+        // add/verify path afterwards. The created row has an empty provenance map.
+        const existing = await getOpportunityByRef(input.ref);
+        if (existing) {
+          throw new TRPCError({ code: "CONFLICT", message: `An instrument with ref "${input.ref}" already exists.` });
+        }
+        const sourceUrl = input.sourceUrl === "" ? null : (input.sourceUrl ?? null);
+        const at = Date.now();
+        const row: InsertOpportunity = {
+          ref: input.ref,
+          name: input.name,
+          assetClass: input.assetClass,
+          issuer: input.issuer ?? null,
+          currency: input.currency,
+          dataSource: input.source,
+          dataAsOf: new Date(at),
+          unverified: false, // a human authored the instrument
+          fieldProvenance: {},
+          verificationState: "human_entered",
+          active: true,
+        };
+        void sourceUrl; // recorded on figures when the human adds them later
+        await upsertOpportunity(row);
+        const reviewed = await reviewAiCandidate({
+          id: input.id,
+          status: "approved",
+          reviewedBy: by,
+          approvedRef: input.ref,
+        });
+        const saved = await getOpportunityByRef(input.ref);
+        return { reviewed, opportunity: saved };
       }),
 
     // ── Part 7.3: add an instrument by hand ──────────────────────────────────

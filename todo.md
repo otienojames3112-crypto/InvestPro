@@ -950,9 +950,10 @@
 - [x] Unit tests for the new tier + no-clobber ordering (aiExtractedTier.test.ts, 15 tests; suite 965 green)
 
 ### Items 2–4: extraction, discovery, confirmation
-- [ ] AI document extraction procedure (adminProcedure): URL/text/file → invokeLLM structured JSON (facts only, no rankings) → upsert as ai_extracted via new DB helper
-- [ ] Universe discovery procedure (adminProcedure): LLM proposes candidate instrument names/refs as suggestions only (never inserted until human approves)
-- [ ] Human confirmation workflow UI: list ai_extracted figures/candidates for confirm-against-source; Confirm→human_verified, Edit→human_entered, Discard
-- [ ] AI intake page + nav entry (admin-gated)
-- [ ] Structural guarantee: AI contract type cannot carry score/rank/rating/recommendation
-- [ ] Tests for extraction parsing, no-clobber of human/scrape, suggestion-only discovery
+- [x] AI document extraction: aiIntake.ts contract + aiIntakeService + ingestAiExtractedInstrument + opportunities.aiExtract procedure
+- [x] Universe discovery: ai_candidates table + opportunities.aiDiscover/listCandidates/reviewCandidate (suggestions only; approve creates human-authored instrument)
+- [x] Human confirmation workflow: extracted figures show value + verbatim quote + "Confirm against source" deep-link to OpportunityDetail's existing per-figure Confirm/Override; candidate Approve creates human-authored instrument, Dismiss files it
+- [x] AI intake page (/ai-intake) + sidebar nav entry with pending-candidate badge (admin-gated)
+- [x] Structural guarantee: aiIntake.ts closed types + compile-time _assertNoVerdictFields + runtime stripVerdictFields
+- [x] Tests for extraction parsing, no-clobber of human/scrape, suggestion-only discovery (aiIntake.test.ts, 16 tests) + live LLM smoke test verified
+- [x] Type gate clean; full suite 981 green; AI Intake page renders

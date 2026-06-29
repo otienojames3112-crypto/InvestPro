@@ -19,7 +19,8 @@ import {
 import { profileFor, type AssetClass } from "@shared/assetModel";
 import { rateStaleness } from "@/lib/rateStaleness";
 import { usePortfolio } from "@/contexts/PortfolioContext";
-import { toast } from "sonner";
+import { ModelDrawer } from "@/components/ModelDrawer";
+import { useState } from "react";
 
 /**
  * Expansion Brief — Part 2: opportunity detail.
@@ -86,6 +87,7 @@ export default function OpportunityDetail() {
   const ref = decodeURIComponent(params.ref ?? "");
   const [, navigate] = useLocation();
   const { mode } = usePortfolio();
+  const [modelOpen, setModelOpen] = useState(false);
 
   const { data: r, isLoading, error } = trpc.opportunities.byRef.useQuery(
     { ref },
@@ -233,11 +235,7 @@ export default function OpportunityDetail() {
               </div>
             </div>
             <Button
-              onClick={() =>
-                toast.info("Hypothetical modeling is coming next", {
-                  description: "This will run a what-if projection — never a purchase.",
-                })
-              }
+              onClick={() => setModelOpen(true)}
               className="active:scale-[0.97] transition-transform"
             >
               <Sparkles className="w-4 h-4 mr-2" />
@@ -262,6 +260,23 @@ export default function OpportunityDetail() {
           </Link>
         </div>
       </div>
+
+      <ModelDrawer
+        opportunity={{
+          ref: r.ref,
+          name: r.name,
+          assetClass: r.assetClass,
+          currency: r.currency,
+          lastPrice: r.lastPrice,
+          yieldPct: r.yieldPct,
+          yieldKind: r.yieldKind,
+          trailingReturnPct: r.trailingReturnPct,
+          dataSource: r.dataSource,
+          dataAsOf: r.dataAsOf,
+        }}
+        open={modelOpen}
+        onOpenChange={setModelOpen}
+      />
     </AppShell>
   );
 }

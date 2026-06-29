@@ -41,6 +41,7 @@ import {
   deactivateMmfFund,
   setPortfolioMmfFund,
   getOtherHoldings,
+  getOtherHolding,
   addOtherHolding,
   updateOtherHolding,
   deleteOtherHolding,
@@ -139,7 +140,17 @@ import {
   TBILL_TENOR_DAYS,
   type SecurityType as GovSecurityType,
 } from "../shared/securityTenor";
-import { assetClassForSecurityType, assetGuardIssues } from "../shared/assetModel";
+import { assetClassForSecurityType, assetGuardIssues, type AssetClass, profileFor } from "../shared/assetModel";
+import { taxFor } from "../shared/assetTax";
+import {
+  type ModelingInputs,
+  modelingIssues,
+  deriveAmountKes,
+  buildHoldingDraft,
+  previewModelImpact,
+  computeExit,
+  registerClassForAssetClass,
+} from "../shared/modeling";
 import { buildAllocation, blendedYield } from "../shared/actuals";
 import {
   buildProjectionRange,
@@ -756,6 +767,53 @@ async function loadProjectionInputs(
   const secondaryMmfs = mapSecondaryMmfs(await getSecondaryMmfs(portfolioId));
   const bankHoldings = mapActualBankHoldings(await getBankInstrumentHoldings(portfolioId));
   return { settings, mappedOverrides, rh, actualDeposits, actualSecurities, secondaryMmfs, bankHoldings };
+}
+
+/**
+ * Build the EXACT `buildAllocation` input from a portfolio's live rows. This is
+ * the single loader shared by the Reconciliation cross-check and the Part-3
+ * modeling preview, so "current net worth + allocation" has one source of truth.
+ */
+async function loadAllocationInput(
+  portfolioId: number,
+  p: Awaited<ReturnType<typeof getPortfolio>>,
+): Promise<import("../shared/actuals").AllocationInput> {
+  const [deposits, securities, secondaries, bank, other] = await Promise.all([
+    getDepositEntries(portfolioId),
+    getSecurities(portfolioId),
+    getSecondaryMmfs(portfolioId),
+    getBankInstrumentHoldings(portfolioId),
+    getOtherHoldings(portfolioId),
+  ]);
+  return {
+    deposits: deposits.map((d) => ({
+      amount: parseFloat(String(d.amount ?? "0")) || 0,
+      bucket: d.bucket,
+      institutionType: d.institutionType,
+      mmfFundId: d.mmfFundId,
+    })),
+    securities: securities.map((s) => ({
+      securityType: s.securityType,
+      faceValue: parseFloat(String(s.faceValue ?? "0")) || 0,
+      isMatured: s.isMatured,
+    })),
+    secondaryMmfs: secondaries.map((s) => ({
+      mmfFundId: s.mmfFundId ?? null,
+      currentBalance: parseFloat(String(s.currentBalance ?? "0")) || 0,
+      ear: parseFloat(String(s.ear ?? "0")) || 0,
+    })),
+    bankHoldings: bank.map((b) => ({
+      principal: parseFloat(String(b.principal ?? "0")) || 0,
+      interestRate: parseFloat(String(b.interestRate ?? "0")) || 0,
+      isActive: b.isActive,
+      currentValue: parseFloat(String(b.currentValue ?? "0")) || 0,
+    })),
+    otherHoldings: other.map((h) => ({
+      assetClass: h.assetClass,
+      currentValue: parseFloat(String(h.currentValue ?? "0")) || 0,
+    })),
+    primaryFundId: p?.mmfFundId ?? null,
+  };
 }
 
 /** Run the projection for a portfolio with an OPTIONAL explicit clock override and rate-shock. */
@@ -3727,6 +3785,191 @@ export const appRouter = router({
         return { success: true };
       }),
   }),
+
+  /**
+   * Expansion Part 3 — "Model what I chose". Turns a catalog selection + the
+   * user's own inputs into a hypothetical PREVIEW (no writes) and, on commit, a
+   * tracked holding written through the EXISTING actuals path (`addOtherHolding`)
+   * with provenance + Change History. The engine projection band is untouched:
+   * other holdings are net-worth/allocation items, never MMF/gov lots, so we
+   * never fabricate an "it hits the goal sooner" engine number. Nothing here
+   * ranks, recommends, or auto-selects.
+   */
+  modeling: router({
+    /** Live side-by-side preview. No database writes. */
+    preview: protectedProcedure
+      .input(z.object({
+        portfolioId: z.number().int().positive(),
+        assetClass: z.enum(["equity", "reit", "offshore_fund", "cash_mmf", "bank_deposit", "gov_discount", "gov_coupon", "alt"]),
+        name: z.string().min(1).max(200),
+        amountKes: z.number().min(0).nullable().optional(),
+        units: z.number().min(0).nullable().optional(),
+        unitPrice: z.number().min(0).nullable().optional(),
+        currency: z.string().max(8).nullable().optional(),
+        fxRateToKes: z.number().min(0).nullable().optional(),
+        incomeRatePct: z.number().min(0).max(100).nullable().optional(),
+        assumedReturnConservative: z.number().min(-100).max(100).nullable().optional(),
+        assumedReturnBase: z.number().min(-100).max(100).nullable().optional(),
+        assumedReturnOptimistic: z.number().min(-100).max(100).nullable().optional(),
+        fundedFromLiquid: z.boolean().default(false),
+      }))
+      .query(async ({ ctx, input }) => {
+        const p = await requirePortfolio(input.portfolioId, ctx.user.id);
+        const modelingInput: ModelingInputs = {
+          assetClass: input.assetClass as AssetClass,
+          name: input.name,
+          amountKes: input.amountKes ?? null,
+          units: input.units ?? null,
+          unitPrice: input.unitPrice ?? null,
+          currency: input.currency ?? null,
+          fxRateToKes: input.fxRateToKes ?? null,
+          incomeRatePct: input.incomeRatePct ?? null,
+          assumedReturnConservative: input.assumedReturnConservative ?? null,
+          assumedReturnBase: input.assumedReturnBase ?? null,
+          assumedReturnOptimistic: input.assumedReturnOptimistic ?? null,
+        };
+        const issues = modelingIssues(modelingInput);
+        const amountKes = deriveAmountKes(modelingInput);
+
+        const allocInput = await loadAllocationInput(input.portfolioId, p);
+        const profile = profileFor(input.assetClass as AssetClass);
+        const horizonMonths = (p as { horizonMonths?: number }).horizonMonths ?? 120;
+        const preview = previewModelImpact({
+          allocationInput: allocInput,
+          registerAssetClass: registerClassForAssetClass(input.assetClass as AssetClass),
+          amountKes,
+          label: input.name,
+          fundedFromLiquid: input.fundedFromLiquid,
+          assumedReturnConservative: input.assumedReturnConservative ?? null,
+          assumedReturnBase: input.assumedReturnBase ?? null,
+          assumedReturnOptimistic: input.assumedReturnOptimistic ?? null,
+          horizonYears: horizonMonths / 12,
+        });
+        // Tax treatment for the income stream, via the single decision point.
+        const tax = taxFor({
+          assetClass: input.assetClass as AssetClass,
+          userRatePct: input.incomeRatePct == null ? null : undefined,
+        });
+        return {
+          amountKes,
+          issues,
+          valid: issues.length === 0,
+          priceDriven: profile.priceDriven,
+          fxExposed: profile.fxExposed,
+          incomeType: profile.incomeType,
+          tax,
+          preview,
+        };
+      }),
+
+    /**
+     * Commit a modeled holding through the EXISTING actuals path. Writes one
+     * `other_holdings` row (tagged by class, with provenance in notes) and an
+     * audit-log Change History entry. Test/Live is implicit: the row is written
+     * to whichever portfolio (sandbox or live) the user is operating.
+     */
+    commit: protectedProcedure
+      .input(z.object({
+        portfolioId: z.number().int().positive(),
+        assetClass: z.enum(["equity", "reit", "offshore_fund", "cash_mmf", "bank_deposit", "gov_discount", "gov_coupon", "alt"]),
+        name: z.string().min(1).max(200),
+        amountKes: z.number().min(0).nullable().optional(),
+        units: z.number().min(0).nullable().optional(),
+        unitPrice: z.number().min(0).nullable().optional(),
+        currency: z.string().max(8).nullable().optional(),
+        fxRateToKes: z.number().min(0).nullable().optional(),
+        incomeRatePct: z.number().min(0).max(100).nullable().optional(),
+        assumedReturnConservative: z.number().min(-100).max(100).nullable().optional(),
+        assumedReturnBase: z.number().min(-100).max(100).nullable().optional(),
+        assumedReturnOptimistic: z.number().min(-100).max(100).nullable().optional(),
+        entryDate: z.string().optional(),
+        catalogRef: z.string().max(120).nullable().optional(),
+        dataSource: z.string().max(200).nullable().optional(),
+        dataAsOf: z.string().max(40).nullable().optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const p = await requirePortfolio(input.portfolioId, ctx.user.id);
+        const now = getNow(p);
+        const entryIso = input.entryDate ?? formatUtcDate(now);
+        const modelingInput: ModelingInputs = {
+          assetClass: input.assetClass as AssetClass,
+          name: input.name,
+          amountKes: input.amountKes ?? null,
+          units: input.units ?? null,
+          unitPrice: input.unitPrice ?? null,
+          currency: input.currency ?? null,
+          fxRateToKes: input.fxRateToKes ?? null,
+          incomeRatePct: input.incomeRatePct ?? null,
+          assumedReturnConservative: input.assumedReturnConservative ?? null,
+          assumedReturnBase: input.assumedReturnBase ?? null,
+          assumedReturnOptimistic: input.assumedReturnOptimistic ?? null,
+          entryDateIso: entryIso,
+          catalogRef: input.catalogRef ?? null,
+          dataSource: input.dataSource ?? null,
+          dataAsOf: input.dataAsOf ?? null,
+        };
+        const issues = modelingIssues(modelingInput);
+        if (issues.length > 0) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: issues.join(" ") });
+        }
+        const draft = buildHoldingDraft(modelingInput);
+        const amountKes = deriveAmountKes(modelingInput);
+
+        const res = await addOtherHolding({
+          portfolioId: input.portfolioId,
+          assetClass: draft.registerAssetClass,
+          name: draft.name,
+          description: draft.description ?? undefined,
+          purchaseValue: String(draft.purchaseValue),
+          currentValue: String(draft.currentValue),
+          purchaseDate: draft.purchaseDate ? new Date(draft.purchaseDate) : undefined,
+          notes: draft.notes,
+          assumedReturnConservative: draft.assumedReturnConservative != null ? String(draft.assumedReturnConservative) : undefined,
+          assumedReturnBase: draft.assumedReturnBase != null ? String(draft.assumedReturnBase) : undefined,
+          assumedReturnOptimistic: draft.assumedReturnOptimistic != null ? String(draft.assumedReturnOptimistic) : undefined,
+        });
+        const newId = (res as { insertId?: number } | null)?.insertId ?? null;
+
+        await addAuditLog({
+          portfolioId: input.portfolioId,
+          entity: "other_holding",
+          entityId: newId ?? undefined,
+          action: "create",
+          field: "modeled_holding",
+          newValue: String(draft.currentValue),
+          changedByOpenId: ctx.user.openId,
+          changedByName: ctx.user.name ?? null,
+          summary: `Modeled "${draft.name}" from Explore (${profileFor(input.assetClass as AssetClass).label}) — KES ${amountKes.toLocaleString()} tracked as a holding`,
+        });
+
+        return { success: true, id: newId, amountKes };
+      }),
+
+    /**
+     * Exit/disposal preview for a modeled (or any) holding: proceeds, realised
+     * gain/loss and any user-supplied gain tax. Listed NSE shares are CGT-exempt,
+     * so the gain tax defaults to 0 unless a rate is supplied. No write.
+     */
+    exitPreview: protectedProcedure
+      .input(z.object({
+        portfolioId: z.number().int().positive(),
+        holdingId: z.number().int().positive(),
+        gainTaxRatePct: z.number().min(0).max(100).nullable().optional(),
+      }))
+      .query(async ({ ctx, input }) => {
+        await requirePortfolio(input.portfolioId, ctx.user.id);
+        const h = await getOtherHolding(input.holdingId, input.portfolioId);
+        if (!h) throw new TRPCError({ code: "NOT_FOUND", message: "Holding not found." });
+        const currentValue = parseFloat(String(h.currentValue ?? "0")) || 0;
+        const costBasis = parseFloat(String(h.purchaseValue ?? h.currentValue ?? "0")) || 0;
+        return computeExit({
+          currentValue,
+          costBasis,
+          gainTaxRatePct: input.gainTaxRatePct ?? 0,
+        });
+      }),
+  }),
+
   /** Secondary MMF accounts — additional MMF funds tracked per portfolio */
   secondaryMmfs: router({
     /** List all secondary MMF accounts for a portfolio. */

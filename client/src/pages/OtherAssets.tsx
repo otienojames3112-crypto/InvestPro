@@ -11,12 +11,13 @@ import { Separator } from "@/components/ui/separator";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
-import { Plus, Pencil, Trash2, TrendingUp, BookOpen, AlertTriangle, Info, ChevronDown, ChevronUp } from "lucide-react";
+import { Plus, Pencil, Trash2, TrendingUp, BookOpen, AlertTriangle, Info, ChevronDown, ChevronUp, LogOut, Sparkles } from "lucide-react";
 import { formatKES } from "@/lib/format";
 
 const ASSET_CLASSES = [
   { value: "real_estate", label: "Real Estate" },
   { value: "equity", label: "Equities / Stocks" },
+  { value: "etf", label: "ETF / Offshore Fund" },
   { value: "pension", label: "Pension / NSSF" },
   { value: "sacco", label: "SACCO Shares" },
   { value: "business", label: "Business / Enterprise" },
@@ -48,9 +49,15 @@ type Holding = {
   assumedReturnBase: number | null;
   assumedReturnOptimistic: number | null;
   notes: string | null;
-  createdAt: Date;
-  updatedAt: Date;
+  createdAt: Date | string;
+  updatedAt: Date | string;
 };
+
+// A modeled-from-Explore holding stamps a provenance line into notes.
+const MODELED_PREFIX = "Modeled from Explore";
+function isModeled(h: { notes: string | null }): boolean {
+  return !!h.notes && h.notes.startsWith(MODELED_PREFIX);
+}
 
 type IncomeRecord = {
   id: number;
@@ -262,17 +269,117 @@ function IncomeFormDialog({
   );
 }
 
+function ExitDialog({
+  open,
+  onClose,
+  holding,
+  portfolioId,
+  onConfirm,
+  confirming,
+}: {
+  open: boolean;
+  onClose: () => void;
+  holding: Holding;
+  portfolioId: number;
+  onConfirm: () => void;
+  confirming: boolean;
+}) {
+  // Listed NSE shares are CGT-exempt, so gain tax defaults to none; the user can
+  // supply a rate if their instrument is taxable. We never invent a rate.
+  const [taxRate, setTaxRate] = useState("");
+  const parsedRate = taxRate.trim() === "" ? null : parseFloat(taxRate);
+  const { data: exit, isLoading } = trpc.modeling.exitPreview.useQuery(
+    {
+      portfolioId,
+      holdingId: holding.id,
+      gainTaxRatePct: parsedRate != null && Number.isFinite(parsedRate) ? parsedRate : null,
+    },
+    { enabled: open },
+  );
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <LogOut className="w-4 h-4" /> Record exit — {holding.name}
+          </DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3 py-1">
+          <p className="text-xs text-muted-foreground">
+            Recording an exit returns the holding’s current value as cash and books the
+            realised gain or loss. A loss is simply a negative result — it is never charged
+            as a fee or penalty. This removes the holding from your register.
+          </p>
+          <div>
+            <Label>Gain tax rate (% — optional)</Label>
+            <Input
+              type="number"
+              step="0.1"
+              value={taxRate}
+              onChange={(e) => setTaxRate(e.target.value)}
+              placeholder="0 — listed NSE shares are CGT-exempt"
+            />
+            <p className="text-[11px] text-muted-foreground mt-1">
+              Leave blank for none. Applies only to a positive gain. You supply the rate —
+              the tool does not assume one.
+            </p>
+          </div>
+          <div className="rounded-md bg-muted/40 p-3 space-y-1.5 text-sm">
+            {isLoading || !exit ? (
+              <p className="text-xs text-muted-foreground">Calculating…</p>
+            ) : (
+              <>
+                <Row label="Proceeds (current value)" value={formatKES(exit.proceedsGross)} />
+                <Row label="Cost basis" value={formatKES(exit.costBasis)} />
+                <Row
+                  label="Realised gain / loss"
+                  value={`${exit.gainLoss >= 0 ? "+" : ""}${formatKES(exit.gainLoss)}`}
+                  emphasis={exit.gainLoss >= 0 ? "pos" : "neg"}
+                />
+                {exit.taxOnGain > 0 && (
+                  <Row label="Tax on gain" value={`-${formatKES(exit.taxOnGain)}`} emphasis="neg" />
+                )}
+                <Separator className="my-1" />
+                <Row label="Net proceeds to cash" value={formatKES(exit.proceedsNet)} strong />
+              </>
+            )}
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={confirming}>Cancel</Button>
+          <Button onClick={onConfirm} disabled={confirming || isLoading}>
+            {confirming ? "Recording…" : "Confirm exit"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function Row({ label, value, emphasis, strong }: { label: string; value: string; emphasis?: "pos" | "neg"; strong?: boolean }) {
+  const color = emphasis === "pos" ? "text-emerald-600 dark:text-emerald-400" : emphasis === "neg" ? "text-red-500" : "";
+  return (
+    <div className="flex items-center justify-between">
+      <span className="text-xs text-muted-foreground">{label}</span>
+      <span className={`${strong ? "font-semibold" : "font-medium"} ${color}`}>{value}</span>
+    </div>
+  );
+}
+
 function HoldingCard({
   holding,
   portfolioId,
   horizonYears,
   onEdit,
+  onExit,
   onDelete,
 }: {
   holding: Holding;
   portfolioId: number;
   horizonYears: number;
   onEdit: () => void;
+  onExit: () => void;
   onDelete: () => void;
 }) {
   const [showIncome, setShowIncome] = useState(false);
@@ -314,14 +421,22 @@ function HoldingCard({
             <div className="flex items-center gap-2 flex-wrap">
               <span className="font-semibold truncate">{holding.name}</span>
               <Badge variant="outline" className="text-xs shrink-0">{assetLabel}</Badge>
+              {isModeled(holding) && (
+                <Badge variant="secondary" className="text-xs shrink-0 gap-1">
+                  <Sparkles className="w-3 h-3" /> Modeled from Explore
+                </Badge>
+              )}
             </div>
             {holding.description && (
               <p className="text-xs text-muted-foreground mt-0.5">{holding.description}</p>
             )}
           </div>
           <div className="flex items-center gap-1 shrink-0">
-            <Button size="icon" variant="ghost" className="h-7 w-7" onClick={onEdit}>
+            <Button size="icon" variant="ghost" className="h-7 w-7" onClick={onEdit} title="Edit">
               <Pencil className="w-3 h-3" />
+            </Button>
+            <Button size="icon" variant="ghost" className="h-7 w-7" onClick={onExit} title="Record exit / disposal">
+              <LogOut className="w-3 h-3" />
             </Button>
             <Button size="icon" variant="ghost" className="h-7 w-7 text-destructive hover:text-destructive" onClick={onDelete}>
               <Trash2 className="w-3 h-3" />
@@ -444,6 +559,7 @@ export default function OtherAssets() {
   const [addOpen, setAddOpen] = useState(false);
   const [editHolding, setEditHolding] = useState<Holding | null>(null);
   const [deleteId, setDeleteId] = useState<number | null>(null);
+  const [exitHolding, setExitHolding] = useState<Holding | null>(null);
 
   const addMutation = trpc.otherHoldings.add.useMutation({
     onSuccess: () => { utils.otherHoldings.list.invalidate(); setAddOpen(false); toast.success("Asset added."); },
@@ -455,6 +571,13 @@ export default function OtherAssets() {
   });
   const deleteMutation = trpc.otherHoldings.delete.useMutation({
     onSuccess: () => { utils.otherHoldings.list.invalidate(); setDeleteId(null); toast.success("Asset removed."); },
+    onError: (e) => toast.error(e.message),
+  });
+  // Exit = realise the holding (return-of-capital). We reuse the existing delete
+  // path, which cascades its income records, after the user has seen the realised
+  // result in the exit preview.
+  const exitMutation = trpc.otherHoldings.delete.useMutation({
+    onSuccess: () => { utils.otherHoldings.list.invalidate(); setExitHolding(null); toast.success("Exit recorded — holding realised and removed."); },
     onError: (e) => toast.error(e.message),
   });
 
@@ -491,6 +614,7 @@ export default function OtherAssets() {
             Other assets — property, equities, pension — form the rest of your net worth.
             Tracking them together gives you a complete picture without mixing the projection math.
             Scenario returns entered here are <strong>your own assumptions</strong>, not forecasts.
+            Holdings you build with <strong>“Model in my plan”</strong> from Explore land here too, tagged as modeled.
           </p>
         </CardContent>
       </Card>
@@ -543,10 +667,23 @@ export default function OtherAssets() {
             portfolioId={portfolioId!}
             horizonYears={(portfolio?.horizonMonths ?? 120) / 12}
             onEdit={() => setEditHolding(h)}
+            onExit={() => setExitHolding(h)}
             onDelete={() => setDeleteId(h.id)}
           />
         ))}
       </div>
+
+      {/* Exit / disposal dialog */}
+      {exitHolding && portfolioId && (
+        <ExitDialog
+          open={!!exitHolding}
+          onClose={() => setExitHolding(null)}
+          holding={exitHolding}
+          portfolioId={portfolioId}
+          onConfirm={() => exitMutation.mutate({ id: exitHolding.id, portfolioId })}
+          confirming={exitMutation.isPending}
+        />
+      )}
 
       <p className="text-xs text-muted-foreground flex items-start gap-1">
         <Info className="w-3 h-3 mt-0.5 shrink-0" />

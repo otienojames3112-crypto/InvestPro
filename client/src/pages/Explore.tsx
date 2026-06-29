@@ -34,8 +34,10 @@ import {
   ChevronRight,
   Globe,
   FlaskConical,
+  ShieldCheck,
 } from "lucide-react";
 import { ASSET_CLASSES, profileFor, type AssetClass } from "@shared/assetModel";
+import { humanCheckedCount, figureCount, type FieldProvenanceMap } from "@shared/provenance";
 import { rateStaleness } from "@/lib/rateStaleness";
 import { usePortfolio } from "@/contexts/PortfolioContext";
 import type { inferRouterOutputs } from "@trpc/server";
@@ -345,6 +347,9 @@ function OpportunityRow({ r }: { r: Opportunity }) {
   const profile = profileFor(r.assetClass as AssetClass);
   const stale = rateStaleness(r.dataAsOf);
   const trailing = num(r.trailingReturnPct);
+  const fp = (r.fieldProvenance ?? {}) as FieldProvenanceMap;
+  const total = figureCount(fp);
+  const checked = humanCheckedCount(fp);
   return (
     <TableRow className="align-top">
       <TableCell>
@@ -400,6 +405,23 @@ function OpportunityRow({ r }: { r: Opportunity }) {
             {stale.label}{stale.isStale ? " · may be stale" : ""}
           </span>
         </div>
+        {total > 0 && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span
+                className={`inline-flex items-center gap-1 mt-1 text-[10px] font-medium cursor-help ${checked > 0 ? "text-emerald-600 dark:text-emerald-400" : "text-muted-foreground"}`}
+              >
+                <ShieldCheck className="w-3 h-3" />
+                {checked}/{total} checked
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="left" className="max-w-xs text-xs">
+              {checked > 0
+                ? `A person has confirmed or entered ${checked} of ${total} figures. Open the instrument to see which.`
+                : `None of these ${total} figures have been checked by a person yet — they are scraped from public sources. Open the instrument to confirm or edit them.`}
+            </TooltipContent>
+          </Tooltip>
+        )}
       </TableCell>
       <TableCell>
         <Link href={`/explore/${encodeURIComponent(r.ref)}`}>

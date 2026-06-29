@@ -1,4 +1,5 @@
 import { sql } from "drizzle-orm";
+import type { FieldProvenanceMap } from "../shared/provenance";
 import {
   int,
   mysqlEnum,
@@ -996,6 +997,22 @@ export const opportunities = mysqlTable("opportunities", {
   dataAsOf: timestamp("dataAsOf"),
   /** Whether any figure here was scraped/unverified (vs. an official feed). */
   unverified: boolean("unverified").notNull().default(true),
+
+  // ── Part 7.1: per-figure provenance & verification lifecycle. ──
+  /**
+   * JSON map keyed by FieldKey (price | yield | coupon | tenor | maturity |
+   * distribution | fx | expense | trailingReturn). Each entry is a FieldProvenance
+   * (shared/provenance.ts): value, source, sourceUrl, asOf, fetchedAt,
+   * verificationState, verifiedBy, verifiedAt. This is where per-figure source and
+   * human-verification state live so trust travels with each individual number.
+   */
+  fieldProvenance: json("fieldProvenance").$type<FieldProvenanceMap>(),
+  /**
+   * Row-level summary verification state, derived from the figures: the highest
+   * human attention any figure has received (or scraped_unverified). Stored for
+   * cheap list-level badges; the per-figure map remains the source of truth.
+   */
+  verificationState: varchar("verificationState", { length: 24 }).notNull().default("scraped_unverified"),
 
   /** Soft-hide a row without deleting it (e.g. delisted) — neutral lifecycle, not curation. */
   active: boolean("active").notNull().default(true),

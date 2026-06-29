@@ -88,8 +88,10 @@ import {
   getOpportunityByRef,
   countOpportunities,
   upsertOpportunity,
+  verifyOpportunityField,
 } from "./db";
 import { OPPORTUNITY_SEED } from "./opportunitySeed";
+import { FIELD_KEYS, type VerifyAction } from "../shared/provenance";
 import { notifyOwner } from "./_core/notification";
 import { createHeartbeatJob, updateHeartbeatJob, deleteHeartbeatJob } from "./_core/heartbeat";
 import { parse as parseCookie } from "cookie";
@@ -954,6 +956,58 @@ export const appRouter = router({
         const row = await getOpportunityByRef(input.ref);
         if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "Opportunity not found" });
         return row;
+      }),
+
+    // ── Part 7.1: per-figure human verification ──────────────────────────────
+    // A signed-in person can CONFIRM a scraped figure (trust -> human_verified)
+    // or OVERRIDE it with their own value (trust -> human_entered). This raises
+    // the figure's verification state; it is the ONLY way a figure leaves the
+    // scraped_unverified state. An override MUST change both the value and the
+    // state — a silent number-only change is rejected. This neither ranks nor
+    // recommends anything; it only records who vouched for which number.
+    verifyField: protectedProcedure
+      .input(
+        z.object({
+          ref: z.string().min(1),
+          fieldKey: z.enum(FIELD_KEYS),
+          action: z.discriminatedUnion("kind", [
+            z.object({ kind: z.literal("confirm") }),
+            z.object({ kind: z.literal("override"), value: z.string().min(1).max(64) }),
+          ]),
+        }),
+      )
+      .mutation(async ({ ctx, input }) => {
+        const row = await getOpportunityByRef(input.ref);
+        if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "Opportunity not found" });
+        const map = (row.fieldProvenance ?? {}) as Record<string, { value: string | null } | undefined>;
+        const existing = map[input.fieldKey];
+        if (!existing) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "This instrument does not expose that figure.",
+          });
+        }
+        // Guard: an override must actually CHANGE the number. A no-op value edit
+        // that only flips the state would be a silent number-untouched change,
+        // which the model forbids; reject it explicitly.
+        if (input.action.kind === "override" && input.action.value === (existing.value ?? "")) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "To override, enter a different value. Use Confirm to keep the current value.",
+          });
+        }
+        const by = ctx.user.name ?? ctx.user.email ?? "You";
+        const action: VerifyAction =
+          input.action.kind === "confirm"
+            ? { kind: "confirm", by, at: Date.now() }
+            : { kind: "override", by, at: Date.now(), value: input.action.value };
+        const updated = await verifyOpportunityField({
+          ref: input.ref,
+          fieldKey: input.fieldKey,
+          action,
+        });
+        if (!updated) throw new TRPCError({ code: "NOT_FOUND", message: "Figure not found" });
+        return { ref: input.ref, fieldKey: input.fieldKey, provenance: updated };
       }),
   }),
 

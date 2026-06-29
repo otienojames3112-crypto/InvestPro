@@ -31,6 +31,14 @@ import {
 } from "../drizzle/schema";
 import { ENV } from "./_core/env";
 import { computeActualsTotals, estInterestToDate, govAccruedInterestTotal } from "../shared/actuals";
+import {
+  applyVerification,
+  summariseState,
+  type FieldKey,
+  type FieldProvenance,
+  type FieldProvenanceMap,
+  type VerifyAction,
+} from "../shared/provenance";
 
 let _db: ReturnType<typeof drizzle> | null = null;
 
@@ -1469,4 +1477,41 @@ export async function upsertOpportunity(data: InsertOpportunity): Promise<void> 
   } else {
     await db.insert(opportunities).values(data);
   }
+}
+
+/**
+ * Part 7.1: apply a single human verification action (confirm | override) to ONE
+ * figure of an opportunity, then persist the updated per-figure map and the
+ * derived row-level summary state. This is the only write path that changes a
+ * figure's verification state, and it goes through the pure `applyVerification`
+ * helper so the invariants (human action raises trust; an override changes BOTH
+ * value AND state; a confirm never lowers an already-entered figure) hold.
+ *
+ * Returns the updated FieldProvenance for the affected figure, or null when the
+ * row/figure does not exist.
+ */
+export async function verifyOpportunityField(args: {
+  ref: string;
+  fieldKey: FieldKey;
+  action: VerifyAction;
+}): Promise<FieldProvenance | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db
+    .select()
+    .from(opportunities)
+    .where(eq(opportunities.ref, args.ref))
+    .limit(1);
+  const row = rows[0];
+  if (!row) return null;
+  const map: FieldProvenanceMap = { ...((row.fieldProvenance as FieldProvenanceMap | null) ?? {}) };
+  const existing = map[args.fieldKey];
+  if (!existing) return null; // never invent a figure that the instrument doesn't expose
+  const updated = applyVerification(existing, args.action);
+  map[args.fieldKey] = updated;
+  await db
+    .update(opportunities)
+    .set({ fieldProvenance: map, verificationState: summariseState(map) })
+    .where(eq(opportunities.ref, args.ref));
+  return updated;
 }

@@ -38,10 +38,11 @@ function fmtAsOf(ms: number | null): string {
 }
 
 export default function SourceConflicts() {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, user } = useAuth();
+  const isMaintainer = user?.role === "admin";
   const utils = trpc.useUtils();
   const { data, isLoading } = trpc.opportunities.conflicts.useQuery(undefined, {
-    enabled: isAuthenticated,
+    enabled: isMaintainer,
   });
 
   const resolve = trpc.opportunities.resolveConflict.useMutation({
@@ -59,7 +60,7 @@ export default function SourceConflicts() {
     onError: (err) => toast.error(err.message),
   });
 
-  if (!isAuthenticated) {
+  if (!isMaintainer) {
     return (
       <AppShell>
         <div className="container py-10 max-w-3xl">
@@ -69,14 +70,16 @@ export default function SourceConflicts() {
                 <GitCompareArrows className="w-5 h-5 text-primary" /> Source Conflicts
               </CardTitle>
               <CardDescription>
-                Sign in to review figures where a fresh data pull disagrees with a value you checked.
+                {isAuthenticated
+                  ? "Reviewing and resolving source conflicts is a maintainer-only task. Ask an administrator for access."
+                  : "Sign in as a maintainer to review figures where a fresh data pull disagrees with a checked value."}
               </CardDescription>
             </CardHeader>
-            <CardContent>
-              <Button onClick={() => (window.location.href = getLoginUrl())}>
-                Sign in
-              </Button>
-            </CardContent>
+            {!isAuthenticated && (
+              <CardContent>
+                <Button onClick={() => (window.location.href = getLoginUrl())}>Sign in</Button>
+              </CardContent>
+            )}
           </Card>
         </div>
       </AppShell>

@@ -889,3 +889,23 @@
 - [x] Conflict review surface: tRPC procedures (owner-gated) + Source Conflicts page (Keep mine / Use scraped value via human override) + sidebar open-count badge
 - [x] Tests: 21 adapter (facts + drift-fails-loudly + bright-line), 5 reconcile (no-clobber/agree/disagree), 4 runner (fixture-driven, no network); full suite 923 green; tsc clean
 - [x] Live end-to-end proof: a disagreeing scrape (8.60) did NOT clobber a human-entered yield (7.77); it raised one open conflict; DB restored clean afterwards
+
+## Expansion Brief — Part 7.3 (human override & verification workflow)
+
+- [x] Editor/admin gating: verifyField/conflicts/resolveConflict/runIngestion/addOpportunity now adminProcedure
+- [x] Edit any field with authoritative value + source → human_entered (override now carries source/sourceUrl/asOf)
+- [x] Confirm a scraped figure as correct → scraped_unverified promotes to human_verified (existing path, now admin)
+- [x] Resolve 7.2 conflicts from the workflow (keep mine / apply scraped as human_entered) — admin-gated
+- [x] Add a new instrument by hand (addOpportunity mutation; figures land human_entered with citation)
+- [ ] End-user Explore/Detail: quiet "verified" marker on human_verified, "may be stale" on stale, plain to read
+- [ ] Tests: edit-with-source transition, confirm transition, gating rejection, add-instrument, conflict apply; full suite + tsc
+
+## Expansion Brief — Part 7.3 (UI + tests)
+
+- [x] Detail page: verify/confirm controls gated on maintainer role (admin), not merely signed-in
+- [x] Detail Edit flow captures authoritative Source / Source URL and threads them into the override
+- [x] End-user verification markers use viewer-neutral wording (Verified / Maintainer-entered / Unverified scrape / May be stale)
+- [x] "Add instrument by hand" maintainer page (/explore/new) + route ordered before /explore/:ref
+- [x] Maintainer-only "Add instrument" button on Explore; Source Conflicts gated on maintainer role
+- [x] Tests: humanField + override-with-source (pure), admin gating (FORBIDDEN 10002), addOpportunity happy-path + duplicate-ref
+- [x] Full suite green (934) + tsc clean; live no-leftover verified (test row deactivated in teardown)

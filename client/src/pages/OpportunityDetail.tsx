@@ -24,7 +24,7 @@ import {
 import { profileFor, type AssetClass } from "@shared/assetModel";
 import {
   effectiveState,
-  stateLabel,
+  viewerStateLabel,
   isHumanChecked,
   humanCheckedCount,
   figureCount,
@@ -67,7 +67,7 @@ const NOW = Date.now();
 /** Small coloured badge describing a figure's effective verification state. */
 function VerificationBadge({ p }: { p: FieldProvenance }) {
   const eff = effectiveState(p, NOW);
-  const label = stateLabel(eff);
+  const label = viewerStateLabel(eff);
   const cls =
     eff === "human_verified"
       ? "border-emerald-500/40 text-emerald-600 dark:text-emerald-400"
@@ -116,6 +116,8 @@ function Fact({
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(provenance?.value ?? "");
+  const [srcDraft, setSrcDraft] = useState("");
+  const [srcUrlDraft, setSrcUrlDraft] = useState("");
 
   const verify = trpc.opportunities.verifyField.useMutation({
     onSuccess: () => {
@@ -183,7 +185,7 @@ function Fact({
         </div>
       )}
 
-      {/* "checked by you" line */}
+      {/* "checked by a person" line — neutral so end-users can trust it regardless of who they are */}
       {checked && provenance?.verifiedBy && provenance?.verifiedAt && (
         <p className="text-[10px] text-emerald-600 dark:text-emerald-400 mt-1">
           {provenance.verificationState === "human_entered" ? "Entered" : "Checked"} by{" "}
@@ -227,36 +229,65 @@ function Fact({
       )}
 
       {canAct && editing && (
-        <div className="flex items-center gap-2 mt-2">
-          <Input
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            className="h-7 w-28 text-xs"
-            placeholder="New value"
-            autoFocus
-          />
-          <Button
-            size="sm"
-            className="h-7 px-2 text-[11px] active:scale-[0.97] transition-transform"
-            disabled={verify.isPending || draft.trim() === "" || draft.trim() === (provenance?.value ?? "")}
-            onClick={() =>
-              verify.mutate({
-                ref: opportunityRef,
-                fieldKey: fieldKey!,
-                action: { kind: "override", value: draft.trim() },
-              })
-            }
-          >
-            Save my value
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            className="h-7 px-2 text-[11px]"
-            onClick={() => setEditing(false)}
-          >
-            Cancel
-          </Button>
+        <div className="mt-2 space-y-2 rounded-md border border-border bg-muted/30 p-2.5">
+          <p className="text-[10px] text-muted-foreground">
+            Enter the authoritative value and where it came from. This records it as
+            <strong> entered by you</strong> and stamps your name.
+          </p>
+          <div className="flex flex-wrap items-center gap-2">
+            <Input
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              className="h-7 w-28 text-xs"
+              placeholder="New value"
+              autoFocus
+            />
+            <Input
+              value={srcDraft}
+              onChange={(e) => setSrcDraft(e.target.value)}
+              className="h-7 w-52 text-xs"
+              placeholder='Source (e.g. "ILAM fact sheet Q1-2026")'
+            />
+            <Input
+              value={srcUrlDraft}
+              onChange={(e) => setSrcUrlDraft(e.target.value)}
+              className="h-7 w-52 text-xs"
+              placeholder="Source URL (optional)"
+            />
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              className="h-7 px-2 text-[11px] active:scale-[0.97] transition-transform"
+              disabled={verify.isPending || draft.trim() === "" || draft.trim() === (provenance?.value ?? "")}
+              onClick={() =>
+                verify.mutate({
+                  ref: opportunityRef,
+                  fieldKey: fieldKey!,
+                  action: {
+                    kind: "override",
+                    value: draft.trim(),
+                    ...(srcDraft.trim() !== "" ? { source: srcDraft.trim() } : {}),
+                    ...(srcUrlDraft.trim() !== "" ? { sourceUrl: srcUrlDraft.trim() } : {}),
+                  },
+                })
+              }
+            >
+              Save my value
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 px-2 text-[11px]"
+              onClick={() => {
+                setEditing(false);
+                setSrcDraft("");
+                setSrcUrlDraft("");
+              }}
+            >
+              Cancel
+            </Button>
+          </div>
         </div>
       )}
     </div>
@@ -268,7 +299,8 @@ export default function OpportunityDetail() {
   const ref = decodeURIComponent(params.ref ?? "");
   const [, navigate] = useLocation();
   const { mode } = usePortfolio();
-  const { isAuthenticated } = useAuth();
+  const { user } = useAuth();
+  const isMaintainer = user?.role === "admin";
   const [modelOpen, setModelOpen] = useState(false);
   const utils = trpc.useUtils();
 
@@ -394,9 +426,9 @@ export default function OpportunityDetail() {
             <CardTitle className="text-base">Sourced facts</CardTitle>
             <CardDescription className="text-xs">
               Each figure carries its own source and as-of date.
-              {isAuthenticated
-                ? " Confirm a figure if it looks right, or edit it to enter your own — either raises its trust."
-                : " Sign in to confirm or edit a figure."}
+              {isMaintainer
+                ? " As a maintainer you can confirm a figure if it looks right, or edit it to enter the authoritative value and source — either raises its trust."
+                : " A green marker means a maintainer has checked that figure; unmarked figures are scraped from public sources."}
             </CardDescription>
           </CardHeader>
           <CardContent className="divide-y divide-border">
@@ -409,7 +441,7 @@ export default function OpportunityDetail() {
                 provenance={yieldIsDistribution ? fp.distribution : fp.yield}
                 fallbackSource={r.dataSource}
                 fallbackAsOf={r.dataAsOf}
-                canVerify={isAuthenticated}
+                canVerify={isMaintainer}
                 onVerified={onVerified}
               />
             )}
@@ -422,7 +454,7 @@ export default function OpportunityDetail() {
                 provenance={fp.price}
                 fallbackSource={r.dataSource}
                 fallbackAsOf={r.dataAsOf}
-                canVerify={isAuthenticated}
+                canVerify={isMaintainer}
                 onVerified={onVerified}
               />
             )}
@@ -436,7 +468,7 @@ export default function OpportunityDetail() {
                 fallbackSource={r.dataSource}
                 fallbackAsOf={r.dataAsOf}
                 caution="Past performance — describes what already happened and does not predict future results."
-                canVerify={isAuthenticated}
+                canVerify={isMaintainer}
                 onVerified={onVerified}
               />
             )}
@@ -449,7 +481,7 @@ export default function OpportunityDetail() {
                 provenance={fp.expense}
                 fallbackSource={r.dataSource}
                 fallbackAsOf={r.dataAsOf}
-                canVerify={isAuthenticated}
+                canVerify={isMaintainer}
                 onVerified={onVerified}
               />
             )}
@@ -462,7 +494,7 @@ export default function OpportunityDetail() {
                 provenance={fp.tenor}
                 fallbackSource={r.dataSource}
                 fallbackAsOf={r.dataAsOf}
-                canVerify={isAuthenticated}
+                canVerify={isMaintainer}
                 onVerified={onVerified}
               />
             )}
@@ -475,7 +507,7 @@ export default function OpportunityDetail() {
                 provenance={fp.maturity}
                 fallbackSource={r.dataSource}
                 fallbackAsOf={r.dataAsOf}
-                canVerify={isAuthenticated}
+                canVerify={isMaintainer}
                 onVerified={onVerified}
               />
             )}

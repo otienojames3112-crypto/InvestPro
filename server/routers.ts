@@ -1,7 +1,7 @@
 import { TRPCError } from "@trpc/server";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
-import { protectedProcedure, publicProcedure, router } from "./_core/trpc";
+import { adminProcedure, protectedProcedure, publicProcedure, router } from "./_core/trpc";
 import { z } from "zod";
 import {
   getPortfolios,
@@ -94,7 +94,17 @@ import {
   resolveIngestionConflict,
 } from "./db";
 import { OPPORTUNITY_SEED } from "./opportunitySeed";
-import { FIELD_KEYS, isFieldKey, type VerifyAction } from "../shared/provenance";
+import {
+  FIELD_KEYS,
+  isFieldKey,
+  humanField,
+  type VerifyAction,
+  type FieldKey,
+  type FieldProvenance,
+  type FieldProvenanceMap,
+} from "../shared/provenance";
+import { summariseState } from "../shared/provenance";
+import type { InsertOpportunity } from "../drizzle/schema";
 import { runAdapter } from "./ingestion/runner";
 import { ADAPTERS } from "./ingestion/adapters";
 import { SOURCE_IDS } from "../shared/ingestion";
@@ -971,14 +981,22 @@ export const appRouter = router({
     // scraped_unverified state. An override MUST change both the value and the
     // state — a silent number-only change is rejected. This neither ranks nor
     // recommends anything; it only records who vouched for which number.
-    verifyField: protectedProcedure
+    verifyField: adminProcedure
       .input(
         z.object({
           ref: z.string().min(1),
           fieldKey: z.enum(FIELD_KEYS),
           action: z.discriminatedUnion("kind", [
             z.object({ kind: z.literal("confirm") }),
-            z.object({ kind: z.literal("override"), value: z.string().min(1).max(64) }),
+            z.object({
+              kind: z.literal("override"),
+              value: z.string().min(1).max(64),
+              // When a maintainer corrects/enters a figure they may record WHERE the
+              // authoritative value came from. Optional so a quick correction still works.
+              source: z.string().max(200).optional(),
+              sourceUrl: z.string().url().max(500).optional().or(z.literal("")),
+              asOf: z.number().int().positive().optional(),
+            }),
           ]),
         }),
       )
@@ -1006,7 +1024,15 @@ export const appRouter = router({
         const action: VerifyAction =
           input.action.kind === "confirm"
             ? { kind: "confirm", by, at: Date.now() }
-            : { kind: "override", by, at: Date.now(), value: input.action.value };
+            : {
+                kind: "override",
+                by,
+                at: Date.now(),
+                value: input.action.value,
+                source: input.action.source,
+                sourceUrl: input.action.sourceUrl === "" ? null : input.action.sourceUrl,
+                asOf: input.action.asOf,
+              };
         const updated = await verifyOpportunityField({
           ref: input.ref,
           fieldKey: input.fieldKey,
@@ -1024,7 +1050,7 @@ export const appRouter = router({
     // the human value; `apply` writes the scraped value through the SAME verify
     // mutation, so an applied scrape becomes `human_entered` (human attention),
     // not a silent overwrite. There is no ranking anywhere in this surface.
-    conflicts: protectedProcedure.query(async () => {
+    conflicts: adminProcedure.query(async () => {
       const open = await listIngestionConflicts(true);
       return { conflicts: open, openCount: open.length };
     }),
@@ -1033,7 +1059,7 @@ export const appRouter = router({
       return { count: await countOpenConflicts() };
     }),
 
-    resolveConflict: protectedProcedure
+    resolveConflict: adminProcedure
       .input(
         z.object({
           id: z.number().int().positive(),
@@ -1072,12 +1098,100 @@ export const appRouter = router({
     // Manual trigger for one source (owner-initiated dry-run / refresh). The cron
     // job runs all sources on cadence; this is for an on-demand pull. It still
     // upserts as scraped_unverified and flags (never applies) conflicts.
-    runIngestion: protectedProcedure
+    runIngestion: adminProcedure
       .input(z.object({ sourceId: z.enum(SOURCE_IDS) }))
       .mutation(async ({ input }) => {
         const adapter = ADAPTERS[input.sourceId];
         const report = await runAdapter(adapter);
         return report;
+      }),
+
+    // ── Part 7.3: add an instrument by hand ──────────────────────────────────
+    // The catalog must NOT be gated on a scraper existing for every source. A
+    // maintainer can author an instrument directly; every figure they supply is
+    // recorded as `human_entered` (a person authored it) with their citation, and
+    // the row's numeric columns are kept in lock-step with the per-figure map.
+    // This neither ranks nor scores anything; it only records facts + provenance.
+    addOpportunity: adminProcedure
+      .input(
+        z.object({
+          ref: z.string().min(1).max(64),
+          name: z.string().min(1).max(200),
+          assetClass: z.string().min(1).max(32),
+          issuer: z.string().max(200).optional(),
+          currency: z.string().min(1).max(8).default("KES"),
+          market: z.string().max(64).optional(),
+          liquidity: z.string().max(32).optional(),
+          factNote: z.string().max(2000).optional(),
+          // The authoritative origin the maintainer is citing for ALL supplied figures.
+          source: z.string().min(1).max(200),
+          sourceUrl: z.string().url().max(500).optional().or(z.literal("")),
+          asOf: z.number().int().positive().optional(),
+          // Factual figures (all optional; only set the ones that apply to the asset).
+          figures: z
+            .object({
+              yieldPct: z.number().optional(),
+              yieldKind: z.string().max(48).optional(),
+              lastPrice: z.number().optional(),
+              trailingReturnPct: z.number().optional(),
+              tenorYears: z.number().optional(),
+              maturityDate: z.string().max(32).optional(), // ISO date string
+              expenseRatioPct: z.number().optional(),
+            })
+            .default({}),
+        }),
+      )
+      .mutation(async ({ ctx, input }) => {
+        const existing = await getOpportunityByRef(input.ref);
+        if (existing) {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: `An instrument with ref "${input.ref}" already exists. Edit it instead.`,
+          });
+        }
+        const by = ctx.user.name ?? ctx.user.email ?? "You";
+        const at = Date.now();
+        const asOf = input.asOf ?? at;
+        const sourceUrl = input.sourceUrl === "" ? null : (input.sourceUrl ?? null);
+        const mk = (value: string | null): FieldProvenance =>
+          humanField({ value, source: input.source, sourceUrl, asOf, by, at });
+
+        // Build the per-figure provenance map from whichever figures were supplied.
+        const f = input.figures;
+        const map: FieldProvenanceMap = {};
+        if (f.yieldPct !== undefined) map.yield = mk(String(f.yieldPct));
+        if (f.lastPrice !== undefined) map.price = mk(String(f.lastPrice));
+        if (f.trailingReturnPct !== undefined) map.trailingReturn = mk(String(f.trailingReturnPct));
+        if (f.tenorYears !== undefined) map.tenor = mk(String(f.tenorYears));
+        if (f.maturityDate !== undefined) map.maturity = mk(f.maturityDate);
+        if (f.expenseRatioPct !== undefined) map.expense = mk(String(f.expenseRatioPct));
+
+        const row: InsertOpportunity = {
+          ref: input.ref,
+          name: input.name,
+          assetClass: input.assetClass,
+          issuer: input.issuer ?? null,
+          currency: input.currency,
+          market: input.market ?? null,
+          liquidity: input.liquidity ?? null,
+          factNote: input.factNote ?? null,
+          yieldPct: f.yieldPct !== undefined ? String(f.yieldPct) : null,
+          yieldKind: f.yieldKind ?? null,
+          lastPrice: f.lastPrice !== undefined ? String(f.lastPrice) : null,
+          trailingReturnPct: f.trailingReturnPct !== undefined ? String(f.trailingReturnPct) : null,
+          tenorYears: f.tenorYears !== undefined ? String(f.tenorYears) : null,
+          maturityDate: f.maturityDate ? new Date(f.maturityDate) : null,
+          expenseRatioPct: f.expenseRatioPct !== undefined ? String(f.expenseRatioPct) : null,
+          dataSource: input.source,
+          dataAsOf: new Date(asOf),
+          unverified: false, // a person authored it
+          fieldProvenance: map,
+          verificationState: summariseState(map),
+          active: true,
+        };
+        await upsertOpportunity(row);
+        const saved = await getOpportunityByRef(input.ref);
+        return { ref: input.ref, opportunity: saved };
       }),
   }),
 

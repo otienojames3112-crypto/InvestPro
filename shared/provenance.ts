@@ -144,6 +144,33 @@ export function scrapedField(args: {
 }
 
 /**
+ * Build a fresh HUMAN-ENTERED figure provenance entry (used when a maintainer adds
+ * an instrument by hand or types an authoritative value). The figure starts at
+ * `human_entered` — a real person authored it — and carries who entered it and when,
+ * plus the authoritative source they cited. This is the hand-entry counterpart of
+ * `scrapedField`; it never ranks or scores anything, it only records origin + trust.
+ */
+export function humanField(args: {
+  value: string | null;
+  source: string | null;
+  sourceUrl?: string | null;
+  asOf?: number | null;
+  by: string;
+  at: number;
+}): FieldProvenance {
+  return {
+    value: args.value,
+    source: args.source && args.source.trim() !== "" ? args.source.trim() : "Entered by you",
+    sourceUrl: args.sourceUrl && args.sourceUrl.trim() !== "" ? args.sourceUrl.trim() : null,
+    asOf: args.asOf ?? args.at,
+    fetchedAt: args.at,
+    verificationState: "human_entered",
+    verifiedBy: args.by,
+    verifiedAt: args.at,
+  };
+}
+
+/**
  * The effective DISPLAY state of a figure given the current time. A human-checked
  * figure is shown with its human state regardless of age (a person vouched for it).
  * A scraped figure whose as-of date is older than the stale threshold and which no
@@ -166,7 +193,18 @@ export function isStaleForDisplay(p: FieldProvenance, nowMs: number): boolean {
 
 export type VerifyAction =
   | { kind: "confirm"; by: string; at: number }
-  | { kind: "override"; by: string; at: number; value: string };
+  | {
+      kind: "override";
+      by: string;
+      at: number;
+      value: string;
+      /** Authoritative origin the human took the value from, e.g. "ILAM fact sheet Q1-2026". */
+      source?: string | null;
+      /** Direct link to that origin, where one exists. */
+      sourceUrl?: string | null;
+      /** As-of timestamp of the human's figure (epoch ms UTC). Defaults to `at`. */
+      asOf?: number | null;
+    };
 
 /**
  * Apply a human verification action to a figure. This is the heart of Part 7.1:
@@ -193,10 +231,17 @@ export function applyVerification(p: FieldProvenance, action: VerifyAction): Fie
     verifiedBy: action.by,
     verifiedAt: action.at,
   };
-  // When a human re-enters, the figure is now their figure as-of now.
+  // When a human re-enters, the figure is now THEIR figure. If they recorded where
+  // the authoritative value came from, that origin replaces the old scraped source;
+  // otherwise we keep the prior source (or mark it as hand-entered).
   if (action.kind === "override") {
-    next.asOf = action.at;
-    next.source = p.source ?? "Entered by you";
+    next.asOf = action.asOf ?? action.at;
+    if (action.source !== undefined) {
+      next.source = action.source && action.source.trim() !== "" ? action.source.trim() : "Entered by you";
+      next.sourceUrl = action.sourceUrl && action.sourceUrl.trim() !== "" ? action.sourceUrl.trim() : null;
+    } else {
+      next.source = p.source ?? "Entered by you";
+    }
   }
   return next;
 }
@@ -228,7 +273,7 @@ export function figureCount(map: FieldProvenanceMap): number {
   return Object.values(map).filter((p) => !!p).length;
 }
 
-/** Short human label for a verification state (for badges). */
+/** Short human label for a verification state (for badges, first-person/maintainer view). */
 export function stateLabel(s: VerificationState): string {
   switch (s) {
     case "human_verified":
@@ -240,6 +285,26 @@ export function stateLabel(s: VerificationState): string {
     case "scraped_unverified":
     default:
       return "Unverified";
+  }
+}
+
+/**
+ * Viewer-neutral label for the END-USER view. A reader of the catalog wants to
+ * know whether a *person* has checked a figure (not whether *they themselves*
+ * did), so this phrases it impersonally. Use this on public-facing Explore/Detail
+ * markers; use `stateLabel` only where the current user is the actor.
+ */
+export function viewerStateLabel(s: VerificationState): string {
+  switch (s) {
+    case "human_verified":
+      return "Verified";
+    case "human_entered":
+      return "Maintainer-entered";
+    case "stale":
+      return "May be stale";
+    case "scraped_unverified":
+    default:
+      return "Unverified scrape";
   }
 }
 

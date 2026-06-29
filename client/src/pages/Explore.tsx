@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
-import { Link } from "wouter";
+import { Link, useLocation } from "wouter";
+import { useAuth } from "@/_core/hooks/useAuth";
 import { AppShell } from "@/components/AppShell";
 import { trpc } from "@/lib/trpc";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -35,6 +36,7 @@ import {
   Globe,
   FlaskConical,
   ShieldCheck,
+  PlusCircle,
 } from "lucide-react";
 import { ASSET_CLASSES, profileFor, type AssetClass } from "@shared/assetModel";
 import { humanCheckedCount, figureCount, type FieldProvenanceMap } from "@shared/provenance";
@@ -93,6 +95,9 @@ function fmtPrice(v: string | null, currency: string): string {
 
 export default function Explore() {
   const { mode } = usePortfolio();
+  const { user } = useAuth();
+  const isMaintainer = user?.role === "admin";
+  const [, navigate] = useLocation();
   const { data: rows = [], isLoading } = trpc.opportunities.list.useQuery();
 
   // ── User-controlled filters (the user narrows; the tool never pre-filters) ──
@@ -198,9 +203,21 @@ export default function Explore() {
               filter, and compare.
             </p>
           </div>
-          <Badge variant="outline" className="text-xs px-2.5 py-1 gap-1.5">
-            <Info className="w-3 h-3" /> Information only
-          </Badge>
+          <div className="flex items-center gap-2">
+            {isMaintainer && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => navigate("/explore/new")}
+                className="active:scale-[0.97] transition-transform"
+              >
+                <PlusCircle className="w-4 h-4 mr-1.5" /> Add instrument
+              </Button>
+            )}
+            <Badge variant="outline" className="text-xs px-2.5 py-1 gap-1.5">
+              <Info className="w-3 h-3" /> Information only
+            </Badge>
+          </div>
         </div>
 
         {/* Persistent disclaimer — always visible, not dismissible */}

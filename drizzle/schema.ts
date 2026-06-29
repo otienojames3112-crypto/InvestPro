@@ -1014,6 +1014,14 @@ export const opportunities = mysqlTable("opportunities", {
    */
   verificationState: varchar("verificationState", { length: 24 }).notNull().default("scraped_unverified"),
 
+  /**
+   * Part 8.1 — storage keys of screenshots/images a maintainer uploaded as the SOURCE
+   * for an AI image extraction on this row. Kept so the review queue can render a
+   * thumbnail of the original next to each AI-extracted figure (confirm-against-source).
+   * Append-only list of storage keys; never file bytes. Null for non-image instruments.
+   */
+  aiSourceImageKeys: json("aiSourceImageKeys").$type<string[]>(),
+
   /** Soft-hide a row without deleting it (e.g. delisted) — neutral lifecycle, not curation. */
   active: boolean("active").notNull().default(true),
 

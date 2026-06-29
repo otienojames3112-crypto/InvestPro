@@ -36,6 +36,8 @@ import {
   Search,
   AlertTriangle,
   User as UserIcon,
+  Image as ImageIcon,
+  Maximize2,
 } from "lucide-react";
 import type { FieldProvenance, FieldProvenanceMap, FieldKey } from "@shared/provenance";
 import { InfoHint } from "@/components/InfoHint";
@@ -334,6 +336,7 @@ function ReviewQueue() {
           row={item.row}
           aiFigureCount={item.aiFigureCount}
           hiddenFromCatalog={item.hiddenFromCatalog}
+          sourceImageUrls={item.sourceImageUrls ?? []}
         />
       ))}
     </div>
@@ -353,10 +356,12 @@ function InstrumentReviewCard({
   row,
   aiFigureCount,
   hiddenFromCatalog,
+  sourceImageUrls,
 }: {
   row: Row;
   aiFigureCount: number;
   hiddenFromCatalog: boolean;
+  sourceImageUrls: string[];
 }) {
   const map = (row.fieldProvenance ?? {}) as FieldProvenanceMap;
   // Only the figures still awaiting confirmation (ai_extracted) belong in the queue.
@@ -409,6 +414,9 @@ function InstrumentReviewCard({
         )}
       </CardHeader>
       <CardContent className="space-y-3">
+        {/* Part 8.1 — the original screenshot(s) this row's AI figures were read from, so a
+            reviewer can verify each value against the picture without re-opening a file. */}
+        {sourceImageUrls.length > 0 && <SourceScreenshots urls={sourceImageUrls} />}
         <p className="text-xs text-muted-foreground">
           {aiFigureCount} figure{aiFigureCount === 1 ? "" : "s"} awaiting confirmation.
         </p>
@@ -419,6 +427,80 @@ function InstrumentReviewCard({
         </ul>
       </CardContent>
     </Card>
+  );
+}
+
+/**
+ * Part 8.1 — the source screenshot strip shown at the top of an image-sourced review card.
+ * Each thumbnail opens full-size in a dialog so a reviewer can read the printed figures and
+ * confirm the AI's transcription against the original picture. Images only; no figure data.
+ */
+function SourceScreenshots({ urls }: { urls: string[] }) {
+  const [open, setOpen] = useState<string | null>(null);
+  return (
+    <div className="rounded-lg border border-orange-500/20 bg-orange-500/[0.03] p-2.5 space-y-2">
+      <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground inline-flex items-center gap-1">
+        <ImageIcon className="w-3.5 h-3.5" /> Source screenshot{urls.length === 1 ? "" : "s"}
+        <InfoHint side="top" iconClassName="normal-case">
+          The picture a maintainer uploaded as the source for this AI extraction. Click to enlarge
+          and read the printed figures, then confirm each value below against what you see here.
+        </InfoHint>
+      </span>
+      <div className="flex flex-wrap gap-2">
+        {urls.map((u, i) => (
+          <button
+            key={u + i}
+            type="button"
+            onClick={() => setOpen(u)}
+            className="group relative h-20 w-28 overflow-hidden rounded-md border border-border bg-muted/40 transition-transform hover:scale-[1.02] focus:outline-none focus:ring-2 focus:ring-ring"
+            aria-label={`Enlarge source screenshot ${i + 1}`}
+          >
+            <img
+              src={u}
+              alt={`Source screenshot ${i + 1}`}
+              loading="lazy"
+              className="h-full w-full object-cover"
+            />
+            <span className="absolute inset-0 flex items-center justify-center bg-black/0 text-transparent transition-colors group-hover:bg-black/40 group-hover:text-white">
+              <Maximize2 className="w-4 h-4" />
+            </span>
+          </button>
+        ))}
+      </div>
+      <Dialog open={open !== null} onOpenChange={(o) => !o && setOpen(null)}>
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-base">
+              <ImageIcon className="w-4 h-4" /> Source screenshot
+            </DialogTitle>
+            <DialogDescription>
+              Read the figures printed here and compare them with the AI-extracted values below before
+              confirming. The AI transcribes only what is visibly printed — it never infers a missing number.
+            </DialogDescription>
+          </DialogHeader>
+          {open && (
+            <div className="max-h-[70vh] overflow-auto rounded-md border border-border bg-muted/30">
+              <img src={open} alt="Source screenshot, full size" className="w-full h-auto" />
+            </div>
+          )}
+          <DialogFooter className="sm:justify-between gap-2">
+            {open && (
+              <a
+                href={open}
+                target="_blank"
+                rel="noreferrer"
+                className="text-xs text-primary inline-flex items-center gap-1 hover:underline"
+              >
+                <ExternalLink className="w-3.5 h-3.5" /> Open in a new tab
+              </a>
+            )}
+            <Button variant="outline" size="sm" onClick={() => setOpen(null)}>
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
   );
 }
 

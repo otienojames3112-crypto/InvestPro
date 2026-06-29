@@ -1754,6 +1754,27 @@ export async function ingestAiExtractedInstrument(args: {
   return { ref: args.base.ref, filled, conflicts: conflicts.length, changed, created: false };
 }
 
+/**
+ * Part 8.1 — record the storage key of a screenshot/image that was uploaded as the SOURCE
+ * for an AI image extraction on a row, so the review queue can render a thumbnail next to
+ * the figures. Append-only and de-duplicated; stores keys only, never file bytes. No-op if
+ * the row is missing or the key is already recorded.
+ */
+export async function attachAiSourceImageKey(ref: string, key: string): Promise<void> {
+  const db = await getDb();
+  if (!db || !key) return;
+  const rows = await db
+    .select({ keys: opportunities.aiSourceImageKeys })
+    .from(opportunities)
+    .where(eq(opportunities.ref, ref))
+    .limit(1);
+  if (!rows[0]) return;
+  const current = Array.isArray(rows[0].keys) ? (rows[0].keys as string[]) : [];
+  if (current.includes(key)) return;
+  const next = [...current, key].slice(-8); // cap to the 8 most recent screenshots
+  await db.update(opportunities).set({ aiSourceImageKeys: next }).where(eq(opportunities.ref, ref));
+}
+
 /* ── Part 8: AI universe-discovery candidates (suggestions only) ──────────── */
 
 /** Insert a batch of AI-proposed candidates (status=pending). De-dupes by name within the call. */

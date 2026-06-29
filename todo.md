@@ -1032,3 +1032,13 @@
 - [x] Mocked vision response test: correct fields, correct nulls, image provenance at ai_extracted trust (server/aiImageSource.test.ts)
 - [x] Thin-fetch detection unit test + vision allow-list + resolveVisionModel + vision-guard short-circuit (no LLM call)
 - [x] Type gate clean; full suite green (1011 passing); checkpoint
+
+## Part 8.2 — source screenshot thumbnail in the AI review queue
+
+- [x] Schema: opportunities.aiSourceImageKeys (JSON string[]) — storage keys of uploaded screenshots used as image-extraction sources; applied via additive ALTER (drizzle-kit generate blocked on unrelated rename prompts)
+- [x] db.attachAiSourceImageKey(ref, key): append-only, de-duped, capped to 8 most recent
+- [x] aiExtract image branch records the uploaded screenshot's storage key on the row after upsert
+- [x] aiReviewQueue returns sourceImageUrls (keys → /manus-storage/{key} served URLs)
+- [x] AiReview card: SourceScreenshots strip of thumbnails at top of each card; click opens full-size dialog + "open in new tab"
+- [x] Tests: key→URL mapping (null/non-array safe) + append dedupe/cap/empty-key (server/aiReviewScreenshot.test.ts, 7 tests)
+- [x] Type gate clean; full suite green (1018 passing); checkpoint

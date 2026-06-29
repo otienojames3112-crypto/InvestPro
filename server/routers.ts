@@ -94,6 +94,7 @@ import {
   countOpenConflicts,
   resolveIngestionConflict,
   ingestAiExtractedInstrument,
+  attachAiSourceImageKey,
   insertAiCandidates,
   listAiCandidates,
   countPendingCandidates,
@@ -1013,10 +1014,17 @@ export const appRouter = router({
       return rows
         .map((r) => {
           const map = (r.fieldProvenance ?? {}) as FieldProvenanceMap;
+          // Part 8.1 — surface the uploaded screenshot(s) a maintainer used as the source
+          // for an AI image extraction, as ready-to-render URLs (the template serves stored
+          // objects via a signed redirect at /manus-storage/{key}), so the reviewer can see
+          // the original picture next to each figure and confirm against it.
+          const keys = Array.isArray(r.aiSourceImageKeys) ? (r.aiSourceImageKeys as string[]) : [];
+          const sourceImageUrls = keys.map((k) => `/manus-storage/${k}`);
           return {
             row: r,
             aiFigureCount: countAiFigures(map),
             hiddenFromCatalog: isAiProvisionalRow(map),
+            sourceImageUrls,
           };
         })
         .filter((x) => x.aiFigureCount > 0);
@@ -1245,6 +1253,9 @@ export const appRouter = router({
           // When the source is an uploaded screenshot, we stamp a distinct provenance quote
           // so a human reviewer knows the figures were read off an image (and against what).
           let imageProvenanceLabel: string | null = null;
+          // The storage key of an uploaded screenshot, recorded on the row after upsert so
+          // the review queue can show a thumbnail of the original beside each figure.
+          let imageSourceKey: string | null = null;
           if (input.source.kind === "text") {
             llmSource = { kind: "text", text: input.source.text };
           } else if (input.source.kind === "url") {
@@ -1280,6 +1291,8 @@ export const appRouter = router({
             llmSource = { kind: "image", imageUrl: signed };
             const day = new Date(Date.now()).toISOString().slice(0, 10);
             imageProvenanceLabel = `read from an uploaded screenshot of ${input.sourceLabel}, ${day}`;
+            // Remember the storage key so we can render a thumbnail in the review queue.
+            imageSourceKey = input.source.fileKey;
           }
 
           const { extraction, model } = await aiExtractInstrument({
@@ -1341,6 +1354,9 @@ export const appRouter = router({
           // Same reconcile/upsert/conflicts machinery as a scrape — AI only fills blanks,
           // never clobbers a human or scraped value (disagreements become conflicts).
           const result = await ingestAiExtractedInstrument({ base, ai: aiMap, sourceId: AI_INTAKE_SOURCE_ID });
+          // For image sources, record the screenshot's storage key on the row so a reviewer
+          // can see the original picture next to the figures (confirm-against-source).
+          if (imageSourceKey) await attachAiSourceImageKey(ref, imageSourceKey);
           const saved = await getOpportunityByRef(ref);
           // Record what entered the catalog for traceability.
           audit.resultName = inst.name;

@@ -1048,6 +1048,19 @@ export async function getBenchmarkInputs() {
   return db.select().from(benchmarkInputs).orderBy(benchmarkInputs.id);
 }
 
+/**
+ * Part A1 — the single inflation rate (% p.a.) used across the app. This is the
+ * SAME `benchmark_inputs.inflation` row that powers the Dashboard/Portfolio
+ * Review real-yield line, so the inflated-goal default can never disagree with
+ * the inflation figure the user already sees. Returns `fallback` when unset.
+ */
+export async function getInflationBenchmarkPct(fallback = 0): Promise<number> {
+  const rows = await getBenchmarkInputs();
+  const row = rows.find((r) => r.metricKey === "inflation");
+  const v = row ? Number(row.value) : NaN;
+  return Number.isFinite(v) ? v : fallback;
+}
+
 export async function upsertBenchmarkInput(data: InsertBenchmarkInput) {
   const db = await getDb();
   if (!db) return;

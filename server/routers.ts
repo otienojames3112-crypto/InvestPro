@@ -64,6 +64,7 @@ import {
   deleteBankInstrumentHolding,
   getActualsSummary,
   getBenchmarkInputs,
+  getInflationBenchmarkPct,
   upsertBenchmarkInput,
   addAuditLog,
   getAuditLog,
@@ -139,6 +140,7 @@ import {
   assessPace,
   assessBackloading,
   assessLiquidityCushion,
+  computeInflationAdjustedGoal,
 } from "../shared/decisionSurface";
 import { discountPriceForSecurity, tbillPrice, parseBreachAckRow } from "../shared/discount";
 import {
@@ -712,6 +714,11 @@ const portfolioCreateInput = z.object({
   allocationPolicy: z.enum(["balanced", "yield_first", "custom"]).optional(),
   // Round 66: total-liquid-drift alert threshold (% of net worth). 1–50.
   driftAlertThresholdPct: z.number().min(1).max(50).optional(),
+  // Part A1: inflation-link this goal (the liability). Default off.
+  inflationLinked: z.boolean().optional(),
+  // Part A1: optional override for the goal inflation rate (% p.a.); null/omitted
+  // = use the global inflation benchmark already shown on the Dashboard.
+  inflationOverrideRate: z.number().min(0).max(50).nullable().optional(),
 });
 
 /**
@@ -1258,6 +1265,10 @@ export const appRouter = router({
           ratesLastUpdatedAt: p.ratesLastUpdatedAt ?? null,
           mmfFundId: p.mmfFundId ?? null,
           isSandbox: p.isSandbox,
+          inflationLinked: !!(p as { inflationLinked?: boolean }).inflationLinked,
+          inflationOverrideRate: (p as { inflationOverrideRate?: string | null }).inflationOverrideRate != null
+            ? parseFloat(String((p as { inflationOverrideRate?: string | null }).inflationOverrideRate))
+            : null,
           createdAt: p.createdAt,
           updatedAt: p.updatedAt,
         }));
@@ -1291,6 +1302,10 @@ export const appRouter = router({
         ratesLastUpdatedAt: p.ratesLastUpdatedAt ?? null,
         mmfFundId: p.mmfFundId ?? null,
         isSandbox: p.isSandbox,
+        inflationLinked: !!(p as { inflationLinked?: boolean }).inflationLinked,
+        inflationOverrideRate: (p as { inflationOverrideRate?: string | null }).inflationOverrideRate != null
+          ? parseFloat(String((p as { inflationOverrideRate?: string | null }).inflationOverrideRate))
+          : null,
         createdAt: p.createdAt,
       };
     }),
@@ -1418,6 +1433,10 @@ export const appRouter = router({
           ...(input.typeConcentrationCapPct != null ? { typeConcentrationCapPct: String(input.typeConcentrationCapPct) } : {}),
           ...(input.allocationPolicy ? { allocationPolicy: input.allocationPolicy } : {}),
           ...(input.driftAlertThresholdPct != null ? { driftAlertThresholdPct: String(input.driftAlertThresholdPct) } : {}),
+          ...(input.inflationLinked != null ? { inflationLinked: input.inflationLinked } : {}),
+          ...(input.inflationOverrideRate !== undefined
+            ? { inflationOverrideRate: input.inflationOverrideRate == null ? null : String(input.inflationOverrideRate) }
+            : {}),
         } as Record<string, unknown>);
         return { success: true };
       }),
@@ -1830,13 +1849,46 @@ export const appRouter = router({
       }
       const liquidity = assessLiquidityCushion(liquidAtGoal, base, goalDateMs, latestMaturityMs);
 
+      // Part A1 — inflation-adjusted goal (the liability). When the portfolio is
+      // inflation-linked we judge the nominal projection against the FUTURE goal
+      // (target inflated to the goal date) and express the surplus in today's
+      // shillings. The inflation rate is the per-portfolio override if set, else
+      // the SAME global inflation benchmark the real-yield line already uses.
+      const inflationLinked = !!(p as { inflationLinked?: boolean }).inflationLinked;
+      const overrideRate = (p as { inflationOverrideRate?: string | null }).inflationOverrideRate;
+      const benchmarkInflationPct = await getInflationBenchmarkPct(0);
+      const inflationRatePct =
+        overrideRate != null && Number.isFinite(Number(overrideRate))
+          ? Number(overrideRate)
+          : benchmarkInflationPct;
+      const inflationGoal = computeInflationAdjustedGoal({
+        target,
+        projectedNominal: base,
+        horizonMonths,
+        inflationRatePct,
+        linked: inflationLinked,
+      });
+      // The honest on-track test uses the EFFECTIVE goal (inflated when linked).
+      const effectivePace = assessPace(
+        base,
+        inflationGoal.effectiveGoal,
+        Math.round(inflationGoal.effectiveGoal * 0.01),
+      );
+
       return {
         target,
         horizonMonths,
         goalDateMs,
         range,
         cases: { base, rateShockCase, rateUpCase, slipCase },
+        // `pace` stays nominal-vs-stored-target for back-compat; `effectivePace`
+        // is the inflation-aware test the headline now reads from.
         pace,
+        effectivePace,
+        inflation: {
+          ratePct: inflationRatePct,
+          ...inflationGoal,
+        },
         stepUp,
         stepUpMonths: settings.stepUpMonths,
         backloading,

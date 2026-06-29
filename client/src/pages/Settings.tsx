@@ -4,6 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { Settings as SettingsIcon, RefreshCw, Info, Pencil, Sparkles, ShieldAlert } from "lucide-react";
 import { UpdateRatesPanel } from "@/components/UpdateRatesPanel";
 import {
@@ -60,6 +61,10 @@ interface PlanForm {
   typeConcentrationCapPct: number;
   allocationPolicy: "balanced" | "yield_first" | "custom";
   driftAlertThresholdPct: number;
+  // Part A1: inflation-link the goal (the liability). Default off.
+  inflationLinked: boolean;
+  // Part A1: optional override (% p.a.); empty string = use Dashboard inflation benchmark.
+  inflationOverrideRate: number | null;
 }
 
 function RateField({ label, name, register, description }: {
@@ -151,6 +156,13 @@ export default function Settings() {
   const { portfolioId, portfolio, refetch: refetchPortfolios } = usePortfolio();
   const { fundLabel: selectedFundLabel, fundEar: selectedFundEar, hasFund } = useSelectedFund();
   const utils = trpc.useUtils();
+
+  // Part A1: read the SAME global inflation benchmark the Dashboard real-yield
+  // line uses, so the toggle can show the default rate that applies when no
+  // per-portfolio override is set.
+  const { data: benchmarks } = trpc.benchmarks.list.useQuery();
+  const benchmarkInflationPct =
+    benchmarks?.find((b) => b.metricKey === "inflation")?.value ?? null;
 
   // ─── Rate form ──────────────────────────────────────────────────────────────
   const { data: rateSettings } = trpc.settings.get.useQuery(
@@ -251,6 +263,8 @@ export default function Settings() {
       typeConcentrationCapPct: 60,
       allocationPolicy: "balanced",
       driftAlertThresholdPct: 5,
+      inflationLinked: false,
+      inflationOverrideRate: null,
     },
   });
 
@@ -272,6 +286,9 @@ export default function Settings() {
           (portfolio as { allocationPolicy?: "balanced" | "yield_first" | "custom" }).allocationPolicy ?? "balanced",
         driftAlertThresholdPct:
           (portfolio as { driftAlertThresholdPct?: number }).driftAlertThresholdPct ?? 5,
+        inflationLinked: !!(portfolio as { inflationLinked?: boolean }).inflationLinked,
+        inflationOverrideRate:
+          (portfolio as { inflationOverrideRate?: number | null }).inflationOverrideRate ?? null,
       });
     }
   }, [portfolio]);
@@ -310,14 +327,25 @@ export default function Settings() {
       setPendingPlan(data);
       return;
     }
-    updatePortfolioMutation.mutate({ portfolioId, ...data });
+    updatePortfolioMutation.mutate({ portfolioId, ...normalizePlan(data) });
+  }
+
+  // Part A1: an empty / NaN override means "use the Dashboard inflation benchmark".
+  function normalizePlan(data: PlanForm) {
+    return {
+      ...data,
+      inflationOverrideRate:
+        data.inflationOverrideRate == null || Number.isNaN(data.inflationOverrideRate)
+          ? null
+          : data.inflationOverrideRate,
+    };
   }
 
   async function confirmYieldFirst() {
     if (!portfolioId || !pendingPlan) return;
     try {
       await acknowledgeYieldFirst.mutateAsync({ portfolioId });
-      updatePortfolioMutation.mutate({ portfolioId, ...pendingPlan });
+      updatePortfolioMutation.mutate({ portfolioId, ...normalizePlan(pendingPlan) });
     } finally {
       setPendingPlan(null);
     }
@@ -525,6 +553,38 @@ export default function Settings() {
                 <Label className="text-xs font-medium">Drift Alert Threshold (%)</Label>
                 <Input type="number" step="0.5" min="1" max="50" {...planForm.register("driftAlertThresholdPct", { valueAsNumber: true })} />
                 <p className="text-xs text-muted-foreground">When your reconciled liquid cash drifts from the recommended split by more than this share of net worth (total of all gaps), the Dashboard liquid card shows a rebalancing alert. Default 5%.</p>
+              </div>
+              {/* Part A1 — Inflation-link the goal (the liability). Default off so the
+                  goal stays nominal and the Dashboard labels it as such. */}
+              <div className="space-y-2 sm:col-span-2 rounded-lg border border-border bg-muted/30 p-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="space-y-0.5">
+                    <Label className="text-xs font-medium">Inflation-adjust the goal</Label>
+                    <p className="text-xs text-muted-foreground">
+                      Treat your target as a price in <strong>today's shillings</strong>. The plan is then judged against the goal inflated to the goal date, and the surplus is shown in today's money so the margin isn't overstated. Off by default — the goal stays nominal.
+                    </p>
+                  </div>
+                  <Switch
+                    checked={planForm.watch("inflationLinked")}
+                    onCheckedChange={(v) => planForm.setValue("inflationLinked", v, { shouldDirty: true })}
+                  />
+                </div>
+                {planForm.watch("inflationLinked") && (
+                  <div className="space-y-1.5 pt-1">
+                    <Label className="text-xs font-medium">Goal inflation rate (% p.a.) — optional override</Label>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      max="50"
+                      placeholder={benchmarkInflationPct != null ? `Default ${benchmarkInflationPct.toFixed(2)}% (Dashboard benchmark)` : "Uses Dashboard inflation benchmark"}
+                      {...planForm.register("inflationOverrideRate", { valueAsNumber: true })}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Leave blank to reuse the global inflation benchmark{benchmarkInflationPct != null ? <> (currently <strong>{benchmarkInflationPct.toFixed(2)}%</strong>)</> : null} that drives the Dashboard real-yield line — so this figure never disagrees with the inflation rate shown elsewhere.
+                    </p>
+                  </div>
+                )}
               </div>
               <div className="space-y-1.5">
                 <Label className="text-xs font-medium">Liquidity Horizon (days)</Label>

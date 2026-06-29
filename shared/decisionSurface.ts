@@ -268,3 +268,105 @@ export function classifyLiquidityTimingRisk(opts: {
   if (opts.maturesNearOrAfterGoal) return "caution";
   return "ok";
 }
+
+// ─── Part A1 — Inflation-adjusted goal (the liability) ───────────────────────
+//
+// The goal is a real-asset price expressed in TODAY'S shillings. If we judge the
+// projection (a nominal, future-shilling number) against a goal frozen in today's
+// shillings, the surplus is overstated in real terms. When the user inflation-links
+// a portfolio, we instead:
+//   1. Inflate the goal to the goal date:  futureGoal = target × (1+i)^years
+//   2. Test the nominal projection against that FUTURE goal (the honest on-track test)
+//   3. Express the surplus back in today's shillings so the cushion is real, not nominal.
+// All of this is pure so the tRPC query and unit tests share one source of truth.
+
+export interface InflationAdjustedGoal {
+  /** Whether inflation-linking is active for this assessment. */
+  linked: boolean;
+  /** Annual inflation rate as a fraction (e.g. 0.0668 for 6.68%). */
+  inflationRate: number;
+  /** Horizon expressed in years (months / 12). */
+  horizonYears: number;
+  /** Goal in today's shillings (the stored target). */
+  goalToday: number;
+  /**
+   * Goal at the goal date. When linked this is target×(1+i)^years; when not
+   * linked it equals goalToday (the goal is treated as nominal/fixed).
+   */
+  goalAtDate: number;
+  /**
+   * Discount factor (1+i)^years used to convert future shillings back to today's.
+   * Always ≥ 1; equals 1 when not linked or rate is 0.
+   */
+  inflationFactor: number;
+  /** Nominal projected ending value (future shillings) carried through for display. */
+  projectedNominal: number;
+  /** Projected ending value expressed in TODAY's shillings (projectedNominal / factor). */
+  projectedReal: number;
+  /** Nominal surplus/shortfall vs the goal that the on-track test uses (goalAtDate). */
+  surplusNominal: number;
+  /** Real (today's-shilling) surplus/shortfall = projectedReal − goalToday. */
+  surplusReal: number;
+  /**
+   * Real surplus as a share of the goal (0.11 = ~11% real cushion). Negative when
+   * the plan falls short in real terms. 0 when the goal is non-positive.
+   */
+  realCushionShare: number;
+  /**
+   * The goal the on-track / pace test MUST compare the nominal projection against:
+   * goalAtDate when linked, goalToday when not. Callers feed this to assessPace.
+   */
+  effectiveGoal: number;
+}
+
+/**
+ * Compute the inflation-adjusted view of the goal and the projection.
+ *
+ * @param target          Stored goal in today's shillings.
+ * @param projectedNominal Base-case projected ending value (nominal/future shillings).
+ * @param horizonMonths   Plan horizon in months.
+ * @param inflationRatePct Annual inflation as a PERCENT (e.g. 6.68). Reused from the
+ *                         Dashboard's existing inflation benchmark — not a new source.
+ * @param linked          Whether the portfolio inflation-links its goal.
+ */
+export function computeInflationAdjustedGoal(opts: {
+  target: number;
+  projectedNominal: number;
+  horizonMonths: number;
+  inflationRatePct: number;
+  linked: boolean;
+}): InflationAdjustedGoal {
+  const goalToday = Math.max(0, Number(opts.target) || 0);
+  const projectedNominal = Math.max(0, Number(opts.projectedNominal) || 0);
+  const horizonYears = (Number(opts.horizonMonths) || 0) / 12;
+  const rateFrac = Math.max(0, (Number(opts.inflationRatePct) || 0) / 100);
+
+  // The factor is only applied when linked; an unlinked goal is treated as nominal
+  // (factor 1) so behaviour is identical to before the feature, just labelled.
+  const inflationFactor = opts.linked
+    ? Math.pow(1 + rateFrac, horizonYears)
+    : 1;
+
+  const goalAtDate = opts.linked ? goalToday * inflationFactor : goalToday;
+  const projectedReal = inflationFactor > 0 ? projectedNominal / inflationFactor : projectedNominal;
+
+  const effectiveGoal = goalAtDate;
+  const surplusNominal = Math.round(projectedNominal - effectiveGoal);
+  const surplusReal = Math.round(projectedReal - goalToday);
+  const realCushionShare = goalToday > 0 ? (projectedReal - goalToday) / goalToday : 0;
+
+  return {
+    linked: opts.linked,
+    inflationRate: rateFrac,
+    horizonYears,
+    goalToday: Math.round(goalToday),
+    goalAtDate: Math.round(goalAtDate),
+    inflationFactor,
+    projectedNominal: Math.round(projectedNominal),
+    projectedReal: Math.round(projectedReal),
+    surplusNominal,
+    surplusReal,
+    realCushionShare,
+    effectiveGoal: Math.round(effectiveGoal),
+  };
+}

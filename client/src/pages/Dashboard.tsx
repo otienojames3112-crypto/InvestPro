@@ -65,7 +65,7 @@ import { toast } from "sonner";
 import { rateStaleness } from "@/lib/rateStaleness";
 import { currentSecurityValue, securityYieldContribution, isDiscountSecurityType, classifyDurationRisk, largestConcentration, classifyConcentration, analyzePerTypeBreach, isConcentrationSnoozed, formatConcentrationPct, splitEndStateBuckets, DEFAULT_LIQUIDITY_HORIZON_DAYS, type CurrentValueSecurity } from "@shared/discount";
 import { whtRateForSecurity } from "@shared/securityTenor";
-import { Layers, TrendingDown, BellOff, Bell, Scale, ArrowRightLeft, Copy, Check, ChevronUp, ChevronDown } from "lucide-react";
+import { Layers, TrendingDown, BellOff, Bell, Scale, ArrowRightLeft, Copy, Check, ChevronUp, ChevronDown, ShieldAlert } from "lucide-react";
 import { buildTransferPlan, SNOOZE_OPTIONS, snoozeUntilFromDays } from "@shared/liquidAllocator";
 import {
   classifyBreachSeverity,
@@ -1028,7 +1028,14 @@ export default function Dashboard() {
         {/* ── Part 5: Role-aware top — investor strip + manager band ───────── */}
         {decision && (() => {
           const liveNetWorth = concentration?.netWorth ?? (actualsSummary?.totalContributed ?? 0);
-          const paceStatus = decision.pace.status;
+          // Part A1: when the goal is inflation-linked, the honest on-track test
+          // compares the nominal projection against the FUTURE (inflated) goal —
+          // never the today's-shilling target, which would overstate the margin.
+          const infl = (decision as any).inflation as
+            | { linked: boolean; ratePct: number; goalToday: number; goalAtDate: number; surplusReal: number; realCushionShare: number; projectedReal: number }
+            | undefined;
+          const effPace = (decision as any).effectivePace ?? decision.pace;
+          const paceStatus = (effPace?.status ?? decision.pace.status) as string;
           const realYield = yieldSummary?.realYield ?? null;
           const hasYield = (yieldSummary?.partCount ?? 0) > 0 && yieldSummary != null;
           // The single "Next:" action — the most important thing to do today.
@@ -1052,13 +1059,58 @@ export default function Dashboard() {
               <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-base leading-relaxed text-foreground">
                 <span>You have <strong className="kes-amount text-lg">{formatKES(liveNetWorth)}</strong>.</span>
                 <span className="text-muted-foreground">·</span>
-                <span>
-                  Projected ≈ <strong className="kes-amount text-lg">{formatKESCompact(decision.range.base)}</strong>
-                  {goalDateLabel ? <> by {goalDateLabel}</> : null}
-                  {decision.range.high > decision.range.low && (
-                    <span className="text-muted-foreground text-sm"> (range {formatKESCompact(decision.range.low)}–{formatKESCompact(decision.range.high)})</span>
-                  )}
+                <span className="inline-flex items-center gap-1">
+                  <span>
+                    Projected ≈ <strong className="kes-amount text-lg">{formatKESCompact(decision.range.base)}</strong>
+                    {goalDateLabel ? <> by {goalDateLabel}</> : null}
+                    {decision.range.high > decision.range.low && (
+                      <span className="text-muted-foreground text-sm"> (range {formatKESCompact(decision.range.low)}–{formatKESCompact(decision.range.high)})</span>
+                    )}
+                  </span>
+                  {/* Part A3 — the projection must not promise more than it guarantees.
+                      The base figure assumes today's rates hold for the whole
+                      horizon; the range already prices a rate-ease case, so we
+                      state the assumption plainly rather than implying certainty. */}
+                  <Tooltip>
+                    <TooltipTrigger asChild><HelpCircle className="w-3 h-3 text-muted-foreground/60 cursor-help shrink-0" /></TooltipTrigger>
+                    <TooltipContent side="top" className="max-w-xs text-xs">
+                      Assumes today's CBK / MMF rates hold for the full {horizonMonths ? `${horizonMonths}-month ` : ""}horizon. Rates move, so this is a planning estimate, not a guarantee — the {formatKESCompact(decision.range.low)}–{formatKESCompact(decision.range.high)} range shows how a rate-ease or missed-contribution path would land.
+                    </TooltipContent>
+                  </Tooltip>
                 </span>
+                <span className="text-muted-foreground">·</span>
+                {infl?.linked ? (
+                  <span className="inline-flex items-center gap-1">
+                    <span>
+                      Goal <strong className="kes-amount">{formatKESCompact(infl.goalToday)}</strong> today
+                      {goalDateLabel ? <> ≈ <strong className="kes-amount">{formatKESCompact(infl.goalAtDate)}</strong> by {goalDateLabel}</> : <> ≈ <strong className="kes-amount">{formatKESCompact(infl.goalAtDate)}</strong> at goal date</>}
+                    </span>
+                    <Tooltip>
+                      <TooltipTrigger asChild><HelpCircle className="w-3 h-3 text-muted-foreground/60 cursor-help shrink-0" /></TooltipTrigger>
+                      <TooltipContent side="top" className="max-w-xs text-xs">
+                        Your {formatKESCompact(infl.goalToday)} target is a price in today's shillings. At {infl.ratePct.toFixed(1)}% inflation it costs about {formatKESCompact(infl.goalAtDate)} by the goal date, so the on-track test below judges the projection against that future figure — not the lower nominal target. The surplus is then shown back in today's money.
+                      </TooltipContent>
+                    </Tooltip>
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 text-muted-foreground text-sm">
+                    Goal {formatKESCompact(infl?.goalToday ?? decision.target)} (nominal — not inflation-adjusted)
+                    <Tooltip>
+                      <TooltipTrigger asChild><HelpCircle className="w-3 h-3 text-muted-foreground/60 cursor-help shrink-0" /></TooltipTrigger>
+                      <TooltipContent side="top" className="max-w-xs text-xs">
+                        The goal is treated as a fixed nominal amount, so the surplus is in future shillings and overstates real purchasing power. Turn on inflation-linking in plan settings to judge the plan against an inflated goal and see the cushion in today's money.
+                      </TooltipContent>
+                    </Tooltip>
+                  </span>
+                )}
+                {infl?.linked && (
+                  <>
+                    <span className="text-muted-foreground">·</span>
+                    <span className={infl.surplusReal >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}>
+                      {infl.surplusReal >= 0 ? "+" : "−"}{formatKESCompact(Math.abs(infl.surplusReal))} {infl.surplusReal >= 0 ? "real surplus" : "real shortfall"} (today's KES)
+                    </span>
+                  </>
+                )}
                 {hasYield && realYield != null && (
                   <>
                     <span className="text-muted-foreground">·</span>
@@ -2403,6 +2455,30 @@ export default function Dashboard() {
                       </div>
                     </div>
                   )}
+                {/* Part A2 — uninsured-MMF caution. The liability matters as much as
+                    the yield: an MMF carries no KDIC cover, so a large end-state
+                    share concentrated in one fund is real, uninsured exposure. We
+                    reuse the SAME end-state split slices + the portfolio's issuer
+                    cap — no new threshold of our own — and only caution when a
+                    single MMF slice exceeds that cap (falling back to 40% only if
+                    the cap is unavailable). */}
+                {landsFullyLiquid && endStateSplit && (() => {
+                  const capFrac = endStateSplit.effectiveIssuerCapFrac || 0.4;
+                  const topMmf = endStateSplit.slices
+                    .filter((s) => s.kind === "primary_mmf" || s.kind === "secondary_mmf")
+                    .reduce<{ label: string; share: number } | null>((acc, s) =>
+                      !acc || s.targetShare > acc.share ? { label: s.label, share: s.targetShare } : acc, null);
+                  if (!topMmf || topMmf.share <= capFrac) return null;
+                  return (
+                    <p className="mt-2 flex items-start gap-1.5 text-[11px] leading-snug text-amber-600 dark:text-amber-400">
+                      <ShieldAlert className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                      <span>
+                        At the goal date about {(topMmf.share * 100).toFixed(0)}% of your liquid pot sits in {topMmf.label} — above your {(capFrac * 100).toFixed(0)}% issuer cap.{" "}
+                        <GlossaryTerm id="mmf-uninsured">MMF balances are not KDIC-insured</GlossaryTerm>, so this is uninsured single-fund exposure. Consider spreading it across a second MMF or a liquid bank account.
+                      </span>
+                    </p>
+                  );
+                })()}
               </div>
             </div>
 
@@ -2667,6 +2743,14 @@ export default function Dashboard() {
               <p className="text-xs text-muted-foreground mt-2 flex items-start gap-1.5">
                 <Info className="w-3 h-3 mt-0.5 shrink-0" />
                 Manage these accounts on the <Link href="/mmf-funds"><span className="text-primary hover:underline cursor-pointer">MMF Funds</span></Link> page. Balances are entered manually.
+              </p>
+              {/* Part A2 — the MMF total is a real, uninsured balance. State it plainly
+                  next to the money so a green total never implies a guarantee. */}
+              <p className="text-xs text-muted-foreground mt-1 flex items-start gap-1.5">
+                <ShieldAlert className="w-3 h-3 mt-0.5 shrink-0 text-amber-500" />
+                <span>
+                  <GlossaryTerm id="mmf-uninsured">Not KDIC-insured</GlossaryTerm> — unlike bank deposits, money in an MMF carries no deposit-insurance floor; its safeguards are diversification and CMA oversight, not a state guarantee.
+                </span>
               </p>
             </CardContent>
           </Card>

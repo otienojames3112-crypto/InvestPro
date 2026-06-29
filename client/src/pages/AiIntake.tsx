@@ -41,6 +41,8 @@ import {
   Sparkles,
 } from "lucide-react";
 import { ASSET_CLASSES, ASSET_PROFILES, type AssetClass } from "@shared/assetModel";
+import { InfoHint } from "@/components/InfoHint";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 /** Friendly label for a figure key. */
 const FIELD_LABELS: Record<string, string> = {
@@ -217,7 +219,7 @@ function ExtractPanel() {
       <CardContent className="space-y-4">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div className="space-y-1.5">
-            <Label htmlFor="src-label">Cited source *</Label>
+            <Label htmlFor="src-label" className="inline-flex items-center gap-1">Cited source *<InfoHint>A short name for the document these facts came from (e.g. “CIC MMF fact sheet, May 2026”). It is stored with every extracted figure so anyone can trace a number back to its origin.</InfoHint></Label>
             <Input
               id="src-label"
               placeholder="e.g. CIC MMF fact sheet, May 2026"
@@ -226,7 +228,7 @@ function ExtractPanel() {
             />
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="src-url">Source link (optional)</Label>
+            <Label htmlFor="src-url" className="inline-flex items-center gap-1">Source link (optional)<InfoHint>A web link a person can open to check the figures for themselves — ideally the exact page or PDF the document came from.</InfoHint></Label>
             <Input
               id="src-url"
               placeholder="https://… (link a human can open to confirm)"
@@ -236,7 +238,7 @@ function ExtractPanel() {
           </div>
         </div>
         <div className="space-y-1.5">
-          <Label htmlFor="hint">Instrument name hint (optional)</Label>
+          <Label htmlFor="hint" className="inline-flex items-center gap-1">Instrument name hint (optional)<InfoHint>If the document covers one specific instrument, type its name here so the AI focuses on it instead of guessing which one you mean.</InfoHint></Label>
           <Input
             id="hint"
             placeholder="Helps the librarian focus on one instrument"
@@ -317,9 +319,16 @@ function ExtractPanel() {
               <div className="flex items-center gap-2">
                 <Bot className="w-4 h-4 text-orange-500" />
                 <span className="font-medium">{result.extraction.name}</span>
-                <Badge variant="outline" className="text-orange-500 border-orange-500/40">
-                  AI-extracted · unverified
-                </Badge>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Badge variant="outline" className="text-orange-500 border-orange-500/40 cursor-help">
+                      AI-extracted · unverified
+                    </Badge>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom" className="max-w-xs text-xs leading-relaxed">
+                    The lowest trust level in the app. These numbers were read off a document by AI and have <strong>not</strong> been checked by a person or a parser. They never overwrite real data and must be confirmed against the source before anyone relies on them.
+                  </TooltipContent>
+                </Tooltip>
               </div>
               <div className="flex items-center gap-2">
                 <Link href="/ai-review">
@@ -328,7 +337,7 @@ function ExtractPanel() {
                   </Button>
                 </Link>
                 <Link href={`/explore/${encodeURIComponent(result.ref)}`}>
-                  <Button size="sm" variant="outline">
+                  <Button size="sm" variant="outline" title="Open the instrument page to check each figure against the document and mark it confirmed or corrected.">
                     Confirm against source <ArrowRight className="w-3.5 h-3.5 ml-1" />
                   </Button>
                 </Link>
@@ -366,13 +375,20 @@ function ExtractPanel() {
                         </span>
                         <span className="font-semibold tabular-nums">{f.value}</span>
                         {flag && (
-                          <Badge variant="outline" className="text-red-500 border-red-500/40 text-[10px]">
-                            sanity check · {flag.reason}
-                          </Badge>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Badge variant="outline" className="text-red-500 border-red-500/40 text-[10px] cursor-help">
+                                sanity check · {flag.reason}
+                              </Badge>
+                            </TooltipTrigger>
+                            <TooltipContent side="top" className="max-w-xs text-xs leading-relaxed">
+                              This value falls outside the normal range for this kind of figure, so it is probably a misread (for example a 925% yield where 9.25% was meant). It is kept provisional — check it especially carefully against the source.
+                            </TooltipContent>
+                          </Tooltip>
                         )}
                       </div>
                       <p className="mt-1 flex items-start gap-1.5 text-xs text-muted-foreground italic">
-                        <Quote className="w-3 h-3 mt-0.5 shrink-0" />
+                        <InfoHint icon={Quote} side="right">The exact words the AI read this figure from in the document. Compare it against the original source to confirm the number is right.</InfoHint>
                         <span>“{f.quote}”</span>
                       </p>
                     </li>
@@ -427,7 +443,7 @@ function DiscoverPanel() {
       </CardHeader>
       <CardContent className="space-y-3">
         <div className="space-y-1.5">
-          <Label htmlFor="universe">Universe description</Label>
+          <Label htmlFor="universe" className="inline-flex items-center gap-1">Universe description<InfoHint>A “universe” is the set of instruments you want to track — e.g. “all money-market funds regulated in Kenya”. Describe it and the AI suggests names that might belong; it never adds anything itself.</InfoHint></Label>
           <Input
             id="universe"
             placeholder="e.g. KES-denominated money-market funds regulated in Kenya"

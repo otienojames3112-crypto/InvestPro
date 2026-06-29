@@ -16,6 +16,7 @@ import {
   Download,
   Info,
 } from "lucide-react";
+import { InfoHint } from "@/components/InfoHint";
 /** Friendly label for a figure key (falls back to the key itself). */
 const FIELD_LABELS: Record<string, string> = {
   price: "Price",
@@ -144,8 +145,9 @@ export default function SourceConflicts() {
                         </span>
                         <span>{fieldLabel(c.field)}</span>
                       </CardTitle>
-                      <Badge variant="outline" className="text-amber-500 border-amber-500/40">
+                      <Badge variant="outline" className="text-amber-500 border-amber-500/40 inline-flex items-center gap-1">
                         Needs review
+                        <InfoHint side="left" iconClassName="normal-case">A fresh automated data pull found a number that disagrees with the figure you verified or entered. Nothing was changed — you decide which value to keep.</InfoHint>
                       </Badge>
                     </div>
                   </CardHeader>
@@ -154,6 +156,7 @@ export default function SourceConflicts() {
                       <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3">
                         <p className="text-[11px] uppercase tracking-wide text-emerald-500 font-semibold flex items-center gap-1">
                           <ShieldCheck className="w-3 h-3" /> Your value
+                          <InfoHint side="top" iconClassName="normal-case">The figure a person checked or typed in. It is the trusted value and is never overwritten automatically.</InfoHint>
                         </p>
                         <p className="text-lg font-semibold tabular-nums mt-1">{c.humanValue ?? "—"}</p>
                         <p className="text-xs text-muted-foreground mt-1">{stateLabelSafe(c.humanState)}</p>
@@ -161,6 +164,7 @@ export default function SourceConflicts() {
                       <div className="rounded-lg border border-border bg-muted/30 p-3">
                         <p className="text-[11px] uppercase tracking-wide text-muted-foreground font-semibold flex items-center gap-1">
                           <Download className="w-3 h-3" /> Latest scraped value
+                          <InfoHint side="top" iconClassName="normal-case">The number an automated pull read from the source most recently. “Scraped” means collected by a program, not yet checked by a person.</InfoHint>
                         </p>
                         <p className="text-lg font-semibold tabular-nums mt-1">{c.scrapedValue ?? "—"}</p>
                         <p className="text-xs text-muted-foreground mt-1">
@@ -178,6 +182,7 @@ export default function SourceConflicts() {
                       >
                         <Check className="w-3.5 h-3.5 mr-1" /> Keep mine
                       </Button>
+                      <InfoHint side="bottom">“Keep mine” dismisses the scraped number and leaves your value untouched. “Use scraped value” adopts the new number and records it as entered by you — a deliberate choice, never a silent overwrite.</InfoHint>
                       <Button
                         size="sm"
                         disabled={busy}

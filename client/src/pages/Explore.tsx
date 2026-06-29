@@ -24,6 +24,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { InfoHint } from "@/components/InfoHint";
 import {
   Search,
   Info,
@@ -337,12 +338,37 @@ export default function Explore() {
                   <TableHeader>
                     <TableRow>
                       <TableHead><SortHead k="name">Instrument</SortHead></TableHead>
-                      <TableHead><SortHead k="assetClass">Class</SortHead></TableHead>
-                      <TableHead><SortHead k="currency">Ccy</SortHead></TableHead>
-                      <TableHead className="text-right"><SortHead k="yieldPct" numeric>Yield / coupon</SortHead></TableHead>
-                      <TableHead className="text-right"><SortHead k="trailingReturnPct" numeric>Trailing 1Y</SortHead></TableHead>
+                      <TableHead>
+                        <span className="inline-flex items-center gap-1">
+                          <SortHead k="assetClass">Class</SortHead>
+                          <InfoHint>The kind of investment — e.g. a money market fund, a Treasury bill, a bank deposit or a bond. It determines how the instrument earns and what risks apply.</InfoHint>
+                        </span>
+                      </TableHead>
+                      <TableHead>
+                        <span className="inline-flex items-center gap-1">
+                          <SortHead k="currency">Ccy</SortHead>
+                          <InfoHint>Currency the instrument is held in (e.g. KES for Kenyan shillings, USD for US dollars). “Ccy” is shorthand for currency.</InfoHint>
+                        </span>
+                      </TableHead>
+                      <TableHead className="text-right">
+                        <span className="inline-flex items-center justify-end gap-1 w-full">
+                          <SortHead k="yieldPct" numeric>Yield / coupon</SortHead>
+                          <InfoHint side="left">The annual interest rate the instrument pays. “Yield” is the headline rate for funds and deposits; “coupon” is the fixed rate a bond pays. This is before tax.</InfoHint>
+                        </span>
+                      </TableHead>
+                      <TableHead className="text-right">
+                        <span className="inline-flex items-center justify-end gap-1 w-full">
+                          <SortHead k="trailingReturnPct" numeric>Trailing 1Y</SortHead>
+                          <InfoHint side="left">The actual return the instrument delivered over the past 12 months. It describes what already happened and does not predict the future.</InfoHint>
+                        </span>
+                      </TableHead>
                       <TableHead className="text-right">Price</TableHead>
-                      <TableHead>Source &amp; freshness</TableHead>
+                      <TableHead>
+                        <span className="inline-flex items-center gap-1">
+                          Source &amp; freshness
+                          <InfoHint>Where each figure came from and how recently it was updated. “May be stale” means the data is older than expected and should be re-checked before relying on it.</InfoHint>
+                        </span>
+                      </TableHead>
                       <TableHead className="w-10"></TableHead>
                     </TableRow>
                   </TableHeader>
@@ -390,17 +416,38 @@ function OpportunityRow({ r }: { r: Opportunity }) {
         <div className="text-xs text-muted-foreground mt-0.5">{r.issuer ?? r.market ?? r.ref}</div>
         <div className="flex flex-wrap gap-1 mt-1">
           {profile.fxExposed && (
-            <Badge variant="outline" className="text-[10px] px-1.5 py-0 gap-1 border-blue-500/30 text-blue-600 dark:text-blue-400">
-              <Globe className="w-2.5 h-2.5" /> FX risk
-            </Badge>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Badge variant="outline" className="text-[10px] px-1.5 py-0 gap-1 border-blue-500/30 text-blue-600 dark:text-blue-400 cursor-help">
+                  <Globe className="w-2.5 h-2.5" /> FX risk
+                </Badge>
+              </TooltipTrigger>
+              <TooltipContent side="top" className="max-w-xs text-xs leading-relaxed">
+                Foreign-exchange risk: this instrument is in a foreign currency, so its value in shillings rises and falls with the exchange rate — you can gain or lose money on currency moves alone.
+              </TooltipContent>
+            </Tooltip>
           )}
           {profile.priceDriven && (
-            <Badge variant="outline" className="text-[10px] px-1.5 py-0">Price-driven</Badge>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Badge variant="outline" className="text-[10px] px-1.5 py-0 cursor-help">Price-driven</Badge>
+              </TooltipTrigger>
+              <TooltipContent side="top" className="max-w-xs text-xs leading-relaxed">
+                Its value moves with a market price (like a bond or share), so it can go up or down day to day — unlike a fund or deposit that simply accrues interest.
+              </TooltipContent>
+            </Tooltip>
           )}
           {profile.insured === "none" && (
-            <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-amber-500/30 text-amber-600 dark:text-amber-400">
-              Not insured
-            </Badge>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-amber-500/30 text-amber-600 dark:text-amber-400 cursor-help">
+                  Not insured
+                </Badge>
+              </TooltipTrigger>
+              <TooltipContent side="top" className="max-w-xs text-xs leading-relaxed">
+                Not covered by deposit insurance (KDIC). If the provider failed, the money is not guaranteed — unlike a bank deposit, which is insured up to a limit.
+              </TooltipContent>
+            </Tooltip>
           )}
         </div>
       </TableCell>

@@ -38,6 +38,8 @@ import {
   User as UserIcon,
 } from "lucide-react";
 import type { FieldProvenance, FieldProvenanceMap, FieldKey } from "@shared/provenance";
+import { InfoHint } from "@/components/InfoHint";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 const FIELD_LABELS: Record<string, string> = {
   price: "Price",
@@ -121,6 +123,7 @@ export default function AiReview() {
             </TabsTrigger>
             <TabsTrigger value="audit">
               <ScrollText className="w-3.5 h-3.5 mr-1.5" /> Audit trail
+              <InfoHint side="bottom" iconClassName="ml-1.5">A log of every AI intake call — which document, what was extracted, which model, when, and by whom — so a wrong figure can be traced to its origin and costs stay visible.</InfoHint>
             </TabsTrigger>
           </TabsList>
           <TabsContent value="queue" className="mt-5">
@@ -380,9 +383,16 @@ function InstrumentReviewCard({
           </div>
           <div className="flex items-center gap-2 shrink-0">
             {hiddenFromCatalog && (
-              <Badge variant="outline" className="text-orange-500 border-orange-500/40 text-[11px]">
-                <EyeOff className="w-3 h-3 mr-1" /> hidden from catalog
-              </Badge>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Badge variant="outline" className="text-orange-500 border-orange-500/40 text-[11px] cursor-help">
+                    <EyeOff className="w-3 h-3 mr-1" /> hidden from catalog
+                  </Badge>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" className="max-w-xs text-xs leading-relaxed">
+                  This instrument was drafted entirely by AI and no figure has been confirmed yet, so people browsing the catalog cannot see it. Confirm at least one figure against its source to make it public.
+                </TooltipContent>
+              </Tooltip>
             )}
             <Link href={`/explore/${encodeURIComponent(row.ref)}`}>
               <Button size="sm" variant="outline">
@@ -484,8 +494,9 @@ function FigureReviewRow({
 
         {/* Source span the value was read from */}
         <div className="space-y-1 rounded-md bg-muted/40 p-2.5">
-          <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+          <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground inline-flex items-center gap-1">
             Source span
+            <InfoHint side="top" iconClassName="normal-case">The exact words from the document that the AI read this figure from. Compare the value on the left against this quote (and the linked source) before confirming.</InfoHint>
           </span>
           {quote ? (
             <p className="flex items-start gap-1.5 text-xs italic text-muted-foreground">
@@ -519,6 +530,7 @@ function FigureReviewRow({
         >
           <Check className="w-3.5 h-3.5 mr-1" /> {confirming ? "…" : "Confirm as read"}
         </Button>
+        <InfoHint side="bottom">“Confirm as read” means the AI value matches the source exactly — it becomes a human-verified figure. “Correct” lets you type the right value if the AI misread it. “Reject” removes a figure that is wrong or invented (only AI figures can be removed this way).</InfoHint>
         <Button size="sm" variant="outline" disabled={busy} onClick={() => setCorrectOpen(true)}>
           <Pencil className="w-3.5 h-3.5 mr-1" /> Correct
         </Button>

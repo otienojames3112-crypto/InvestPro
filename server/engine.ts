@@ -6,6 +6,10 @@ import {
   accretedValue,
 } from "../shared/discount";
 import {
+  assetClassForSecurityType,
+  ASSET_PROFILES,
+} from "../shared/assetModel";
+import {
   allocateLiquidReserve,
   type LiquidHome,
   type LiquidAllocationResult,
@@ -1294,6 +1298,23 @@ export function runProjection(
   // dropped every register holding for a brand-new plan.
   for (const sec of actualSecurities) {
     if (sec.isMatured) continue;
+    // Expansion Brief Part 1: route every lot through the shared AssetClass
+    // taxonomy. For the classes the engine knows how to project (the two
+    // government families) behavior is UNCHANGED — we only assert the derived
+    // family agrees with the profile so the abstraction can never silently
+    // diverge from the legacy switch. A price-driven class (equity/REIT/offshore)
+    // has no deterministic accretion/coupon projection yet, so we SKIP it here
+    // rather than mis-project it through discount/coupon math (it is valued from
+    // its market price elsewhere). This keeps the engine the single path without
+    // inventing a parallel one.
+    const derivedClass = (sec as { assetClass?: string }).assetClass
+      ? ((sec as { assetClass?: string }).assetClass as keyof typeof ASSET_PROFILES)
+      : assetClassForSecurityType(sec.securityType);
+    const derivedProfile = ASSET_PROFILES[derivedClass];
+    if (derivedProfile && derivedProfile.priceDriven) {
+      // Market-priced assets are not projected by the compounding engine.
+      continue;
+    }
     const issueDate = new Date(sec.issueDate + "T12:00:00Z");
     const matDate = new Date(sec.maturityDate + "T12:00:00Z");
     const issueMonthOffset = Math.floor(

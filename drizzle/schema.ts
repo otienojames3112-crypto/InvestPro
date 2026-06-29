@@ -316,6 +316,42 @@ export const securities = mysqlTable("securities", {
   notes: text("notes"),
   /** Time Machine: session id when this lot was materialised by a simulation (sandbox only). Null = real record. */
   simSessionId: varchar("simSessionId", { length: 40 }),
+  /**
+   * Expansion Brief Part 1 — generic asset abstraction (all ADDITIVE & NULLABLE
+   * so existing rows are unaffected; backfilled by migration). The engine reads
+   * behavior from the AssetClass profile (shared/assetModel.ts) rather than
+   * switching on securityType.
+   */
+  /** Behavior taxonomy: gov_discount | gov_coupon | cash_mmf | bank_deposit | equity | reit | offshore_fund | alt. */
+  assetClass: mysqlEnum("assetClass", [
+    "cash_mmf",
+    "bank_deposit",
+    "gov_discount",
+    "gov_coupon",
+    "equity",
+    "reit",
+    "offshore_fund",
+    "alt",
+  ]),
+  /** Price-driven assets (equity/REIT/offshore): value = units × unitPrice. */
+  unitPrice: decimal("unitPrice", { precision: 18, scale: 6 }),
+  units: decimal("units", { precision: 18, scale: 6 }),
+  /** Annual dividend yield (%) for equity income. */
+  dividendYieldPct: decimal("dividendYieldPct", { precision: 8, scale: 4 }),
+  /** Annual distribution yield (%) for REIT / fund income. */
+  distributionYieldPct: decimal("distributionYieldPct", { precision: 8, scale: 4 }),
+  /** Denomination currency (default KES; USD etc. for offshore). */
+  currency: varchar("currency", { length: 8 }),
+  /** FX rate used to convert to KES, with provenance below. */
+  fxRateToKes: decimal("fxRateToKes", { precision: 18, scale: 6 }),
+  /** Provenance: source of any scraped price/yield/FX figure (mandatory for price-driven). */
+  dataSource: varchar("dataSource", { length: 200 }),
+  /** Provenance: as-of timestamp for the scraped figure. */
+  dataAsOf: timestamp("dataAsOf"),
+  /** Annualised expected return (%) — reserved for Part 6 (nullable now). */
+  expectedReturnPct: decimal("expectedReturnPct", { precision: 8, scale: 4 }),
+  /** Annualised volatility (%) — reserved for Part 6 (nullable now). */
+  volatilityPct: decimal("volatilityPct", { precision: 8, scale: 4 }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });

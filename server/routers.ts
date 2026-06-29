@@ -134,6 +134,7 @@ import {
   TBILL_TENOR_DAYS,
   type SecurityType as GovSecurityType,
 } from "../shared/securityTenor";
+import { assetClassForSecurityType, assetGuardIssues } from "../shared/assetModel";
 import { buildAllocation, blendedYield } from "../shared/actuals";
 import {
   buildProjectionRange,
@@ -2573,9 +2574,14 @@ export const appRouter = router({
         if (isZero) couponRate = 0;
         // Tax-exempt is derived: IFB exempt, everything else taxable.
         const isTaxExempt = input.isTaxExempt ?? type === "ifb";
+        // Expansion Brief Part 1: stamp the behavior taxonomy at write time using
+        // the shared mapping so the column is never left to a backfill job and
+        // there is one source of truth for an asset's class.
+        const assetClass = assetClassForSecurityType(input.securityType);
         await addSecurity({
           portfolioId: input.portfolioId,
           securityType: input.securityType,
+          assetClass,
           faceValue: String(input.faceValue),
           issueDate: new Date(input.issueDate + "T12:00:00Z"),
           maturityDate: new Date(maturityStr + "T12:00:00Z"),
@@ -2638,7 +2644,11 @@ export const appRouter = router({
         const secUpdate: Record<string, unknown> = {};
         if (input.isMatured !== undefined) secUpdate.isMatured = input.isMatured;
         if (input.notes !== undefined) secUpdate.notes = input.notes;
-        if (input.securityType !== undefined) secUpdate.securityType = input.securityType;
+        if (input.securityType !== undefined) {
+          secUpdate.securityType = input.securityType;
+          // Keep the behavior taxonomy in lockstep with the product type.
+          secUpdate.assetClass = assetClassForSecurityType(input.securityType);
+        }
         if (input.faceValue !== undefined) secUpdate.faceValue = String(input.faceValue);
         if (input.issueDate !== undefined) secUpdate.issueDate = new Date(input.issueDate + "T12:00:00Z");
         // Persist tenor (bonds only); T-bills always clear it.
@@ -2975,6 +2985,7 @@ export const appRouter = router({
           const sec = await addSecurity({
             portfolioId: input.portfolioId,
             securityType,
+            assetClass: assetClassForSecurityType(securityType),
             tenorYears: tenorYears != null ? String(tenorYears) : null,
             faceValue: String(input.amount),
             issueDate: issue,

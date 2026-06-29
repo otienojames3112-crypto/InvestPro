@@ -455,3 +455,389 @@ export function resolveTierSelection(opts: {
 function round2(n: number): number {
   return Math.round((Number(n) || 0) * 100) / 100;
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * Allocation Model — Part 2 of 4: the GLIDE PATH (tier-aware convex de-risking)
+ *
+ * WHAT THIS IS
+ *   A goal's target mix is not static. The glide moves it from the selected
+ *   tier's STARTING template (Part 1) toward the Capital-Preservation END anchor
+ *   as the goal date approaches, so risk is retired automatically as the time to
+ *   recover from a loss shrinks. Every goal ends liquid and safe by its date,
+ *   regardless of how aggressively it began.
+ *
+ * THE CURVE IS CONVEX, NOT LINEAR (the financial heart of it)
+ *   A linear glide retires risk evenly, but the cost of a drawdown rises sharply
+ *   as the goal nears: a 20% equity fall four years out is recoverable; the same
+ *   fall four months out is not. So the interpolation is weighted by a CONVEX
+ *   easing of the time-remaining fraction — the mix stays near the tier's growth
+ *   posture through the early-and-middle journey, then converges quickly toward
+ *   cash in the final stretch. The steepness is an EDITABLE assumption (see
+ *   DEFAULT_GLIDE_PARAMS.steepness), not a magic constant.
+ *
+ * ONE CURVE, NOT TWO SYSTEMS
+ *   The engine's Foundation → Growth → De-risking → Final phases are reframed as
+ *   labeled REGIONS of this same curve (thresholds on time-remaining), not a
+ *   separate mechanism. A Capital-Preservation goal's glide is nearly flat (it
+ *   started safe); an Aggressive long-horizon goal's glide is dramatic — same
+ *   curve function, different start anchor. The deterministic car-plan engine
+ *   keeps its own discrete four-bucket phase table as its source of truth; this
+ *   module REPRODUCES that table through the generalized curve (see
+ *   `engineBucketsForPhase`) and is regression-locked against it, so the existing
+ *   projection does not move.
+ *
+ * WEIGHTS + SHAPE ONLY
+ *   As in Part 1, the glide owns only allocation WEIGHTS (Part 1 templates) and
+ *   the curve-SHAPE parameters (steepness, phase thresholds) — all editable, all
+ *   stored with provenance. No return / volatility / correlation / rate numbers
+ *   live here; those resolve from riskModel / the sourced ingestion layer. The
+ *   glide is a PLAN for managing risk over time, never a promise of a return.
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+/**
+ * Time-remaining fraction: 1.0 at the goal's START, 0.0 at the goal DATE. The
+ * glide is a function of this (time-to-go), never a calendar date, so it behaves
+ * identically for any horizon length.
+ */
+export type TimeRemainingFraction = number;
+
+/**
+ * The four phase labels, expressed as labeled regions of the one glide curve.
+ * Identical strings to the engine's phases so the two never diverge.
+ */
+export type GlidePhase = "foundation" | "growth" | "de-risking" | "final-liquidity";
+
+export const GLIDE_PHASES: readonly GlidePhase[] = [
+  "foundation",
+  "growth",
+  "de-risking",
+  "final-liquidity",
+] as const;
+
+/**
+ * Editable curve-shape parameters. These are the ONLY numbers the glide owns
+ * besides the Part 1 weight templates; they are stored with provenance and tuned
+ * like any other assumption.
+ */
+export interface GlideParams {
+  /**
+   * Convexity exponent applied to the time-remaining fraction (> 1 ⇒ convex,
+   * de-risking accelerates late). At 1.0 the glide is linear; the higher the
+   * value, the longer the mix holds its growth posture before a steep late
+   * descent toward cash.
+   */
+  steepness: number;
+  /**
+   * Phase-region thresholds on the ELAPSED fraction (1 − timeRemaining), in
+   * ascending order. With elapsed e:
+   *   e < foundationEnd        → foundation
+   *   foundationEnd ≤ e < growthEnd     → growth
+   *   growthEnd ≤ e < deRiskingEnd      → de-risking
+   *   e ≥ deRiskingEnd                  → final-liquidity
+   * Defaults mirror the engine's default phase fractions
+   * (0.20 / +0.50 / +0.15 = 0.20, 0.70, 0.85) so the labels line up with the
+   * existing car plan out of the box.
+   */
+  foundationEnd: number;
+  growthEnd: number;
+  deRiskingEnd: number;
+}
+
+/**
+ * Default glide shape.
+ *
+ *   steepness = 2.0 — a quadratic ease. WHY CONVEX & WHY 2.0: a drawdown's cost
+ *   rises roughly with how little time is left to recover, so risk should be
+ *   shed faster as the date nears, not evenly. A quadratic keeps ~the tier's
+ *   growth posture for the first ~half of the journey (at 50% elapsed the mix is
+ *   only ~25% of the way to cash), then accelerates toward the safe anchor in
+ *   the final stretch. It is a deliberately mild, explainable convexity — higher
+ *   values de-risk even later/faster; 1.0 would be a plain linear glide.
+ *
+ *   phase thresholds = 0.20 / 0.70 / 0.85 — the engine's default phase fractions
+ *   (foundation 0.20, growth 0.50, de-risking 0.15, final 0.15) as cumulative
+ *   ELAPSED thresholds, so the glide's regions and the car plan's phases coincide.
+ */
+export const DEFAULT_GLIDE_PARAMS: GlideParams = {
+  steepness: 2.0,
+  foundationEnd: 0.20,
+  growthEnd: 0.70,
+  deRiskingEnd: 0.85,
+};
+
+/**
+ * The END anchor every glide converges to: the Capital-Preservation tier's
+ * template. Read from the (possibly edited) set of templates so an edit to the
+ * CP template automatically moves every glide's destination — one source of
+ * truth. Falls back to the default CP template.
+ */
+export function glideEndAnchor(
+  templates?: Partial<Record<AllocationTier, AllocationWeights>>,
+): AllocationWeights {
+  const cp = templates?.capital_preservation;
+  return cp ? { ...cp } : { ...DEFAULT_ALLOCATION_TEMPLATES.capital_preservation };
+}
+
+/** Clamp a number into [lo, hi]. */
+function clamp(n: number, lo: number, hi: number): number {
+  return Math.min(hi, Math.max(lo, n));
+}
+
+/**
+ * The convex BLEND WEIGHT placed on the START anchor at a given time-remaining
+ * fraction. At trf = 1 (start) it is 1 (all start anchor); at trf = 0 (goal
+ * date) it is 0 (all end anchor). Convexity (steepness > 1) keeps this weight
+ * HIGH for most of the journey then drops it quickly near the end:
+ *
+ *   startWeight(trf) = 1 − (1 − trf) ^ steepness
+ *
+ * Let elapsed = 1 − trf run 0 → 1 over the journey. Raising ELAPSED to a power
+ * > 1 keeps elapsed^k small while elapsed is small (early/mid), so the start
+ * weight stays near 1 — the mix holds its growth posture. As elapsed → 1 (the
+ * final stretch) elapsed^k climbs steeply, so the start weight collapses and the
+ * mix converges quickly toward the safe end anchor. This is the financial heart
+ * of the glide: de-risking ACCELERATES late, because a late drawdown is the one
+ * you cannot recover from. steepness = 1 reduces to a plain linear glide.
+ */
+export function glideStartWeight(
+  timeRemainingFraction: TimeRemainingFraction,
+  params: GlideParams = DEFAULT_GLIDE_PARAMS,
+): number {
+  const trf = clamp(Number(timeRemainingFraction) || 0, 0, 1);
+  const k = Math.max(1, Number(params.steepness) || 1);
+  const elapsed = 1 - trf;
+  return 1 - Math.pow(elapsed, k);
+}
+
+/**
+ * Re-normalise a raw blended mix back to a valid template: clamp negatives,
+ * enforce the cash floor by topping cash up from the largest non-cash bucket if
+ * needed, then rescale every bucket so the whole sums to exactly 100. Interpolating
+ * two valid templates already sums to ~100 and respects the floor (both anchors
+ * do), but float dust and the floor top-up are corrected here so EVERY point on
+ * the glide re-validates.
+ */
+function normaliseToValidTemplate(raw: AllocationWeights): AllocationWeights {
+  const out = {} as AllocationWeights;
+  for (const b of ALLOCATION_BUCKETS) out[b] = Math.max(0, Number(raw[b]) || 0);
+
+  // Enforce the cash floor by pulling from the largest non-cash bucket(s).
+  if (out.cash < MIN_CASH_FLOOR_PCT) {
+    let deficit = MIN_CASH_FLOOR_PCT - out.cash;
+    const donors = ALLOCATION_BUCKETS.filter((b) => b !== "cash").sort(
+      (a, b) => out[b] - out[a],
+    );
+    for (const d of donors) {
+      if (deficit <= 0) break;
+      const take = Math.min(out[d], deficit);
+      out[d] -= take;
+      out.cash += take;
+      deficit -= take;
+    }
+  }
+
+  // Rescale to sum to exactly 100.
+  const total = ALLOCATION_BUCKETS.reduce((s, b) => s + out[b], 0);
+  if (total > 0) {
+    for (const b of ALLOCATION_BUCKETS) out[b] = (out[b] / total) * TEMPLATE_SUM_PCT;
+  }
+  return out;
+}
+
+/**
+ * The glided target allocation for a tier at a given time-remaining fraction.
+ *
+ *   glidedAllocation(tier, trf) = blend( startAnchor=tierTemplate,
+ *                                        endAnchor=capitalPreservation,
+ *                                        w = trf ^ steepness )
+ *
+ * - At trf = 1 it equals the tier's start template; at trf = 0 it equals the
+ *   Capital-Preservation end anchor.
+ * - The result is re-normalised so it ALWAYS sums to 100 and honours the cash
+ *   floor (the brief's re-validation requirement at every point).
+ * - `templates` lets callers pass the stored/edited templates (so edits flow
+ *   through); omitted ⇒ the Part 1 defaults.
+ */
+export function glidedAllocation(
+  tier: AllocationTier,
+  timeRemainingFraction: TimeRemainingFraction,
+  params: GlideParams = DEFAULT_GLIDE_PARAMS,
+  templates?: Partial<Record<AllocationTier, AllocationWeights>>,
+): AllocationWeights {
+  const start = templates?.[tier]
+    ? { ...templates[tier]! }
+    : { ...DEFAULT_ALLOCATION_TEMPLATES[tier] };
+  const end = glideEndAnchor(templates);
+  const w = glideStartWeight(timeRemainingFraction, params);
+
+  const blended = {} as AllocationWeights;
+  for (const b of ALLOCATION_BUCKETS) {
+    blended[b] = start[b] * w + end[b] * (1 - w);
+  }
+  return normaliseToValidTemplate(blended);
+}
+
+/**
+ * The phase LABEL for a point on the curve, by ELAPSED fraction (1 − trf), using
+ * the editable thresholds. This is the single mapping that re-expresses the
+ * engine's four phases as regions of the one glide.
+ */
+export function glidePhaseForElapsed(
+  elapsedFraction: number,
+  params: GlideParams = DEFAULT_GLIDE_PARAMS,
+): GlidePhase {
+  const e = clamp(Number(elapsedFraction) || 0, 0, 1);
+  if (e < params.foundationEnd) return "foundation";
+  if (e < params.growthEnd) return "growth";
+  if (e < params.deRiskingEnd) return "de-risking";
+  return "final-liquidity";
+}
+
+/** Same, but taking the time-remaining fraction directly (elapsed = 1 − trf). */
+export function glidePhaseForTimeRemaining(
+  timeRemainingFraction: TimeRemainingFraction,
+  params: GlideParams = DEFAULT_GLIDE_PARAMS,
+): GlidePhase {
+  return glidePhaseForElapsed(1 - clamp(Number(timeRemainingFraction) || 0, 0, 1), params);
+}
+
+/* ───────── Bridge: reproduce the engine's discrete four-bucket plan ───────── */
+
+/**
+ * The four engine buckets the deterministic car-plan projects over. The glide's
+ * five allocation buckets collapse onto these for the car plan, which holds no
+ * equity/REIT/offshore: cash ≈ MMF, and the government sleeve (gov) is split
+ * across T-bills / IFB / FXD by phase.
+ */
+export interface EngineBucketWeights {
+  mmf: number;
+  tbill: number;
+  ifb: number;
+  fxd: number;
+}
+
+/**
+ * The engine's documented phase → four-bucket target table, reproduced here so
+ * the generalized model can express the car plan's behavior as regions of the
+ * curve WITHOUT the engine importing this module. This is the single fixture the
+ * regression test pins against `engine.getPhaseAllocation`; if the engine's
+ * table ever changes, the regression test fails loudly and this must be updated
+ * in lock-step.
+ *
+ *   foundation:      MMF 50 / Tbill 50 / IFB  0 / FXD  0
+ *   growth:          MMF 20 / Tbill 20 / IFB 45 / FXD 15
+ *   de-risking:      MMF 25 / Tbill 35 / IFB 30 / FXD 10
+ *   final-liquidity: MMF 40 / Tbill 45 / IFB 10 / FXD  5
+ */
+export const ENGINE_PHASE_BUCKETS: Record<GlidePhase, EngineBucketWeights> = {
+  foundation: { mmf: 0.5, tbill: 0.5, ifb: 0.0, fxd: 0.0 },
+  growth: { mmf: 0.2, tbill: 0.2, ifb: 0.45, fxd: 0.15 },
+  "de-risking": { mmf: 0.25, tbill: 0.35, ifb: 0.3, fxd: 0.1 },
+  "final-liquidity": { mmf: 0.4, tbill: 0.45, ifb: 0.1, fxd: 0.05 },
+};
+
+/**
+ * The engine's four-bucket target for a phase. Short-horizon plans use MMF +
+ * 91-day T-bills only — identical to the engine's own short-horizon rule — so
+ * the generalized model reproduces that branch too.
+ */
+export function engineBucketsForPhase(
+  phase: GlidePhase,
+  isShortHorizon = false,
+): EngineBucketWeights {
+  if (isShortHorizon) return { mmf: 0.5, tbill: 0.5, ifb: 0, fxd: 0 };
+  return { ...ENGINE_PHASE_BUCKETS[phase] };
+}
+
+/* ───────────────────────── Full-curve query (for display) ───────────────── */
+
+/** One sampled point on the glide curve, for charting "how your mix shifts". */
+export interface GlideSamplePoint {
+  /** Elapsed fraction 0..1 (0 = start, 1 = goal date). */
+  elapsedFraction: number;
+  /** Time-remaining fraction 1..0. */
+  timeRemainingFraction: TimeRemainingFraction;
+  /** Whole month index when a horizon is supplied (else null). */
+  monthIndex: number | null;
+  /** The phase region this point falls in. */
+  phase: GlidePhase;
+  /** The glided five-bucket target at this point (sums to 100, cash floored). */
+  weights: AllocationWeights;
+}
+
+/**
+ * Sample the WHOLE glide curve from start (elapsed 0) to goal date (elapsed 1)
+ * so the UI (Part 4) can show the entire de-risking path, not just today's
+ * point — making the glide explainable as an intentional design, never drift.
+ *
+ * - When `horizonMonths` is provided, samples once per month (inclusive of both
+ *   ends) and stamps each point's month index; otherwise samples `steps + 1`
+ *   evenly-spaced points.
+ * - Pure: returns weights + shape only, no return/rate numbers.
+ */
+export function sampleGlidePath(opts: {
+  tier: AllocationTier;
+  horizonMonths?: number | null;
+  steps?: number;
+  params?: GlideParams;
+  templates?: Partial<Record<AllocationTier, AllocationWeights>>;
+}): GlideSamplePoint[] {
+  const params = opts.params ?? DEFAULT_GLIDE_PARAMS;
+  const horizon =
+    opts.horizonMonths != null && Number(opts.horizonMonths) > 0
+      ? Math.round(Number(opts.horizonMonths))
+      : null;
+  const n = horizon ?? Math.max(1, Math.round(Number(opts.steps) || 24));
+
+  const points: GlideSamplePoint[] = [];
+  for (let i = 0; i <= n; i++) {
+    const elapsedFraction = i / n;
+    const timeRemainingFraction = 1 - elapsedFraction;
+    points.push({
+      elapsedFraction,
+      timeRemainingFraction,
+      monthIndex: horizon != null ? i : null,
+      phase: glidePhaseForElapsed(elapsedFraction, params),
+      weights: glidedAllocation(opts.tier, timeRemainingFraction, params, opts.templates),
+    });
+  }
+  return points;
+}
+
+/**
+ * Validate a set of glide-shape params: steepness must be a finite number ≥ 1
+ * (≥ 1 keeps the curve convex/linear, never concave — de-risking must not slow
+ * down late), and the three phase thresholds must be finite, within (0,1), and
+ * strictly ascending. Returns all failing reasons for an editor to show at once.
+ */
+export function validateGlideParams(
+  params: Partial<GlideParams> | null | undefined,
+): { ok: boolean; errors: string[] } {
+  const errors: string[] = [];
+  const p = params ?? {};
+
+  const k = Number(p.steepness);
+  if (!Number.isFinite(k) || k < 1) {
+    errors.push("De-risking aggressiveness (steepness) must be a number ≥ 1.");
+  }
+
+  const fe = Number(p.foundationEnd);
+  const ge = Number(p.growthEnd);
+  const de = Number(p.deRiskingEnd);
+  for (const [name, v] of [
+    ["Foundation end", fe],
+    ["Growth end", ge],
+    ["De-risking end", de],
+  ] as const) {
+    if (!Number.isFinite(v) || v <= 0 || v >= 1) {
+      errors.push(`${name} threshold must be strictly between 0 and 1.`);
+    }
+  }
+  if (Number.isFinite(fe) && Number.isFinite(ge) && Number.isFinite(de)) {
+    if (!(fe < ge && ge < de)) {
+      errors.push("Phase thresholds must be strictly ascending (foundation < growth < de-risking).");
+    }
+  }
+
+  return { ok: errors.length === 0, errors };
+}

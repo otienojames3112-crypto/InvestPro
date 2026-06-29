@@ -39,6 +39,8 @@ import {
   type InsertAiIntakeAudit,
   allocationTemplates,
   type AllocationTemplateRow,
+  allocationGlideParams,
+  type AllocationGlideParamsRow,
 } from "../drizzle/schema";
 import { ENV } from "./_core/env";
 import { computeActualsTotals, estInterestToDate, govAccruedInterestTotal } from "../shared/actuals";
@@ -1926,6 +1928,9 @@ import {
   ALLOCATION_BUCKETS,
   defaultTemplateFor,
   validateAllocationWeights,
+  type GlideParams,
+  DEFAULT_GLIDE_PARAMS,
+  validateGlideParams,
 } from "../shared/allocationModel";
 
 /** Parse a YYYY-MM-DD provenance date into a Date, or null when absent/invalid. */
@@ -2037,6 +2042,119 @@ export async function saveAllocationTemplate(args: {
     await db.insert(allocationTemplates).values({
       tier: args.tier,
       weights,
+      source: args.source ?? null,
+      asOfDate,
+      notes: args.notes ?? null,
+    });
+  }
+  return { ok: true, errors: [] };
+}
+
+/* ── Allocation Model Part 2: editable glide-curve shape parameters ────────── */
+
+/** The sentinel key for the single global glide-params row. */
+const GLIDE_PARAMS_KEY = "global";
+
+/** Coerce a stored params blob into a clean GlideParams, defaulting any missing field. */
+function coerceGlideParams(raw: unknown): GlideParams {
+  const src = (raw ?? {}) as Record<string, unknown>;
+  const num = (v: unknown, fallback: number) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : fallback;
+  };
+  return {
+    steepness: num(src.steepness, DEFAULT_GLIDE_PARAMS.steepness),
+    foundationEnd: num(src.foundationEnd, DEFAULT_GLIDE_PARAMS.foundationEnd),
+    growthEnd: num(src.growthEnd, DEFAULT_GLIDE_PARAMS.growthEnd),
+    deRiskingEnd: num(src.deRiskingEnd, DEFAULT_GLIDE_PARAMS.deRiskingEnd),
+  };
+}
+
+/** The stored glide params with their provenance, for an editor/display. */
+export interface StoredGlideParams {
+  params: GlideParams;
+  source: string | null;
+  asOf: string | null;
+  notes: string | null;
+  updatedAt: number | null;
+}
+
+/** Map a stored row to the StoredGlideParams shape. */
+function rowToGlideParams(row: AllocationGlideParamsRow): StoredGlideParams {
+  return {
+    params: coerceGlideParams(row.params),
+    source: row.source ?? null,
+    asOf: row.asOfDate ? String(row.asOfDate) : null,
+    notes: row.notes ?? null,
+    updatedAt: row.updatedAt ? new Date(row.updatedAt).getTime() : null,
+  };
+}
+
+/**
+ * Read the global glide-curve shape. Falls back to the documented defaults
+ * (DEFAULT_GLIDE_PARAMS) when no row is present, so the glide always has a valid,
+ * complete shape. Read-only.
+ */
+export async function getGlideParams(): Promise<StoredGlideParams> {
+  const db = await getDb();
+  if (db) {
+    const rows = await db
+      .select()
+      .from(allocationGlideParams)
+      .where(eq(allocationGlideParams.singletonKey, GLIDE_PARAMS_KEY))
+      .limit(1);
+    if (rows[0]) return rowToGlideParams(rows[0]);
+  }
+  return {
+    params: { ...DEFAULT_GLIDE_PARAMS },
+    source: "Default glide shape (illustrative; editable)",
+    asOf: null,
+    notes: null,
+    updatedAt: null,
+  };
+}
+
+/**
+ * Save (upsert) the global glide-curve shape. The params are VALIDATED first
+ * (steepness ≥ 1 so the curve stays convex/linear — never concave; phase
+ * thresholds strictly ascending within (0,1)); a non-conforming shape is REJECTED
+ * and never written. Provenance (source/asOf/notes) is recorded alongside.
+ */
+export async function saveGlideParams(args: {
+  params: GlideParams;
+  source?: string | null;
+  asOf?: string | null;
+  notes?: string | null;
+}): Promise<{ ok: boolean; errors: string[] }> {
+  const validation = validateGlideParams(args.params);
+  if (!validation.ok) return { ok: false, errors: validation.errors };
+
+  const db = await getDb();
+  if (!db) return { ok: false, errors: ["Database unavailable."] };
+
+  const params = {
+    steepness: Number(args.params.steepness),
+    foundationEnd: Number(args.params.foundationEnd),
+    growthEnd: Number(args.params.growthEnd),
+    deRiskingEnd: Number(args.params.deRiskingEnd),
+  };
+  const asOfDate = parseAsOfDate(args.asOf);
+
+  const existing = await db
+    .select({ id: allocationGlideParams.id })
+    .from(allocationGlideParams)
+    .where(eq(allocationGlideParams.singletonKey, GLIDE_PARAMS_KEY))
+    .limit(1);
+
+  if (existing[0]) {
+    await db
+      .update(allocationGlideParams)
+      .set({ params, source: args.source ?? null, asOfDate, notes: args.notes ?? null })
+      .where(eq(allocationGlideParams.singletonKey, GLIDE_PARAMS_KEY));
+  } else {
+    await db.insert(allocationGlideParams).values({
+      singletonKey: GLIDE_PARAMS_KEY,
+      params,
       source: args.source ?? null,
       asOfDate,
       notes: args.notes ?? null,

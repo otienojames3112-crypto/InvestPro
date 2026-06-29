@@ -102,6 +102,8 @@ import {
   reviewAiCandidate,
   insertAiIntakeAudit,
   listAiIntakeAudit,
+  listAllocationTemplates,
+  getGlideParams,
 } from "./db";
 import { OPPORTUNITY_SEED } from "./opportunitySeed";
 import {
@@ -112,6 +114,11 @@ import {
   type ExtractionSource,
 } from "./aiIntakeService";
 import { extractionToAdapterResult, aiInstrumentToProvenanceMap } from "../shared/aiAdapter";
+import {
+  ALLOCATION_TIERS,
+  type AllocationTier,
+  sampleGlidePath,
+} from "../shared/allocationModel";
 import { storagePut, storageGetSignedUrl } from "./storage";
 import { stripVerdictFields } from "../shared/aiIntake";
 import {
@@ -5981,6 +5988,60 @@ export const appRouter = router({
       }
       return { success: true, deleted: sandboxes.length };
     }),
+  }),
+
+  /**
+   * Allocation Model (Parts 1–2) — read-only surfaces. The target templates and
+   * the glide curve are queryable so the UI (Part 4) can show "your mix today and
+   * how it is designed to shift toward safety as your goal approaches" — the
+   * whole curve, framed as an intentional plan, never a promise of a return.
+   * Editing templates/params goes through dedicated admin paths; these are reads.
+   */
+  allocation: router({
+    /** Every tier's (stored-or-default) target template, in tier order. */
+    templates: publicProcedure.query(async () => {
+      return await listAllocationTemplates();
+    }),
+
+    /** The global glide-curve shape + its provenance (falls back to defaults). */
+    glideParams: publicProcedure.query(async () => {
+      return await getGlideParams();
+    }),
+
+    /**
+     * The FULL glide curve for a tier over a horizon: a sampled path of
+     * { elapsed, time-remaining, month, phase, weights } the UI charts to show
+     * the de-risking over time. Uses the stored (editable) templates + glide
+     * shape so edits flow through. Weights/shape only — no return/rate numbers.
+     */
+    glidePath: publicProcedure
+      .input(
+        z.object({
+          tier: z.enum(
+            ALLOCATION_TIERS as readonly [AllocationTier, ...AllocationTier[]],
+          ),
+          horizonMonths: z.number().int().positive().max(600).optional(),
+          steps: z.number().int().positive().max(240).optional(),
+        }),
+      )
+      .query(async ({ input }) => {
+        const [templates, glide] = await Promise.all([
+          listAllocationTemplates(),
+          getGlideParams(),
+        ]);
+        // Build the stored/edited template map the sampler reads from.
+        const templateMap = Object.fromEntries(
+          templates.map((t) => [t.tier, t.weights]),
+        ) as Record<AllocationTier, (typeof templates)[number]["weights"]>;
+        const points = sampleGlidePath({
+          tier: input.tier,
+          horizonMonths: input.horizonMonths ?? null,
+          steps: input.steps,
+          params: glide.params,
+          templates: templateMap,
+        });
+        return { tier: input.tier, params: glide.params, points };
+      }),
   }),
 });
 export type AppRouter = typeof appRouter;

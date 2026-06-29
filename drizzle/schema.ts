@@ -905,6 +905,32 @@ export type AllocationTemplateRow = typeof allocationTemplates.$inferSelect;
 export type InsertAllocationTemplateRow = typeof allocationTemplates.$inferInsert;
 
 /**
+ * Allocation Model Part 2 — the GLIDE-curve shape parameters, editable and
+ * stored with provenance (same pattern as the templates above). A SINGLE global
+ * row holds the de-risking aggressiveness (steepness) and the phase-region
+ * thresholds; absent ⇒ the documented defaults (DEFAULT_GLIDE_PARAMS) are used.
+ * The glide owns only WEIGHTS (templates above) and this SHAPE — no return/rate
+ * numbers, which resolve from the sourced risk layer.
+ */
+export const allocationGlideParams = mysqlTable("allocation_glide_params", {
+  id: int("id").autoincrement().primaryKey(),
+  /** Sentinel singleton key so there is exactly one global row. */
+  singletonKey: varchar("singletonKey", { length: 16 }).notNull().unique(),
+  /** { steepness, foundationEnd, growthEnd, deRiskingEnd } — the editable shape. */
+  params: json("params").$type<Record<string, number>>().notNull(),
+  /** Provenance: methodology note / rationale for the chosen shape. */
+  source: varchar("source", { length: 500 }),
+  /** "As of" / last-reviewed date (YYYY-MM-DD), provenance only. */
+  asOfDate: date("asOfDate"),
+  /** Free-text rationale or edit note. */
+  notes: text("notes"),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type AllocationGlideParamsRow = typeof allocationGlideParams.$inferSelect;
+export type InsertAllocationGlideParamsRow = typeof allocationGlideParams.$inferInsert;
+
+/**
  * Audit log — change trail for rate and deposit edits (defensibility).
  * Records who changed what, when, and the before/after values.
  */

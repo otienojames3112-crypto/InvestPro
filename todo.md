@@ -1066,3 +1066,29 @@
 - [x] Horizon bands at/around every boundary; suggestTier standard/critical/aspirational + default nature
 - [x] resolveTierSelection: default, riskier-override conflict, safer-override no-conflict, same-as-suggestion, critical-shift-vs-base, unknown-value fallback
 - [x] Type gate clean; full suite green (1018 → 1041, +23); no existing behavior changed
+
+## Allocation Model — Part 2 (the glide path; tier-aware convex de-risking)
+
+### Investigation (no-regression anchor)
+- [x] Engine phases driven by getPhase/getPhaseBoundaries (proportional fractions); per-month NON-MMF target weights come from getPhaseAllocation(phase) — discrete switch at boundaries
+- [x] Phase→mix table (foundation 50/50/0/0, growth 20/20/45/15, de-risking 25/35/30/10, final 40/45/10/5); engine sizes sweeps toward these; liquidAllocator only diversifies the CASH portion across issuers (does not set risky/cash split)
+- [x] Bridge: car plan uses 4 engine buckets (mmf/tbill/ifb/fxd) with NO equity/reit/offshore; Part 1 uses 5 alloc buckets (cash/gov/equity/reit/offshore). cash≈mmf, gov≈tbill+ifb+fxd for this plan. Glide is the generalized model; engine keeps getPhaseAllocation as source of truth (regression-locked)
+
+### Glide model (shared/allocationModel.ts)
+- [x] glidedAllocation(tier, trf): blends start tier template → CP end anchor by trf^steepness; normaliseToValidTemplate re-validates (sum 100 + cash floor) at every point
+- [x] Convex easing glideStartWeight = trf^steepness (steepness default 2.0, documented why convex); editable via GlideParams; validateGlideParams enforces steepness ≥ 1 (never concave)
+- [x] Foundation/Growth/De-risking/Final as labeled regions via glidePhaseForElapsed with editable thresholds (defaults 0.20/0.70/0.85 = engine's phase fractions); engineBucketsForPhase + ENGINE_PHASE_BUCKETS reproduce the car plan's 4-bucket table (regression fixture)
+- [x] sampleGlidePath() returns the full curve (per-month or N steps) with phase + weights for Part 4 display; weights/shape only, no return/rate numbers
+
+### Wiring + storage
+- [x] Glide exposed as the queryable TARGET source via allocation.glidePath / .templates / .glideParams (reads stored+edited templates so edits flow through); engine keeps its discrete getPhaseAllocation as source of truth — NO parallel allocator, no double-allocation, deterministic engine still doesn't forward-project price-driven assets (regression-locked via ENGINE_PHASE_BUCKETS)
+- [x] Store editable curve params (steepness, phase thresholds) with provenance: allocation_glide_params singleton table + getGlideParams/saveGlideParams (validated, reuses Part 1 storage pattern); seeded default row
+
+### Tests + gate (server/allocationGlide.test.ts, 20 tests)
+- [x] Interpolation endpoints: trf=1 == tier template, trf=0 == capital preservation; CP glide is flat
+- [x] Convexity: late de-risking faster than early (fixed easing to 1-(1-trf)^k so de-risking ACCELERATES late, matching the brief); steepness=1 == linear; higher steepness holds growth longer
+- [x] Mid-point validation: every sampled month sums to 100, holds cash floor, passes validateAllocationWeights; equity monotonically non-increasing
+- [x] Phase regions: default thresholds map to the 4 phases; phase vocabulary matches engine; mirror inputs
+- [x] Param validation: defaults ok; rejects steepness<1, non-ascending thresholds, out-of-(0,1)
+- [x] CAR-PLAN REGRESSION: engineBucketsForPhase + ENGINE_PHASE_BUCKETS pinned byte-for-byte against LIVE getPhaseAllocation (+short-horizon); glide thresholds line up with getPhaseBoundaries
+- [x] Type gate clean; full suite green (1041 → 1061, +20); no existing behavior changed

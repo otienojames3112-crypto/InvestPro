@@ -70,13 +70,15 @@ describe("opportunity seed — neutral, sourced, no ranking", () => {
 
 describe("neutral default ordering (asset class, then name)", () => {
   // Mirrors the server's orderBy(asc(assetClass), asc(name)) without a DB.
+  // Mirror the server's collation sort: asset class asc, then name asc. The name
+  // tiebreak uses localeCompare so this sort and the localeCompare assertions
+  // below stay self-consistent at any catalog size (raw < / > can disagree with
+  // localeCompare on mixed case, which is a test artifact, not a product change).
   function neutralSort<T extends { assetClass: string; name: string }>(rows: T[]): T[] {
     return [...rows].sort((a, b) =>
       a.assetClass < b.assetClass ? -1
       : a.assetClass > b.assetClass ? 1
-      : a.name < b.name ? -1
-      : a.name > b.name ? 1
-      : 0,
+      : a.name.localeCompare(b.name),
     );
   }
 

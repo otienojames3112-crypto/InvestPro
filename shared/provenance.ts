@@ -476,3 +476,122 @@ export function reconcileScrape(
 
   return { merged, conflicts, changed };
 }
+
+/**
+ * Part 7.5 — per-asset-type staleness thresholds.
+ *
+ * A scraped figure goes "stale" at a cadence that matches how often its source
+ * actually refreshes. A market-priced instrument (equity / REIT / offshore fund)
+ * is meant to be daily, so it goes stale quickly; bonds, bills, MMF and bank
+ * deposits move on a weekly/auction cadence, so a week-old figure is still fresh.
+ * These mirror the ingestion cadence in `shared/ingestion.ts` (equities daily,
+ * bonds/MMF weekly/per-auction) so display and pull policy never drift.
+ *
+ * The keys are the AssetClass strings from `shared/assetModel.ts`; we accept a
+ * plain string (the row column is a string) and fall back to the generic
+ * `STALE_AFTER_DAYS` for anything unknown, so this never throws on a new class.
+ */
+export const STALE_AFTER_DAYS_BY_CLASS: Record<string, number> = {
+  equity: 3, // listed shares — daily close; allow a long weekend before "stale"
+  reit: 3, // listed property fund — daily close
+  offshore_fund: 4, // offshore close + FX; allow a small settlement/holiday buffer
+  cash_mmf: 8, // MMF yields are published ~weekly
+  bank_deposit: 35, // deposit rate cards change rarely (monthly-ish)
+  gov_discount: 8, // T-bill auctions are weekly
+  gov_coupon: 35, // bond coupons/levels move per-auction (monthly-ish)
+  alt: STALE_AFTER_DAYS,
+};
+
+/** The stale threshold (in days) for a given asset class, with a safe default. */
+export function staleDaysForClass(assetClass: string | null | undefined): number {
+  if (!assetClass) return STALE_AFTER_DAYS;
+  return STALE_AFTER_DAYS_BY_CLASS[assetClass] ?? STALE_AFTER_DAYS;
+}
+
+/**
+ * Class-aware variant of {@link effectiveState}. A human-checked figure keeps its
+ * human state regardless of age. An unchecked scraped figure becomes `stale` once
+ * its as-of date is older than the per-class threshold. Pure projection — never
+ * mutates stored state. When `assetClass` is omitted this matches `effectiveState`.
+ */
+export function effectiveStateForClass(
+  p: FieldProvenance,
+  nowMs: number,
+  assetClass: string | null | undefined,
+): VerificationState {
+  if (isHumanChecked(p.verificationState)) return p.verificationState;
+  const asOf = p.asOf;
+  if (asOf === null) return p.verificationState;
+  const ageDays = (nowMs - asOf) / (1000 * 60 * 60 * 24);
+  if (ageDays >= staleDaysForClass(assetClass)) return "stale";
+  return p.verificationState;
+}
+
+/** Whole-number age in days of a figure's as-of date, or null when unknown. */
+export function figureAgeDays(p: FieldProvenance, nowMs: number): number | null {
+  if (p.asOf === null) return null;
+  return Math.floor((nowMs - p.asOf) / (1000 * 60 * 60 * 24));
+}
+
+/**
+ * Part 7.5 — the non-blocking "verify before relying on it" prompt model used at
+ * the Model-in-my-plan step. Given the figures that actually drive a modeled
+ * holding (price for price-driven assets, the income/yield figure otherwise), it
+ * reports whether ANY of them is stale or not-yet-human-verified, and a quiet
+ * sentence the UI can show. It NEVER blocks: `shouldPrompt` is advisory only.
+ *
+ * This reuses the same provenance + class-threshold logic as the badges, so the
+ * prompt and the per-figure markers can never disagree.
+ */
+export interface ModelFreshnessPrompt {
+  shouldPrompt: boolean;
+  /** The driving figures that triggered the prompt (for precise copy). */
+  flagged: Array<{
+    field: FieldKey;
+    state: VerificationState;
+    ageDays: number | null;
+  }>;
+  /** A single quiet sentence, or null when every driving figure is fine. */
+  message: string | null;
+}
+
+export function modelFreshnessPrompt(args: {
+  map: FieldProvenanceMap | null | undefined;
+  assetClass: string | null | undefined;
+  /** Which figures drive this holding's model (defaults to price + yield). */
+  drivingFields?: FieldKey[];
+  nowMs: number;
+}): ModelFreshnessPrompt {
+  const map = args.map ?? {};
+  const driving = args.drivingFields ?? (["price", "yield", "distribution", "coupon"] as FieldKey[]);
+  const flagged: ModelFreshnessPrompt["flagged"] = [];
+
+  for (const field of driving) {
+    const p = map[field];
+    if (!p) continue;
+    const state = effectiveStateForClass(p, args.nowMs, args.assetClass);
+    if (state === "stale" || state === "scraped_unverified") {
+      flagged.push({ field, state, ageDays: figureAgeDays(p, args.nowMs) });
+    }
+  }
+
+  if (flagged.length === 0) {
+    return { shouldPrompt: false, flagged: [], message: null };
+  }
+
+  // Build one quiet sentence. Prefer the strongest caution (stale > unverified).
+  const stale = flagged.find((f) => f.state === "stale");
+  if (stale) {
+    const age = stale.ageDays != null ? `${stale.ageDays} day${stale.ageDays !== 1 ? "s" : ""} old` : "old";
+    return {
+      shouldPrompt: true,
+      flagged,
+      message: `This figure is about ${age} and no one has checked it recently — confirm or update it before relying on this model.`,
+    };
+  }
+  return {
+    shouldPrompt: true,
+    flagged,
+    message: "This figure is a raw scrape that no one has verified yet — confirm or update it before relying on this model.",
+  };
+}

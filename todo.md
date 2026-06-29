@@ -909,3 +909,27 @@
 - [x] Maintainer-only "Add instrument" button on Explore; Source Conflicts gated on maintainer role
 - [x] Tests: humanField + override-with-source (pure), admin gating (FORBIDDEN 10002), addOpportunity happy-path + duplicate-ref
 - [x] Full suite green (934) + tsc clean; live no-leftover verified (test row deactivated in teardown)
+
+## Expansion Brief — Parts 7.4–7.6 (catalog expansion + staleness/honesty + guardrails)
+
+- [ ] 7.4 Expand seed: fuller NSE equity slice, active gov bond/bill series, major Kenyan MMFs, main REITs, offshore set (global equity, S&P, USD MMF)
+- [ ] 7.4 Every added instrument carries a real source + per-figure provenance + a verification state (not unverified placeholders)
+- [ ] 7.4 Default catalog ordering stays neutral (asset class, then name) regardless of size
+- [ ] 7.5 Wire real asOf/fetchedAt into staleness display; per-asset-type thresholds (equities daily, bonds/MMF weekly)
+- [ ] 7.5 Non-blocking prompt at "Model in my plan" when figure is stale or scraped_unverified ("N days old / not yet human-verified; confirm or update")
+- [ ] 7.5 Persistent "information only — verify before acting" disclaimer stays; no scraped figure presented as verified/guaranteed
+- [ ] 7.6 Guardrail tests: ingestion has no ranking path; neutral default order at any catalog size; no silent clobber; source+age+state always shown
+- [ ] Acceptance: existing tests pass; fixed-income plans and numbers unchanged
+- [ ] Export full build code as a downloadable archive for the user
+
+## Expansion Brief — Parts 7.4–7.6 (DONE)
+
+- [x] 7.4 Catalog expanded to a representative universe (29 instruments): fuller NSE equities, active gov coupon (FXD 2/5/10/15Y) + IFB, T-bills (91/182/364), major MMFs (CIC/Sanlam/NCBA/Etica/Madison-style), REITs (FAHR/Acorn I-REIT/D-REIT), offshore (VWRA/S&P 500/USD MMF)
+- [x] 7.4 Every added instrument carries real source + per-figure provenance + verification state via withProvenance (no unverified placeholders; scraped_unverified)
+- [x] 7.4 Default catalog order stays neutral (asset class, then name) regardless of size — no popular/top sort
+- [x] 7.4 New rows inserted insert-only (existing rows' provenance untouched; human values protected)
+- [x] 7.5 Per-asset-type staleness thresholds (equity/reit 3d, offshore 4d, mmf/t-bill 8d, bonds/deposit ~35d) in effectiveStateForClass/staleDaysForClass
+- [x] 7.5 Real asOf/fetchedAt wired into the freshness display (Explore age chips reflect actual data age per class)
+- [x] 7.5 Non-blocking model-step prompt (modelFreshnessPrompt) in ModelDrawer for stale/scraped_unverified driving figures; commit never blocked; "information only" disclaimer stays
+- [x] 7.6 Guardrail tests: facts-only at scale, neutral order at 500 rows, no silent clobber, source+age+state always present (catalogGuardrails.test.ts, 15 tests)
+- [x] Fixed-income plans/numbers unchanged; full suite 949 green; tsc clean

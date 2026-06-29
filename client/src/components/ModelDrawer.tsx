@@ -33,6 +33,11 @@ import {
 } from "lucide-react";
 import { profileFor, type AssetClass } from "@shared/assetModel";
 import { defaultRiskFor } from "@shared/riskModel";
+import {
+  modelFreshnessPrompt,
+  type FieldProvenanceMap,
+  type FieldKey,
+} from "@shared/provenance";
 import { usePortfolio } from "@/contexts/PortfolioContext";
 import { trpc } from "@/lib/trpc";
 import { toast } from "sonner";
@@ -60,6 +65,8 @@ export interface ModelDrawerOpportunity {
   trailingReturnPct: string | null;
   dataSource: string | null;
   dataAsOf: Date | string | null;
+  /** Part 7.5: per-figure provenance so the model step can flag stale/unverified driving figures. */
+  fieldProvenance?: FieldProvenanceMap | null;
 }
 
 function n(v: string | null | undefined): number | null {
@@ -84,6 +91,23 @@ export function ModelDrawer({
   const { mode, portfolioId } = usePortfolio();
   const [, navigate] = useLocation();
   const profile = profileFor(opportunity.assetClass as AssetClass);
+
+  // Part 7.5: a quiet, NON-BLOCKING freshness prompt for the figures that actually
+  // drive this holding's model. Price-driven assets lean on `price`; income assets
+  // lean on the yield/distribution/coupon figure. We reuse the shared provenance
+  // logic + per-asset-class staleness thresholds so this can never disagree with
+  // the per-figure badges shown on the detail page.
+  const freshness = useMemo(() => {
+    const driving: FieldKey[] = profile.priceDriven
+      ? ["price"]
+      : ["yield", "distribution", "coupon"];
+    return modelFreshnessPrompt({
+      map: opportunity.fieldProvenance ?? null,
+      assetClass: opportunity.assetClass,
+      drivingFields: driving,
+      nowMs: Date.now(),
+    });
+  }, [opportunity.fieldProvenance, opportunity.assetClass, profile.priceDriven]);
 
   // ── User inputs (catalog values prefill, but the user owns them all) ─────────
   const indicativePrice = n(opportunity.lastPrice);
@@ -210,6 +234,17 @@ export function ModelDrawer({
               you would actually do.
             </p>
           </div>
+
+          {/* Part 7.5: quiet, NON-BLOCKING freshness prompt for the driving figure(s). */}
+          {freshness.shouldPrompt && (
+            <div className="rounded-lg border border-sky-500/30 bg-sky-500/5 p-3 flex items-start gap-2">
+              <HelpCircle className="w-4 h-4 text-sky-600 dark:text-sky-400 shrink-0 mt-0.5" />
+              <p className="text-[11px] text-sky-800 dark:text-sky-300 leading-relaxed">
+                {freshness.message} You can still model it now — this is a heads-up,
+                not a block.
+              </p>
+            </div>
+          )}
 
           {/* ── Inputs ─────────────────────────────────────────────────── */}
           <div className="space-y-4">

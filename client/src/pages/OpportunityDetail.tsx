@@ -576,6 +576,7 @@ export default function OpportunityDetail() {
           trailingReturnPct: r.trailingReturnPct,
           dataSource: r.dataSource,
           dataAsOf: r.dataAsOf,
+          fieldProvenance: fp,
         }}
         open={modelOpen}
         onOpenChange={setModelOpen}

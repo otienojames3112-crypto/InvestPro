@@ -251,6 +251,11 @@ import {
   type AllocationInput,
   type AllocationResult,
 } from "./actuals";
+import {
+  projectHoldingToHorizon,
+  type IncomeCadence,
+  type IncomeDisposition,
+} from "./holdingValuation";
 
 /**
  * The honest, source-of-truth-reusing preview of what adding a modeled holding
@@ -289,6 +294,20 @@ export interface ModelPreviewInput {
   assumedReturnOptimistic?: number | null;
   /** Years used for the holding's own scenario projection (plan horizon). */
   horizonYears: number;
+  /**
+   * Part 4: the BEHAVIOUR asset class (equity/reit/offshore/...) so the single
+   * valuation pipeline decomposes capital growth vs income and nets income
+   * through `taxFor()`. Falls back to the register class mapping when omitted.
+   */
+  assetClass?: AssetClass;
+  /** Assumed income (dividend/distribution) rate %/yr. */
+  incomeRatePct?: number | null;
+  /** Income payment cadence (annual by default for equity/REIT/offshore). */
+  incomeCadence?: IncomeCadence;
+  /** Where net income goes: swept to liquid (default) or reinvested (DRIP). */
+  incomeDisposition?: IncomeDisposition;
+  /** User-supplied WHT rate for REIT/offshore distributions (%). */
+  userTaxRatePct?: number | null;
 }
 
 export interface ModelPreviewResult {
@@ -310,6 +329,18 @@ export interface ModelPreviewResult {
     base: number | null;
     optimistic: number | null;
     years: number;
+  };
+  /**
+   * Part 4: net income received over the horizon (base scenario) and whether the
+   * modeled tax rate is jurisdiction-dependent (user should confirm). Income is
+   * shown distinctly from capital so it is never double-counted.
+   */
+  income: {
+    netOverHorizonBase: number | null;
+    taxRatePct: number | null;
+    taxRequiresReview: boolean;
+    disposition: IncomeDisposition;
+    priceFlat: boolean;
   };
 }
 
@@ -347,10 +378,34 @@ export function previewModelImpact(inp: ModelPreviewInput): ModelPreviewResult {
   const liquidAfter = round2(withHolding.primaryMmf);
 
   const years = inp.horizonYears;
-  const scen = (rate: number | null | undefined): number | null =>
-    typeof rate === "number" && Number.isFinite(rate)
-      ? round2(inp.amountKes * Math.pow(1 + rate / 100, years))
-      : null;
+  // Part 4: route EACH scenario through the single per-holding valuation pipeline
+  // (capital growth + scheduled net income), instead of a flat compounding line.
+  const ac: AssetClass = inp.assetClass ?? "equity";
+  const disposition: IncomeDisposition = inp.incomeDisposition ?? "sweep";
+  const project = (rate: number | null | undefined) => {
+    if (!(typeof rate === "number" && Number.isFinite(rate))) return null;
+    return projectHoldingToHorizon({
+      assetClass: ac,
+      scenario: "base",
+      entryValueKes: inp.amountKes,
+      assumedReturnBasePct: rate,
+      incomeRatePct: inp.incomeRatePct ?? null,
+      cadence: inp.incomeCadence,
+      incomeDisposition: disposition,
+      userTaxRatePct: inp.userTaxRatePct ?? null,
+      horizonYears: years,
+    });
+  };
+  const consRes = project(inp.assumedReturnConservative);
+  const baseRes = project(inp.assumedReturnBase);
+  const optRes = project(inp.assumedReturnOptimistic);
+  // End value shown = capital at horizon PLUS swept net income (so the user sees
+  // the full economic outcome); for DRIP the income is already inside capital.
+  const endOf = (r: ReturnType<typeof project>): number | null =>
+    r == null
+      ? null
+      : round2(r.endValue + (disposition === "sweep" ? r.incomeReceivedNet : 0));
+  const scen = endOf;
 
   return {
     current,
@@ -363,10 +418,17 @@ export function previewModelImpact(inp: ModelPreviewInput): ModelPreviewResult {
     liquidAfter,
     reducesLiquidity: inp.fundedFromLiquid && liquidAfter < liquidBefore,
     scenario: {
-      conservative: scen(inp.assumedReturnConservative),
-      base: scen(inp.assumedReturnBase),
-      optimistic: scen(inp.assumedReturnOptimistic),
+      conservative: scen(consRes),
+      base: scen(baseRes),
+      optimistic: scen(optRes),
       years,
+    },
+    income: {
+      netOverHorizonBase: baseRes ? baseRes.incomeReceivedNet : null,
+      taxRatePct: baseRes ? baseRes.taxRatePct : null,
+      taxRequiresReview: baseRes ? baseRes.taxRequiresReview : false,
+      disposition,
+      priceFlat: baseRes ? baseRes.priceFlat : true,
     },
   };
 }

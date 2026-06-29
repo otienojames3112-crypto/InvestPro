@@ -3808,6 +3808,9 @@ export const appRouter = router({
         currency: z.string().max(8).nullable().optional(),
         fxRateToKes: z.number().min(0).nullable().optional(),
         incomeRatePct: z.number().min(0).max(100).nullable().optional(),
+        incomeCadence: z.enum(["annual", "semiannual", "quarterly", "none"]).optional(),
+        incomeDisposition: z.enum(["sweep", "reinvest"]).optional(),
+        userTaxRatePct: z.number().min(0).max(100).nullable().optional(),
         assumedReturnConservative: z.number().min(-100).max(100).nullable().optional(),
         assumedReturnBase: z.number().min(-100).max(100).nullable().optional(),
         assumedReturnOptimistic: z.number().min(-100).max(100).nullable().optional(),
@@ -3844,11 +3847,18 @@ export const appRouter = router({
           assumedReturnBase: input.assumedReturnBase ?? null,
           assumedReturnOptimistic: input.assumedReturnOptimistic ?? null,
           horizonYears: horizonMonths / 12,
+          // Part 4: route the holding's own scenarios through the single
+          // valuation pipeline (capital growth + scheduled net income).
+          assetClass: input.assetClass as AssetClass,
+          incomeRatePct: input.incomeRatePct ?? null,
+          incomeCadence: input.incomeCadence,
+          incomeDisposition: input.incomeDisposition,
+          userTaxRatePct: input.userTaxRatePct ?? null,
         });
         // Tax treatment for the income stream, via the single decision point.
         const tax = taxFor({
           assetClass: input.assetClass as AssetClass,
-          userRatePct: input.incomeRatePct == null ? null : undefined,
+          userRatePct: input.userTaxRatePct ?? null,
         });
         return {
           amountKes,

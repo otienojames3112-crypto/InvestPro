@@ -11,6 +11,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -95,6 +102,12 @@ export function ModelDrawer({
   const [retBase, setRetBase] = useState<string>("");
   const [retOpt, setRetOpt] = useState<string>("");
   const [fundedFromLiquid, setFundedFromLiquid] = useState<boolean>(false);
+  // Part 4: income behaviour — cadence, where income goes, and an editable WHT.
+  const [incomeCadence, setIncomeCadence] = useState<
+    "annual" | "semiannual" | "quarterly" | "none"
+  >(profile.incomeType === "coupon" ? "semiannual" : "annual");
+  const [incomeDisposition, setIncomeDisposition] = useState<"sweep" | "reinvest">("sweep");
+  const [userTaxRatePct, setUserTaxRatePct] = useState<string>("");
 
   // Build the query input. Stable enough across renders to avoid refetch storms.
   const previewInput = useMemo(() => {
@@ -111,6 +124,9 @@ export function ModelDrawer({
       currency: currency || null,
       fxRateToKes: n(fxRateToKes),
       incomeRatePct: n(incomeRatePct),
+      incomeCadence,
+      incomeDisposition,
+      userTaxRatePct: n(userTaxRatePct),
       assumedReturnConservative: n(retCons),
       assumedReturnBase: n(retBase),
       assumedReturnOptimistic: n(retOpt),
@@ -120,7 +136,7 @@ export function ModelDrawer({
   }, [
     portfolioId, opportunity.assetClass, opportunity.name, amountKes, units,
     unitPrice, currency, fxRateToKes, incomeRatePct, retCons, retBase, retOpt,
-    fundedFromLiquid,
+    fundedFromLiquid, incomeCadence, incomeDisposition, userTaxRatePct,
   ]);
 
   const previewQuery = trpc.modeling.preview.useQuery(
@@ -293,6 +309,60 @@ export function ModelDrawer({
               />
             </div>
 
+            {/* Part 4: income behaviour — cadence + disposition + editable WHT */}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label className="text-xs">Income paid</Label>
+                <Select
+                  value={incomeCadence}
+                  onValueChange={(v) => setIncomeCadence(v as typeof incomeCadence)}
+                >
+                  <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="annual">Once a year</SelectItem>
+                    <SelectItem value="semiannual">Twice a year</SelectItem>
+                    <SelectItem value="quarterly">Quarterly</SelectItem>
+                    <SelectItem value="none">No income</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs">When income arrives</Label>
+                <Select
+                  value={incomeDisposition}
+                  onValueChange={(v) => setIncomeDisposition(v as typeof incomeDisposition)}
+                >
+                  <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="sweep">Take it as cash (sweep)</SelectItem>
+                    <SelectItem value="reinvest">Reinvest it (DRIP)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-xs flex items-center gap-1">
+                Withholding tax on income (%)
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <HelpCircle className="w-3 h-3 text-muted-foreground" />
+                  </TooltipTrigger>
+                  <TooltipContent className="max-w-[240px] text-xs">
+                    Tax on the income, not the capital. Local dividends/coupons have a
+                    known rate; REIT and offshore distributions depend on your own
+                    circumstances, so we leave it for you to confirm rather than guess.
+                  </TooltipContent>
+                </Tooltip>
+              </Label>
+              <Input
+                inputMode="decimal"
+                value={userTaxRatePct}
+                onChange={(e) => setUserTaxRatePct(e.target.value)}
+                placeholder="leave blank to use the default for this class"
+              />
+            </div>
+
             {/* Assumed return scenarios — explicitly the user's own */}
             <div className="space-y-2">
               <Label className="text-xs flex items-center gap-1">
@@ -426,6 +496,56 @@ export function ModelDrawer({
                       <ScenarioCell label="Optimistic" value={pv.scenario.optimistic} />
                     </div>
                   </div>
+                )}
+
+                {/* Part 4: capital vs income decomposition (base scenario) */}
+                {pv.income && pv.income.netOverHorizonBase != null && pv.income.netOverHorizonBase > 0 && (
+                  <div className="rounded-lg border p-3 space-y-2">
+                    <p className="text-[10px] text-muted-foreground">
+                      Where the base-case return comes from — capital growth and
+                      income are shown separately so income is never counted twice:
+                    </p>
+                    <div className="grid grid-cols-2 gap-2 text-center">
+                      <div className="rounded-md bg-muted/40 p-2">
+                        <p className="text-[10px] text-muted-foreground">Capital at horizon</p>
+                        <p className="text-sm font-semibold tabular-nums">
+                          {pv.scenario.base != null ? fmtKes(pv.scenario.base - (pv.income.disposition === "sweep" ? (pv.income.netOverHorizonBase ?? 0) : 0)) : "—"}
+                        </p>
+                      </div>
+                      <div className="rounded-md bg-muted/40 p-2">
+                        <p className="text-[10px] text-muted-foreground">
+                          Net income {pv.income.disposition === "reinvest" ? "reinvested" : "received"}
+                        </p>
+                        <p className="text-sm font-semibold tabular-nums">
+                          {fmtKes(pv.income.netOverHorizonBase ?? 0)}
+                        </p>
+                      </div>
+                    </div>
+                    <p className="text-[10px] text-muted-foreground">
+                      After {pv.income.taxRatePct != null ? `${pv.income.taxRatePct}%` : "the assumed"} withholding tax on income.{" "}
+                      {pv.income.disposition === "reinvest"
+                        ? "Reinvested back into the holding (DRIP), so it is already inside the capital figure."
+                        : "Swept to cash as it is paid."}
+                    </p>
+                    {pv.income.taxRequiresReview && (
+                      <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-2 flex items-start gap-2">
+                        <ShieldAlert className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                        <p className="text-[10px] text-amber-800 dark:text-amber-300 leading-relaxed">
+                          The tax rate on this income depends on your circumstances and the
+                          fund's jurisdiction. Please confirm it above — we did not assume one for you.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Part 4: price-flat caution when no return assumption supplied */}
+                {pv.income && pv.income.priceFlat && (
+                  <p className="text-[10px] text-amber-600 dark:text-amber-400 leading-relaxed">
+                    No total-return assumption was entered, so the capital value is held
+                    flat — only income (if any) accrues. Enter your assumed returns above to
+                    model price growth.
+                  </p>
                 )}
 
                 {/* Engine-projection honesty note */}

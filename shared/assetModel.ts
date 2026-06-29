@@ -206,9 +206,21 @@ export const ASSET_PROFILES: Record<AssetClass, BehaviorProfile> = {
   },
 };
 
-/** Read a behavior profile by class (single lookup the engine/UI should use). */
-export function profileFor(assetClass: AssetClass): BehaviorProfile {
-  return ASSET_PROFILES[assetClass];
+/**
+ * Read a behavior profile by class (single lookup the engine/UI should use).
+ *
+ * Hardened: never returns `undefined`. An unknown, missing, or legacy class
+ * (e.g. an older row, or an AI-extracted instrument whose class was not yet
+ * confirmed) falls back to the conservative `alt` profile so no caller can
+ * crash on `profile.fxExposed` / `profile.priceDriven`. The fallback is
+ * deliberately neutral: not fx-exposed, has no maturity, and stays illiquid.
+ */
+export function profileFor(assetClass: AssetClass | string | null | undefined): BehaviorProfile {
+  if (assetClass != null) {
+    const profile = ASSET_PROFILES[assetClass as AssetClass];
+    if (profile) return profile;
+  }
+  return ASSET_PROFILES.alt;
 }
 
 /**

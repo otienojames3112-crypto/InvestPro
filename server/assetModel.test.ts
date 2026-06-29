@@ -34,6 +34,21 @@ describe("AssetClass taxonomy (Expansion Part 1)", () => {
     }
   });
 
+  it("never returns undefined for unknown / missing / legacy classes (no .fxExposed crash)", () => {
+    // Regression: a legacy or AI-extracted row may carry a class not in the map.
+    // profileFor MUST fall back to a safe profile so callers reading
+    // profile.fxExposed / profile.priceDriven cannot throw.
+    const bad = ["", "unknown_class", "alternatives", "crypto", null, undefined] as const;
+    for (const c of bad) {
+      const p = profileFor(c as unknown as never);
+      expect(p).toBeDefined();
+      expect(typeof p.fxExposed).toBe("boolean");
+      expect(typeof p.priceDriven).toBe("boolean");
+      // Fallback is the conservative `alt` profile (not fx-exposed).
+      expect(p.fxExposed).toBe(false);
+    }
+  });
+
   it("preserves the behavior flags the engine relies on for existing classes", () => {
     // Discount paper accretes, is not price-driven, not FX-exposed, has maturity.
     const d = ASSET_PROFILES.gov_discount;

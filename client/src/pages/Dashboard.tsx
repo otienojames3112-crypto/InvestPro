@@ -278,6 +278,13 @@ export default function Dashboard() {
     { portfolioId: portfolioId! },
     { enabled: !!portfolioId }
   );
+  // Part 5: other holdings (equities / REITs / offshore / property) valued once
+  // via the shared mark-to-model source on the server, surfaced here so the Live
+  // Net Worth strip shows the COMPLETE picture (core liquid plan + other assets).
+  const { data: otherHoldings = [] } = trpc.otherHoldings.list.useQuery(
+    { portfolioId: portfolioId! },
+    { enabled: !!portfolioId }
+  );
   // Round 62: liquid-reserve diversification split (primary MMF + secondary MMFs
   // + liquid bank instruments), spread to keep each issuer under its cap.
   const { data: liquidAlloc } = trpc.bankHoldings.liquidAllocation.useQuery(
@@ -3248,7 +3255,27 @@ export default function Dashboard() {
               const tb = actualsSummary.byBucket?.tbill ?? 0;
               const ifb = actualsSummary.byBucket?.ifb ?? 0;
               const fxd = actualsSummary.byBucket?.fxd ?? 0;
-              const net = actualsSummary.totalContributed ?? 0;
+              const core = actualsSummary.totalContributed ?? 0;
+              // Part 5: fold mark-to-model other assets into the SAME net-worth strip
+              // so the headline is the complete picture. Price-driven classes get
+              // their own coloured slice; the rest fold into "Other assets".
+              const otherBuckets = new Map<string, { label: string; amt: number; color: string }>();
+              const OTHER_COLORS: Record<string, { label: string; color: string }> = {
+                equity: { label: "Equities", color: "#f472b6" },
+                reit: { label: "REITs", color: "#facc15" },
+                offshore_fund: { label: "Offshore", color: "#2dd4bf" },
+              };
+              for (const h of otherHoldings as Array<{ behaviorClass: string | null; priceDriven: boolean; classLabel: string | null; valueKes: number }>) {
+                const spec = h.behaviorClass ? OTHER_COLORS[h.behaviorClass] : undefined;
+                const key = spec ? `oc_${h.behaviorClass}` : "oc_other";
+                const label = spec?.label ?? "Other assets";
+                const color = spec?.color ?? "#94a3b8";
+                const cur = otherBuckets.get(key) ?? { label, amt: 0, color };
+                cur.amt += h.valueKes;
+                otherBuckets.set(key, cur);
+              }
+              const otherTotal = Array.from(otherBuckets.values()).reduce((s, b) => s + b.amt, 0);
+              const net = core + otherTotal;
               const segs = [
                 { key: "pmmf", label: `${fundName} (primary MMF)`, amt: primaryMmf, color: "#34d399" },
                 { key: "smmf", label: `Other MMFs (${actualsSummary.secondaryCount ?? 0})`, amt: sec, color: "#6ee7b7" },
@@ -3256,6 +3283,7 @@ export default function Dashboard() {
                 { key: "tb", label: "CBK T-Bills", amt: tb, color: "#60a5fa" },
                 { key: "ifb", label: "IFB Bonds", amt: ifb, color: "#a78bfa" },
                 { key: "fxd", label: "FXD Bonds", amt: fxd, color: "#fb923c" },
+                ...Array.from(otherBuckets.entries()).map(([key, b]) => ({ key, label: b.label, amt: b.amt, color: b.color })),
               ].filter((s) => s.amt > 0);
               return (
                 <div className="mt-4 rounded-xl border border-emerald-500/20 bg-emerald-500/[0.04] p-4 space-y-3">
@@ -3263,7 +3291,11 @@ export default function Dashboard() {
                     <div>
                       <p className="text-xs font-medium uppercase tracking-widest text-emerald-400">Live Net Worth</p>
                       <p className="text-2xl font-serif font-bold text-foreground kes-amount">{formatKES(net)}</p>
-                      <p className="text-xs text-muted-foreground">Sum of every account you actually own — separate from the projection above.</p>
+                      <p className="text-xs text-muted-foreground">
+                        {otherTotal > 0
+                          ? `Complete picture — ${formatKESCompact(core)} liquid plan + ${formatKESCompact(otherTotal)} other assets (mark-to-model). Separate from the projection above.`
+                          : "Sum of every account you actually own — separate from the projection above."}
+                      </p>
                     </div>
                   </div>
                   {net > 0 && (
@@ -3282,6 +3314,22 @@ export default function Dashboard() {
                           </div>
                         ))}
                       </div>
+                      {otherTotal > 0 && (() => {
+                        // Part 5 — posture honesty: price-driven holdings earn through
+                        // capital return (and any dividend/distribution you log), NOT
+                        // the after-tax interest yield shown elsewhere. They also carry
+                        // price/FX volatility and are not deposit-insured. Say so plainly.
+                        const anyFx = (otherHoldings as Array<{ fxExposed?: boolean; valueKes: number }>).some((h) => h.fxExposed && h.valueKes > 0);
+                        return (
+                          <p className="text-[11px] leading-relaxed text-muted-foreground/80 border-t border-white/5 pt-2">
+                            <span className="font-medium text-foreground/80">Posture note:</span> the
+                            {" "}{formatKESCompact(otherTotal)} in other assets is held for <span className="text-foreground/80">capital return</span>{" "}
+                            (price growth plus any dividend or distribution you log) — it is <span className="text-foreground/80">not</span> part of the
+                            after-tax income yield your MMF, bank and gov paper earn. These holdings can rise or fall in price
+                            {anyFx ? " and move with the shilling exchange rate" : ""}, and they are not deposit-insured.
+                          </p>
+                        );
+                      })()}
                     </>
                   )}
                 </div>

@@ -228,6 +228,50 @@ export function reconcileBank(
 }
 
 /**
+ * Expansion Brief Part 5 — phantom-holding sub-check.
+ *
+ * Every tracked "other holding" (equities / REITs / offshore / property / any
+ * non-core asset) is valued ONCE by the shared `valueHolding` mark-to-model
+ * source and that value is what `buildAllocation` folds into net worth. This
+ * guard proves the two agree: the sum of the per-holding mark-to-model values
+ * MUST equal the other-assets total the allocation engine actually counted. If a
+ * holding is counted in net worth but the proof can't see it (a class that was
+ * added without being wired through valuation), or is valued on a stale
+ * `currentValue` instead of units × price × FX, this row turns red.
+ *
+ * It also asserts COVERAGE: `valuedCount` must equal `heldCount`. A held row the
+ * valuation source returns nothing for is a phantom holding and fails the check.
+ */
+export interface ReconHoldingsResult {
+  /** Sum of per-holding mark-to-model (or stored) values. */
+  markToModelTotal: number;
+  /** Other-assets total the allocation engine folded into net worth. */
+  allocationOtherTotal: number;
+  diff: number;
+  heldCount: number;
+  valuedCount: number;
+  ok: boolean;
+}
+
+export function reconcileHoldings(
+  perHoldingValues: number[],
+  allocationOtherTotal: number,
+  heldCount: number,
+): ReconHoldingsResult {
+  const markToModelTotal = round2(perHoldingValues.reduce((a, b) => a + b, 0));
+  const diff = round2(markToModelTotal - round2(allocationOtherTotal));
+  const valuedCount = perHoldingValues.length;
+  return {
+    markToModelTotal,
+    allocationOtherTotal: round2(allocationOtherTotal),
+    diff,
+    heldCount,
+    valuedCount,
+    ok: Math.abs(diff) <= RECON_TOLERANCE_KES && valuedCount === heldCount,
+  };
+}
+
+/**
  * Round 40 (R40.6) — accrued-interest + WHT reconciliation sub-checks.
  *
  * The Daily Accrual page renders a day-by-day schedule (built by

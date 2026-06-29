@@ -17,6 +17,8 @@ import { WHT_RATES, whtOn } from "./accrual";
  * contribution sum. Only primary-MMF deposits feed `depositsContributed`.
  */
 
+import { valueHolding } from "./holdingValue";
+
 export type DepositRow = {
   amount: number;
   bucket: "mmf" | "tbill" | "ifb" | "fxd";
@@ -453,6 +455,14 @@ export interface RawBankHolding {
 export interface RawOtherHolding {
   assetClass: string;
   currentValue: number | string;
+  // Part 5 — structured mark-to-model + provenance (nullable; legacy rows omit).
+  behaviorClass?: string | null;
+  units?: number | string | null;
+  unitPrice?: number | string | null;
+  currency?: string | null;
+  fxRateToKes?: number | string | null;
+  dataSource?: string | null;
+  dataAsOf?: Date | string | number | null;
 }
 
 /**
@@ -567,9 +577,26 @@ export function buildAllocation(input: AllocationInput): AllocationResult {
       0,
     );
 
+  // Part 5: value EVERY other-holding through the single mark-to-model source
+  // (units × price × FX for price-driven, stored currentValue otherwise). Bucket
+  // price-driven classes under their PRECISE behaviour class (equity / reit /
+  // offshore_fund) so Equities / REITs / Offshore are distinct allocation rows;
+  // non-price-driven rows keep their coarse register class key.
   const other: Record<string, number> = {};
   for (const h of input.otherHoldings) {
-    other[h.assetClass] = (other[h.assetClass] ?? 0) + num(h.currentValue);
+    const valued = valueHolding({
+      assetClass: h.assetClass,
+      behaviorClass: h.behaviorClass ?? null,
+      currentValue: h.currentValue,
+      units: h.units ?? null,
+      unitPrice: h.unitPrice ?? null,
+      currency: h.currency ?? null,
+      fxRateToKes: h.fxRateToKes ?? null,
+      dataSource: h.dataSource ?? null,
+      dataAsOf: h.dataAsOf ?? null,
+    });
+    const key = valued.priceDriven && valued.behaviorClass ? valued.behaviorClass : h.assetClass;
+    other[key] = (other[key] ?? 0) + valued.valueKes;
   }
 
   const labels = input.assetLabels ?? {};

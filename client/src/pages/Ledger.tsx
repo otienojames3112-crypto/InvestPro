@@ -50,6 +50,17 @@ export default function Ledger() {
     { portfolioId: portfolioId! },
     { enabled: !!portfolioId }
   );
+  // Part 5 — recorded income events (dividends / distributions / offshore income)
+  // across the price-driven holdings. Surfaced as a SEPARATE actual stream below
+  // the projected core-flow table — never merged into the projection columns.
+  const { data: incomeEvents = [] } = trpc.ledger.incomeEvents.useQuery(
+    { portfolioId: portfolioId! },
+    { enabled: !!portfolioId }
+  );
+  const incomeTotal = useMemo(
+    () => incomeEvents.reduce((s, e) => s + (e.amount || 0), 0),
+    [incomeEvents],
+  );
   // Stable, ranked share table (only homes with a positive target share).
   const liquidShares = useMemo(() => {
     if (!liquidAlloc || liquidAlloc.liquidPot <= 0) return [];
@@ -647,6 +658,60 @@ export default function Ledger() {
             )}
           </CardContent>
         </Card>
+
+        {/* ── Part 5: recorded income events — a separate ACTUAL stream ──────── */}
+        {incomeEvents.length > 0 && (
+          <Card className="mt-6">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-base">
+                <BookOpen className="w-4 h-4 text-primary" />
+                Recorded income events
+              </CardTitle>
+              <p className="text-xs text-muted-foreground">
+                Dividends, REIT distributions and offshore income you have logged against your
+                holdings — {formatKES(incomeTotal)} received in total. These are <span className="font-medium text-foreground">actual cash receipts</span>,
+                kept separate from the projected core-portfolio flows above (which never assume
+                this income).
+              </p>
+            </CardHeader>
+            <CardContent>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted-foreground">
+                      <th className="px-3 py-2 font-medium">Date</th>
+                      <th className="px-3 py-2 font-medium">Holding</th>
+                      <th className="px-3 py-2 font-medium">Type</th>
+                      <th className="px-3 py-2 font-medium text-right">Amount</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {incomeEvents.map((e) => (
+                      <tr key={e.id} className="border-b border-border/50 last:border-0">
+                        <td className="px-3 py-2 text-muted-foreground whitespace-nowrap">
+                          {new Date(e.incomeDate).toLocaleDateString("en-KE", { year: "numeric", month: "short", day: "numeric" })}
+                        </td>
+                        <td className="px-3 py-2 text-foreground">{e.holdingName}</td>
+                        <td className="px-3 py-2">
+                          <Badge variant="outline" className="text-[11px] font-normal capitalize">
+                            {e.incomeType ?? (e.behaviorClass === "equity" ? "dividend" : e.behaviorClass === "reit" ? "distribution" : "income")}
+                          </Badge>
+                        </td>
+                        <td className="px-3 py-2 text-right kes-amount font-medium text-foreground whitespace-nowrap">{formatKES(e.amount)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot>
+                    <tr className="border-t-2 border-border font-semibold">
+                      <td className="px-3 py-2" colSpan={3}>Total received</td>
+                      <td className="px-3 py-2 text-right kes-amount whitespace-nowrap">{formatKES(incomeTotal)}</td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            </CardContent>
+          </Card>
+        )}
       </div>
       </TooltipProvider>
     </AppShell>

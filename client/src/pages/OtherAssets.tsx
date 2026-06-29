@@ -40,9 +40,26 @@ type Holding = {
   id: number;
   portfolioId: number;
   assetClass: string;
+  behaviorClass: string | null;
   name: string;
   description: string | null;
   currentValue: number;
+  // Part 5: the single mark-to-model figure every surface shows.
+  valueKes: number;
+  markToModel: boolean;
+  priceDriven: boolean;
+  fxExposed: boolean;
+  classLabel: string | null;
+  incomeType: string | null;
+  native: {
+    currency: string;
+    units: number;
+    unitPrice: number;
+    amount: number;
+    fxRateToKes: number;
+  } | null;
+  provenance: { source: string | null; asOf: number | null };
+  incomeRatePct: number | null;
   purchaseValue: number | null;
   purchaseDate: string | null;
   assumedReturnConservative: number | null;
@@ -401,8 +418,12 @@ function HoldingCard({
     onError: (e) => toast.error(e.message),
   });
 
-  const assetLabel = ASSET_CLASSES.find((c) => c.value === holding.assetClass)?.label ?? holding.assetClass;
-  const gain = holding.purchaseValue != null ? holding.currentValue - holding.purchaseValue : null;
+  // Part 5: prefer the precise behaviour-class label (Equities / REITs / Offshore)
+  // over the coarse register label, and value off the single mark-to-model figure.
+  const assetLabel =
+    holding.classLabel ?? ASSET_CLASSES.find((c) => c.value === holding.assetClass)?.label ?? holding.assetClass;
+  const displayValue = holding.valueKes;
+  const gain = holding.purchaseValue != null ? displayValue - holding.purchaseValue : null;
   const gainPct = gain != null && holding.purchaseValue ? (gain / holding.purchaseValue) * 100 : null;
 
   const totalIncome = incomeList.reduce((sum, i) => sum + i.amount, 0);
@@ -411,7 +432,8 @@ function HoldingCard({
   const scenarioYears = horizonYears;
   const scenarioYearsLabel = Number.isInteger(scenarioYears) ? `${scenarioYears}` : scenarioYears.toFixed(1);
   const scenarioValue = (rate: number | null) =>
-    rate != null ? holding.currentValue * Math.pow(1 + rate / 100, scenarioYears) : null;
+    rate != null ? displayValue * Math.pow(1 + rate / 100, scenarioYears) : null;
+  const asOfLabel = holding.provenance.asOf ? new Date(holding.provenance.asOf).toLocaleDateString() : null;
 
   return (
     <Card>
@@ -446,8 +468,23 @@ function HoldingCard({
 
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
           <div>
-            <p className="text-xs text-muted-foreground">Current Value</p>
-            <p className="font-semibold text-sm">{formatKES(holding.currentValue)}</p>
+            <p className="text-xs text-muted-foreground">
+              {holding.markToModel ? "Market value (mark-to-model)" : "Current Value"}
+            </p>
+            <p className="font-semibold text-sm">{formatKES(displayValue)}</p>
+            {holding.markToModel && holding.native && (
+              <p className="text-[11px] text-muted-foreground mt-0.5">
+                {holding.native.units} units × {holding.native.currency} {holding.native.unitPrice}
+                {holding.native.fxRateToKes > 0 && (
+                  <> @ {holding.native.fxRateToKes} KES/{holding.native.currency}</>
+                )}
+              </p>
+            )}
+            {holding.markToModel && holding.native && (
+              <p className="text-[11px] text-muted-foreground">
+                = {holding.native.currency} {holding.native.amount.toLocaleString()} → {formatKES(displayValue)}
+              </p>
+            )}
           </div>
           {holding.purchaseValue != null && (
             <div>
@@ -491,6 +528,13 @@ function HoldingCard({
               })}
             </div>
           </div>
+        )}
+
+        {(holding.provenance.source || asOfLabel) && (
+          <p className="text-[11px] text-muted-foreground">
+            Source: {holding.provenance.source ?? "manual entry"}
+            {asOfLabel && <> · as of {asOfLabel}</>}
+          </p>
         )}
 
         {/* Income section */}
@@ -581,11 +625,23 @@ export default function OtherAssets() {
     onError: (e) => toast.error(e.message),
   });
 
-  const totalValue = holdings.reduce((sum, h) => sum + h.currentValue, 0);
-  const byClass = ASSET_CLASSES.map((c) => ({
-    ...c,
-    total: holdings.filter((h) => h.assetClass === c.value).reduce((s, h) => s + h.currentValue, 0),
-  })).filter((c) => c.total > 0);
+  // Part 5: every total/breakdown uses the single mark-to-model figure (valueKes).
+  // Price-driven holdings are grouped under their PRECISE class label (Equities /
+  // REITs / Offshore); non-price-driven rows keep their register label.
+  const totalValue = holdings.reduce((sum, h) => sum + h.valueKes, 0);
+  const anyMarkToModel = holdings.some((h) => h.markToModel);
+  const classTotals = new Map<string, number>();
+  for (const h of holdings) {
+    const label =
+      (h.priceDriven && h.classLabel) ||
+      ASSET_CLASSES.find((c) => c.value === h.assetClass)?.label ||
+      h.assetClass;
+    classTotals.set(label, (classTotals.get(label) ?? 0) + h.valueKes);
+  }
+  const byClass = Array.from(classTotals.entries())
+    .map(([label, total]) => ({ value: label, label, total }))
+    .filter((c) => c.total > 0)
+    .sort((a, b) => b.total - a.total);
 
   return (
     <AppShell>
@@ -624,7 +680,11 @@ export default function OtherAssets() {
         <Card>
           <CardHeader className="pb-3">
             <CardTitle className="text-base">Net Worth Snapshot</CardTitle>
-            <CardDescription className="text-xs">Current values as you have entered them — not market-linked or auto-updated.</CardDescription>
+            <CardDescription className="text-xs">
+              {anyMarkToModel
+                ? "Price-driven holdings are marked to model from units × price × FX you entered; others use the value you entered. Not a live market feed."
+                : "Current values as you have entered them — not market-linked or auto-updated."}
+            </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
             <div className="flex items-baseline gap-2">
@@ -687,9 +747,9 @@ export default function OtherAssets() {
 
       <p className="text-xs text-muted-foreground flex items-start gap-1">
         <Info className="w-3 h-3 mt-0.5 shrink-0" />
-        All values are entered manually and are not connected to live market data.
-        Scenario projections use simple compound interest on your entered return assumptions.
-        Nothing here constitutes financial advice.
+        Values are either marked to model from the units, price and FX you entered, or the
+        amount you entered manually — never a live market feed. Scenario projections use simple
+        compound interest on your entered return assumptions. Nothing here constitutes financial advice.
       </p>
 
       {/* Add dialog */}

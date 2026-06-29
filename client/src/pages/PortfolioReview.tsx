@@ -207,10 +207,13 @@ export default function PortfolioReview() {
     return map;
   }, [benchmarks]);
 
-  // ─── Blended portfolio yield ────────────────────────────────────────────
-  // Balance-weighted gross yield across every tracked interest-bearing asset:
+  // ─── Blended income yield (fixed-income base) ───────────────────────────
+  // Balance-weighted gross yield across every tracked INTEREST-BEARING asset:
   // primary MMF, secondary MMFs, bank instruments and CBK securities. This is
-  // the actual portfolio yield, not just the primary fund's quoted rate.
+  // the actual income yield on the fixed-income base — not the primary fund's
+  // quoted rate, and deliberately NOT the price-driven holdings (equities /
+  // REITs / offshore), which earn through capital return rather than interest
+  // and would distort an interest-yield figure.
   const blended = useMemo(() => {
     const result = blendedYield({
       primaryMmf: buckets.mmf,
@@ -240,7 +243,7 @@ export default function PortfolioReview() {
 
   const yourYield = blended.yield;
   const benchRows = [
-    { key: "your", label: blended.partCount > 1 ? "Your Portfolio (blended)" : `Your Fund (${fund.fundLabel})`, value: yourYield, highlight: true },
+    { key: "your", label: blended.partCount > 1 ? "Income base (blended)" : `Your Fund (${fund.fundLabel})`, value: yourYield, highlight: true },
     bench["mmf_market_avg"] && { key: "mmf_market_avg", ...bench["mmf_market_avg"], highlight: false },
     bench["mmf_leaders_avg"] && { key: "mmf_leaders_avg", ...bench["mmf_leaders_avg"], highlight: false },
     bench["deposit_rate_avg"] && { key: "deposit_rate_avg", ...bench["deposit_rate_avg"], highlight: false },
@@ -778,6 +781,12 @@ export default function PortfolioReview() {
               Benchmarks are editable in the data layer and dated to their source
               (Serrari comparator, CBK, KNBS). Beating the market average and
               staying above inflation are the two key tests for a cash fund.
+            </p>
+            <p className="text-[11px] text-muted-foreground/70">
+              This yield covers your <span className="font-medium">interest-bearing base</span> only
+              (MMF, bank deposits and government paper). Equities, REITs and offshore holdings are
+              excluded — they earn through capital return, not interest, so mixing them in would
+              overstate or distort the income yield.
             </p>
           </CardContent>
         </Card>

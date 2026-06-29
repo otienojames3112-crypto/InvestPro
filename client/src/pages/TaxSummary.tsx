@@ -170,24 +170,38 @@ export default function TaxSummary() {
       note: l.note,
     }));
 
-    // Equity dividends — 5% WHT, final (estimate using assumedReturnBase as dividend yield proxy if present)
+    // Part 5 — income addendum across ALL price-driven classes (equity dividends,
+    // REIT distributions, offshore-fund income), valued off the SAME mark-to-model
+    // figure (valueKes) the rest of the app uses and the income rate stored on the
+    // holding (incomeRatePct). These remain a page-level addendum, clearly outside
+    // the reconciled fixed-income investment total. We NEVER invent a rate: a line
+    // appears only when the holding actually carries a positive income rate.
     (holdings ?? [])
-      .filter((h) => h.assetClass === "equity")
+      .filter((h) => h.priceDriven && (h.incomeRatePct ?? 0) > 0)
       .forEach((h) => {
-        const divYield = h.assumedReturnBase ?? 0;
-        if (divYield > 0) {
-          const basis = h.currentValue * (divYield / 100);
-          const tax = basis * 0.05;
-          result.push({
-            source: `Dividends — ${h.name}`,
-            basis,
-            rate: 5,
-            tax,
-            net: basis - tax,
-            exempt: false,
-            note: "5% WHT on dividends (final tax for resident individuals).",
-          });
-        }
+        const value = h.valueKes ?? h.currentValue;
+        const incomeRate = h.incomeRatePct ?? 0;
+        const basis = value * (incomeRate / 100);
+        if (basis <= 0) return;
+        // Resident WHT: NSE dividends 5% (final); REIT distributions & offshore
+        // income are commonly 15% but vary by structure — flag for the user to
+        // confirm rather than asserting a single rate as fact.
+        const cls = h.behaviorClass;
+        const isEquity = cls === "equity";
+        const whtPct = isEquity ? 5 : 15;
+        const incomeLabel = isEquity ? "Dividends" : cls === "reit" ? "Distributions" : "Income";
+        const tax = basis * (whtPct / 100);
+        result.push({
+          source: `${incomeLabel} — ${h.name}`,
+          basis,
+          rate: whtPct,
+          tax,
+          net: basis - tax,
+          exempt: false,
+          note: isEquity
+            ? "5% WHT on NSE dividends (final tax for resident individuals)."
+            : `${whtPct}% WHT assumed on ${incomeLabel.toLowerCase()} — confirm the rate for your specific instrument; REIT and offshore structures vary.`,
+        });
       });
 
     return result;

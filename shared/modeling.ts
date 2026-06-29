@@ -169,6 +169,17 @@ export interface HoldingDraft {
   assumedReturnConservative: number | null;
   assumedReturnBase: number | null;
   assumedReturnOptimistic: number | null;
+  // Part 5 — structured mark-to-model + provenance persisted on the row so every
+  // surface can RE-DERIVE units × price × FX, preserve the precise class, show
+  // offshore in both currencies, and trace the figure.
+  behaviorClass: AssetClass;
+  units: number | null;
+  unitPrice: number | null;
+  currency: string | null;
+  fxRateToKes: number | null;
+  incomeRatePct: number | null;
+  dataSource: string | null;
+  dataAsOf: string | null;
 }
 
 export function buildHoldingDraft(inp: ModelingInputs): HoldingDraft {
@@ -203,6 +214,14 @@ export function buildHoldingDraft(inp: ModelingInputs): HoldingDraft {
     assumedReturnConservative: numOrNull(inp.assumedReturnConservative),
     assumedReturnBase: numOrNull(inp.assumedReturnBase),
     assumedReturnOptimistic: numOrNull(inp.assumedReturnOptimistic),
+    behaviorClass: inp.assetClass,
+    units: numOrNull(inp.units),
+    unitPrice: numOrNull(inp.unitPrice),
+    currency: inp.currency ?? null,
+    fxRateToKes: numOrNull(inp.fxRateToKes),
+    incomeRatePct: numOrNull(inp.incomeRatePct),
+    dataSource: inp.dataSource ?? null,
+    dataAsOf: inp.dataAsOf ?? null,
   };
 }
 

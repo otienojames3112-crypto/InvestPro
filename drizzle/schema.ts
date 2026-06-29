@@ -571,6 +571,31 @@ export const otherHoldings = mysqlTable("other_holdings", {
   assumedReturnConservative: decimal("assumedReturnConservative", { precision: 6, scale: 2 }),
   assumedReturnBase: decimal("assumedReturnBase", { precision: 6, scale: 2 }),
   assumedReturnOptimistic: decimal("assumedReturnOptimistic", { precision: 6, scale: 2 }),
+  /**
+   * Expansion Brief Part 5 — structured mark-to-model + provenance (all ADDITIVE
+   * & NULLABLE so existing rows are unaffected). The register `assetClass` above
+   * is a coarse taxonomy (REIT collapses into real_estate, offshore into etf);
+   * `behaviorClass` preserves the precise Part-1 behavior identity so every
+   * money-counting surface can value, label, tax and risk-classify the holding
+   * from ONE source. Price-driven value = units × unitPrice × fxRateToKes, so a
+   * holding's value is RE-DERIVED (never trusted from a stale currentValue).
+   */
+  /** Precise behavior taxonomy: equity | reit | offshore_fund | cash_mmf | bank_deposit | gov_discount | gov_coupon | alt. Null for legacy manual rows. */
+  behaviorClass: varchar("behaviorClass", { length: 24 }),
+  /** Price-driven units/shares held. */
+  units: decimal("units", { precision: 18, scale: 6 }),
+  /** Price per unit in the instrument's own currency. */
+  unitPrice: decimal("unitPrice", { precision: 18, scale: 6 }),
+  /** Denomination currency (default KES; USD etc. for offshore). */
+  currency: varchar("currency", { length: 8 }),
+  /** FX rate KES per native currency used to convert to KES. */
+  fxRateToKes: decimal("fxRateToKes", { precision: 18, scale: 6 }),
+  /** User's assumed income (dividend/distribution) rate %/yr. */
+  incomeRatePct: decimal("incomeRatePct", { precision: 8, scale: 4 }),
+  /** Provenance: source of the price/FX figure (mandatory for price-driven). */
+  dataSource: varchar("dataSource", { length: 200 }),
+  /** Provenance: as-of timestamp for the price/FX figure. */
+  dataAsOf: timestamp("dataAsOf"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });

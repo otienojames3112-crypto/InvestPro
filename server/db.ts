@@ -784,6 +784,35 @@ export async function getHoldingIncome(holdingId: number) {
     .orderBy(desc(holdingIncome.incomeDate));
 }
 
+/**
+ * List ALL income records across a portfolio's holdings, joined to the owning
+ * holding's name + behaviour class, ordered newest-first. Used by the Month
+ * Ledger to surface recorded dividend / distribution payments alongside the
+ * projected core flows. Filtered by portfolioId on the holdings side so a user
+ * only ever sees their own records.
+ */
+export async function getPortfolioHoldingIncome(portfolioId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select({
+      id: holdingIncome.id,
+      holdingId: holdingIncome.holdingId,
+      amount: holdingIncome.amount,
+      incomeDate: holdingIncome.incomeDate,
+      incomeType: holdingIncome.incomeType,
+      notes: holdingIncome.notes,
+      createdAt: holdingIncome.createdAt,
+      holdingName: otherHoldings.name,
+      behaviorClass: otherHoldings.behaviorClass,
+      assetClass: otherHoldings.assetClass,
+    })
+    .from(holdingIncome)
+    .innerJoin(otherHoldings, eq(holdingIncome.holdingId, otherHoldings.id))
+    .where(eq(otherHoldings.portfolioId, portfolioId))
+    .orderBy(desc(holdingIncome.incomeDate));
+}
+
 /** Add an income record for a holding. */
 export async function addHoldingIncome(data: InsertHoldingIncome) {
   const db = await getDb();

@@ -46,6 +46,7 @@ import {
   updateOtherHolding,
   deleteOtherHolding,
   getHoldingIncome,
+  getPortfolioHoldingIncome,
   addHoldingIncome,
   deleteHoldingIncome,
   getSecondaryMmfs,
@@ -123,8 +124,10 @@ import {
   reconcileGov,
   reconcileBank,
   reconcileAccrual,
+  reconcileHoldings,
   type AccrualReconItem,
 } from "../shared/reconciliation";
+import { valueHolding } from "../shared/holdingValue";
 import {
   buildSecurityDailySchedule,
   buildBankDailySchedule,
@@ -811,6 +814,15 @@ async function loadAllocationInput(
     otherHoldings: other.map((h) => ({
       assetClass: h.assetClass,
       currentValue: parseFloat(String(h.currentValue ?? "0")) || 0,
+      // Part 5: carry the structured mark-to-model + provenance fields so the
+      // shared valuation source can RE-DERIVE units × price × FX downstream.
+      behaviorClass: h.behaviorClass ?? null,
+      units: h.units ?? null,
+      unitPrice: h.unitPrice ?? null,
+      currency: h.currency ?? null,
+      fxRateToKes: h.fxRateToKes ?? null,
+      dataSource: h.dataSource ?? null,
+      dataAsOf: h.dataAsOf ?? null,
     })),
     primaryFundId: p?.mmfFundId ?? null,
   };
@@ -2126,14 +2138,42 @@ export const appRouter = router({
         otherHoldings: otherHoldingRows.map((h) => ({
           assetClass: h.assetClass,
           currentValue: parseFloat(String(h.currentValue ?? "0")) || 0,
+          behaviorClass: h.behaviorClass ?? null,
+          units: h.units ?? null,
+          unitPrice: h.unitPrice ?? null,
+          currency: h.currency ?? null,
+          fxRateToKes: h.fxRateToKes ?? null,
+          dataSource: h.dataSource ?? null,
+          dataAsOf: h.dataAsOf ?? null,
         })),
         // Robust guard: any mmf_fund deposit into a non-primary fund is secondary.
         primaryFundId: p.mmfFundId ?? null,
       });
-      // Other assets are not part of the principal-basis reference, so subtract
-      // them to compare the same pockets the reference covers.
-      const otherTotal = Object.values(allocation.other).reduce((a, b) => a + b, 0);
-      const portfolioReviewNetWorth = allocation.netWorth - otherTotal;
+      // Part 5: other assets (equities / REITs / offshore / property / …) are now
+      // a FIRST-CLASS reconciled pocket rather than stripped out. Each row is
+      // valued ONCE by the shared mark-to-model source (the same one
+      // buildAllocation used above), so the per-holding list and the allocation's
+      // other-bucket total are guaranteed to agree (the phantom-holding guard
+      // below proves it). We add this same total to every full-portfolio source
+      // so the whole proof rises by an identical amount and stays balanced.
+      const otherAssetValues = otherHoldingRows.map((h) =>
+        valueHolding({
+          assetClass: h.assetClass,
+          behaviorClass: h.behaviorClass ?? null,
+          currentValue: h.currentValue,
+          units: h.units ?? null,
+          unitPrice: h.unitPrice ?? null,
+          currency: h.currency ?? null,
+          fxRateToKes: h.fxRateToKes ?? null,
+          dataSource: h.dataSource ?? null,
+          dataAsOf: h.dataAsOf ?? null,
+        }).valueKes,
+      );
+      const round2 = (n: number) => Math.round(n * 100) / 100;
+      const otherTotal = round2(Object.values(allocation.other).reduce((a, b) => a + b, 0));
+      // Portfolio Review shows the FULL net worth (incl. other assets) — it must
+      // match the dashboard net worth, which we also lift by otherTotal below.
+      const portfolioReviewNetWorth = allocation.netWorth;
 
       const taxBlended = blendedYield({
         primaryMmf: allocation.primaryMmf,
@@ -2157,11 +2197,14 @@ export const appRouter = router({
         secondaryMmfBalances,
         bankHoldingPrincipals,
         securityFaceValues,
-        otherAssetValues: [],
-        projectionTodayValue,
-        dashboardActualsTotal,
+        // First-class pocket: the reference (sum of parts) now includes other assets.
+        otherAssetValues,
+        // Lift the core-only sources by the SAME other-assets total so every
+        // full-portfolio source reconciles on one footing (core + other assets).
+        projectionTodayValue: round2(projectionTodayValue + otherTotal),
+        dashboardActualsTotal: round2(dashboardActualsTotal + otherTotal),
         accrualLedgerMmfTotal: primaryMmfBalance + secondaryMmfBalances.reduce((a, b) => a + b, 0),
-        dashboardNetWorth: dashboardActualsTotal,
+        dashboardNetWorth: round2(dashboardActualsTotal + otherTotal),
         portfolioReviewNetWorth,
         taxSummaryBase,
       };
@@ -2263,6 +2306,12 @@ export const appRouter = router({
         bankSchedule.whtTotal,
       );
 
+      // Part 5 phantom-holding guard: the per-holding mark-to-model values MUST
+      // sum to the other-assets total the allocation engine folded into net
+      // worth, and every held row MUST be valued (no class counted in net worth
+      // but invisible to the proof).
+      const holdings = reconcileHoldings(otherAssetValues, otherTotal, otherHoldingRows.length);
+
       return {
         full: reconcile(inputs),
         mmf: reconcileMmf(inputs.accrualLedgerMmfTotal, inputs.primaryMmfBalance, inputs.secondaryMmfBalances),
@@ -2270,6 +2319,7 @@ export const appRouter = router({
         bank: reconcileBank(bankHoldingPrincipals, bankDepositAmounts, bankWithdrawalAmounts),
         govAccrual,
         bankAccrual,
+        holdings,
       };
     }),
 
@@ -2537,6 +2587,26 @@ export const appRouter = router({
     list: protectedProcedure.input(portfolioIdInput).query(async ({ ctx, input }) => {
       await requirePortfolio(input.portfolioId, ctx.user.id);
       return getLedgerEntries(input.portfolioId);
+    }),
+
+    // Part 5: recorded income events (dividends / distributions / offshore income)
+    // across ALL price-driven holdings, surfaced on the Month Ledger so realised
+    // payments sit in the same timeline as the projected core flows — but as a
+    // clearly separate, ACTUAL stream (we never synthesise these; only what the
+    // user logged appears here).
+    incomeEvents: protectedProcedure.input(portfolioIdInput).query(async ({ ctx, input }) => {
+      await requirePortfolio(input.portfolioId, ctx.user.id);
+      const rows = await getPortfolioHoldingIncome(input.portfolioId);
+      return rows.map((r) => ({
+        id: r.id,
+        holdingId: r.holdingId,
+        holdingName: r.holdingName,
+        behaviorClass: r.behaviorClass ?? null,
+        amount: parseFloat(String(r.amount)),
+        incomeDate: normaliseDate(r.incomeDate),
+        incomeType: r.incomeType ?? null,
+        notes: r.notes ?? null,
+      }));
     }),
 
     sync: protectedProcedure.input(portfolioIdInput).mutation(async ({ ctx, input }) => {
@@ -3649,22 +3719,52 @@ export const appRouter = router({
       .query(async ({ ctx, input }) => {
         await requirePortfolio(input.portfolioId, ctx.user.id);
         const rows = await getOtherHoldings(input.portfolioId);
-        return rows.map((h) => ({
-          id: h.id,
-          portfolioId: h.portfolioId,
-          assetClass: h.assetClass,
-          name: h.name,
-          description: h.description ?? null,
-          purchaseValue: parseFloat(String(h.purchaseValue)),
-          currentValue: parseFloat(String(h.currentValue)),
-          purchaseDate: h.purchaseDate ? normaliseDate(h.purchaseDate) : null,
-          notes: h.notes ?? null,
-          assumedReturnConservative: h.assumedReturnConservative ? parseFloat(String(h.assumedReturnConservative)) : null,
-          assumedReturnBase: h.assumedReturnBase ? parseFloat(String(h.assumedReturnBase)) : null,
-          assumedReturnOptimistic: h.assumedReturnOptimistic ? parseFloat(String(h.assumedReturnOptimistic)) : null,
-          createdAt: h.createdAt,
-          updatedAt: h.updatedAt,
-        }));
+        return rows.map((h) => {
+          // Part 5: value ONCE via the shared mark-to-model source so the UI shows
+          // units × price × FX (price-driven) or stored value (legacy), the precise
+          // class, offshore native + KES, and provenance — no UI valuation logic.
+          const valued = valueHolding({
+            assetClass: h.assetClass,
+            behaviorClass: h.behaviorClass ?? null,
+            currentValue: h.currentValue,
+            units: h.units ?? null,
+            unitPrice: h.unitPrice ?? null,
+            currency: h.currency ?? null,
+            fxRateToKes: h.fxRateToKes ?? null,
+            dataSource: h.dataSource ?? null,
+            dataAsOf: h.dataAsOf ?? null,
+          });
+          return {
+            id: h.id,
+            portfolioId: h.portfolioId,
+            assetClass: h.assetClass,
+            behaviorClass: valued.behaviorClass,
+            name: h.name,
+            description: h.description ?? null,
+            purchaseValue: parseFloat(String(h.purchaseValue)),
+            currentValue: parseFloat(String(h.currentValue)),
+            // The figure every surface should display:
+            valueKes: valued.valueKes,
+            markToModel: valued.markToModel,
+            priceDriven: valued.priceDriven,
+            fxExposed: valued.fxExposed,
+            hasMaturity: valued.hasMaturity,
+            isLiquid: valued.isLiquid,
+            insured: valued.insured,
+            classLabel: valued.profile?.label ?? null,
+            incomeType: valued.profile?.incomeType ?? null,
+            native: valued.native,
+            provenance: valued.provenance,
+            purchaseDate: h.purchaseDate ? normaliseDate(h.purchaseDate) : null,
+            notes: h.notes ?? null,
+            incomeRatePct: h.incomeRatePct ? parseFloat(String(h.incomeRatePct)) : null,
+            assumedReturnConservative: h.assumedReturnConservative ? parseFloat(String(h.assumedReturnConservative)) : null,
+            assumedReturnBase: h.assumedReturnBase ? parseFloat(String(h.assumedReturnBase)) : null,
+            assumedReturnOptimistic: h.assumedReturnOptimistic ? parseFloat(String(h.assumedReturnOptimistic)) : null,
+            createdAt: h.createdAt,
+            updatedAt: h.updatedAt,
+          };
+        });
       }),
 
     /** Add a new holding. */
@@ -3937,6 +4037,16 @@ export const appRouter = router({
           assumedReturnConservative: draft.assumedReturnConservative != null ? String(draft.assumedReturnConservative) : undefined,
           assumedReturnBase: draft.assumedReturnBase != null ? String(draft.assumedReturnBase) : undefined,
           assumedReturnOptimistic: draft.assumedReturnOptimistic != null ? String(draft.assumedReturnOptimistic) : undefined,
+          // Part 5 — structured mark-to-model + provenance so every surface can
+          // RE-DERIVE value from units × price × FX and trace the figure.
+          behaviorClass: draft.behaviorClass,
+          units: draft.units != null ? String(draft.units) : undefined,
+          unitPrice: draft.unitPrice != null ? String(draft.unitPrice) : undefined,
+          currency: draft.currency ?? undefined,
+          fxRateToKes: draft.fxRateToKes != null ? String(draft.fxRateToKes) : undefined,
+          incomeRatePct: draft.incomeRatePct != null ? String(draft.incomeRatePct) : undefined,
+          dataSource: draft.dataSource ?? undefined,
+          dataAsOf: draft.dataAsOf ? new Date(draft.dataAsOf) : undefined,
         });
         const newId = (res as { insertId?: number } | null)?.insertId ?? null;
 

@@ -75,16 +75,17 @@ describe("makeIncomeEvent — single taxFor() path", () => {
     expect(e.requiresReview).toBe(false);
   });
 
-  it("flags REIT distributions for user review (no rate assumed)", () => {
+  it("applies the sourced REIT 5% (review-flagged) — never a silent zero", () => {
     const e = makeIncomeEvent({
       grossKes: 1000,
       taxInput: { assetClass: "reit" },
       disposition: "sweep",
     });
+    // Part 7.0.b: REIT distribution now uses the sourced resident 5%, still
+    // review-flagged for the unit-holder's circumstances. It is NOT a silent zero.
     expect(e.requiresReview).toBe(true);
-    // No rate assumed -> 0 withheld until the user confirms.
-    expect(e.taxRatePct).toBe(0);
-    expect(e.netKes).toBe(1000);
+    expect(e.taxRatePct).toBe(5);
+    expect(e.netKes).toBe(950);
   });
 
   it("uses a user-supplied offshore distribution rate when provided", () => {
@@ -153,7 +154,7 @@ describe("projectHoldingToHorizon — equity", () => {
 });
 
 describe("projectHoldingToHorizon — REIT & offshore", () => {
-  it("REIT carries the review flag and assumes no rate until confirmed", () => {
+  it("REIT carries the review flag and applies the sourced 5% (not a silent zero)", () => {
     const r = projectHoldingToHorizon({
       assetClass: "reit",
       scenario: "base",
@@ -164,8 +165,9 @@ describe("projectHoldingToHorizon — REIT & offshore", () => {
       incomeDisposition: "sweep",
       horizonYears: 5,
     });
+    // Part 7.0.b: sourced resident 5%, still review-flagged for circumstances.
     expect(r.taxRequiresReview).toBe(true);
-    expect(r.taxRatePct).toBe(0); // not assumed
+    expect(r.taxRatePct).toBe(5);
     expect(r.incomeReceivedNet).toBeGreaterThan(0);
   });
 

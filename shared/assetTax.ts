@@ -28,23 +28,31 @@ import { whtRateForSecurity, type SecurityType } from "./securityTenor";
  * single declared source for dividend/distribution WHT, with provenance so the
  * UI can show "where this number came from" rather than presenting it as fact.
  *
- *   - Listed-share dividends (resident): 5% final tax (KRA).
- *   - REIT distributions to residents: special regime — registered REITs are
- *     largely exempt at trust level and distribution treatment is not a single
- *     flat statutory rate. We default to 0 (treated at trust level) but mark it
- *     `requiresReview` so a user can override with their own circumstances.
- *   - Offshore fund distributions: jurisdiction/treaty dependent; we do NOT
- *     assume a rate (0 with `requiresReview`) and require the user to supply the
- *     applicable rate. The tool models whatever rate is provided; it never
- *     fabricates one.
+ *   - Listed-share dividends (resident): 5% final tax (KRA, ITA Third Schedule
+ *     para 5). SOURCED, not review-required.
+ *   - REIT distributions to residents: a registered REIT is exempt at trust
+ *     level (ITA s.20), but the exemption does NOT extend to withholding tax on
+ *     dividend/interest income earned by non-exempt resident unitholders (NSE;
+ *     TripleOKlaw, "The Tax Regime for REITs in Kenya", 2023). In practice the
+ *     resident WHT applied to REIT income distributions tracks the resident
+ *     dividend rate of 5%. We default to 5% (SOURCED) but still mark it
+ *     `requiresReview` because the exact treatment depends on the unit-holder's
+ *     circumstances and the specific REIT. It is NEVER a silent zero.
+ *   - Offshore fund distributions: Kenyan residents are taxed on worldwide
+ *     income; the applicable rate is jurisdiction-/treaty-dependent (foreign
+ *     WHT, possible double-tax-treaty relief, plus Kenyan tax). There is no
+ *     single Kenyan statutory rate, so we model a LABELLED, UNVERIFIED default
+ *     (15% — a common non-resident WHT benchmark) that the user MUST confirm or
+ *     override. It is surfaced as an assumption and flagged unverified — never
+ *     presented as fact and never silently zero.
  */
 export const RESIDENT_TAX_RATES = {
-  /** Listed-share dividend WHT (resident, final tax). */
+  /** Listed-share dividend WHT (resident, final tax). Sourced. */
   dividend: 5,
-  /** REIT distribution — special regime, user-confirmable. */
-  reitDistribution: 0,
-  /** Offshore distribution — treaty/jurisdiction dependent, user-supplied. */
-  offshoreDistribution: 0,
+  /** REIT distribution — resident WHT tracks the 5% dividend rate; confirmable. */
+  reitDistribution: 5,
+  /** Offshore distribution — labelled UNVERIFIED benchmark, user must confirm. */
+  offshoreDistribution: 15,
 } as const;
 
 export interface TaxRateResult {
@@ -60,6 +68,14 @@ export interface TaxRateResult {
    * does not decide on the user's behalf.
    */
   requiresReview: boolean;
+  /**
+   * True when the rate is a LABELLED PLACEHOLDER that has NOT been confirmed
+   * against an authoritative source for the user's circumstances (today: the
+   * offshore-distribution benchmark). The UI must show it as "unverified —
+   * confirm before relying on it" rather than as fact. A user-supplied rate
+   * clears this. It is never used to justify a silent zero.
+   */
+  unverified: boolean;
   /** Human-readable provenance of the rate (statute / authority / "user-supplied"). */
   source: string;
   /** Basis the rate is applied to. */
@@ -110,6 +126,7 @@ export function taxFor(input: TaxForInput): TaxRateResult {
         incomeType,
         exempt: ratePct === 0,
         requiresReview: false,
+        unverified: false,
         source:
           "KRA / shared whtRateForSecurity (IFB exempt; T-bill & zero 15%; FXD tenor-tiered 15/10)",
         basis: incomeType,
@@ -123,6 +140,7 @@ export function taxFor(input: TaxForInput): TaxRateResult {
         incomeType,
         exempt: false,
         requiresReview: false,
+        unverified: false,
         source: "KRA resident interest WHT 15% (MMF / bank deposit)",
         basis: "interest",
       };
@@ -139,6 +157,7 @@ export function taxFor(input: TaxForInput): TaxRateResult {
         incomeType,
         exempt: ratePct === 0,
         requiresReview: false,
+        unverified: false,
         source:
           input.userRatePct != null
             ? "User-supplied dividend WHT rate"
@@ -149,27 +168,30 @@ export function taxFor(input: TaxForInput): TaxRateResult {
 
     case "distribution": {
       // REIT / offshore distributions: jurisdiction- & circumstance-dependent.
-      // Default conservatively and FLAG for user review rather than asserting a
-      // single statutory rate.
+      // Neither nets at an UNSOURCED zero. REIT uses the sourced resident 5%
+      // (still review-flagged for the unit-holder's circumstances); offshore
+      // uses a LABELLED, UNVERIFIED benchmark the user must confirm. A
+      // user-supplied rate overrides both and clears the unverified flag.
       const isOffshore = input.assetClass === "offshore_fund";
+      const userProvided = typeof input.userRatePct === "number" && input.userRatePct >= 0;
       const fallback = isOffshore
         ? RESIDENT_TAX_RATES.offshoreDistribution
         : RESIDENT_TAX_RATES.reitDistribution;
-      const ratePct =
-        typeof input.userRatePct === "number" && input.userRatePct >= 0
-          ? input.userRatePct
-          : fallback;
+      const ratePct = userProvided ? (input.userRatePct as number) : fallback;
       return {
         ratePct,
         incomeType,
         exempt: ratePct === 0,
-        requiresReview: input.userRatePct == null,
-        source:
-          input.userRatePct != null
-            ? "User-supplied distribution WHT rate"
-            : isOffshore
-              ? "Offshore distribution — treaty/jurisdiction dependent; confirm applicable rate"
-              : "Kenyan REIT distribution — special regime (registered REITs largely exempt at trust level); confirm treatment",
+        // Both REIT and offshore want the user to confirm their own treatment.
+        requiresReview: !userProvided,
+        // Only the offshore benchmark is an UNVERIFIED placeholder; the REIT 5%
+        // is sourced. A user-supplied rate is, by definition, confirmed.
+        unverified: !userProvided && isOffshore,
+        source: userProvided
+          ? "User-supplied distribution WHT rate"
+          : isOffshore
+            ? "Offshore distribution — UNVERIFIED benchmark (15%): Kenyan residents are taxed on worldwide income; actual rate is treaty/jurisdiction dependent. Confirm before relying on it."
+            : "Kenyan REIT distribution — resident WHT tracks the 5% dividend rate (registered REIT exempt at trust level per ITA s.20; WHT on unit-holder dividend/interest income still applies — NSE; TripleOKlaw 2023). Confirm for your circumstances.",
         basis: "distribution",
       };
     }
@@ -180,6 +202,7 @@ export function taxFor(input: TaxForInput): TaxRateResult {
         incomeType: "none",
         exempt: true,
         requiresReview: false,
+        unverified: false,
         source: "No taxable income stream for this asset class",
         basis: "none",
       };

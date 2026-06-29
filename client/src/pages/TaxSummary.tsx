@@ -20,7 +20,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Receipt, Percent, ShieldCheck, TrendingDown, Info, Download, Printer } from "lucide-react";
+import { Receipt, Percent, ShieldCheck, ShieldAlert, TrendingDown, Info, Download, Printer } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { toCsv, downloadCsv, slugify } from "@shared/csv";
 import { GlossaryTerm } from "@/components/GlossaryTerm";
@@ -41,6 +41,8 @@ interface TaxLine {
   tax: number;
   net: number;
   exempt: boolean;
+  /** True when the rate is an UNVERIFIED placeholder (offshore) the user must confirm. */
+  unverified?: boolean;
   note: string;
 }
 
@@ -167,6 +169,7 @@ export default function TaxSummary() {
       tax: l.tax,
       net: l.net,
       exempt: l.exempt,
+      unverified: false,
       note: l.note,
     }));
 
@@ -183,13 +186,16 @@ export default function TaxSummary() {
         const incomeRate = h.incomeRatePct ?? 0;
         const basis = value * (incomeRate / 100);
         if (basis <= 0) return;
-        // Resident WHT: NSE dividends 5% (final); REIT distributions & offshore
-        // income are commonly 15% but vary by structure — flag for the user to
-        // confirm rather than asserting a single rate as fact.
+        // Resident WHT, sourced per class (Part 7.0): NSE dividends 5% (final);
+        // REIT distributions track the sourced resident 5%; offshore income uses
+        // an UNVERIFIED 15% benchmark the user must confirm. None nets at an
+        // unsourced zero, and offshore is explicitly labelled unverified.
         const cls = h.behaviorClass;
         const isEquity = cls === "equity";
-        const whtPct = isEquity ? 5 : 15;
-        const incomeLabel = isEquity ? "Dividends" : cls === "reit" ? "Distributions" : "Income";
+        const isReit = cls === "reit";
+        const isOffshore = cls === "offshore_fund";
+        const whtPct = isOffshore ? 15 : 5;
+        const incomeLabel = isEquity ? "Dividends" : isReit ? "Distributions" : "Income";
         const tax = basis * (whtPct / 100);
         result.push({
           source: `${incomeLabel} — ${h.name}`,
@@ -198,9 +204,12 @@ export default function TaxSummary() {
           tax,
           net: basis - tax,
           exempt: false,
+          unverified: isOffshore,
           note: isEquity
             ? "5% WHT on NSE dividends (final tax for resident individuals)."
-            : `${whtPct}% WHT assumed on ${incomeLabel.toLowerCase()} — confirm the rate for your specific instrument; REIT and offshore structures vary.`,
+            : isReit
+              ? "5% resident WHT — a registered REIT is exempt at trust level (ITA s.20), but WHT on unit-holder dividend/interest income still applies (NSE; TripleOKlaw 2023). Confirm for your circumstances."
+              : "15% — UNVERIFIED benchmark. Kenyan residents are taxed on worldwide income; the actual rate is treaty/jurisdiction dependent. Confirm before relying on this figure.",
         });
       });
 
@@ -376,6 +385,13 @@ export default function TaxSummary() {
                             <Badge variant="secondary" className="gap-1">
                               <ShieldCheck className="w-3 h-3" /> Exempt
                             </Badge>
+                          ) : l.unverified ? (
+                            <span className="inline-flex items-center gap-1 justify-end">
+                              {l.rate.toFixed(0)}%
+                              <Badge variant="outline" className="gap-1 border-amber-500/40 text-amber-700 dark:text-amber-300">
+                                <ShieldAlert className="w-3 h-3" /> Unverified
+                              </Badge>
+                            </span>
                           ) : (
                             `${l.rate.toFixed(0)}%`
                           )}

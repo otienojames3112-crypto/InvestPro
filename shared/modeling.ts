@@ -358,6 +358,8 @@ export interface ModelPreviewResult {
     netOverHorizonBase: number | null;
     taxRatePct: number | null;
     taxRequiresReview: boolean;
+    /** True when the WHT rate is an UNVERIFIED placeholder (offshore) the user must confirm. */
+    taxUnverified: boolean;
     disposition: IncomeDisposition;
     priceFlat: boolean;
   };
@@ -446,6 +448,7 @@ export function previewModelImpact(inp: ModelPreviewInput): ModelPreviewResult {
       netOverHorizonBase: baseRes ? baseRes.incomeReceivedNet : null,
       taxRatePct: baseRes ? baseRes.taxRatePct : null,
       taxRequiresReview: baseRes ? baseRes.taxRequiresReview : false,
+      taxUnverified: baseRes ? baseRes.taxUnverified : false,
       disposition,
       priceFlat: baseRes ? baseRes.priceFlat : true,
     },

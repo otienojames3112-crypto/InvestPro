@@ -210,6 +210,8 @@ export interface IncomeEvent {
   taxSource: string;
   /** True when the rate is jurisdiction-dependent and the user should confirm. */
   requiresReview: boolean;
+  /** True when the rate is an UNVERIFIED placeholder the user must confirm (offshore). */
+  unverified: boolean;
 }
 
 /**
@@ -234,6 +236,7 @@ export function makeIncomeEvent(params: {
     disposition: params.disposition,
     taxSource: tax.source,
     requiresReview: tax.requiresReview,
+    unverified: tax.unverified,
   };
 }
 
@@ -431,6 +434,8 @@ export interface HoldingProjectionResult {
   endValue: number;
   /** True when the modeled rate is jurisdiction-dependent (user should confirm). */
   taxRequiresReview: boolean;
+  /** True when the WHT rate is an UNVERIFIED placeholder (offshore). */
+  taxUnverified: boolean;
   taxRatePct: number;
   /** True when price was held flat (no total-return view supplied). */
   priceFlat: boolean;
@@ -516,6 +521,7 @@ export function projectHoldingToHorizon(
     incomeTaxPaid,
     endValue: round2(endValue),
     taxRequiresReview: tax.requiresReview,
+    taxUnverified: tax.unverified,
     taxRatePct: tax.ratePct,
     priceFlat: dec.priceFlat,
   };

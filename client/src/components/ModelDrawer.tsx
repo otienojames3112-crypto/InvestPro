@@ -350,9 +350,10 @@ export function ModelDrawer({
                     <HelpCircle className="w-3 h-3 text-muted-foreground" />
                   </TooltipTrigger>
                   <TooltipContent className="max-w-[240px] text-xs">
-                    Tax on the income, not the capital. Local dividends/coupons have a
-                    known rate; REIT and offshore distributions depend on your own
-                    circumstances, so we leave it for you to confirm rather than guess.
+                    Tax on the income, not the capital. Local dividends/coupons use a
+                    known rate (5%). For REITs we apply the sourced resident 5% and for
+                    offshore funds an UNVERIFIED 15% benchmark — both depend on your own
+                    circumstances, so confirm or override them here.
                   </TooltipContent>
                 </Tooltip>
               </Label>
@@ -550,8 +551,21 @@ export function ModelDrawer({
                       <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-2 flex items-start gap-2">
                         <ShieldAlert className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
                         <p className="text-[10px] text-amber-800 dark:text-amber-300 leading-relaxed">
-                          The tax rate on this income depends on your circumstances and the
-                          fund's jurisdiction. Please confirm it above — we did not assume one for you.
+                          {pv.income.taxUnverified ? (
+                            <>
+                              The {pv.income.taxRatePct ?? 15}% rate applied here is an{" "}
+                              <strong>unverified benchmark</strong>. Kenyan residents are taxed on
+                              worldwide income, but the actual withholding depends on the fund's
+                              jurisdiction and any tax treaty. Confirm or override it above before
+                              relying on this figure.
+                            </>
+                          ) : (
+                            <>
+                              We applied the sourced resident {pv.income.taxRatePct ?? 5}% rate, but the
+                              exact treatment depends on your circumstances and the specific REIT.
+                              Confirm or override it above.
+                            </>
+                          )}
                         </p>
                       </div>
                     )}

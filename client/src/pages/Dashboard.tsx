@@ -1084,25 +1084,48 @@ export default function Dashboard() {
               <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-base leading-relaxed text-foreground">
                 <span>You have <strong className="kes-amount text-lg">{formatKES(liveNetWorth)}</strong>.</span>
                 <span className="text-muted-foreground">·</span>
-                <span className="inline-flex items-center gap-1">
-                  <span>
-                    Projected ≈ <strong className="kes-amount text-lg">{formatKESCompact(decision.range.base)}</strong>
-                    {goalDateLabel ? <> by {goalDateLabel}</> : null}
-                    {decision.range.high > decision.range.low && (
-                      <span className="text-muted-foreground text-sm"> (range {formatKESCompact(decision.range.low)}–{formatKESCompact(decision.range.high)})</span>
-                    )}
+                {/* Part 7.0.a — the prominent projection must tell the SAME story
+                    as the preview. When the plan holds price-driven / FX assets
+                    (hasMaterialRisk), a single rate-only number understates the
+                    committed holding entirely, so the headline reads the
+                    distribution's most-likely (p50) + ~80% band — agreeing with
+                    the risk card below. Fixed-income-only plans keep the exact
+                    rate-only base + range, byte-for-byte unchanged. */}
+                {decision.risk?.hasMaterialRisk ? (
+                  <span className="inline-flex items-center gap-1">
+                    <span>
+                      Most likely ≈ <strong className="kes-amount text-lg">{formatKESCompact(decision.risk.distribution.p50)}</strong>
+                      {goalDateLabel ? <> by {goalDateLabel}</> : null}
+                      <span className="text-muted-foreground text-sm"> (~80% chance {formatKESCompact(decision.risk.distribution.p10)}–{formatKESCompact(decision.risk.distribution.p90)})</span>
+                    </span>
+                    <Tooltip>
+                      <TooltipTrigger asChild><HelpCircle className="w-3 h-3 text-muted-foreground/60 cursor-help shrink-0" /></TooltipTrigger>
+                      <TooltipContent side="top" className="max-w-xs text-xs">
+                        This plan holds investments whose value rises and falls, so a single number would be a fiction. The most-likely figure and the ~80% band come from the expected-return and volatility assumptions on each holding — a planning estimate, never a forecast. Contractual assets (MMF, T-bills, bank deposits) are still treated as fixed; only the market sleeve carries the swing.
+                      </TooltipContent>
+                    </Tooltip>
                   </span>
-                  {/* Part A3 — the projection must not promise more than it guarantees.
-                      The base figure assumes today's rates hold for the whole
-                      horizon; the range already prices a rate-ease case, so we
-                      state the assumption plainly rather than implying certainty. */}
-                  <Tooltip>
-                    <TooltipTrigger asChild><HelpCircle className="w-3 h-3 text-muted-foreground/60 cursor-help shrink-0" /></TooltipTrigger>
-                    <TooltipContent side="top" className="max-w-xs text-xs">
-                      Assumes today's CBK / MMF rates hold for the full {horizonMonths ? `${horizonMonths}-month ` : ""}horizon. Rates move, so this is a planning estimate, not a guarantee — the {formatKESCompact(decision.range.low)}–{formatKESCompact(decision.range.high)} range shows how a rate-ease or missed-contribution path would land.
-                    </TooltipContent>
-                  </Tooltip>
-                </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1">
+                    <span>
+                      Projected ≈ <strong className="kes-amount text-lg">{formatKESCompact(decision.range.base)}</strong>
+                      {goalDateLabel ? <> by {goalDateLabel}</> : null}
+                      {decision.range.high > decision.range.low && (
+                        <span className="text-muted-foreground text-sm"> (range {formatKESCompact(decision.range.low)}–{formatKESCompact(decision.range.high)})</span>
+                      )}
+                    </span>
+                    {/* Part A3 — the projection must not promise more than it guarantees.
+                        The base figure assumes today's rates hold for the whole
+                        horizon; the range already prices a rate-ease case, so we
+                        state the assumption plainly rather than implying certainty. */}
+                    <Tooltip>
+                      <TooltipTrigger asChild><HelpCircle className="w-3 h-3 text-muted-foreground/60 cursor-help shrink-0" /></TooltipTrigger>
+                      <TooltipContent side="top" className="max-w-xs text-xs">
+                        Assumes today's CBK / MMF rates hold for the full {horizonMonths ? `${horizonMonths}-month ` : ""}horizon. Rates move, so this is a planning estimate, not a guarantee — the {formatKESCompact(decision.range.low)}–{formatKESCompact(decision.range.high)} range shows how a rate-ease or missed-contribution path would land.
+                      </TooltipContent>
+                    </Tooltip>
+                  </span>
+                )}
                 <span className="text-muted-foreground">·</span>
                 {infl?.linked ? (
                   <span className="inline-flex items-center gap-1">
@@ -1175,10 +1198,7 @@ export default function Dashboard() {
                     <Activity className="w-3.5 h-3.5 mt-0.5 shrink-0 text-amber-600 dark:text-amber-400" />
                     <div className="space-y-1">
                       <p className="text-foreground">
-                        This plan holds investments that rise and fall in value, so the outcome is a <strong>range, not a single number</strong>. Most likely about{" "}
-                        <strong className="kes-amount">{formatKESCompact(decision.risk.distribution.p50)}</strong>, and roughly an 80% chance of landing between{" "}
-                        <strong className="kes-amount">{formatKESCompact(decision.risk.distribution.p10)}</strong> and{" "}
-                        <strong className="kes-amount">{formatKESCompact(decision.risk.distribution.p90)}</strong>.
+                        Why the headline shows a range: this plan holds investments that rise and fall in value, so a single number would be a fiction. The most-likely figure and the ~80% band above price in only the market sleeve — your contractual assets (MMF, T-bills, bank deposits) are still treated as fixed.
                       </p>
                       <p className="text-muted-foreground">
                         Based on your assumptions, about a{" "}

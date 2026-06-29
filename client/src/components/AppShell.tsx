@@ -30,6 +30,7 @@ import {
   Building2,
   ClipboardCheck,
   Scale,
+  Compass,
   X,
 } from "lucide-react";
 import { Link, useLocation } from "wouter";
@@ -189,6 +190,12 @@ const navGroups = [
       { href: "/mmf-funds", label: "MMF Funds", icon: PiggyBank },
       { href: "/other-assets", label: "Other Assets", icon: Briefcase },
       { href: "/withdrawals", label: "Withdrawals", icon: ArrowUpCircle },
+    ],
+  },
+  {
+    title: "Invest",
+    items: [
+      { href: "/explore", label: "Explore Opportunities", icon: Compass },
     ],
   },
   {

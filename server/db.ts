@@ -1,4 +1,4 @@
-import { and, eq, desc, sql } from "drizzle-orm";
+import { and, eq, desc, asc, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import {
   InsertUser,
@@ -25,6 +25,9 @@ import {
   portfolioSecondaryMmfs,
   bankInstrumentHoldings,
   type InsertBankInstrumentHolding,
+  opportunities,
+  type Opportunity,
+  type InsertOpportunity,
 } from "../drizzle/schema";
 import { ENV } from "./_core/env";
 import { computeActualsTotals, estInterestToDate, govAccruedInterestTotal } from "../shared/actuals";
@@ -1379,4 +1382,62 @@ export async function deleteDepositEntriesByIds(
     removed += 1;
   }
   return removed;
+}
+
+// ─── Expansion Part 2: Opportunity Catalog (reference data) ──────────────────
+
+/**
+ * List active opportunities in a NEUTRAL default order (asset class, then name —
+ * never by yield/return/price). The catalog is a screener: the SERVER never
+ * applies a quality ranking or a performance-first default; ordering by a metric
+ * only happens when the user explicitly asks for it (handled in the router via an
+ * allow-listed sort the user selects). Returns raw rows.
+ */
+export async function listOpportunities(): Promise<Opportunity[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select()
+    .from(opportunities)
+    .where(eq(opportunities.active, true))
+    .orderBy(asc(opportunities.assetClass), asc(opportunities.name));
+}
+
+/** Fetch a single opportunity by its stable reference key (for the detail view). */
+export async function getOpportunityByRef(ref: string): Promise<Opportunity | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db
+    .select()
+    .from(opportunities)
+    .where(eq(opportunities.ref, ref))
+    .limit(1);
+  return rows[0] ?? null;
+}
+
+/** Count rows (used by the seed/ingestion guard). */
+export async function countOpportunities(): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  const rows = await db.select({ n: sql<number>`count(*)` }).from(opportunities);
+  return Number(rows[0]?.n ?? 0);
+}
+
+/**
+ * Idempotent upsert of a reference row by `ref`. Ingestion writes facts +
+ * provenance; it NEVER writes a ranking/score because no such column exists.
+ */
+export async function upsertOpportunity(data: InsertOpportunity): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  const existing = await db
+    .select({ id: opportunities.id })
+    .from(opportunities)
+    .where(eq(opportunities.ref, data.ref))
+    .limit(1);
+  if (existing[0]) {
+    await db.update(opportunities).set(data).where(eq(opportunities.ref, data.ref));
+  } else {
+    await db.insert(opportunities).values(data);
+  }
 }

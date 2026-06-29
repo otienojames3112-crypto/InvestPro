@@ -880,3 +880,79 @@ export const liquidDriftHistory = mysqlTable("liquid_drift_history", {
 });
 export type LiquidDriftHistory = typeof liquidDriftHistory.$inferSelect;
 export type InsertLiquidDriftHistory = typeof liquidDriftHistory.$inferInsert;
+
+/**
+ * Expansion Brief — Part 2: the Opportunity Catalog (screener) reference data.
+ *
+ * One row per investable instrument the tool has pulled in from public sources.
+ * This is REFERENCE data — global, identical for every user, not portfolio- or
+ * user-scoped — so it lives without a portfolioId and is shown in both Live and
+ * Test modes (modeling a chosen opportunity respects mode isolation; the catalog
+ * itself does not).
+ *
+ * Hard rule encoded in the SCHEMA: there is NO quality/ranking/score column, no
+ * "recommended" flag, no "tier." The tool stores neutral, sourced facts only;
+ * any narrowing or ordering is performed by the user at query/display time. Every
+ * numeric figure carries its own dataSource + dataAsOf so provenance travels with
+ * the value and the UI can badge staleness honestly.
+ */
+export const opportunities = mysqlTable("opportunities", {
+  id: int("id").autoincrement().primaryKey(),
+  /** Stable external/reference key (e.g. NSE ticker, ISIN, fund code) — also used for detail routing. */
+  ref: varchar("ref", { length: 64 }).notNull().unique(),
+  /** Instrument display name. */
+  name: varchar("name", { length: 200 }).notNull(),
+  /** AssetClass taxonomy value from Part 1 (cash_mmf | bank_deposit | gov_discount | gov_coupon | equity | reit | offshore_fund | alt). */
+  assetClass: varchar("assetClass", { length: 32 }).notNull(),
+  /** Issuer / fund manager / counterparty. */
+  issuer: varchar("issuer", { length: 200 }),
+  /** ISO currency code the instrument is denominated in (e.g. KES, USD). */
+  currency: varchar("currency", { length: 8 }).notNull().default("KES"),
+  /** Market/segment label (e.g. NSE, CBK, Offshore) — neutral descriptor, not a ranking. */
+  market: varchar("market", { length: 64 }),
+
+  // ── Income-asset facts (yield/coupon). Nullable; only set where applicable. ──
+  /** Headline yield or coupon (%), as published by the source. */
+  yieldPct: decimal("yieldPct", { precision: 7, scale: 4 }),
+  /** What `yieldPct` represents, e.g. "net annual yield", "coupon", "distribution yield". */
+  yieldKind: varchar("yieldKind", { length: 48 }),
+
+  // ── Price-driven facts (last price + trailing return). ──
+  /** Last traded / quoted price in the instrument currency. */
+  lastPrice: decimal("lastPrice", { precision: 16, scale: 4 }),
+  /** Trailing 12-month total return (%), shown with the standard past-performance caution. */
+  trailingReturnPct: decimal("trailingReturnPct", { precision: 8, scale: 4 }),
+
+  // ── Term-asset facts (tenor / maturity). ──
+  /** Tenor in years for term assets (bonds), null otherwise. */
+  tenorYears: decimal("tenorYears", { precision: 6, scale: 2 }),
+  /** Maturity date for term assets, null otherwise. */
+  maturityDate: date("maturityDate"),
+
+  // ── Fees. ──
+  /** Expense ratio / management fee (%) where applicable. */
+  expenseRatioPct: decimal("expenseRatioPct", { precision: 6, scale: 4 }),
+
+  // ── Liquidity descriptor (neutral facet for filtering, not a quality signal). ──
+  /** Liquidity bucket: daily | t_plus_settlement | term | illiquid. */
+  liquidity: varchar("liquidity", { length: 32 }),
+
+  /** Optional neutral factual note (e.g. "Infrastructure bond, tax-exempt coupon"). */
+  factNote: text("factNote"),
+
+  // ── Provenance (Part 1 honesty requirements). ──
+  /** Where the figures were gathered (e.g. "NSE daily close", "CBK auction results"). */
+  dataSource: varchar("dataSource", { length: 200 }),
+  /** As-of timestamp for the figures; drives the staleness badge. */
+  dataAsOf: timestamp("dataAsOf"),
+  /** Whether any figure here was scraped/unverified (vs. an official feed). */
+  unverified: boolean("unverified").notNull().default(true),
+
+  /** Soft-hide a row without deleting it (e.g. delisted) — neutral lifecycle, not curation. */
+  active: boolean("active").notNull().default(true),
+
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+export type Opportunity = typeof opportunities.$inferSelect;
+export type InsertOpportunity = typeof opportunities.$inferInsert;

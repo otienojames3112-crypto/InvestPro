@@ -82,7 +82,12 @@ import {
   deleteSimSessionRecords,
   deleteDepositEntriesByIds,
   countSimSessionRecords,
+  listOpportunities,
+  getOpportunityByRef,
+  countOpportunities,
+  upsertOpportunity,
 } from "./db";
+import { OPPORTUNITY_SEED } from "./opportunitySeed";
 import { notifyOwner } from "./_core/notification";
 import { createHeartbeatJob, updateHeartbeatJob, deleteHeartbeatJob } from "./_core/heartbeat";
 import { parse as parseCookie } from "cookie";
@@ -840,6 +845,31 @@ export const appRouter = router({
       ctx.res.clearCookie(COOKIE_NAME, { ...cookieOptions, maxAge: -1 });
       return { success: true } as const;
     }),
+  }),
+
+  // ─── Expansion Part 2: Opportunity Catalog (neutral screener) ──────────────
+  // The catalog is REFERENCE data, identical for everyone, shown in both modes.
+  // The server returns rows in a NEUTRAL order (asset class, then name) and never
+  // ranks by performance or marks anything "recommended/best." Any ordering by a
+  // metric is the user's explicit choice, applied on the client. There is no
+  // mutation here that transacts — the only downstream action is hypothetical
+  // modeling (Part 3).
+  opportunities: router({
+    // Self-seeding on first read so the catalog is populated without a separate
+    // migration step. Idempotent: existing rows are refreshed, none are ranked.
+    list: publicProcedure.query(async () => {
+      if ((await countOpportunities()) === 0) {
+        for (const row of OPPORTUNITY_SEED) await upsertOpportunity(row);
+      }
+      return listOpportunities();
+    }),
+    byRef: publicProcedure
+      .input(z.object({ ref: z.string().min(1) }))
+      .query(async ({ input }) => {
+        const row = await getOpportunityByRef(input.ref);
+        if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "Opportunity not found" });
+        return row;
+      }),
   }),
 
   // ─── Time Machine (sandbox only) ───────────────────────────────────────────

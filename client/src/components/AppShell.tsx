@@ -214,6 +214,22 @@ function SidebarCandidatesBadge() {
   );
 }
 
+function SidebarReviewBadge() {
+  const { data } = trpc.opportunities.aiReviewQueue.useQuery(undefined, {
+    refetchInterval: 60_000,
+  });
+  const count = (data ?? []).reduce((n, x) => n + x.aiFigureCount, 0);
+  if (count <= 0) return null;
+  return (
+    <span
+      className="shrink-0 rounded-full border border-orange-500/40 bg-orange-500/15 px-1.5 py-0.5 text-[10px] font-semibold leading-none tabular-nums text-orange-400"
+      title={`${count} AI-extracted figure${count === 1 ? "" : "s"} awaiting confirmation`}
+    >
+      {count}
+    </span>
+  );
+}
+
 const navGroups = [
   {
     title: "Tracking",
@@ -232,6 +248,7 @@ const navGroups = [
     items: [
       { href: "/explore", label: "Explore Opportunities", icon: Compass },
       { href: "/ai-intake", label: "AI Intake", icon: Bot },
+      { href: "/ai-review", label: "AI Review", icon: ClipboardCheck },
       { href: "/source-conflicts", label: "Source Conflicts", icon: GitCompareArrows },
     ],
   },
@@ -360,6 +377,7 @@ function SidebarContent({
                         {href === "/" && <SidebarDriftBadge portfolioId={portfolioId} onNavClick={onNavClick} />}
                         {href === "/securities" && <SidebarSecuritiesBadge portfolioId={portfolioId} />}
                         {href === "/ai-intake" && <SidebarCandidatesBadge />}
+                        {href === "/ai-review" && <SidebarReviewBadge />}
                         {href === "/source-conflicts" && <SidebarConflictsBadge />}
                         {isActive && <ChevronRight className="w-3 h-3 text-primary" />}
                       </div>

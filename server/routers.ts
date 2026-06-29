@@ -89,6 +89,7 @@ import {
   countOpportunities,
   upsertOpportunity,
   verifyOpportunityField,
+  rejectAiField,
   listIngestionConflicts,
   countOpenConflicts,
   resolveIngestionConflict,
@@ -103,8 +104,11 @@ import { OPPORTUNITY_SEED } from "./opportunitySeed";
 import {
   aiExtractInstrument,
   aiDiscoverCandidates,
-  extractionToProvenanceMap,
+  fetchDocumentText,
+  type ExtractionSource,
 } from "./aiIntakeService";
+import { extractionToAdapterResult, aiInstrumentToProvenanceMap } from "../shared/aiAdapter";
+import { storagePut, storageGetSignedUrl } from "./storage";
 import { stripVerdictFields } from "../shared/aiIntake";
 import {
   FIELD_KEYS,
@@ -115,7 +119,11 @@ import {
   type FieldProvenance,
   type FieldProvenanceMap,
 } from "../shared/provenance";
-import { summariseState } from "../shared/provenance";
+import {
+  summariseState,
+  isAiProvisionalRow,
+  countAiFigures,
+} from "../shared/provenance";
 import type { InsertOpportunity } from "../drizzle/schema";
 import { runAdapter } from "./ingestion/runner";
 import { ADAPTERS } from "./ingestion/adapters";
@@ -976,7 +984,39 @@ export const appRouter = router({
       if ((await countOpportunities()) === 0) {
         for (const row of OPPORTUNITY_SEED) await upsertOpportunity(row);
       }
+      const rows = await listOpportunities();
+      // Visibility wall (Part 8): hide rows an AI invented whole-cloth (every figure
+      // still ai_extracted, no human/scrape has touched any) from the public catalog.
+      // They are NOT yet trustworthy enough to display as a tracked instrument; they
+      // surface only in the maintainer review queue until at least one human confirms a
+      // figure. The moment any figure is confirmed/entered, the row appears here.
+      return rows.filter(
+        (r) => !isAiProvisionalRow((r.fieldProvenance ?? {}) as FieldProvenanceMap),
+      );
+    }),
+
+    // Admin-only: the FULL catalog INCLUDING AI-provisional rows hidden from `list`.
+    // Used by the maintainer review queue so a maintainer can see and confirm rows that
+    // the public never sees. Never ranks; same neutral order.
+    listAll: adminProcedure.query(async () => {
       return listOpportunities();
+    }),
+
+    // Admin-only: rows awaiting human confirmation (any figure still ai_extracted),
+    // for the dedicated review queue. Returns the row plus its provisional status so the
+    // UI can group hidden (all-AI) rows separately from partially-confirmed ones.
+    aiReviewQueue: adminProcedure.query(async () => {
+      const rows = await listOpportunities();
+      return rows
+        .map((r) => {
+          const map = (r.fieldProvenance ?? {}) as FieldProvenanceMap;
+          return {
+            row: r,
+            aiFigureCount: countAiFigures(map),
+            hiddenFromCatalog: isAiProvisionalRow(map),
+          };
+        })
+        .filter((x) => x.aiFigureCount > 0);
     }),
     byRef: publicProcedure
       .input(z.object({ ref: z.string().min(1) }))
@@ -1054,6 +1094,26 @@ export const appRouter = router({
         return { ref: input.ref, fieldKey: input.fieldKey, provenance: updated };
       }),
 
+    // ── Part 8: reject a single AI-extracted figure ──────────────────────────
+    // A maintainer judged an ai_extracted figure to be a misread/hallucination and
+    // DROPS it. Narrow on purpose: the DB helper only removes a figure still in the
+    // ai_extracted state, never a human/scraped value (those are corrected via
+    // verifyField, never destroyed). If the dropped figure was the last AI figure on an
+    // AI-only row, the row is deactivated. Confirm/Correct stay in verifyField.
+    rejectAiField: adminProcedure
+      .input(z.object({ ref: z.string().min(1), fieldKey: z.enum(FIELD_KEYS) }))
+      .mutation(async ({ input }) => {
+        const res = await rejectAiField({ ref: input.ref, fieldKey: input.fieldKey });
+        if (!res.removed) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message:
+              "Only an AI-extracted figure can be rejected. Human or scraped values are corrected, not dropped.",
+          });
+        }
+        return res;
+      }),
+
     // ── Part 7.2: ingestion conflict review ──────────────────────────────────
     // When a fresh scrape disagrees with a figure a human verified/entered, the
     // runner records an `ingestion_conflicts` row rather than clobbering the
@@ -1128,8 +1188,13 @@ export const appRouter = router({
     aiExtract: adminProcedure
       .input(
         z.object({
-          // The raw source text the human pasted (fact sheet, auction notice, etc.).
-          documentText: z.string().min(20).max(40000),
+          // The document source. The librarian reads ONE of: pasted/typed text, a URL it
+          // fetches and strips to text, or an uploaded PDF (storage key) it reads directly.
+          source: z.discriminatedUnion("kind", [
+            z.object({ kind: z.literal("text"), text: z.string().min(20).max(40000) }),
+            z.object({ kind: z.literal("url"), url: z.string().url().max(500) }),
+            z.object({ kind: z.literal("pdf"), fileKey: z.string().min(1).max(300) }),
+          ]),
           // The cited source document label (for the confirm-against-source UI).
           sourceLabel: z.string().min(1).max(200),
           // Link to the source document, so a human can open and confirm against it.
@@ -1142,53 +1207,72 @@ export const appRouter = router({
         }),
       )
       .mutation(async ({ input }) => {
+        // Resolve the document source into what the model reads, and a default link to
+        // the source so a human can open and confirm against it.
+        let llmSource: ExtractionSource;
+        let defaultUrl: string | null = null;
+        if (input.source.kind === "text") {
+          llmSource = { kind: "text", text: input.source.text };
+        } else if (input.source.kind === "url") {
+          // Fetch + strip server-side (the model never browses; it reads the text we got).
+          const text = await fetchDocumentText(input.source.url);
+          llmSource = { kind: "text", text };
+          defaultUrl = input.source.url;
+        } else {
+          // PDF: hand the stored file to the model directly via a signed URL.
+          const signed = await storageGetSignedUrl(input.source.fileKey);
+          llmSource = { kind: "pdf", fileUrl: signed };
+        }
+
         const { extraction, model } = await aiExtractInstrument({
-          documentText: input.documentText,
+          source: llmSource,
           hintName: input.hintName ?? null,
         });
         if (!extraction) {
           throw new TRPCError({
             code: "UNPROCESSABLE_CONTENT",
             message:
-              "The AI could not read a specific instrument with confirmable figures from this document. Check the source text and try again.",
+              "The AI could not read a specific instrument with confirmable figures from this document. Check the source and try again.",
           });
         }
-        const sourceUrl = input.sourceUrl === "" ? null : (input.sourceUrl ?? null);
+        const sourceUrl =
+          input.sourceUrl && input.sourceUrl !== "" ? input.sourceUrl : defaultUrl;
         const at = Date.now();
-        const aiMap = extractionToProvenanceMap({
+
+        // AI extraction is JUST ANOTHER ADAPTER behind the same wall: turn it into the
+        // exact AdapterResult shape the scrapers produce, then run the figures through
+        // the AI-tier provenance map (which stamps ai_extracted AND applies the numeric
+        // sanity gate, flagging implausible values for review rather than saving clean).
+        const adapterResult = extractionToAdapterResult({
           extraction,
+          ref: input.ref ?? null,
           sourceLabel: input.sourceLabel,
           sourceUrl,
-          model,
-          at,
         });
+        const inst = adapterResult.instruments[0];
+        const { map: aiMap, flagged } = aiInstrumentToProvenanceMap(inst, { at, model });
         if (Object.keys(aiMap).length === 0) {
           throw new TRPCError({
             code: "UNPROCESSABLE_CONTENT",
             message: "The AI found no confirmable figures (each figure needs a source quote).",
           });
         }
-        // Derive a provisional ref from the extracted name when none was supplied.
-        const ref =
-          input.ref ??
-          `ai-${extraction.name
-            .toLowerCase()
-            .replace(/[^a-z0-9]+/g, "-")
-            .replace(/^-+|-+$/g, "")
-            .slice(0, 56)}`;
+        const ref = inst.ref;
         const base: InsertOpportunity = {
           ref,
-          name: extraction.name,
-          assetClass: (extraction.assetClass ?? "alt").slice(0, 32),
-          issuer: extraction.issuer ?? null,
-          currency: (extraction.currency ?? "KES").slice(0, 8),
-          market: extraction.market ?? null,
-          factNote: extraction.notes ?? null,
+          name: inst.name,
+          assetClass: inst.assetClass,
+          issuer: inst.issuer ?? null,
+          currency: inst.currency ?? "KES",
+          market: inst.market ?? null,
+          factNote: inst.factNote ?? null,
           dataSource: input.sourceLabel,
           dataAsOf: new Date(at),
           unverified: true,
           active: true,
         };
+        // Same reconcile/upsert/conflicts machinery as a scrape — AI only fills blanks,
+        // never clobbers a human or scraped value (disagreements become conflicts).
         const result = await ingestAiExtractedInstrument({ base, ai: aiMap, sourceId: AI_INTAKE_SOURCE_ID });
         const saved = await getOpportunityByRef(ref);
         return {
@@ -1196,9 +1280,30 @@ export const appRouter = router({
           created: result.created,
           filled: result.filled,
           conflicts: result.conflicts,
+          flagged, // figures that tripped a numeric sanity gate (shown loudly for review)
           extraction, // returned so the UI can show what to confirm against the source
           opportunity: saved,
         };
+      }),
+
+    // Upload a PDF source document, returning its storage key for `aiExtract`.
+    aiUploadDocument: adminProcedure
+      .input(
+        z.object({
+          // base64-encoded PDF bytes (the client reads the File and base64s it).
+          base64: z.string().min(1),
+          fileName: z.string().min(1).max(200),
+        }),
+      )
+      .mutation(async ({ ctx, input }) => {
+        const bytes = Buffer.from(input.base64, "base64");
+        if (bytes.length === 0) throw new TRPCError({ code: "BAD_REQUEST", message: "Empty file." });
+        if (bytes.length > 15 * 1024 * 1024) {
+          throw new TRPCError({ code: "PAYLOAD_TOO_LARGE", message: "PDF exceeds 15MB." });
+        }
+        const safe = input.fileName.replace(/[^a-zA-Z0-9._-]+/g, "_").slice(0, 120) || "document.pdf";
+        const { key } = await storagePut(`ai-intake/${ctx.user.id}/${safe}`, bytes, "application/pdf");
+        return { fileKey: key };
       }),
 
     // ── Part 8: universe discovery (suggestions only) ────────────────────────

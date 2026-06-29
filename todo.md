@@ -957,3 +957,41 @@
 - [x] Structural guarantee: aiIntake.ts closed types + compile-time _assertNoVerdictFields + runtime stripVerdictFields
 - [x] Tests for extraction parsing, no-clobber of human/scrape, suggestion-only discovery (aiIntake.test.ts, 16 tests) + live LLM smoke test verified
 - [x] Type gate clean; full suite 981 green; AI Intake page renders
+
+
+## Part 8 (deeper spec) — AI extraction as an adapter behind the same wall
+
+### Backend: AI as a Part 7 adapter
+- [x] shared/aiAdapter.ts: extractionToAdapterResult → same AdapterResult/ScrapedInstrument shape (no slot for a score)
+- [x] aiInstrumentToProvenanceMap stamps ai_extracted + quote + model, AND runs the sanity gate
+- [x] aiExtract now builds the adapter result then feeds the AI map through ingestAiExtractedInstrument (reconcile/upsert/conflicts)
+- [x] Grounding: prompt forbids invention; null-on-absent; quote required per figure
+
+### Numeric sanity gates (reuse/extend Part 7 anomaly posture)
+- [x] shared/figureSanity.ts: per-field plausibility bounds (rate>25%, negative/zero price, fee>5%, tenor sanity, fx positive)
+- [x] Implausible AI figures carry a neutral reviewFlag on their provenance (provisional + suspected misread), never saved as clean
+- [x] aiExtract returns `flagged[]`; reviewFlag stored on the figure for the queue
+
+### Document sources
+- [x] aiExtract accepts source: {kind:text|url|pdf}
+- [x] URL fetch: fetchDocumentText (polite fetch + node-html-parser strip)
+- [x] PDF: aiUploadDocument (base64→storagePut) then aiExtract reads it via LLM file_url (no native PDF lib; keeps Node-only deploy clean)
+
+### Visibility policy
+- [x] Hide ai_extracted-ONLY instruments from public Explore (isAiProvisionalRow predicate)
+- [x] opportunities.list filters AI-provisional rows; opportunities.listAll/aiReviewQueue (admin) include them
+- [x] Loud provisional treatment carried by ai_extracted badge + reviewFlag (covered by review queue UI next)
+
+### Maintainer review queue (the on-ramp to trust)
+- [x] AiIntake ExtractPanel: text/URL/PDF source picker + flagged-figure sanity warnings + review-queue link
+- [x] /ai-review admin-only page: aiReviewQueue grouped by instrument; hidden-from-catalog rows flagged
+- [x] Per-figure side-by-side: AI value + source span (verbatim quote) + open-document link
+- [x] One-click Confirm (verifyField→human_verified), Correct (override→human_entered), Reject (rejectAiField drops ai_extracted only)
+- [x] Per-figure not all-or-nothing; reuses verifyField + new rejectAiField; AI Review nav entry + pending-figure badge
+
+### Tests + gate
+- [x] aiAdapter parity test (extraction → AdapterResult → ai_extracted map, no clobber) — aiAdapterPipeline.test.ts
+- [x] figureSanity tests (each bound flags correctly; valid values pass)
+- [x] visibility test (isAiProvisionalRow/hasAiExtractedFigure/countAiFigures)
+- [x] per-figure reject narrowness (rejectAiField drops ai_extracted only); confirm/correct reuse verifyField (covered by Part 7 suite)
+- [x] type gate clean; full suite 995 green; AI Review + AI Intake render; checkpoint next

@@ -136,28 +136,71 @@ function AiPrincipleBanner() {
 
 /* ── Panel 1: read a source document → ai_extracted figures ─────────────────── */
 
+type SourceKind = "text" | "url" | "pdf";
+
 function ExtractPanel() {
   const utils = trpc.useUtils();
+  const [kind, setKind] = useState<SourceKind>("text");
   const [documentText, setDocumentText] = useState("");
+  const [docUrl, setDocUrl] = useState("");
+  const [pdfFile, setPdfFile] = useState<File | null>(null);
   const [sourceLabel, setSourceLabel] = useState("");
   const [sourceUrl, setSourceUrl] = useState("");
   const [hintName, setHintName] = useState("");
+  const [uploading, setUploading] = useState(false);
 
+  const upload = trpc.opportunities.aiUploadDocument.useMutation();
   const extract = trpc.opportunities.aiExtract.useMutation({
     onSuccess: (res) => {
       toast.success(
         res.created
-          ? `Drafted “${res.extraction.name}” with ${res.filled} AI-extracted figure${res.filled === 1 ? "" : "s"} — confirm each against the source.`
+          ? `Drafted “${res.extraction.name}” with ${res.filled} AI-extracted figure${res.filled === 1 ? "" : "s"} — now in the review queue.`
           : `Filled ${res.filled} blank figure${res.filled === 1 ? "" : "s"} on “${res.extraction.name}”${res.conflicts ? `, ${res.conflicts} sent to conflicts` : ""}.`,
       );
       utils.opportunities.list.invalidate();
       utils.opportunities.byRef.invalidate();
+      utils.opportunities.aiReviewQueue.invalidate();
     },
     onError: (err) => toast.error(err.message),
   });
 
-  const canSubmit = documentText.trim().length >= 20 && sourceLabel.trim().length > 0 && !extract.isPending;
+  const busy = extract.isPending || uploading;
+  const sourceReady =
+    kind === "text" ? documentText.trim().length >= 20 : kind === "url" ? /^https?:\/\//.test(docUrl.trim()) : !!pdfFile;
+  const canSubmit = sourceReady && sourceLabel.trim().length > 0 && !busy;
   const result = extract.data;
+
+  async function fileToBase64(file: File): Promise<string> {
+    const buf = await file.arrayBuffer();
+    let binary = "";
+    const bytes = new Uint8Array(buf);
+    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+    return btoa(binary);
+  }
+
+  async function handleSubmit() {
+    const common = {
+      sourceLabel: sourceLabel.trim(),
+      sourceUrl: sourceUrl.trim() === "" ? undefined : sourceUrl.trim(),
+      hintName: hintName.trim() === "" ? undefined : hintName.trim(),
+    };
+    try {
+      if (kind === "text") {
+        extract.mutate({ source: { kind: "text", text: documentText.trim() }, ...common });
+      } else if (kind === "url") {
+        extract.mutate({ source: { kind: "url", url: docUrl.trim() }, ...common });
+      } else if (pdfFile) {
+        setUploading(true);
+        const base64 = await fileToBase64(pdfFile);
+        const { fileKey } = await upload.mutateAsync({ base64, fileName: pdfFile.name });
+        setUploading(false);
+        extract.mutate({ source: { kind: "pdf", fileKey }, ...common });
+      }
+    } catch (err) {
+      setUploading(false);
+      toast.error(err instanceof Error ? err.message : "Upload failed.");
+    }
+  }
 
   return (
     <Card>
@@ -166,9 +209,9 @@ function ExtractPanel() {
           <FileText className="w-4 h-4 text-primary" /> Read a source document
         </CardTitle>
         <CardDescription>
-          Paste a fact sheet, auction notice, or prospectus excerpt. AI extracts the factual figures it can find
-          and saves them as <em>AI-extracted · unverified</em>, each with the verbatim quote it read — so you can
-          confirm every number against the source.
+          Give the librarian a fact sheet, auction notice, or prospectus — as pasted text, a URL it fetches, or an
+          uploaded PDF. It extracts the factual figures it can find and saves them as <em>AI-extracted ·
+          unverified</em>, each with the verbatim quote it read, into the review queue.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -186,7 +229,7 @@ function ExtractPanel() {
             <Label htmlFor="src-url">Source link (optional)</Label>
             <Input
               id="src-url"
-              placeholder="https://…"
+              placeholder="https://… (link a human can open to confirm)"
               value={sourceUrl}
               onChange={(e) => setSourceUrl(e.target.value)}
             />
@@ -201,31 +244,71 @@ function ExtractPanel() {
             onChange={(e) => setHintName(e.target.value)}
           />
         </div>
-        <div className="space-y-1.5">
-          <Label htmlFor="doc">Source document text *</Label>
-          <Textarea
-            id="doc"
-            rows={8}
-            placeholder="Paste the raw text from the fact sheet / notice here…"
-            value={documentText}
-            onChange={(e) => setDocumentText(e.target.value)}
-            className="font-mono text-xs"
-          />
-          <p className="text-[11px] text-muted-foreground">{documentText.trim().length} characters</p>
+
+        {/* Source kind picker */}
+        <div className="flex gap-1 rounded-lg border border-border p-1 w-fit">
+          {(["text", "url", "pdf"] as const).map((k) => (
+            <button
+              key={k}
+              type="button"
+              onClick={() => setKind(k)}
+              className={`px-3 py-1.5 text-xs rounded-md transition-colors ${
+                kind === k ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              {k === "text" ? "Paste text" : k === "url" ? "Fetch a URL" : "Upload a PDF"}
+            </button>
+          ))}
         </div>
-        <Button
-          onClick={() =>
-            extract.mutate({
-              documentText: documentText.trim(),
-              sourceLabel: sourceLabel.trim(),
-              sourceUrl: sourceUrl.trim() === "" ? undefined : sourceUrl.trim(),
-              hintName: hintName.trim() === "" ? undefined : hintName.trim(),
-            })
-          }
-          disabled={!canSubmit}
-        >
+
+        {kind === "text" && (
+          <div className="space-y-1.5">
+            <Label htmlFor="doc">Source document text *</Label>
+            <Textarea
+              id="doc"
+              rows={8}
+              placeholder="Paste the raw text from the fact sheet / notice here…"
+              value={documentText}
+              onChange={(e) => setDocumentText(e.target.value)}
+              className="font-mono text-xs"
+            />
+            <p className="text-[11px] text-muted-foreground">{documentText.trim().length} characters</p>
+          </div>
+        )}
+        {kind === "url" && (
+          <div className="space-y-1.5">
+            <Label htmlFor="doc-url">Document URL *</Label>
+            <Input
+              id="doc-url"
+              placeholder="https://manager.example/fund-factsheet"
+              value={docUrl}
+              onChange={(e) => setDocUrl(e.target.value)}
+            />
+            <p className="text-[11px] text-muted-foreground">
+              The page is fetched and stripped to text on the server; the librarian reads only that text.
+            </p>
+          </div>
+        )}
+        {kind === "pdf" && (
+          <div className="space-y-1.5">
+            <Label htmlFor="doc-pdf">PDF file *</Label>
+            <Input
+              id="doc-pdf"
+              type="file"
+              accept="application/pdf"
+              onChange={(e) => setPdfFile(e.target.files?.[0] ?? null)}
+            />
+            {pdfFile && (
+              <p className="text-[11px] text-muted-foreground">
+                {pdfFile.name} · {(pdfFile.size / 1024 / 1024).toFixed(2)} MB
+              </p>
+            )}
+          </div>
+        )}
+
+        <Button onClick={handleSubmit} disabled={!canSubmit}>
           <Sparkles className="w-4 h-4 mr-1.5" />
-          {extract.isPending ? "Reading the document…" : "Extract facts for review"}
+          {uploading ? "Uploading…" : extract.isPending ? "Reading the document…" : "Extract facts for review"}
         </Button>
 
         {result && (
@@ -238,37 +321,68 @@ function ExtractPanel() {
                   AI-extracted · unverified
                 </Badge>
               </div>
-              <Link href={`/explore/${encodeURIComponent(result.ref)}`}>
-                <Button size="sm" variant="outline">
-                  Confirm against source <ArrowRight className="w-3.5 h-3.5 ml-1" />
-                </Button>
-              </Link>
+              <div className="flex items-center gap-2">
+                <Link href="/ai-review">
+                  <Button size="sm" variant="outline">
+                    Open review queue <ArrowRight className="w-3.5 h-3.5 ml-1" />
+                  </Button>
+                </Link>
+                <Link href={`/explore/${encodeURIComponent(result.ref)}`}>
+                  <Button size="sm" variant="outline">
+                    Confirm against source <ArrowRight className="w-3.5 h-3.5 ml-1" />
+                  </Button>
+                </Link>
+              </div>
             </div>
+            {result.flagged && result.flagged.length > 0 && (
+              <div className="flex items-start gap-2 rounded-md border border-red-500/40 bg-red-500/[0.06] px-3 py-2 text-xs text-red-500">
+                <ShieldAlert className="w-4 h-4 mt-0.5 shrink-0" />
+                <span>
+                  {result.flagged.length} figure{result.flagged.length === 1 ? "" : "s"} tripped a sanity check
+                  (a value outside the plausible range — likely a misread). {""}
+                  {result.flagged.map((fl) => FIELD_LABELS[fl.key] ?? fl.key).join(", ")}. These are kept
+                  provisional and marked for extra scrutiny — check them especially carefully against the source.
+                </span>
+              </div>
+            )}
             {result.extraction.figures.length === 0 ? (
               <p className="text-sm text-muted-foreground">
                 No confirmable figures were found. {result.extraction.notes ?? ""}
               </p>
             ) : (
               <ul className="space-y-2">
-                {result.extraction.figures.map((f) => (
-                  <li key={f.field} className="rounded-md border border-border bg-background/60 p-2.5">
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                        {FIELD_LABELS[f.field] ?? f.field}
-                      </span>
-                      <span className="font-semibold tabular-nums">{f.value}</span>
-                    </div>
-                    <p className="mt-1 flex items-start gap-1.5 text-xs text-muted-foreground italic">
-                      <Quote className="w-3 h-3 mt-0.5 shrink-0" />
-                      <span>“{f.quote}”</span>
-                    </p>
-                  </li>
-                ))}
+                {result.extraction.figures.map((f) => {
+                  const flag = result.flagged?.find((fl) => fl.key === f.field);
+                  return (
+                    <li
+                      key={f.field}
+                      className={`rounded-md border bg-background/60 p-2.5 ${
+                        flag ? "border-red-500/40" : "border-border"
+                      }`}
+                    >
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                          {FIELD_LABELS[f.field] ?? f.field}
+                        </span>
+                        <span className="font-semibold tabular-nums">{f.value}</span>
+                        {flag && (
+                          <Badge variant="outline" className="text-red-500 border-red-500/40 text-[10px]">
+                            sanity check · {flag.reason}
+                          </Badge>
+                        )}
+                      </div>
+                      <p className="mt-1 flex items-start gap-1.5 text-xs text-muted-foreground italic">
+                        <Quote className="w-3 h-3 mt-0.5 shrink-0" />
+                        <span>“{f.quote}”</span>
+                      </p>
+                    </li>
+                  );
+                })}
               </ul>
             )}
             <p className="text-[11px] text-muted-foreground">
-              These figures are provisional until you open the instrument and confirm (or correct) each one
-              against the cited source.
+              These figures are provisional until a human confirms (or corrects) each one against the cited
+              source. The instrument stays hidden from the public catalog until at least one figure is confirmed.
             </p>
           </div>
         )}

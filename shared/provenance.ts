@@ -137,6 +137,14 @@ export interface FieldProvenance {
    * a quality signal and never raises trust. Null for non-AI figures.
    */
   aiModel?: string | null;
+  /**
+   * Part 8 (deeper spec): a neutral, factual reason this figure FAILED a numeric
+   * sanity gate on extraction (e.g. "A yield above 25% is implausible"). When set, the
+   * figure is provisional AND suspected of being a misread, so the review surface shows
+   * the warning prominently and the human must look extra hard before confirming. It is
+   * NOT a quality judgement and never affects trust ordering. Null when the value passed.
+   */
+  reviewFlag?: string | null;
 }
 
 /** A whole instrument's per-field provenance map (only the applicable keys are set). */
@@ -190,6 +198,8 @@ export function aiExtractedField(args: {
   at: number;
   /** The model id that produced it (audit only, never a quality signal). */
   model?: string | null;
+  /** Neutral reason this figure failed a numeric sanity gate (null when it passed). */
+  reviewFlag?: string | null;
 }): FieldProvenance {
   return {
     value: args.value,
@@ -201,6 +211,7 @@ export function aiExtractedField(args: {
     verifiedBy: null,
     verifiedAt: null,
     aiModel: args.model ?? null,
+    reviewFlag: args.reviewFlag ?? null,
   };
 }
 
@@ -419,6 +430,32 @@ export function summariseState(map: FieldProvenanceMap): VerificationState {
     if (trustRank(p.verificationState) < trustRank(worst)) worst = p.verificationState;
   }
   return worst;
+}
+
+/** True when at least one figure on the row was AI-extracted and not yet checked. */
+export function hasAiExtractedFigure(map: FieldProvenanceMap): boolean {
+  return Object.values(map).some((p) => p?.verificationState === "ai_extracted");
+}
+
+/**
+ * Part 8 (deeper spec) visibility rule: a row is "AI-provisional" when it carries
+ * figures AND **every** figure is still `ai_extracted` — i.e. an AI invented the whole
+ * row and NO human and NO deterministic scrape has touched any figure yet. Such a row is
+ * hidden from the public catalog (it is not yet trustworthy enough to display as a real
+ * tracked instrument) and lives only in the maintainer review queue. The instant ANY
+ * figure is confirmed/entered by a human (or raised by a scrape), the row stops being
+ * AI-provisional and becomes eligible for the catalog. Returns false for rows with no
+ * figures (a human-authored shell is not AI-provisional).
+ */
+export function isAiProvisionalRow(map: FieldProvenanceMap): boolean {
+  const present = Object.values(map).filter((p): p is FieldProvenance => !!p);
+  if (present.length === 0) return false;
+  return present.every((p) => p.verificationState === "ai_extracted");
+}
+
+/** Count figures on the row still awaiting human confirmation (ai_extracted). */
+export function countAiFigures(map: FieldProvenanceMap): number {
+  return Object.values(map).filter((p) => p?.verificationState === "ai_extracted").length;
 }
 
 /**

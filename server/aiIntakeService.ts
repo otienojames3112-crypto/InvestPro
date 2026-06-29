@@ -10,6 +10,7 @@
  * directly; the `invokeLLM`-calling functions are thin wrappers around them.
  */
 
+import { parse as parseHtml } from "node-html-parser";
 import { invokeLLM } from "./_core/llm";
 import {
   AI_EXTRACTABLE_FIELDS,
@@ -20,6 +21,46 @@ import {
   type AiCandidateInstrument,
 } from "../shared/aiIntake";
 import { aiExtractedField, type FieldKey, type FieldProvenanceMap } from "../shared/provenance";
+
+/* ── Document sources ─────────────────────────────────────────────────────────
+ * The librarian can read from three kinds of source, all converging on the same
+ * grounded extraction: pasted text, a fetched URL (HTML stripped to text), or an
+ * uploaded PDF (handed to the model as a file so it reads the real document). In every
+ * case the model is told to extract ONLY what is present — never to fill from general
+ * knowledge — so the source is the sole ground truth.
+ */
+
+/** Strip an HTML document down to readable text (drop script/style/nav chrome). */
+export function htmlToText(html: string): string {
+  const root = parseHtml(html, { comment: false });
+  root.querySelectorAll("script,style,noscript,svg,head,nav,footer,header").forEach((n) => n.remove());
+  const text = root.text.replace(/[ \t]+/g, " ").replace(/\n{3,}/g, "\n\n").trim();
+  return text;
+}
+
+/**
+ * Politely fetch a URL server-side and return its text content. Caps the body so a
+ * huge page cannot blow the request budget. Throws a friendly error on failure so the
+ * procedure can surface it.
+ */
+export async function fetchDocumentText(url: string, maxChars = 40000): Promise<string> {
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      headers: { Accept: "text/html,text/plain", "User-Agent": "kes5m-tracker/ai-intake (contact: owner)" },
+      redirect: "follow",
+    });
+  } catch (err) {
+    throw new Error(`Could not fetch the URL: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  if (!res.ok) throw new Error(`The source URL returned HTTP ${res.status}.`);
+  const ctype = res.headers.get("content-type") ?? "";
+  const body = await res.text();
+  const text = ctype.includes("html") ? htmlToText(body) : body;
+  const trimmed = text.trim();
+  if (trimmed.length < 20) throw new Error("The fetched page had no readable text to extract from.");
+  return trimmed.slice(0, maxChars);
+}
 
 /* ── Prompts ──────────────────────────────────────────────────────────────── */
 
@@ -242,19 +283,31 @@ function truncate(s: string, n: number): string {
 
 /* ── LLM-calling wrappers (thin) ──────────────────────────────────────────── */
 
+/**
+ * A document source for extraction: either raw pasted/fetched TEXT, or a PDF FILE the
+ * model reads directly (via a `file_url`). Both converge on the same grounded schema.
+ */
+export type ExtractionSource =
+  | { kind: "text"; text: string }
+  | { kind: "pdf"; fileUrl: string };
+
 export async function aiExtractInstrument(args: {
-  documentText: string;
+  source: ExtractionSource;
   hintName?: string | null;
 }): Promise<{ extraction: AiInstrumentExtraction | null; model: string | null }> {
+  const hint = args.hintName ? `The document is about: ${args.hintName}\n\n` : "";
+  const userContent =
+    args.source.kind === "text"
+      ? `${hint}SOURCE DOCUMENT:\n${args.source.text}`
+      : ([
+          { type: "text" as const, text: `${hint}Extract the facts from the attached source document (PDF).` },
+          { type: "file_url" as const, file_url: { url: args.source.fileUrl, mime_type: "application/pdf" as const } },
+        ]);
+
   const res = await invokeLLM({
     messages: [
       { role: "system", content: EXTRACTION_SYSTEM_PROMPT },
-      {
-        role: "user",
-        content:
-          (args.hintName ? `The document is about: ${args.hintName}\n\n` : "") +
-          `SOURCE DOCUMENT:\n${args.documentText}`,
-      },
+      { role: "user", content: userContent },
     ],
     response_format: { type: "json_schema", json_schema: EXTRACTION_SCHEMA },
   });

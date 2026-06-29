@@ -1525,6 +1525,51 @@ export async function verifyOpportunityField(args: {
 }
 
 /**
+ * Part 8 (deeper spec) — REJECT a single AI-extracted figure (a maintainer judged it
+ * a misread/hallucination). This DROPS the figure from the provenance map entirely so
+ * it stops appearing as a provisional value. It is deliberately narrow: it will ONLY
+ * remove a figure whose state is `ai_extracted`. It refuses to delete a human-verified,
+ * human-entered, or scraped figure (returning `{ removed: false }`), because those are
+ * real data a reject must never destroy — correcting those goes through verifyField.
+ *
+ * Returns whether a figure was removed and whether the whole row became empty (caller
+ * may then deactivate an AI-only row that the human rejected wholesale).
+ */
+export async function rejectAiField(args: {
+  ref: string;
+  fieldKey: FieldKey;
+}): Promise<{ removed: boolean; emptied: boolean }> {
+  const db = await getDb();
+  if (!db) return { removed: false, emptied: false };
+  const rows = await db
+    .select()
+    .from(opportunities)
+    .where(eq(opportunities.ref, args.ref))
+    .limit(1);
+  const row = rows[0];
+  if (!row) return { removed: false, emptied: false };
+  const map: FieldProvenanceMap = { ...((row.fieldProvenance as FieldProvenanceMap | null) ?? {}) };
+  const existing = map[args.fieldKey];
+  // Only AI-extracted, never-human-touched figures may be rejected/dropped.
+  if (!existing || existing.verificationState !== "ai_extracted") {
+    return { removed: false, emptied: false };
+  }
+  delete map[args.fieldKey];
+  const emptied = Object.keys(map).length === 0;
+  await db
+    .update(opportunities)
+    .set({
+      fieldProvenance: map,
+      verificationState: summariseState(map),
+      // If the human rejected the LAST AI figure on an AI-only row, deactivate it so it
+      // never lingers as an empty provisional shell in the catalog or the queue.
+      ...(emptied ? { active: false } : {}),
+    })
+    .where(eq(opportunities.ref, args.ref));
+  return { removed: true, emptied };
+}
+
+/**
  * Part 7.2 — ingest a freshly scraped per-figure map for one instrument WITHOUT
  * ever clobbering a human-checked figure.
  *

@@ -200,6 +200,14 @@ export const portfolios = mysqlTable("portfolios", {
    * Only consulted when inflationLinked = true.
    */
   inflationOverrideRate: decimal("inflationOverrideRate", { precision: 6, scale: 4 }),
+  /**
+   * Expansion Brief Part 6 — OPTIONAL stated risk tolerance (comfort band).
+   * Null means "not stated". When set it informs sensible defaults and raises a
+   * non-blocking WARNING if the modeled mix is more volatile than this comfort.
+   * It NEVER auto-allocates, ranks, or transacts. One of:
+   * capital_preservation | conservative | balanced | growth | aggressive.
+   */
+  riskTolerance: varchar("riskTolerance", { length: 24 }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
@@ -596,6 +604,22 @@ export const otherHoldings = mysqlTable("other_holdings", {
   dataSource: varchar("dataSource", { length: 200 }),
   /** Provenance: as-of timestamp for the price/FX figure. */
   dataAsOf: timestamp("dataAsOf"),
+  /**
+   * Expansion Brief Part 6 — editable per-holding RISK ASSUMPTIONS (all ADDITIVE
+   * & NULLABLE). Null means "use the per-class default in shared/riskModel.ts";
+   * a stored value is the user's own assumption and is always labeled as such.
+   * These feed the portfolio end-value DISTRIBUTION and goal probability.
+   */
+  /** Assumed annual return (%/yr) for the distribution mean. */
+  expectedReturnPct: decimal("expectedReturnPct", { precision: 8, scale: 4 }),
+  /** Assumed annualised volatility (%/yr) — how much the value could swing. */
+  volatilityPct: decimal("volatilityPct", { precision: 8, scale: 4 }),
+  /** Coarse correlation group: kes_rates | kes_equity | property | offshore_equity | cash. */
+  correlationGroup: varchar("correlationGroup", { length: 24 }),
+  /** Provenance: where the risk assumption came from (user note / source). */
+  riskSource: varchar("riskSource", { length: 200 }),
+  /** Provenance: as-of timestamp for the risk assumption. */
+  riskAsOf: timestamp("riskAsOf"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });

@@ -65,6 +65,17 @@ type Holding = {
   assumedReturnConservative: number | null;
   assumedReturnBase: number | null;
   assumedReturnOptimistic: number | null;
+  // Part 6: effective risk assumption (user edits win, else per-class default).
+  risk: {
+    expectedReturnPct: number;
+    volatilityPct: number;
+    correlationGroup: string;
+    expectedReturnIsDefault: boolean;
+    volatilityIsDefault: boolean;
+    correlationGroupIsDefault: boolean;
+    source: string | null;
+    asOf: number | null;
+  } | null;
   notes: string | null;
   createdAt: Date | string;
   updatedAt: Date | string;
@@ -106,6 +117,8 @@ function HoldingFormDialog({
     assumedReturnConservative?: number;
     assumedReturnBase?: number;
     assumedReturnOptimistic?: number;
+    expectedReturnPct?: number;
+    volatilityPct?: number;
     notes?: string;
   }) => void;
   saving: boolean;
@@ -120,6 +133,8 @@ function HoldingFormDialog({
     assumedReturnConservative: String(initial?.assumedReturnConservative ?? ""),
     assumedReturnBase: String(initial?.assumedReturnBase ?? ""),
     assumedReturnOptimistic: String(initial?.assumedReturnOptimistic ?? ""),
+    expectedReturnPct: String(initial?.risk && !initial.risk.expectedReturnIsDefault ? initial.risk.expectedReturnPct : ""),
+    volatilityPct: String(initial?.risk && !initial.risk.volatilityIsDefault ? initial.risk.volatilityPct : ""),
     notes: initial?.notes ?? "",
   });
 
@@ -140,6 +155,8 @@ function HoldingFormDialog({
       assumedReturnConservative: form.assumedReturnConservative ? parseFloat(form.assumedReturnConservative) : undefined,
       assumedReturnBase: form.assumedReturnBase ? parseFloat(form.assumedReturnBase) : undefined,
       assumedReturnOptimistic: form.assumedReturnOptimistic ? parseFloat(form.assumedReturnOptimistic) : undefined,
+      expectedReturnPct: form.expectedReturnPct ? parseFloat(form.expectedReturnPct) : undefined,
+      volatilityPct: form.volatilityPct ? parseFloat(form.volatilityPct) : undefined,
       notes: form.notes || undefined,
     });
   };
@@ -200,6 +217,21 @@ function HoldingFormDialog({
           <div>
             <Label>Optimistic return (% p.a.)</Label>
             <Input type="number" step="0.1" value={form.assumedReturnOptimistic} onChange={set("assumedReturnOptimistic")} placeholder="e.g. 10.0" />
+          </div>
+          <div className="col-span-2">
+            <Separator className="my-1" />
+            <p className="text-xs text-muted-foreground mb-2 flex items-center gap-1">
+              <TrendingUp className="w-3 h-3 text-amber-500" />
+              Risk assumptions (optional) — used for the goal-probability range. Leave blank to use the per-class default.
+            </p>
+          </div>
+          <div>
+            <Label>Expected return (% p.a.)</Label>
+            <Input type="number" step="0.1" value={form.expectedReturnPct} onChange={set("expectedReturnPct")} placeholder="class default" />
+          </div>
+          <div>
+            <Label>Volatility (% p.a.)</Label>
+            <Input type="number" step="0.1" value={form.volatilityPct} onChange={set("volatilityPct")} placeholder="class default" />
           </div>
           <div className="col-span-2">
             <Label>Notes</Label>
@@ -527,6 +559,22 @@ function HoldingCard({
                 );
               })}
             </div>
+          </div>
+        )}
+
+        {/* Part 6: assumed return & volatility — an assumption, never a forecast. */}
+        {holding.priceDriven && holding.risk && (
+          <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-3 space-y-1">
+            <div className="flex items-center gap-1 text-xs text-amber-700 dark:text-amber-400">
+              <TrendingUp className="w-3 h-3" /> Assumed risk — a market-priced holding swings
+            </div>
+            <p className="text-[11px] text-muted-foreground">
+              ~{holding.risk.expectedReturnPct}% p.a. expected, typical year ±{holding.risk.volatilityPct}%
+              {holding.fxExposed && <> + FX</>}.{" "}
+              {holding.risk.volatilityIsDefault && holding.risk.expectedReturnIsDefault
+                ? "Default for the class — edit to use your own view."
+                : "Your own figures."}
+            </p>
           </div>
         )}
 

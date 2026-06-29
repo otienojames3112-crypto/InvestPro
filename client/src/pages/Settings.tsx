@@ -65,6 +65,8 @@ interface PlanForm {
   inflationLinked: boolean;
   // Part A1: optional override (% p.a.); empty string = use Dashboard inflation benchmark.
   inflationOverrideRate: number | null;
+  // Part 6: optional stated risk tolerance (comfort band). "" = not stated.
+  riskTolerance: "" | "capital_preservation" | "conservative" | "balanced" | "growth" | "aggressive";
 }
 
 function RateField({ label, name, register, description }: {
@@ -265,6 +267,7 @@ export default function Settings() {
       driftAlertThresholdPct: 5,
       inflationLinked: false,
       inflationOverrideRate: null,
+      riskTolerance: "",
     },
   });
 
@@ -289,6 +292,8 @@ export default function Settings() {
         inflationLinked: !!(portfolio as { inflationLinked?: boolean }).inflationLinked,
         inflationOverrideRate:
           (portfolio as { inflationOverrideRate?: number | null }).inflationOverrideRate ?? null,
+        riskTolerance:
+          ((portfolio as { riskTolerance?: PlanForm["riskTolerance"] | null }).riskTolerance ?? "") || "",
       });
     }
   }, [portfolio]);
@@ -338,6 +343,8 @@ export default function Settings() {
         data.inflationOverrideRate == null || Number.isNaN(data.inflationOverrideRate)
           ? null
           : data.inflationOverrideRate,
+      // Part 6: "" → null (not stated). Otherwise the chosen comfort band.
+      riskTolerance: data.riskTolerance === "" ? null : data.riskTolerance,
     };
   }
 
@@ -585,6 +592,32 @@ export default function Settings() {
                     </p>
                   </div>
                 )}
+              </div>
+              {/* Part 6 — optional stated risk tolerance. This NEVER allocates or
+                  blocks: it sets sensible defaults for new holdings and lets the
+                  Dashboard warn when the modeled mix swings more than your stated
+                  comfort. Leave as "Not set" to skip entirely. */}
+              <div className="space-y-1.5 sm:col-span-2 rounded-lg border border-border bg-muted/30 p-3">
+                <Label className="text-xs font-medium">Risk tolerance (optional)</Label>
+                <Select
+                  value={planForm.watch("riskTolerance") || "none"}
+                  onValueChange={(v) =>
+                    planForm.setValue("riskTolerance", v === "none" ? "" : (v as PlanForm["riskTolerance"]), { shouldDirty: true })
+                  }
+                >
+                  <SelectTrigger className="text-sm"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">Not set</SelectItem>
+                    <SelectItem value="capital_preservation">Capital preservation — no capital risk</SelectItem>
+                    <SelectItem value="conservative">Conservative — mostly fixed income</SelectItem>
+                    <SelectItem value="balanced">Balanced — some equities</SelectItem>
+                    <SelectItem value="growth">Growth — equity-tilted</SelectItem>
+                    <SelectItem value="aggressive">Aggressive — mostly equities / offshore</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  Used only to suggest defaults and to <strong>flag</strong> when your modeled mix is more volatile than you said you're comfortable with. It never changes your holdings, ranks anything, or blocks a choice — you always decide.
+                </p>
               </div>
               <div className="space-y-1.5">
                 <Label className="text-xs font-medium">Liquidity Horizon (days)</Label>

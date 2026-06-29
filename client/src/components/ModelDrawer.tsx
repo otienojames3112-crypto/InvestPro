@@ -32,6 +32,7 @@ import {
   HelpCircle,
 } from "lucide-react";
 import { profileFor, type AssetClass } from "@shared/assetModel";
+import { defaultRiskFor } from "@shared/riskModel";
 import { usePortfolio } from "@/contexts/PortfolioContext";
 import { trpc } from "@/lib/trpc";
 import { toast } from "sonner";
@@ -495,6 +496,24 @@ export function ModelDrawer({
                       <ScenarioCell label="Base" value={pv.scenario.base} />
                       <ScenarioCell label="Optimistic" value={pv.scenario.optimistic} />
                     </div>
+                  </div>
+                )}
+
+                {/* Part 6: price-volatility honesty note. For a price-driven /
+                    FX holding, a single "value in N years" line understates the
+                    swing. We surface the assumed annual volatility for the class
+                    so the user reads the scenario as a midpoint, not a promise. */}
+                {profile.priceDriven && (
+                  <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 flex items-start gap-2">
+                    <TrendingUp className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                    <p className="text-[10px] text-amber-800 dark:text-amber-300 leading-relaxed">
+                      This is a market-priced holding, so its value rises and falls.
+                      A typical year could swing roughly
+                      {" "}±{defaultRiskFor(opportunity.assetClass as AssetClass).volatilityPct}% around the figures above
+                      {profile.fxExposed ? ", and the foreign-currency exposure adds exchange-rate movement on top" : ""}.
+                      Treat the scenarios as a midpoint of a range, not a forecast — your
+                      goal probability on the Dashboard reflects this uncertainty.
+                    </p>
                   </div>
                 )}
 

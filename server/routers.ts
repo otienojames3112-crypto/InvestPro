@@ -129,6 +129,15 @@ import {
 } from "../shared/reconciliation";
 import { valueHolding } from "../shared/holdingValue";
 import {
+  resolveRiskAssumption,
+  buildEndValueDistribution,
+  goalProbability,
+  assessToleranceMismatch,
+  assessVolatileConcentration,
+  type RiskPosition,
+  type RiskTolerance,
+} from "../shared/riskModel";
+import {
   buildSecurityDailySchedule,
   buildBankDailySchedule,
   type SecurityIncomeInput,
@@ -740,6 +749,12 @@ const portfolioCreateInput = z.object({
   // Part A1: optional override for the goal inflation rate (% p.a.); null/omitted
   // = use the global inflation benchmark already shown on the Dashboard.
   inflationOverrideRate: z.number().min(0).max(50).nullable().optional(),
+  // Part 6: optional stated risk tolerance (comfort band). Informs defaults +
+  // warns on mismatch only; never auto-allocates. null/omitted = not stated.
+  riskTolerance: z
+    .enum(["capital_preservation", "conservative", "balanced", "growth", "aggressive"])
+    .nullable()
+    .optional(),
 });
 
 /**
@@ -1539,6 +1554,7 @@ export const appRouter = router({
           ...(input.inflationOverrideRate !== undefined
             ? { inflationOverrideRate: input.inflationOverrideRate == null ? null : String(input.inflationOverrideRate) }
             : {}),
+          ...(input.riskTolerance !== undefined ? { riskTolerance: input.riskTolerance } : {}),
         } as Record<string, unknown>);
         return { success: true };
       }),
@@ -1992,12 +2008,78 @@ export const appRouter = router({
         Math.round(inflationGoal.effectiveGoal * 0.01),
       );
 
+      // ── Part 6 — UNCERTAINTY as a first-class output ───────────────────────
+      // The fixed-income core (`base`) is held-to-maturity and near-deterministic,
+      // so it is the CERTAIN chunk. Price-driven / FX holdings carry real
+      // volatility, so they form the RISKY sleeve whose end value is a
+      // distribution. A plan with no risky assets (the car) reports
+      // hasMaterialRisk=false and keeps its tight band unchanged. We REUSE the
+      // same horizon and the same `base` engine number — no parallel projection.
+      const horizonYears = horizonMonths / 12;
+      const otherRows = await getOtherHoldings(input.portfolioId);
+      const riskPositions: RiskPosition[] = [];
+      const concentrationInputs: { name: string; valueKes: number; volatilityPct: number }[] = [];
+      for (const h of otherRows) {
+        const valued = valueHolding({
+          assetClass: h.assetClass,
+          behaviorClass: h.behaviorClass ?? null,
+          currentValue: h.currentValue,
+          units: h.units ?? null,
+          unitPrice: h.unitPrice ?? null,
+          currency: h.currency ?? null,
+          fxRateToKes: h.fxRateToKes ?? null,
+        });
+        if (!valued.behaviorClass || !valued.priceDriven || valued.valueKes <= 0) continue;
+        const r = resolveRiskAssumption(valued.behaviorClass, {
+          expectedReturnPct: h.expectedReturnPct != null ? Number(h.expectedReturnPct) : null,
+          volatilityPct: h.volatilityPct != null ? Number(h.volatilityPct) : null,
+          correlationGroup: h.correlationGroup ?? null,
+        });
+        riskPositions.push({
+          valueKes: valued.valueKes,
+          assetClass: valued.behaviorClass,
+          assumption: {
+            expectedReturnPct: r.expectedReturnPct,
+            volatilityPct: r.volatilityPct,
+            correlationGroup: r.correlationGroup,
+          },
+        });
+        concentrationInputs.push({ name: h.name, valueKes: valued.valueKes, volatilityPct: r.volatilityPct });
+      }
+      const distribution = buildEndValueDistribution({
+        positions: riskPositions,
+        horizonYears,
+        extraCertainEndValue: base,
+      });
+      const probability = goalProbability({
+        dist: distribution,
+        deterministicEndValue: base,
+        goal: inflationGoal.effectiveGoal,
+      });
+      // Stated comfort vs modeled volatility — a WARNING only, never a block.
+      const tolerance = assessToleranceMismatch({
+        stated: (p as { riskTolerance?: string | null }).riskTolerance as RiskTolerance | null,
+        modeledVolPct: distribution.portfolioVolPct,
+      });
+      // Risk-aware concentration brake over the volatile sleeve (flag, not block).
+      const volatileConcentration = assessVolatileConcentration(concentrationInputs);
+
       return {
         target,
         horizonMonths,
         goalDateMs,
         range,
         cases: { base, rateShockCase, rateUpCase, slipCase },
+        // Part 6 uncertainty block — present on every plan; `hasMaterialRisk`
+        // tells the UI whether to widen the band into a distribution.
+        risk: {
+          hasMaterialRisk: distribution.hasMaterialRisk,
+          riskyValueKes: Math.round(riskPositions.reduce((a, r) => a + r.valueKes, 0)),
+          distribution,
+          probability,
+          tolerance,
+          volatileConcentration,
+        },
         // `pace` stays nominal-vs-stored-target for back-compat; `effectivePace`
         // is the inflation-aware test the headline now reads from.
         pace,
@@ -3761,6 +3843,22 @@ export const appRouter = router({
             assumedReturnConservative: h.assumedReturnConservative ? parseFloat(String(h.assumedReturnConservative)) : null,
             assumedReturnBase: h.assumedReturnBase ? parseFloat(String(h.assumedReturnBase)) : null,
             assumedReturnOptimistic: h.assumedReturnOptimistic ? parseFloat(String(h.assumedReturnOptimistic)) : null,
+            // Part 6: the EFFECTIVE risk assumption (user edits win, else per-class
+            // default). `*IsDefault` lets the UI tag values as "assumed by class".
+            risk: valued.behaviorClass
+              ? (() => {
+                  const r = resolveRiskAssumption(valued.behaviorClass!, {
+                    expectedReturnPct: h.expectedReturnPct != null ? parseFloat(String(h.expectedReturnPct)) : null,
+                    volatilityPct: h.volatilityPct != null ? parseFloat(String(h.volatilityPct)) : null,
+                    correlationGroup: h.correlationGroup ?? null,
+                  });
+                  return {
+                    ...r,
+                    source: h.riskSource ?? null,
+                    asOf: h.riskAsOf ? new Date(h.riskAsOf).getTime() : null,
+                  };
+                })()
+              : null,
             createdAt: h.createdAt,
             updatedAt: h.updatedAt,
           };
@@ -3781,6 +3879,11 @@ export const appRouter = router({
         assumedReturnConservative: z.number().min(0).max(100).optional(),
         assumedReturnBase: z.number().min(0).max(100).optional(),
         assumedReturnOptimistic: z.number().min(0).max(100).optional(),
+        // Part 6: optional per-holding risk assumptions (null = use class default).
+        expectedReturnPct: z.number().min(-50).max(100).optional(),
+        volatilityPct: z.number().min(0).max(200).optional(),
+        correlationGroup: z.enum(["kes_rates", "kes_equity", "property", "offshore_equity", "cash"]).optional(),
+        riskSource: z.string().max(200).optional(),
       }))
       .mutation(async ({ ctx, input }) => {
         await requirePortfolio(input.portfolioId, ctx.user.id);
@@ -3796,6 +3899,11 @@ export const appRouter = router({
           assumedReturnConservative: input.assumedReturnConservative != null ? String(input.assumedReturnConservative) : undefined,
           assumedReturnBase: input.assumedReturnBase != null ? String(input.assumedReturnBase) : undefined,
           assumedReturnOptimistic: input.assumedReturnOptimistic != null ? String(input.assumedReturnOptimistic) : undefined,
+          expectedReturnPct: input.expectedReturnPct != null ? String(input.expectedReturnPct) : undefined,
+          volatilityPct: input.volatilityPct != null ? String(input.volatilityPct) : undefined,
+          correlationGroup: input.correlationGroup,
+          riskSource: input.riskSource,
+          riskAsOf: (input.expectedReturnPct != null || input.volatilityPct != null || input.correlationGroup) ? new Date() : undefined,
         });
         return { success: true };
       }),
@@ -3812,10 +3920,19 @@ export const appRouter = router({
         assumedReturnConservative: z.number().min(0).max(100).nullable().optional(),
         assumedReturnBase: z.number().min(0).max(100).nullable().optional(),
         assumedReturnOptimistic: z.number().min(0).max(100).nullable().optional(),
+        // Part 6: editable risk assumptions (null clears the override → class default).
+        expectedReturnPct: z.number().min(-50).max(100).nullable().optional(),
+        volatilityPct: z.number().min(0).max(200).nullable().optional(),
+        correlationGroup: z.enum(["kes_rates", "kes_equity", "property", "offshore_equity", "cash"]).nullable().optional(),
+        riskSource: z.string().max(200).nullable().optional(),
       }))
       .mutation(async ({ ctx, input }) => {
         await requirePortfolio(input.portfolioId, ctx.user.id);
         const { id, portfolioId, ...rest } = input;
+        const riskTouched =
+          rest.expectedReturnPct !== undefined ||
+          rest.volatilityPct !== undefined ||
+          rest.correlationGroup !== undefined;
         await updateOtherHolding(id, portfolioId, {
           ...(rest.name !== undefined && { name: rest.name }),
           ...(rest.description !== undefined && { description: rest.description }),
@@ -3824,6 +3941,11 @@ export const appRouter = router({
           ...(rest.assumedReturnConservative !== undefined && { assumedReturnConservative: rest.assumedReturnConservative != null ? String(rest.assumedReturnConservative) : null }),
           ...(rest.assumedReturnBase !== undefined && { assumedReturnBase: rest.assumedReturnBase != null ? String(rest.assumedReturnBase) : null }),
           ...(rest.assumedReturnOptimistic !== undefined && { assumedReturnOptimistic: rest.assumedReturnOptimistic != null ? String(rest.assumedReturnOptimistic) : null }),
+          ...(rest.expectedReturnPct !== undefined && { expectedReturnPct: rest.expectedReturnPct != null ? String(rest.expectedReturnPct) : null }),
+          ...(rest.volatilityPct !== undefined && { volatilityPct: rest.volatilityPct != null ? String(rest.volatilityPct) : null }),
+          ...(rest.correlationGroup !== undefined && { correlationGroup: rest.correlationGroup ?? null }),
+          ...(rest.riskSource !== undefined && { riskSource: rest.riskSource ?? null }),
+          ...(riskTouched && { riskAsOf: new Date() }),
         });
         return { success: true };
       }),

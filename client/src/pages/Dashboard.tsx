@@ -65,7 +65,7 @@ import { toast } from "sonner";
 import { rateStaleness } from "@/lib/rateStaleness";
 import { currentSecurityValue, securityYieldContribution, isDiscountSecurityType, classifyDurationRisk, largestConcentration, classifyConcentration, analyzePerTypeBreach, isConcentrationSnoozed, formatConcentrationPct, splitEndStateBuckets, DEFAULT_LIQUIDITY_HORIZON_DAYS, type CurrentValueSecurity } from "@shared/discount";
 import { whtRateForSecurity } from "@shared/securityTenor";
-import { Layers, TrendingDown, BellOff, Bell, Scale, ArrowRightLeft, Copy, Check, ChevronUp, ChevronDown, ShieldAlert } from "lucide-react";
+import { Layers, TrendingDown, BellOff, Bell, Scale, ArrowRightLeft, Copy, Check, ChevronUp, ChevronDown, ShieldAlert, Activity } from "lucide-react";
 import { buildTransferPlan, SNOOZE_OPTIONS, snoozeUntilFromDays } from "@shared/liquidAllocator";
 import {
   classifyBreachSeverity,
@@ -1163,6 +1163,47 @@ export default function Dashboard() {
                     </Tooltip>
                   </span>
                 </p>
+              )}
+              {/* Part 6 — uncertainty made first-class. When the plan holds
+                  price-driven / FX assets, a single projected line is a fiction:
+                  we show the most-likely value, the ~80% band, and a goal
+                  PROBABILITY (never 0/100%). Fixed-income-only plans skip this
+                  block entirely and keep their tight, near-deterministic band. */}
+              {decision.risk?.hasMaterialRisk && (
+                <div className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-sm">
+                  <div className="flex items-start gap-1.5">
+                    <Activity className="w-3.5 h-3.5 mt-0.5 shrink-0 text-amber-600 dark:text-amber-400" />
+                    <div className="space-y-1">
+                      <p className="text-foreground">
+                        This plan holds investments that rise and fall in value, so the outcome is a <strong>range, not a single number</strong>. Most likely about{" "}
+                        <strong className="kes-amount">{formatKESCompact(decision.risk.distribution.p50)}</strong>, and roughly an 80% chance of landing between{" "}
+                        <strong className="kes-amount">{formatKESCompact(decision.risk.distribution.p10)}</strong> and{" "}
+                        <strong className="kes-amount">{formatKESCompact(decision.risk.distribution.p90)}</strong>.
+                      </p>
+                      <p className="text-muted-foreground">
+                        Based on your assumptions, about a{" "}
+                        <strong className="text-foreground">{decision.risk.probability.probabilityPct.toFixed(0)}% chance</strong>{" "}
+                        of reaching the goal. Modeled volatility ≈ {decision.risk.distribution.portfolioVolPct.toFixed(0)}%/yr.
+                        <Tooltip>
+                          <TooltipTrigger asChild><HelpCircle className="w-3 h-3 ml-1 inline-block align-text-top text-muted-foreground/60 cursor-help" /></TooltipTrigger>
+                          <TooltipContent side="top" className="max-w-xs text-xs">
+                            The band and probability come from the expected-return and volatility ASSUMPTIONS you (or the per-class defaults) set on each holding — they are an honest planning estimate, not a forecast or a guarantee. The figure is never shown as 0% or 100%.
+                          </TooltipContent>
+                        </Tooltip>
+                      </p>
+                      {decision.risk.tolerance?.exceedsComfort && (
+                        <p className="text-amber-700 dark:text-amber-300">
+                          Heads up: the modeled swing ({decision.risk.tolerance.modeledVolPct.toFixed(0)}%/yr) is larger than your stated comfort ({decision.risk.tolerance.comfortVolCeilingPct?.toFixed(0)}%/yr). This is a flag for you to weigh — not a block, and nothing is changed for you.
+                        </p>
+                      )}
+                      {decision.risk.volatileConcentration?.flagged && (
+                        <p className="text-amber-700 dark:text-amber-300">
+                          {(decision.risk.volatileConcentration.share * 100).toFixed(0)}% of your volatile sleeve sits in a single name ({decision.risk.volatileConcentration.name}). Concentration raises the swing — review whether that is intended.
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </div>
               )}
               <div className="mt-3 flex items-center gap-2 text-sm">
                 <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Next</span>

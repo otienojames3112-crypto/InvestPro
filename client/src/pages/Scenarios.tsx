@@ -95,6 +95,11 @@ export default function Scenarios() {
             primary contribution and include your tracked secondary MMF accounts, but they do <strong>not</strong> replay past recorded deposits —
             every scenario uses the same engine, target and accounts so the only thing that differs between them is the step-up.
           </p>
+          <p className="text-xs text-muted-foreground/80 mt-1.5 max-w-3xl">
+            Each line here is a single contribution-and-interest path for your fixed-income core, so it is shown as one number. If you hold
+            market-priced investments (equities, REITs, offshore funds), their value rises and falls — the <strong>goal-probability range</strong> on the
+            Dashboard reflects that uncertainty, which these step-up lines deliberately do not.
+          </p>
         </div>
 
         {/* ── Your current plan: real status from the solver/projection ── */}

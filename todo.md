@@ -874,3 +874,18 @@
 - [x] 7.1.4 Server: list/byRef return the typed map; verifyOpportunityField db helper (only write path that changes a figure's state) + opportunities.verifyField protected mutation (confirm | override), rejects a no-op override; row summary state re-derived on every write.
 - [x] 7.1.5 UI: OpportunityDetail per-figure verification badge (Unverified/Verified by you/Entered by you/May be stale), clickable per-figure source link + as-of, "checked by you on …" line, inline Confirm / Edit value controls (signed-in only). Header + Explore rows show "x/N figures checked". Liquidity no longer shows a false "never" staleness.
 - [x] 7.1.6 Tests: server/provenance.test.ts (19 cases). Full suite 893 green across 95 files, tsc clean.
+
+## Expansion Brief — Part 7.2 (scraper / ingestion layer)
+
+- [x] Shared no-ranking adapter contract (`shared/ingestion.ts`): closed `ScrapedFigure`/`ScrapedInstrument` types with no slot for any score/rating/rank/grade/tier/performer; per-source `SourcePolicy` (cadence/cron/spacing/back-off)
+- [x] CBK/DhowCSD adapter (JSON auction results → T-bill yield/tenor, IFB/FXD coupon/tenor/maturity), throws on schema drift
+- [x] NSE adapter (HTML daily price table → equity price/dividend yield/trailing return, REIT distribution), throws on layout drift
+- [x] Fund fact-sheet adapter (CSV → MMF/offshore yield, expense ratio, price, FX), throws on layout drift
+- [x] Committed fixtures (html/json/csv) as the layout source of truth
+- [x] Pure `reconcileScrape` (no-clobber merge + conflict detection) in `shared/provenance.ts`
+- [x] Ingestion runner: fetch with rate-limit spacing + exponential back-off, parse via adapter, upsert each instrument as scraped_unverified; failed run reported, never throws
+- [x] `ingestion_conflicts` table (additive migration) + DB helpers (ingest-with-reconcile, list/count/resolve)
+- [x] Scheduled ingestion endpoint under `/api/scheduled/`; per-source cron in policy
+- [x] Conflict review surface: tRPC procedures (owner-gated) + Source Conflicts page (Keep mine / Use scraped value via human override) + sidebar open-count badge
+- [x] Tests: 21 adapter (facts + drift-fails-loudly + bright-line), 5 reconcile (no-clobber/agree/disagree), 4 runner (fixture-driven, no network); full suite 923 green; tsc clean
+- [x] Live end-to-end proof: a disagreeing scrape (8.60) did NOT clobber a human-entered yield (7.77); it raised one open conflict; DB restored clean afterwards

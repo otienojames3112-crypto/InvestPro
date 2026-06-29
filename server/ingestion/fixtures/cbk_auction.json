@@ -1,0 +1,31 @@
+{
+  "source": "CBK / DhowCSD auction results",
+  "results": [
+    {
+      "securityType": "TBILL",
+      "ref": "CBK:TBILL-364",
+      "name": "364-Day Treasury Bill",
+      "tenorYears": 1.0,
+      "discountYield": 12.15,
+      "auctionDate": "2026-06-25"
+    },
+    {
+      "securityType": "IFB",
+      "ref": "CBK:IFB1-2026",
+      "name": "Infrastructure Bond IFB1/2026/15",
+      "tenorYears": 15.0,
+      "couponRate": 13.5,
+      "maturityDate": "2041-03-01",
+      "auctionDate": "2026-06-18"
+    },
+    {
+      "securityType": "FXD",
+      "ref": "CBK:FXD-2026-10Y",
+      "name": "Treasury Bond FXD1/2026/10",
+      "tenorYears": 10.0,
+      "couponRate": 14.35,
+      "maturityDate": "2036-06-01",
+      "auctionDate": "2026-06-18"
+    }
+  ]
+}

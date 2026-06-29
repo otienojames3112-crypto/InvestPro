@@ -27,6 +27,7 @@ import Learn from "./pages/Learn";
 import { TimeMachine } from "./pages/TimeMachine";
 import Explore from "./pages/Explore";
 import OpportunityDetail from "./pages/OpportunityDetail";
+import SourceConflicts from "./pages/SourceConflicts";
 
 function Router() {
   return (
@@ -51,6 +52,7 @@ function Router() {
       <Route path="/other-assets" component={OtherAssets} />
       <Route path="/explore" component={Explore} />
       <Route path="/explore/:ref" component={OpportunityDetail} />
+      <Route path="/source-conflicts" component={SourceConflicts} />
       <Route path="/time-machine" component={TimeMachine} />
       <Route path="/404" component={NotFound} />
       <Route component={NotFound} />

@@ -89,9 +89,15 @@ import {
   countOpportunities,
   upsertOpportunity,
   verifyOpportunityField,
+  listIngestionConflicts,
+  countOpenConflicts,
+  resolveIngestionConflict,
 } from "./db";
 import { OPPORTUNITY_SEED } from "./opportunitySeed";
-import { FIELD_KEYS, type VerifyAction } from "../shared/provenance";
+import { FIELD_KEYS, isFieldKey, type VerifyAction } from "../shared/provenance";
+import { runAdapter } from "./ingestion/runner";
+import { ADAPTERS } from "./ingestion/adapters";
+import { SOURCE_IDS } from "../shared/ingestion";
 import { notifyOwner } from "./_core/notification";
 import { createHeartbeatJob, updateHeartbeatJob, deleteHeartbeatJob } from "./_core/heartbeat";
 import { parse as parseCookie } from "cookie";
@@ -1008,6 +1014,70 @@ export const appRouter = router({
         });
         if (!updated) throw new TRPCError({ code: "NOT_FOUND", message: "Figure not found" });
         return { ref: input.ref, fieldKey: input.fieldKey, provenance: updated };
+      }),
+
+    // ── Part 7.2: ingestion conflict review ──────────────────────────────────
+    // When a fresh scrape disagrees with a figure a human verified/entered, the
+    // runner records an `ingestion_conflicts` row rather than clobbering the
+    // human's value. These procedures let a signed-in owner SEE and RESOLVE those
+    // disagreements. Resolving never silently changes a number: `dismiss` keeps
+    // the human value; `apply` writes the scraped value through the SAME verify
+    // mutation, so an applied scrape becomes `human_entered` (human attention),
+    // not a silent overwrite. There is no ranking anywhere in this surface.
+    conflicts: protectedProcedure.query(async () => {
+      const open = await listIngestionConflicts(true);
+      return { conflicts: open, openCount: open.length };
+    }),
+
+    openConflictCount: publicProcedure.query(async () => {
+      return { count: await countOpenConflicts() };
+    }),
+
+    resolveConflict: protectedProcedure
+      .input(
+        z.object({
+          id: z.number().int().positive(),
+          resolution: z.enum(["dismiss", "apply"]),
+        }),
+      )
+      .mutation(async ({ ctx, input }) => {
+        const open = await listIngestionConflicts(true);
+        const conflict = open.find((c) => c.id === input.id);
+        if (!conflict) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Conflict not found or already resolved." });
+        }
+        const by = ctx.user.name ?? ctx.user.email ?? "You";
+
+        if (input.resolution === "apply") {
+          // Apply the scraped value through the human override path so the figure
+          // becomes human_entered — a person chose to take this number.
+          if (!isFieldKey(conflict.field)) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: "Unknown figure key on conflict." });
+          }
+          if (conflict.scrapedValue == null || conflict.scrapedValue === "") {
+            throw new TRPCError({ code: "BAD_REQUEST", message: "Conflict has no scraped value to apply." });
+          }
+          await verifyOpportunityField({
+            ref: conflict.opportunityRef,
+            fieldKey: conflict.field,
+            action: { kind: "override", by, at: Date.now(), value: conflict.scrapedValue },
+          });
+        }
+
+        const status = input.resolution === "apply" ? "applied" : "dismissed";
+        const resolved = await resolveIngestionConflict({ id: input.id, status, resolvedBy: by });
+        return { resolved };
+      }),
+
+    // Manual trigger for one source (owner-initiated dry-run / refresh). The cron
+    // job runs all sources on cadence; this is for an on-demand pull. It still
+    // upserts as scraped_unverified and flags (never applies) conflicts.
+    runIngestion: protectedProcedure
+      .input(z.object({ sourceId: z.enum(SOURCE_IDS) }))
+      .mutation(async ({ input }) => {
+        const adapter = ADAPTERS[input.sourceId];
+        const report = await runAdapter(adapter);
+        return report;
       }),
   }),
 

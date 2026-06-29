@@ -318,3 +318,96 @@ export function buildSeedProvenance(args: {
   if (f.trailingReturn != null) map.trailingReturn = mk(f.trailingReturn);
   return map;
 }
+
+/**
+ * Part 7.2 — a detected disagreement between a fresh scrape and a figure a human
+ * has already verified/entered. The runner records these for review; it NEVER
+ * applies them, so the human's value stays authoritative.
+ */
+export interface FigureConflict {
+  field: FieldKey;
+  /** The value the human vouched for (kept). */
+  humanValue: string | null;
+  /** The human state that protects it (human_verified | human_entered). */
+  humanState: VerificationState;
+  /** The newly scraped value that disagrees (NOT applied). */
+  scrapedValue: string | null;
+  /** Where the disagreeing scrape came from. */
+  scrapedSource: string | null;
+  /** When the scrape was as-of, epoch ms. */
+  scrapedAsOf: number | null;
+}
+
+export interface ReconcileResult {
+  /** The map to persist: scrapes applied only where no human had checked the figure. */
+  merged: FieldProvenanceMap;
+  /** Figures where a scrape disagreed with a human value (flagged, not applied). */
+  conflicts: FigureConflict[];
+  /** Whether anything actually changed (so the runner can skip a no-op write). */
+  changed: boolean;
+}
+
+/** Normalise two figure values for equality (trim + numeric tolerance). */
+function valuesAgree(a: string | null, b: string | null): boolean {
+  if (a == null || b == null) return a === b;
+  const na = Number(a);
+  const nb = Number(b);
+  if (Number.isFinite(na) && Number.isFinite(nb)) return na === nb;
+  return a.trim() === b.trim();
+}
+
+/**
+ * Reconcile a freshly scraped per-figure map against the stored one. This is the
+ * heart of the "never clobber a human" rule, made pure and testable:
+ *
+ *  - For a figure no human has checked: the scrape is applied (via mergeScrape).
+ *  - For a human_verified / human_entered figure: the human's value/state are kept.
+ *    If the scrape AGREES, we only refresh fetchedAt (we re-checked the source). If
+ *    the scrape DISAGREES, we keep the human value AND record a FigureConflict for
+ *    review — the number is never silently overwritten.
+ *  - Figures present in the stored map but absent from the scrape are left as-is.
+ */
+export function reconcileScrape(
+  existing: FieldProvenanceMap,
+  scraped: FieldProvenanceMap,
+): ReconcileResult {
+  const merged: FieldProvenanceMap = { ...existing };
+  const conflicts: FigureConflict[] = [];
+  let changed = false;
+
+  for (const key of Object.keys(scraped) as FieldKey[]) {
+    const fresh = scraped[key];
+    if (!fresh) continue;
+    const prior = existing[key];
+
+    if (prior && isHumanChecked(prior.verificationState)) {
+      if (valuesAgree(prior.value, fresh.value)) {
+        // Agreement: just note we re-checked (refresh fetchedAt) — never downgrade.
+        const next = { ...prior, fetchedAt: fresh.fetchedAt ?? prior.fetchedAt };
+        if (next.fetchedAt !== prior.fetchedAt) changed = true;
+        merged[key] = next;
+      } else {
+        // Disagreement with a human value: keep the human's, flag a conflict.
+        merged[key] = { ...prior, fetchedAt: fresh.fetchedAt ?? prior.fetchedAt };
+        if (merged[key]!.fetchedAt !== prior.fetchedAt) changed = true;
+        conflicts.push({
+          field: key,
+          humanValue: prior.value,
+          humanState: prior.verificationState,
+          scrapedValue: fresh.value,
+          scrapedSource: fresh.source,
+          scrapedAsOf: fresh.asOf,
+        });
+      }
+    } else {
+      // No human attention yet: the scrape is authoritative.
+      const next = mergeScrape(prior, fresh);
+      if (!prior || !valuesAgree(prior.value, next.value) || prior.asOf !== next.asOf || prior.fetchedAt !== next.fetchedAt) {
+        changed = true;
+      }
+      merged[key] = next;
+    }
+  }
+
+  return { merged, conflicts, changed };
+}

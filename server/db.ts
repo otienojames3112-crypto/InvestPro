@@ -28,12 +28,16 @@ import {
   opportunities,
   type Opportunity,
   type InsertOpportunity,
+  ingestionConflicts,
+  type IngestionConflict,
+  type InsertIngestionConflict,
 } from "../drizzle/schema";
 import { ENV } from "./_core/env";
 import { computeActualsTotals, estInterestToDate, govAccruedInterestTotal } from "../shared/actuals";
 import {
   applyVerification,
   summariseState,
+  reconcileScrape,
   type FieldKey,
   type FieldProvenance,
   type FieldProvenanceMap,
@@ -1514,4 +1518,141 @@ export async function verifyOpportunityField(args: {
     .set({ fieldProvenance: map, verificationState: summariseState(map) })
     .where(eq(opportunities.ref, args.ref));
   return updated;
+}
+
+/**
+ * Part 7.2 — ingest a freshly scraped per-figure map for one instrument WITHOUT
+ * ever clobbering a human-checked figure.
+ *
+ * If the row does not yet exist, it is inserted from the provided base columns
+ * (all figures land as scraped_unverified). If it exists, the scrape is reconciled
+ * against the stored map via the pure `reconcileScrape`:
+ *  - unverified figures are refreshed with the scraped value/asOf/fetchedAt;
+ *  - human_verified / human_entered figures keep their value+state (only fetchedAt
+ *    is refreshed to record that we re-checked);
+ *  - any disagreement with a human value becomes an `ingestion_conflicts` row
+ *    (status=open) instead of overwriting the number.
+ *
+ * Returns the conflicts detected for this instrument so the runner can report them.
+ * Never writes a ranking — there is no such column.
+ */
+export async function ingestScrapedInstrument(args: {
+  base: InsertOpportunity;
+  scraped: FieldProvenanceMap;
+  sourceId: string;
+}): Promise<{ ref: string; conflicts: number; changed: boolean }> {
+  const db = await getDb();
+  if (!db) return { ref: args.base.ref, conflicts: 0, changed: false };
+
+  const rows = await db
+    .select()
+    .from(opportunities)
+    .where(eq(opportunities.ref, args.base.ref))
+    .limit(1);
+  const existingRow = rows[0];
+
+  // New instrument: insert with the scraped map straight in as unverified.
+  if (!existingRow) {
+    await db.insert(opportunities).values({
+      ...args.base,
+      fieldProvenance: args.scraped,
+      verificationState: summariseState(args.scraped),
+    });
+    return { ref: args.base.ref, conflicts: 0, changed: true };
+  }
+
+  const existingMap: FieldProvenanceMap = (existingRow.fieldProvenance as FieldProvenanceMap | null) ?? {};
+  const { merged, conflicts, changed } = reconcileScrape(existingMap, args.scraped);
+
+  if (changed) {
+    await db
+      .update(opportunities)
+      .set({ fieldProvenance: merged, verificationState: summariseState(merged) })
+      .where(eq(opportunities.ref, args.base.ref));
+  }
+
+  // Persist any conflicts (idempotently: skip if an identical open conflict exists).
+  for (const c of conflicts) {
+    const dupe = await db
+      .select({ id: ingestionConflicts.id })
+      .from(ingestionConflicts)
+      .where(
+        and(
+          eq(ingestionConflicts.opportunityRef, args.base.ref),
+          eq(ingestionConflicts.field, c.field),
+          eq(ingestionConflicts.status, "open"),
+        ),
+      )
+      .limit(1);
+    if (dupe[0]) {
+      // Refresh the latest scraped value/source on the existing open conflict.
+      await db
+        .update(ingestionConflicts)
+        .set({
+          scrapedValue: c.scrapedValue,
+          scrapedSource: c.scrapedSource,
+          scrapedAsOf: c.scrapedAsOf,
+          sourceId: args.sourceId,
+        })
+        .where(eq(ingestionConflicts.id, dupe[0].id));
+      continue;
+    }
+    const insert: InsertIngestionConflict = {
+      opportunityRef: args.base.ref,
+      field: c.field,
+      humanValue: c.humanValue,
+      humanState: c.humanState,
+      scrapedValue: c.scrapedValue,
+      scrapedSource: c.scrapedSource,
+      sourceId: args.sourceId,
+      scrapedAsOf: c.scrapedAsOf,
+      status: "open",
+    };
+    await db.insert(ingestionConflicts).values(insert);
+  }
+
+  return { ref: args.base.ref, conflicts: conflicts.length, changed };
+}
+
+/** List ingestion conflicts (newest first), optionally only open ones. */
+export async function listIngestionConflicts(openOnly = true): Promise<IngestionConflict[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const base = db.select().from(ingestionConflicts);
+  const rows = openOnly
+    ? await base.where(eq(ingestionConflicts.status, "open")).orderBy(desc(ingestionConflicts.createdAt))
+    : await base.orderBy(desc(ingestionConflicts.createdAt));
+  return rows;
+}
+
+/** Count open ingestion conflicts (for a review badge). */
+export async function countOpenConflicts(): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  const rows = await db
+    .select({ n: sql<number>`count(*)` })
+    .from(ingestionConflicts)
+    .where(eq(ingestionConflicts.status, "open"));
+  return Number(rows[0]?.n ?? 0);
+}
+
+/**
+ * Resolve a conflict. `dismiss` keeps the human value (the scrape is discarded).
+ * `apply` records the resolution here; the caller is responsible for writing the
+ * scraped value through the normal verify/override path so the human-attention
+ * invariant still holds (an applied scrape becomes human_entered by the reviewer).
+ */
+export async function resolveIngestionConflict(args: {
+  id: number;
+  status: "dismissed" | "applied";
+  resolvedBy: string;
+}): Promise<IngestionConflict | null> {
+  const db = await getDb();
+  if (!db) return null;
+  await db
+    .update(ingestionConflicts)
+    .set({ status: args.status, resolvedBy: args.resolvedBy, resolvedAt: Date.now() })
+    .where(eq(ingestionConflicts.id, args.id));
+  const rows = await db.select().from(ingestionConflicts).where(eq(ingestionConflicts.id, args.id)).limit(1);
+  return rows[0] ?? null;
 }

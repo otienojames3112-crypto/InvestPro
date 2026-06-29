@@ -1022,3 +1022,39 @@ export const opportunities = mysqlTable("opportunities", {
 });
 export type Opportunity = typeof opportunities.$inferSelect;
 export type InsertOpportunity = typeof opportunities.$inferInsert;
+
+/**
+ * Part 7.2 — ingestion conflicts. When a fresh scrape DISAGREES with a figure a
+ * human has already verified/entered, the runner records the disagreement here
+ * instead of overwriting the human's value. A reviewer can later accept the human
+ * value (dismiss) or apply the scraped value through the normal verify/override
+ * path. The human's number is NEVER changed by ingestion — only this table grows.
+ */
+export const ingestionConflicts = mysqlTable("ingestion_conflicts", {
+  id: int("id").autoincrement().primaryKey(),
+  /** opportunities.ref this conflict belongs to. */
+  opportunityRef: varchar("opportunityRef", { length: 64 }).notNull(),
+  /** Which figure (FieldKey): price | yield | coupon | tenor | maturity | distribution | fx | expense | trailingReturn. */
+  field: varchar("field", { length: 24 }).notNull(),
+  /** The value the human vouched for (kept authoritative). */
+  humanValue: varchar("humanValue", { length: 64 }),
+  /** The human verification state protecting it (human_verified | human_entered). */
+  humanState: varchar("humanState", { length: 24 }).notNull(),
+  /** The newly scraped value that disagrees (NOT applied). */
+  scrapedValue: varchar("scrapedValue", { length: 64 }),
+  /** Where the disagreeing scrape came from. */
+  scrapedSource: varchar("scrapedSource", { length: 200 }),
+  /** Adapter that produced the scrape (sourceId). */
+  sourceId: varchar("sourceId", { length: 32 }).notNull(),
+  /** When the scraped figure was as-of, epoch ms UTC. */
+  scrapedAsOf: bigint("scrapedAsOf", { mode: "number" }),
+  /** open = awaiting review; dismissed = human value kept; applied = reviewer took the scrape. */
+  status: varchar("status", { length: 16 }).notNull().default("open"),
+  /** Who resolved it + when (null while open). */
+  resolvedBy: varchar("resolvedBy", { length: 200 }),
+  resolvedAt: bigint("resolvedAt", { mode: "number" }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+export type IngestionConflict = typeof ingestionConflicts.$inferSelect;
+export type InsertIngestionConflict = typeof ingestionConflicts.$inferInsert;

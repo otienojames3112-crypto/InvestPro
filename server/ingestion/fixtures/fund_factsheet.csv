@@ -1,0 +1,6 @@
+code,name,as_of,price,yield,yield_kind,expense_ratio,fx_kes
+SANLAM-MMF,SanlamAllianz Money Market Fund,2026-06-29,,8.60,daily effective annual yield (gross),1.20,
+CIC-MMF,CIC Money Market Fund,2026-06-29,,8.35,effective annual yield (gross),1.50,
+VWRA,Vanguard FTSE All-World UCITS ETF (USD),2026-06-29,145.20,,,0.22,131.50
+SPY-MMF-USD,USD Money Market Fund (offshore),2026-06-29,,4.55,7-day yield (indicative),0.15,131.50
+UNTRACKED-FUND,Some Other Fund,2026-06-29,10.00,5.00,yield,1.00,

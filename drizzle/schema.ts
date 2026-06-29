@@ -209,6 +209,24 @@ export const portfolios = mysqlTable("portfolios", {
    * capital_preservation | conservative | balanced | growth | aggressive.
    */
   riskTolerance: varchar("riskTolerance", { length: 24 }),
+  /**
+   * Allocation Model Part 1 — the per-goal risk-tier selection. These three
+   * columns are ADDITIVE and surface nothing to the user yet (Part 4 does the UI).
+   *   - allocationSuggestedTier: the tier computed from the goal's horizon (+
+   *     nature) by suggestTier(). Recorded so the UI can show "suggested" vs the
+   *     user's choice and explain any later override.
+   *   - allocationSelectedTier: the user's chosen tier; defaults to the suggested
+   *     tier. Overriding to ANY tier is always allowed and never blocked — a
+   *     riskier-than-horizon choice is only FLAGGED for a consequence (Part 3).
+   *   - allocationTierOverridden: true once the user picks a tier different from
+   *     the suggestion (so the UI can show "you changed this from the suggestion").
+   * All three are nullable: null means "not yet computed/chosen", which the
+   * resolver treats as "default to the suggestion". One of the five tiers:
+   * capital_preservation | conservative | balanced | growth | aggressive.
+   */
+  allocationSuggestedTier: varchar("allocationSuggestedTier", { length: 24 }),
+  allocationSelectedTier: varchar("allocationSelectedTier", { length: 24 }),
+  allocationTierOverridden: boolean("allocationTierOverridden").notNull().default(false),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
@@ -854,6 +872,37 @@ export const benchmarkInputs = mysqlTable("benchmark_inputs", {
 
 export type BenchmarkInput = typeof benchmarkInputs.$inferSelect;
 export type InsertBenchmarkInput = typeof benchmarkInputs.$inferInsert;
+
+/**
+ * Allocation Model Part 1 — editable TARGET ALLOCATION TEMPLATES, one row per
+ * risk tier. Global (one shared set, like benchmark_inputs), each row carrying
+ * its weights plus source + as-of + notes provenance so an edit is defensible.
+ *
+ * The `weights` JSON is a map over the five allocation buckets
+ * ({ cash, gov, equity, reit, offshore }) as whole-number percentages that MUST
+ * sum to 100 with cash >= the operational floor — enforced by
+ * validateAllocationWeights() on every save (shared/allocationModel.ts). This
+ * table stores WEIGHTS ONLY; no return/volatility/rate numbers live here (those
+ * resolve from the sourced risk layer), so a non-conforming template is rejected
+ * before it is ever written.
+ */
+export const allocationTemplates = mysqlTable("allocation_templates", {
+  id: int("id").autoincrement().primaryKey(),
+  /** One of the five tiers (capital_preservation | conservative | balanced | growth | aggressive). Unique. */
+  tier: varchar("tier", { length: 24 }).notNull().unique(),
+  /** Target mix over the five buckets as whole-number percentages, summing to 100. */
+  weights: json("weights").$type<Record<string, number>>().notNull(),
+  /** Provenance: where this template came from (seed note, methodology, URL). */
+  source: varchar("source", { length: 500 }),
+  /** "As of" / last-reviewed date (YYYY-MM-DD), provenance only. */
+  asOfDate: date("asOfDate"),
+  /** Free-text rationale or edit note. */
+  notes: text("notes"),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type AllocationTemplateRow = typeof allocationTemplates.$inferSelect;
+export type InsertAllocationTemplateRow = typeof allocationTemplates.$inferInsert;
 
 /**
  * Audit log — change trail for rate and deposit edits (defensibility).

@@ -1042,3 +1042,27 @@
 - [x] AiReview card: SourceScreenshots strip of thumbnails at top of each card; click opens full-size dialog + "open in new tab"
 - [x] Tests: key→URL mapping (null/non-array safe) + append dedupe/cap/empty-key (server/aiReviewScreenshot.test.ts, 7 tests)
 - [x] Type gate clean; full suite green (1018 passing); checkpoint
+
+## Allocation Model — Part 1 (foundation, data layer only; no UI)
+
+### Shared model (shared/allocationModel.ts)
+- [x] Five ordered risk tiers, ALIASED to riskModel's RiskTolerance (no duplicate type); ascending-risk ordering re-exported so the two models can't drift
+- [x] Neutral tier specs (label + one-liner); no tier framed as "best"/"recommended"
+- [x] Five allocation buckets (cash/gov/equity/reit/offshore) with the single class→bucket grouping (alt excluded from target mix)
+- [x] Editable target templates: default starting weights per tier (illustrative, all editable); weights-only, no return/vol/rate numbers embedded
+- [x] Validator: weights in [0,100], sum to exactly 100 (float epsilon), cash ≥ 5% operational floor; returns all failing reasons
+- [x] suggestTier(horizonMonths, goalNature): horizon bands → base tier; critical = one tier safer (clamped); standard/aspirational = no auto-riskier shift; returns plain-language reason; never a locked choice
+- [x] resolveTierSelection: defaults to suggestion; userOverrode flag; conflictsWithHorizon flag (riskier-than-horizon) — a flag for a future consequence, never a block
+
+### Storage (additive migration; surfaces nothing yet)
+- [x] allocation_templates table (one row/tier: weights JSON + source/asOf/notes provenance + updatedAt), modeled on benchmark_inputs
+- [x] portfolios: allocationSuggestedTier / allocationSelectedTier (nullable) + allocationTierOverridden (default false)
+- [x] Migration applied directly via SQL (drizzle-kit generate prompts on unrelated renames); five default templates seeded + verified
+- [x] db helpers: listAllocationTemplates / getAllocationTemplate (fall back to seeded defaults), saveAllocationTemplate (VALIDATES before write, rejects non-conforming); per-goal tier fields written via existing updatePortfolio
+
+### Tests + gate
+- [x] Tiers/ordering/shift-clamp; class→bucket grouping; default templates valid + monotone (cash ↓, equity ↑ with risk)
+- [x] Validator: sum≠100, cash-floor, out-of-range/missing, float-dust tolerance
+- [x] Horizon bands at/around every boundary; suggestTier standard/critical/aspirational + default nature
+- [x] resolveTierSelection: default, riskier-override conflict, safer-override no-conflict, same-as-suggestion, critical-shift-vs-base, unknown-value fallback
+- [x] Type gate clean; full suite green (1018 → 1041, +23); no existing behavior changed

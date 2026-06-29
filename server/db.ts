@@ -37,6 +37,8 @@ import {
   aiIntakeAudit,
   type AiIntakeAuditRow,
   type InsertAiIntakeAudit,
+  allocationTemplates,
+  type AllocationTemplateRow,
 } from "../drizzle/schema";
 import { ENV } from "./_core/env";
 import { computeActualsTotals, estInterestToDate, govAccruedInterestTotal } from "../shared/actuals";
@@ -1911,4 +1913,134 @@ export async function resolveIngestionConflict(args: {
     .where(eq(ingestionConflicts.id, args.id));
   const rows = await db.select().from(ingestionConflicts).where(eq(ingestionConflicts.id, args.id)).limit(1);
   return rows[0] ?? null;
+}
+
+
+/* ── Allocation Model Part 1: editable target allocation templates ─────────── */
+
+import {
+  type AllocationTier,
+  type AllocationTemplate,
+  type AllocationWeights,
+  ALLOCATION_TIERS,
+  ALLOCATION_BUCKETS,
+  defaultTemplateFor,
+  validateAllocationWeights,
+} from "../shared/allocationModel";
+
+/** Parse a YYYY-MM-DD provenance date into a Date, or null when absent/invalid. */
+function parseAsOfDate(asOf: string | null | undefined): Date | null {
+  if (!asOf) return null;
+  const d = new Date(asOf);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+/** Coerce a stored JSON weights blob into a clean AllocationWeights (numbers per bucket). */
+function coerceWeights(raw: unknown): AllocationWeights {
+  const src = (raw ?? {}) as Record<string, unknown>;
+  const out = {} as AllocationWeights;
+  for (const b of ALLOCATION_BUCKETS) out[b] = Number(src[b]) || 0;
+  return out;
+}
+
+/** Map a stored row to the shared AllocationTemplate shape. */
+function rowToTemplate(row: AllocationTemplateRow): AllocationTemplate {
+  return {
+    tier: row.tier as AllocationTier,
+    weights: coerceWeights(row.weights),
+    source: row.source ?? null,
+    asOf: row.asOfDate ? String(row.asOfDate) : null,
+    notes: row.notes ?? null,
+    updatedAt: row.updatedAt ? new Date(row.updatedAt).getTime() : null,
+  };
+}
+
+/**
+ * List the target allocation template for every tier, in tier order. Any tier
+ * not yet present in the table falls back to its seeded default, so the engine
+ * always sees a complete, valid set even before the table is populated. Read
+ * helper only — never writes.
+ */
+export async function listAllocationTemplates(): Promise<AllocationTemplate[]> {
+  const db = await getDb();
+  const stored = new Map<AllocationTier, AllocationTemplate>();
+  if (db) {
+    const rows = await db.select().from(allocationTemplates);
+    for (const r of rows) {
+      if ((ALLOCATION_TIERS as readonly string[]).includes(r.tier)) {
+        stored.set(r.tier as AllocationTier, rowToTemplate(r));
+      }
+    }
+  }
+  return ALLOCATION_TIERS.map((tier) => stored.get(tier) ?? defaultTemplateFor(tier));
+}
+
+/** Read one tier's template (stored, else the seeded default). */
+export async function getAllocationTemplate(tier: AllocationTier): Promise<AllocationTemplate> {
+  const db = await getDb();
+  if (db) {
+    const rows = await db
+      .select()
+      .from(allocationTemplates)
+      .where(eq(allocationTemplates.tier, tier))
+      .limit(1);
+    if (rows[0]) return rowToTemplate(rows[0]);
+  }
+  return defaultTemplateFor(tier);
+}
+
+/**
+ * Save (upsert) a tier's allocation template. The weights are VALIDATED first
+ * (sum to 100, cash floor, in-range) — a non-conforming template is REJECTED and
+ * never written. Returns the validation result so the caller can surface the
+ * specific failures; on success the stored template is returned via the `ok`
+ * path. Provenance (source/asOf/notes) is recorded alongside the weights.
+ */
+export async function saveAllocationTemplate(args: {
+  tier: AllocationTier;
+  weights: AllocationWeights;
+  source?: string | null;
+  asOf?: string | null;
+  notes?: string | null;
+}): Promise<{ ok: boolean; errors: string[] }> {
+  const validation = validateAllocationWeights(args.weights);
+  if (!validation.ok) return { ok: false, errors: validation.errors };
+
+  const db = await getDb();
+  if (!db) return { ok: false, errors: ["Database unavailable."] };
+
+  // Normalise to whole-number weights over exactly the known buckets.
+  const weights = {} as AllocationWeights;
+  for (const b of ALLOCATION_BUCKETS) weights[b] = Number(args.weights[b]) || 0;
+
+  // The date column expects a Date (or null). Parse a YYYY-MM-DD string; an
+  // unparseable/empty value becomes null rather than an Invalid Date.
+  const asOfDate = parseAsOfDate(args.asOf);
+
+  const existing = await db
+    .select({ id: allocationTemplates.id })
+    .from(allocationTemplates)
+    .where(eq(allocationTemplates.tier, args.tier))
+    .limit(1);
+
+  if (existing[0]) {
+    await db
+      .update(allocationTemplates)
+      .set({
+        weights,
+        source: args.source ?? null,
+        asOfDate,
+        notes: args.notes ?? null,
+      })
+      .where(eq(allocationTemplates.tier, args.tier));
+  } else {
+    await db.insert(allocationTemplates).values({
+      tier: args.tier,
+      weights,
+      source: args.source ?? null,
+      asOfDate,
+      notes: args.notes ?? null,
+    });
+  }
+  return { ok: true, errors: [] };
 }

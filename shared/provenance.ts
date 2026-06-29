@@ -43,14 +43,22 @@ export function isFieldKey(v: string): v is FieldKey {
 
 /**
  * Verification lifecycle for a single figure.
- *  - scraped_unverified: pulled from a public source, no human has checked it.
- *  - human_verified:     a person confirmed the scraped value is correct.
+ *  - ai_extracted:       an LLM pulled this figure from a source document. NO human and
+ *                        NO deterministic parser has checked it. This is the LEAST
+ *                        trusted state of all — a scraper at least parsed a known
+ *                        structure, whereas an LLM may have hallucinated the number.
+ *                        (Part 8.) It is never auto-promoted and never clobbers a
+ *                        scrape or a human value; it only ever rises by being checked.
+ *  - scraped_unverified: pulled from a public source by a deterministic parser, no
+ *                        human has checked it.
+ *  - human_verified:     a person confirmed the scraped/AI value is correct.
  *  - human_entered:      a person typed/overrode the value themselves.
- *  - stale:              a DISPLAY state for a scraped figure whose as-of date is old
+ *  - stale:              a DISPLAY state for a scraped/AI figure whose as-of date is old
  *                        and which no human has since checked. It is derived, never a
  *                        stored downgrade of a human state.
  */
 export const VERIFICATION_STATES = [
+  "ai_extracted",
   "scraped_unverified",
   "human_verified",
   "human_entered",
@@ -65,14 +73,26 @@ export function isVerificationState(v: string): v is VerificationState {
 
 /**
  * Trust ranking. Higher = more trusted / more human attention. Used so a re-scrape
- * can never overwrite a figure a human has already verified or entered. `stale` is
- * intentionally the LOWEST rank: a scraped figure gone stale is the least trusted.
+ * can never overwrite a figure a human has already verified or entered, AND so an AI
+ * extraction can never overwrite a deterministic scrape or a human value.
+ *
+ * Ordering (lowest → highest): ai_extracted < scraped_unverified < stale-display
+ * < human_verified < human_entered.
+ *
+ * Two figures share the bottom for two DIFFERENT reasons:
+ *  - `ai_extracted` is the lowest STORED trust (an LLM may have hallucinated it), so a
+ *    deterministic scrape is allowed to raise it.
+ *  - `stale` is the lowest DISPLAY trust (a once-scraped figure gone old) — it is a
+ *    derived projection, never a stored value, so it never participates in clobber
+ *    decisions (those use the stored state). We give ai_extracted the true floor and
+ *    place stale just above it for the brief's display ordering.
  */
 const TRUST_RANK: Record<VerificationState, number> = {
-  stale: 0,
-  scraped_unverified: 1,
-  human_verified: 2,
-  human_entered: 3,
+  ai_extracted: 0,
+  stale: 1,
+  scraped_unverified: 2,
+  human_verified: 3,
+  human_entered: 4,
 };
 
 export function trustRank(s: VerificationState): number {
@@ -111,6 +131,12 @@ export interface FieldProvenance {
   verifiedBy?: string | null;
   /** When the human confirmed/entered it, epoch ms UTC. */
   verifiedAt?: number | null;
+  /**
+   * Part 8: when this figure was pulled by an LLM (verificationState=ai_extracted),
+   * the model id that produced it. Recorded for honesty/auditing only — it is NEVER
+   * a quality signal and never raises trust. Null for non-AI figures.
+   */
+  aiModel?: string | null;
 }
 
 /** A whole instrument's per-field provenance map (only the applicable keys are set). */
@@ -140,6 +166,41 @@ export function scrapedField(args: {
     verificationState: "scraped_unverified",
     verifiedBy: null,
     verifiedAt: null,
+  };
+}
+
+/**
+ * Part 8 — build a fresh AI-EXTRACTED figure provenance entry. An LLM read a source
+ * document and pulled this figure; no human and no deterministic parser has checked
+ * it, so it starts at the LOWEST trust state of all (`ai_extracted`). It is the AI
+ * counterpart of `scrapedField`: it records the cited source the AI read it from, the
+ * model that produced it, and the timestamps — but it asserts nothing about whether
+ * the value is correct, and it carries no score/rank/quality field. It can only ever
+ * RISE in trust by a human confirming it (or a deterministic scrape overwriting it).
+ */
+export function aiExtractedField(args: {
+  value: string | null;
+  /** The cited source document the AI read the figure FROM (e.g. "ILAM fact sheet Q1-2026"). */
+  source: string | null;
+  /** Direct link to that source document, so a human can confirm against it. */
+  sourceUrl?: string | null;
+  /** As-of date the AI believes the figure refers to, epoch ms UTC (may be null). */
+  asOf?: number | null;
+  /** When the AI extraction ran, epoch ms UTC. */
+  at: number;
+  /** The model id that produced it (audit only, never a quality signal). */
+  model?: string | null;
+}): FieldProvenance {
+  return {
+    value: args.value,
+    source: args.source && args.source.trim() !== "" ? args.source.trim() : null,
+    sourceUrl: args.sourceUrl && args.sourceUrl.trim() !== "" ? args.sourceUrl.trim() : null,
+    asOf: args.asOf ?? null,
+    fetchedAt: args.at,
+    verificationState: "ai_extracted",
+    verifiedBy: null,
+    verifiedAt: null,
+    aiModel: args.model ?? null,
   };
 }
 
@@ -179,6 +240,11 @@ export function humanField(args: {
  */
 export function effectiveState(p: FieldProvenance, nowMs: number): VerificationState {
   if (isHumanChecked(p.verificationState)) return p.verificationState;
+  // An AI-extracted figure NEVER auto-promotes to a more trusted state by mere age:
+  // it stays ai_extracted (provisional) until a human checks it or a scrape overwrites
+  // it. We keep showing it as ai_extracted regardless of age — its provisionality is
+  // a stronger caution than "stale", and we never want age to make it read as safer.
+  if (p.verificationState === "ai_extracted") return "ai_extracted";
   const asOf = p.asOf;
   if (asOf === null) return p.verificationState;
   const ageDays = (nowMs - asOf) / (1000 * 60 * 60 * 24);
@@ -260,7 +326,31 @@ export function mergeScrape(existing: FieldProvenance | undefined, scraped: Fiel
     // Keep the human's value/state; just note we re-checked the source.
     return { ...existing, fetchedAt: scraped.fetchedAt ?? existing.fetchedAt };
   }
+  // Part 8: a deterministic scrape is MORE trusted than an AI extraction, so it is
+  // allowed to overwrite an ai_extracted figure (raising it to scraped_unverified).
+  // This is intentional and the ONE direction in which an AI value can be replaced
+  // without a human: a known parser beats a possible hallucination. Human values are
+  // already protected above; the scrape never reaches them.
   return scraped;
+}
+
+/**
+ * Part 8 — the AI counterpart of {@link mergeScrape}. Merge a freshly AI-extracted
+ * figure over an existing one WITHOUT EVER lowering OR overwriting more-trusted data.
+ * Because `ai_extracted` is the lowest stored trust of all, an AI value may only be
+ * written onto an EMPTY slot. If anything is already there — a human value, a
+ * deterministic scrape, or even a prior AI extraction — the AI value is NOT applied
+ * to the stored figure; the caller routes the disagreement to the conflicts surface
+ * instead. This is what makes AI structurally unable to clobber or become the source
+ * of record: it can fill a blank, never overwrite.
+ */
+export function mergeAiExtraction(
+  existing: FieldProvenance | undefined,
+  ai: FieldProvenance,
+): FieldProvenance {
+  if (!existing || existing.value == null) return ai;
+  // Something more trusted is already present — keep it untouched.
+  return existing;
 }
 
 /** Count how many figures in a map a human has actually checked. */
@@ -282,6 +372,8 @@ export function stateLabel(s: VerificationState): string {
       return "Entered by you";
     case "stale":
       return "May be stale";
+    case "ai_extracted":
+      return "AI-extracted · unverified — confirm against source";
     case "scraped_unverified":
     default:
       return "Unverified";
@@ -302,6 +394,8 @@ export function viewerStateLabel(s: VerificationState): string {
       return "Maintainer-entered";
     case "stale":
       return "May be stale";
+    case "ai_extracted":
+      return "AI-extracted · unverified — confirm against source";
     case "scraped_unverified":
     default:
       return "Unverified scrape";
@@ -315,12 +409,16 @@ export function viewerStateLabel(s: VerificationState): string {
  * Pure projection — does not consider staleness (staleness is a display concern).
  */
 export function summariseState(map: FieldProvenanceMap): VerificationState {
-  let best: VerificationState = "scraped_unverified";
-  for (const p of Object.values(map)) {
-    if (!p) continue;
-    if (trustRank(p.verificationState) > trustRank(best)) best = p.verificationState;
+  const present = Object.values(map).filter((p): p is FieldProvenance => !!p);
+  if (present.length === 0) return "scraped_unverified";
+  // The row badge reflects the LEAST-trusted figure on the instrument, so a single
+  // unconfirmed AI figure makes the whole row read as provisional (you can't trust the
+  // row more than its weakest number). This keeps ai_extracted visible at list level.
+  let worst: VerificationState = present[0].verificationState;
+  for (const p of present) {
+    if (trustRank(p.verificationState) < trustRank(worst)) worst = p.verificationState;
   }
-  return best;
+  return worst;
 }
 
 /**
@@ -520,6 +618,8 @@ export function effectiveStateForClass(
   assetClass: string | null | undefined,
 ): VerificationState {
   if (isHumanChecked(p.verificationState)) return p.verificationState;
+  // AI-extracted figures never auto-promote with age (see effectiveState).
+  if (p.verificationState === "ai_extracted") return "ai_extracted";
   const asOf = p.asOf;
   if (asOf === null) return p.verificationState;
   const ageDays = (nowMs - asOf) / (1000 * 60 * 60 * 24);
@@ -570,7 +670,7 @@ export function modelFreshnessPrompt(args: {
     const p = map[field];
     if (!p) continue;
     const state = effectiveStateForClass(p, args.nowMs, args.assetClass);
-    if (state === "stale" || state === "scraped_unverified") {
+    if (state === "stale" || state === "scraped_unverified" || state === "ai_extracted") {
       flagged.push({ field, state, ageDays: figureAgeDays(p, args.nowMs) });
     }
   }
@@ -579,7 +679,18 @@ export function modelFreshnessPrompt(args: {
     return { shouldPrompt: false, flagged: [], message: null };
   }
 
-  // Build one quiet sentence. Prefer the strongest caution (stale > unverified).
+  // Build one quiet sentence. Strongest caution first: an AI-extracted figure is the
+  // most urgent to confirm (a model may have hallucinated it), then stale, then a raw
+  // deterministic scrape.
+  const ai = flagged.find((f) => f.state === "ai_extracted");
+  if (ai) {
+    return {
+      shouldPrompt: true,
+      flagged,
+      message:
+        "This figure was pulled from a document by AI and no one has checked it — it may be wrong. Confirm it against the cited source before relying on this model.",
+    };
+  }
   const stale = flagged.find((f) => f.state === "stale");
   if (stale) {
     const age = stale.ageDays != null ? `${stale.ageDays} day${stale.ageDays !== 1 ? "s" : ""} old` : "old";

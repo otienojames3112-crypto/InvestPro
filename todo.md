@@ -912,15 +912,15 @@
 
 ## Expansion Brief — Parts 7.4–7.6 (catalog expansion + staleness/honesty + guardrails)
 
-- [ ] 7.4 Expand seed: fuller NSE equity slice, active gov bond/bill series, major Kenyan MMFs, main REITs, offshore set (global equity, S&P, USD MMF)
-- [ ] 7.4 Every added instrument carries a real source + per-figure provenance + a verification state (not unverified placeholders)
-- [ ] 7.4 Default catalog ordering stays neutral (asset class, then name) regardless of size
-- [ ] 7.5 Wire real asOf/fetchedAt into staleness display; per-asset-type thresholds (equities daily, bonds/MMF weekly)
-- [ ] 7.5 Non-blocking prompt at "Model in my plan" when figure is stale or scraped_unverified ("N days old / not yet human-verified; confirm or update")
-- [ ] 7.5 Persistent "information only — verify before acting" disclaimer stays; no scraped figure presented as verified/guaranteed
-- [ ] 7.6 Guardrail tests: ingestion has no ranking path; neutral default order at any catalog size; no silent clobber; source+age+state always shown
-- [ ] Acceptance: existing tests pass; fixed-income plans and numbers unchanged
-- [ ] Export full build code as a downloadable archive for the user
+- [x] 7.4 Expand seed: fuller NSE equity slice, active gov bond/bill series, major Kenyan MMFs, main REITs, offshore set (global equity, S&P, USD MMF)
+- [x] 7.4 Every added instrument carries a real source + per-figure provenance + a verification state (not unverified placeholders)
+- [x] 7.4 Default catalog ordering stays neutral (asset class, then name) regardless of size
+- [x] 7.5 Wire real asOf/fetchedAt into staleness display; per-asset-type thresholds (equities daily, bonds/MMF weekly)
+- [x] 7.5 Non-blocking prompt at "Model in my plan" when figure is stale or scraped_unverified ("N days old / not yet human-verified; confirm or update")
+- [x] 7.5 Persistent "information only — verify before acting" disclaimer stays; no scraped figure presented as verified/guaranteed
+- [x] 7.6 Guardrail tests: ingestion has no ranking path; neutral default order at any catalog size; no silent clobber; source+age+state always shown
+- [x] Acceptance: existing tests pass (949 green); fixed-income plans and numbers unchanged
+- [x] Export full build code as a downloadable archive for the user (see deliverables below)
 
 ## Expansion Brief — Parts 7.4–7.6 (DONE)
 
@@ -933,3 +933,26 @@
 - [x] 7.5 Non-blocking model-step prompt (modelFreshnessPrompt) in ModelDrawer for stale/scraped_unverified driving figures; commit never blocked; "information only" disclaimer stays
 - [x] 7.6 Guardrail tests: facts-only at scale, neutral order at 500 rows, no silent clobber, source+age+state always present (catalogGuardrails.test.ts, 15 tests)
 - [x] Fixed-income plans/numbers unchanged; full suite 949 green; tsc clean
+
+
+## Part 8 — AI-assisted instrument intake & universe discovery (AI is a librarian, never an oracle)
+### Item 1: ai_extracted lowest-trust verification tier
+- [x] Add `ai_extracted` to VERIFICATION_STATES as the lowest trust rank (below stale/scraped)
+- [x] Update TRUST_RANK so ai_extracted < scraped_unverified < stale-display < human_verified < human_entered
+- [x] Add `aiExtractedField()` builder (mirrors scrapedField but state=ai_extracted, records model/source)
+- [x] effectiveState/effectiveStateForClass: ai_extracted stays ai_extracted (never auto-promotes)
+- [x] mergeScrape lets a scrape raise ai_extracted; mergeAiExtraction fills blanks only (never clobbers)
+- [x] stateLabel/viewerStateLabel: "AI-extracted · unverified — confirm against source"
+- [x] DB migration: NOT NEEDED — verificationState/field/humanState are varchar(24), ai_extracted fits; conflicts table reused for AI conflicts
+- [x] VerificationBadge (OpportunityDetail): distinct filled-orange + bot-icon provisional marker
+- [x] Explore row indicator: show ai_extracted figures distinctly (orange Bot "N AI-extracted")
+- [x] modelFreshnessPrompt: most-urgent variant for ai_extracted driving figures (ModelDrawer renders orange Bot prompt)
+- [x] Unit tests for the new tier + no-clobber ordering (aiExtractedTier.test.ts, 15 tests; suite 965 green)
+
+### Items 2–4: extraction, discovery, confirmation
+- [ ] AI document extraction procedure (adminProcedure): URL/text/file → invokeLLM structured JSON (facts only, no rankings) → upsert as ai_extracted via new DB helper
+- [ ] Universe discovery procedure (adminProcedure): LLM proposes candidate instrument names/refs as suggestions only (never inserted until human approves)
+- [ ] Human confirmation workflow UI: list ai_extracted figures/candidates for confirm-against-source; Confirm→human_verified, Edit→human_entered, Discard
+- [ ] AI intake page + nav entry (admin-gated)
+- [ ] Structural guarantee: AI contract type cannot carry score/rank/rating/recommendation
+- [ ] Tests for extraction parsing, no-clobber of human/scrape, suggestion-only discovery

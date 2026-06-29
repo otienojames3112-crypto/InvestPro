@@ -20,6 +20,7 @@ import {
   ExternalLink,
   ShieldCheck,
   UserCheck,
+  Bot,
 } from "lucide-react";
 import { profileFor, type AssetClass } from "@shared/assetModel";
 import {
@@ -68,6 +69,20 @@ const NOW = Date.now();
 function VerificationBadge({ p }: { p: FieldProvenance }) {
   const eff = effectiveState(p, NOW);
   const label = viewerStateLabel(eff);
+  // ai_extracted is the lowest-trust tier and must read as provisional UNMISTAKABLY:
+  // a filled orange chip (not a thin outline) with a bot icon, distinct from the
+  // ordinary "unverified scrape" amber outline.
+  if (eff === "ai_extracted") {
+    return (
+      <Badge
+        variant="outline"
+        className="text-[10px] gap-1 border-orange-500/60 bg-orange-500/15 text-orange-700 dark:text-orange-300 font-medium"
+      >
+        <Bot className="w-2.5 h-2.5" />
+        {label}
+      </Badge>
+    );
+  }
   const cls =
     eff === "human_verified"
       ? "border-emerald-500/40 text-emerald-600 dark:text-emerald-400"

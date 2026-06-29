@@ -30,6 +30,7 @@ import {
   Droplets,
   TrendingUp,
   HelpCircle,
+  Bot,
 } from "lucide-react";
 import { profileFor, type AssetClass } from "@shared/assetModel";
 import { defaultRiskFor } from "@shared/riskModel";
@@ -108,6 +109,11 @@ export function ModelDrawer({
       nowMs: Date.now(),
     });
   }, [opportunity.fieldProvenance, opportunity.assetClass, profile.priceDriven]);
+
+  // Part 8: when a DRIVING figure is AI-extracted, the freshness prompt is upgraded to
+  // its most-urgent (orange) variant — an LLM may have hallucinated the number, so it
+  // must be confirmed against the cited source before the scenario is trusted.
+  const freshnessIsAi = freshness.flagged.some((f) => f.state === "ai_extracted");
 
   // ── User inputs (catalog values prefill, but the user owns them all) ─────────
   const indicativePrice = n(opportunity.lastPrice);
@@ -235,11 +241,28 @@ export function ModelDrawer({
             </p>
           </div>
 
-          {/* Part 7.5: quiet, NON-BLOCKING freshness prompt for the driving figure(s). */}
+          {/* Part 7.5/8: quiet, NON-BLOCKING freshness prompt for the driving figure(s).
+              An AI-extracted driving figure gets the most-urgent (orange) treatment. */}
           {freshness.shouldPrompt && (
-            <div className="rounded-lg border border-sky-500/30 bg-sky-500/5 p-3 flex items-start gap-2">
-              <HelpCircle className="w-4 h-4 text-sky-600 dark:text-sky-400 shrink-0 mt-0.5" />
-              <p className="text-[11px] text-sky-800 dark:text-sky-300 leading-relaxed">
+            <div
+              className={`rounded-lg border p-3 flex items-start gap-2 ${
+                freshnessIsAi
+                  ? "border-orange-500/40 bg-orange-500/10"
+                  : "border-sky-500/30 bg-sky-500/5"
+              }`}
+            >
+              {freshnessIsAi ? (
+                <Bot className="w-4 h-4 text-orange-600 dark:text-orange-400 shrink-0 mt-0.5" />
+              ) : (
+                <HelpCircle className="w-4 h-4 text-sky-600 dark:text-sky-400 shrink-0 mt-0.5" />
+              )}
+              <p
+                className={`text-[11px] leading-relaxed ${
+                  freshnessIsAi
+                    ? "text-orange-800 dark:text-orange-300"
+                    : "text-sky-800 dark:text-sky-300"
+                }`}
+              >
                 {freshness.message} You can still model it now — this is a heads-up,
                 not a block.
               </p>

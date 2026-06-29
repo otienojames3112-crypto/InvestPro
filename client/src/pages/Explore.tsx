@@ -37,13 +37,22 @@ import {
   FlaskConical,
   ShieldCheck,
   PlusCircle,
+  Bot,
 } from "lucide-react";
 import { ASSET_CLASSES, profileFor, type AssetClass } from "@shared/assetModel";
-import { humanCheckedCount, figureCount, type FieldProvenanceMap } from "@shared/provenance";
+import {
+  humanCheckedCount,
+  figureCount,
+  effectiveState,
+  type FieldProvenance,
+  type FieldProvenanceMap,
+} from "@shared/provenance";
 import { rateStaleness } from "@/lib/rateStaleness";
 import { usePortfolio } from "@/contexts/PortfolioContext";
 import type { inferRouterOutputs } from "@trpc/server";
 import type { AppRouter } from "../../../server/routers";
+
+const ROW_NOW = Date.now();
 
 type Opportunity = inferRouterOutputs<AppRouter>["opportunities"]["list"][number];
 
@@ -367,6 +376,11 @@ function OpportunityRow({ r }: { r: Opportunity }) {
   const fp = (r.fieldProvenance ?? {}) as FieldProvenanceMap;
   const total = figureCount(fp);
   const checked = humanCheckedCount(fp);
+  // Part 8: how many figures are AI-extracted (lowest-trust, provisional). Surfaced
+  // distinctly so a row carrying any AI figure visibly reads as not-yet-checked.
+  const aiCount = Object.values(fp).filter(
+    (p): p is FieldProvenance => !!p && effectiveState(p, ROW_NOW) === "ai_extracted",
+  ).length;
   return (
     <TableRow className="align-top">
       <TableCell>
@@ -437,6 +451,21 @@ function OpportunityRow({ r }: { r: Opportunity }) {
                 ? `A person has confirmed or entered ${checked} of ${total} figures. Open the instrument to see which.`
                 : `None of these ${total} figures have been checked by a person yet — they are scraped from public sources. Open the instrument to confirm or edit them.`}
             </TooltipContent>
+          </Tooltip>
+        )}
+        {aiCount > 0 && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="inline-flex items-center gap-1 mt-1 text-[10px] font-medium cursor-help text-orange-700 dark:text-orange-300">
+                  <Bot className="w-3 h-3" />
+                  {aiCount} AI-extracted
+                </span>
+              </TooltipTrigger>
+              <TooltipContent side="left" className="max-w-xs text-xs">
+                {aiCount} of these figures were pulled from a document by AI and have not been
+                checked by a person or a parser. Treat them as provisional and confirm against the
+                cited source before relying on them.
+              </TooltipContent>
           </Tooltip>
         )}
       </TableCell>

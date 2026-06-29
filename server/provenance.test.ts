@@ -25,10 +25,17 @@ function fresh(value = "8.45", asOf = NOW): FieldProvenance {
 }
 
 describe("trust ranking", () => {
-  it("orders stale < scraped < verified < entered", () => {
+  it("orders ai_extracted < stale < scraped < verified < entered", () => {
+    expect(trustRank("ai_extracted")).toBeLessThan(trustRank("stale"));
     expect(trustRank("stale")).toBeLessThan(trustRank("scraped_unverified"));
     expect(trustRank("scraped_unverified")).toBeLessThan(trustRank("human_verified"));
     expect(trustRank("human_verified")).toBeLessThan(trustRank("human_entered"));
+  });
+  it("ai_extracted is the absolute lowest trust of all states", () => {
+    const others = ["stale", "scraped_unverified", "human_verified", "human_entered"] as const;
+    for (const s of others) {
+      expect(trustRank("ai_extracted")).toBeLessThan(trustRank(s));
+    }
   });
   it("isAtLeastAsTrusted is reflexive and correct", () => {
     expect(isAtLeastAsTrusted("human_entered", "human_verified")).toBe(true);
@@ -156,12 +163,18 @@ describe("map summaries", () => {
     expect(map.fx).toBeUndefined(); // absent figure -> no entry
   });
 
-  it("summariseState reflects the highest human attention", () => {
+  it("summariseState reflects the WEAKEST figure (a row is only as trusted as its least-checked number)", () => {
+    // All scraped -> row is scraped_unverified.
     expect(summariseState(map)).toBe("scraped_unverified");
+    // Confirming ONE figure does not lift the row while others remain scraped.
     const m2 = { ...map, price: applyVerification(map.price!, { kind: "confirm", by: "J", at: NOW }) };
-    expect(summariseState(m2)).toBe("human_verified");
-    const m3 = { ...m2, yield: applyVerification(map.yield!, { kind: "override", by: "J", at: NOW, value: "7" }) };
-    expect(summariseState(m3)).toBe("human_entered");
+    expect(summariseState(m2)).toBe("scraped_unverified");
+    // The row only reaches a human state once EVERY figure is human-checked.
+    let m3: typeof map = { ...m2 };
+    for (const k of Object.keys(m3) as (keyof typeof m3)[]) {
+      m3[k] = applyVerification(m3[k]!, { kind: "confirm", by: "J", at: NOW });
+    }
+    expect(summariseState(m3)).toBe("human_verified");
   });
 
   it("humanCheckedCount counts only human-checked figures", () => {
@@ -188,5 +201,6 @@ describe("stateLabel", () => {
     expect(stateLabel("human_verified")).toBe("Verified by you");
     expect(stateLabel("human_entered")).toBe("Entered by you");
     expect(stateLabel("stale")).toBe("May be stale");
+    expect(stateLabel("ai_extracted")).toBe("AI-extracted · unverified — confirm against source");
   });
 });

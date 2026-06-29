@@ -897,8 +897,8 @@
 - [x] Confirm a scraped figure as correct → scraped_unverified promotes to human_verified (existing path, now admin)
 - [x] Resolve 7.2 conflicts from the workflow (keep mine / apply scraped as human_entered) — admin-gated
 - [x] Add a new instrument by hand (addOpportunity mutation; figures land human_entered with citation)
-- [ ] End-user Explore/Detail: quiet "verified" marker on human_verified, "may be stale" on stale, plain to read
-- [ ] Tests: edit-with-source transition, confirm transition, gating rejection, add-instrument, conflict apply; full suite + tsc
+- [x] End-user Explore/Detail: quiet "verified" marker on human_verified, "may be stale" on stale, plain to read (viewer-neutral labels + per-row x/N checked indicator)
+- [x] Tests: edit-with-source transition, confirm transition, gating rejection, add-instrument, conflict apply; full suite + tsc (covered by provenanceHumanEntry + opportunityMaintainer tests; existing provenance/reconcile tests cover confirm + conflict apply)
 
 ## Expansion Brief — Part 7.3 (UI + tests)
 

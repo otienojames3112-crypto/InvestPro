@@ -48,6 +48,40 @@ export function getPhaseName(phase: string): string {
 }
 
 /**
+ * Part C2 — plain-language phase label for always-on chrome. The dashboard's
+ * persistent badge should say what the phase MEANS, not just name it; the
+ * technical phase name (from {@link getPhaseName}) is kept one hover away.
+ */
+export function getPhasePlainLabel(phase: string): string {
+  switch (phase) {
+    case "foundation": return "Building your base";
+    case "growth": return "Growing your savings";
+    case "de-risking": return "Locking in gains";
+    case "final-liquidity": return "Getting ready to cash out";
+    default: return getPhaseName(phase);
+  }
+}
+
+/**
+ * Part C2 — one-line explanation of what the current phase does, for the badge
+ * tooltip. Pairs the plain label with the precise technical term.
+ */
+export function getPhasePlainHint(phase: string): string {
+  switch (phase) {
+    case "foundation":
+      return "Foundation phase: the early stage where you build a cash base in money-market funds before laddering into government paper.";
+    case "growth":
+      return "Growth Engine phase: contributions and reinvested interest compound through a ladder of Treasury bills and bonds to grow the balance.";
+    case "de-risking":
+      return "De-risking phase: as the goal nears, the plan shifts toward shorter, safer holdings so a late rate move can't derail the target.";
+    case "final-liquidity":
+      return "Final Liquidity phase: holdings are timed to mature into cash by the goal date so the money is available when you need it.";
+    default:
+      return "";
+  }
+}
+
+/**
  * Get the phase color class.
  */
 export function getPhaseColorClass(phase: string): string {

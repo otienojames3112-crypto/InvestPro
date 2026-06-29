@@ -370,3 +370,75 @@ export function computeInflationAdjustedGoal(opts: {
     effectiveGoal: Math.round(effectiveGoal),
   };
 }
+
+
+// ─── Part B2 — Savings-led framing (return share of the ending value) ─────────
+//
+// This plan reaches its goal mostly by *saving* (contributions) and only thinly
+// by *investing* (the return earned on those contributions). Giving YTM / net
+// yield / unrealized gain investment-product prominence implies the investing
+// drives the outcome — it does not. We compute the honest split so the UI can
+// state plainly how small the investment contribution really is, which sets
+// expectations and discourages yield-chasing with safety money.
+
+export interface SavingsLedSplit {
+  /** Projected ending value (nominal/future shillings). */
+  projectedFinalValue: number;
+  /** Sum of all contributions paid in over the horizon (KES). */
+  totalContributions: number;
+  /** Opening principal already in the pot at the start (KES). */
+  startingPrincipal: number;
+  /** Total principal you put in = startingPrincipal + totalContributions (KES). */
+  principalIn: number;
+  /** Return earned = projectedFinalValue − principalIn (KES); floored at 0. */
+  returnEarned: number;
+  /** Return as a share (0..1) of the ending value: returnEarned / projectedFinalValue. */
+  returnShare: number;
+  /** Principal as a share (0..1) of the ending value: principalIn / projectedFinalValue. */
+  principalShare: number;
+  /**
+   * True when principal dominates (returnShare below `savingsLedThreshold`), i.e.
+   * the plan is primarily structured-savings rather than investment-led.
+   */
+  isSavingsLed: boolean;
+}
+
+/** Below this return share the plan is "savings-led" (principal does most of the work). */
+export const SAVINGS_LED_THRESHOLD = 0.35;
+
+/**
+ * Compute the savings-vs-investing split of the projected ending value.
+ *
+ * returnShare = (projectedFinalValue − totalContributions − startingPrincipal) / projectedFinalValue
+ *
+ * The result is the share of the ENDING VALUE attributable to investment return
+ * (everything else is principal you saved). Pure so the tRPC query and unit tests
+ * share one source of truth.
+ */
+export function computeSavingsLedSplit(opts: {
+  projectedFinalValue: number;
+  totalContributions: number;
+  startingPrincipal?: number;
+  savingsLedThreshold?: number;
+}): SavingsLedSplit {
+  const projectedFinalValue = Math.max(0, Number(opts.projectedFinalValue) || 0);
+  const totalContributions = Math.max(0, Number(opts.totalContributions) || 0);
+  const startingPrincipal = Math.max(0, Number(opts.startingPrincipal) || 0);
+  const threshold = opts.savingsLedThreshold ?? SAVINGS_LED_THRESHOLD;
+
+  const principalIn = startingPrincipal + totalContributions;
+  const returnEarned = Math.max(0, projectedFinalValue - principalIn);
+  const returnShare = projectedFinalValue > 0 ? returnEarned / projectedFinalValue : 0;
+  const principalShare = projectedFinalValue > 0 ? Math.min(1, principalIn / projectedFinalValue) : 0;
+
+  return {
+    projectedFinalValue: Math.round(projectedFinalValue),
+    totalContributions: Math.round(totalContributions),
+    startingPrincipal: Math.round(startingPrincipal),
+    principalIn: Math.round(principalIn),
+    returnEarned: Math.round(returnEarned),
+    returnShare,
+    principalShare,
+    isSavingsLed: returnShare < threshold,
+  };
+}

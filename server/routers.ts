@@ -141,6 +141,7 @@ import {
   assessBackloading,
   assessLiquidityCushion,
   computeInflationAdjustedGoal,
+  computeSavingsLedSplit,
 } from "../shared/decisionSurface";
 import { discountPriceForSecurity, tbillPrice, parseBreachAckRow } from "../shared/discount";
 import {
@@ -1826,6 +1827,21 @@ export const appRouter = router({
       const monthlyContributions = baseMonths.map((m) => m.contribution ?? 0);
       const backloading = assessBackloading(monthlyContributions, 3);
 
+      // Part B2 — savings-led framing. The plan reaches the goal mostly by SAVING
+      // (contributions) and only thinly by INVESTING (return on those savings).
+      // The engine already places each ACTUAL primary-MMF deposit into the month
+      // it occurred and reports it as that month's `contribution`, so summing the
+      // full month series captures ALL principal put in (past + future). There is
+      // no separate opening lump outside this series, so startingPrincipal is 0 —
+      // adding actual deposits again would double-count. returnEarned is then
+      // exactly base − totalContributions. No new source of truth.
+      const totalContributions = monthlyContributions.reduce((a, b) => a + b, 0);
+      const savingsLed = computeSavingsLedSplit({
+        projectedFinalValue: base,
+        totalContributions,
+        startingPrincipal: 0,
+      });
+
       // Goal-date liquidity — final-month liquid pot vs locked securities.
       const liquidAtGoal =
         (baseFinal?.mmfEnd ?? 0) + (baseFinal?.secondaryMmfEnd ?? 0) + (baseFinal?.bankEnd ?? 0);
@@ -1892,6 +1908,7 @@ export const appRouter = router({
         stepUp,
         stepUpMonths: settings.stepUpMonths,
         backloading,
+        savingsLed,
         liquidity,
       };
     }),

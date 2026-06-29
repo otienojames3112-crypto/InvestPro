@@ -3,7 +3,7 @@ import { useSimulatedNow } from "@/hooks/useSimulatedNow";
 import { AppShell } from "@/components/AppShell";
 import { SimulatedDateChip } from "@/components/SimulatedDateChip";
 import { trpc } from "@/lib/trpc";
-import { formatKES, formatKESCompact, formatPct, getPhaseName, getPhaseColorClass, formatRelativeTime, isReconcileStale } from "@/lib/format";
+import { formatKES, formatKESCompact, formatPct, getPhaseName, getPhasePlainLabel, getPhasePlainHint, getPhaseColorClass, formatRelativeTime, isReconcileStale } from "@/lib/format";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -1019,9 +1019,18 @@ export default function Dashboard() {
                 {mode === "sandbox" ? "Live → from Test" : "Live"}
               </span>
             </Button>
-            <Badge variant="outline" className={`text-xs px-3 py-1 border ${getPhaseColorClass(currentPhase)}`}>
-              {getPhaseName(currentPhase)} Phase
-            </Badge>
+            {/* Part C2 — always-on chrome speaks plain language; the precise
+                phase name + meaning sit one hover away in the tooltip. */}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Badge variant="outline" className={`text-xs px-3 py-1 border cursor-help ${getPhaseColorClass(currentPhase)}`}>
+                  {getPhasePlainLabel(currentPhase)}
+                </Badge>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" className="max-w-xs text-xs">
+                <span className="font-semibold">{getPhaseName(currentPhase)} phase.</span> {getPhasePlainHint(currentPhase)}
+              </TooltipContent>
+            </Tooltip>
           </div>
         </div>
 
@@ -1038,20 +1047,29 @@ export default function Dashboard() {
           const paceStatus = (effPace?.status ?? decision.pace.status) as string;
           const realYield = yieldSummary?.realYield ?? null;
           const hasYield = (yieldSummary?.partCount ?? 0) > 0 && yieldSummary != null;
+          // Part B1 — the headline is "on track" only because future, back-loaded
+          // contributions are assumed to arrive. When a material share of the plan
+          // still sits in the final quarter, the status must say so out loud rather
+          // than let a green badge over-promise. Reuse the existing back-loading
+          // flag (decisionSurface, 35% threshold) — no new source of truth.
+          const isBackloaded = !!decision.backloading?.isBackloaded;
+          const conditionalOnContrib = paceStatus !== "behind" && isBackloaded;
           // The single "Next:" action — the most important thing to do today.
           const nextAction =
             paceStatus === "behind" && decision.stepUp?.feasible
               ? `Raise step-up by ${formatKES(decision.stepUp.recommendedStepUp)}/mo to stay on pace`
               : (settings as any)?.ratesLastUpdatedAt && rateStaleness((settings as any).ratesLastUpdatedAt).isStale
                 ? "Refresh your CBK rate snapshot"
-                : "Nothing today — you're on track";
+                : conditionalOnContrib
+                  ? "Nothing today — on track, provided you keep to your contribution schedule"
+                  : "Nothing today — you're on track";
           const onTrack = paceStatus !== "behind";
           return (
             <div className="rounded-xl border border-primary/25 bg-gradient-to-br from-primary/10 via-card to-card p-5 shadow-sm">
               <div className="flex items-center justify-between gap-2 mb-3">
                 <span className="text-[11px] font-semibold uppercase tracking-wider text-primary/80">At a glance</span>
                 {onTrack ? (
-                  <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-600 dark:text-emerald-400"><CheckCircle2 className="w-3.5 h-3.5" /> On track</span>
+                  <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-600 dark:text-emerald-400"><CheckCircle2 className="w-3.5 h-3.5" /> {conditionalOnContrib ? "On track — if you sustain your contribution plan" : "On track"}</span>
                 ) : (
                   <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-amber-600 dark:text-amber-400"><AlertTriangle className="w-3.5 h-3.5" /> Needs attention</span>
                 )}
@@ -1120,6 +1138,25 @@ export default function Dashboard() {
                   </>
                 )}
               </div>
+              {/* Part B2 — savings-led framing. ~95% of the ending value is principal
+                  you save; the investments add only the return share on top. Stating
+                  this plainly sets expectations and discourages yield-chasing with
+                  money that's there for safety. Share is computed server-side. */}
+              {decision.savingsLed && decision.savingsLed.projectedFinalValue > 0 && (
+                <p className="mt-3 flex items-start gap-1.5 text-sm text-muted-foreground">
+                  <PiggyBank className="w-3.5 h-3.5 mt-0.5 shrink-0 text-primary/70" />
+                  <span>
+                    {decision.savingsLed.isSavingsLed ? "This is primarily a structured-savings plan" : "This is a savings-and-investment plan"} — your contributions do most of the work; the investments add roughly{" "}
+                    <strong className="text-foreground">{(decision.savingsLed.returnShare * 100).toFixed(0)}%</strong> on top.
+                    <Tooltip>
+                      <TooltipTrigger asChild><HelpCircle className="w-3 h-3 ml-1 inline-block align-text-top text-muted-foreground/60 cursor-help" /></TooltipTrigger>
+                      <TooltipContent side="top" className="max-w-xs text-xs">
+                        Of the projected {formatKESCompact(decision.savingsLed.projectedFinalValue)} ending value, about {formatKESCompact(decision.savingsLed.principalIn)} is principal you contribute and {formatKESCompact(decision.savingsLed.returnEarned)} ({(decision.savingsLed.returnShare * 100).toFixed(0)}%) is investment return. The investing protects and modestly grows your savings — it isn't what gets you there.
+                      </TooltipContent>
+                    </Tooltip>
+                  </span>
+                </p>
+              )}
               <div className="mt-3 flex items-center gap-2 text-sm">
                 <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Next</span>
                 <span className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-sm font-medium ${onTrack ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300" : "bg-amber-500/15 text-amber-700 dark:text-amber-300"}`}>
@@ -1133,38 +1170,69 @@ export default function Dashboard() {
 
         {/* ── Part 5: Manager band — exceptions & posture ──────────────────── */}
         {decision && (() => {
-          const exceptions: Array<{ key: string; label: string; tone: "amber" | "red" }> = [];
-          if (issuerSeverity === "action") exceptions.push({ key: "issuer", label: "Issuer cap breach needs action", tone: "red" });
-          else if (issuerBreachActive) exceptions.push({ key: "issuer", label: "Issuer cap breach (acknowledged)", tone: "amber" });
-          if (typeSeverity === "action") exceptions.push({ key: "type", label: "Type cap breach needs action", tone: "red" });
-          else if (typeBreach?.breached) exceptions.push({ key: "type", label: "Type cap breach (self-correcting)", tone: "amber" });
+          // Part B3 — separate "Needs your action" from "For your awareness".
+          // Self-correcting or acknowledged items are real context but NOT homework,
+          // so they go under awareness and are excluded from the "N to review" count
+          // (which must count only things that actually need a decision). Each item
+          // declares its group + an optional disposition note explaining who owns it.
+          type ExGroup = "action" | "awareness";
+          const exceptions: Array<{ key: string; label: string; tone: "amber" | "red"; group: ExGroup; disposition?: string }> = [];
+          if (issuerSeverity === "action") exceptions.push({ key: "issuer", label: "Issuer cap breach needs action", tone: "red", group: "action", disposition: "Rebalance to bring the issuer back under its cap." });
+          else if (issuerBreachActive) exceptions.push({ key: "issuer", label: "Issuer cap breach (acknowledged)", tone: "amber", group: "awareness", disposition: "You acknowledged this — nothing to do unless it worsens." });
+          if (typeSeverity === "action") exceptions.push({ key: "type", label: "Type cap breach needs action", tone: "red", group: "action", disposition: "Shift between instrument types to clear the cap." });
+          else if (typeBreach?.breached) exceptions.push({ key: "type", label: "Type cap breach (self-correcting)", tone: "amber", group: "awareness", disposition: "Self-correcting as lots mature and sweeps diversify — nothing to do." });
           const rateStale = (settings as any)?.ratesLastUpdatedAt ? rateStaleness((settings as any).ratesLastUpdatedAt) : null;
-          if (rateStale?.isVeryStale) exceptions.push({ key: "rates", label: `Rates last updated ${rateStale.label}`, tone: "red" });
-          else if (rateStale?.isStale) exceptions.push({ key: "rates", label: `Rates ${rateStale.label} — consider refresh`, tone: "amber" });
-          if (maturitiesNext90.count > 0) exceptions.push({ key: "mat", label: `${maturitiesNext90.count} maturit${maturitiesNext90.count === 1 ? "y" : "ies"} in next 90 days (${formatKESCompact(maturitiesNext90.faceTotal)})`, tone: "amber" });
-          if (decision.pace.status === "behind") exceptions.push({ key: "pace", label: `Behind pace by ${formatKESCompact(decision.pace.shortfall)}`, tone: "red" });
+          if (rateStale?.isVeryStale) exceptions.push({ key: "rates", label: `Rates last updated ${rateStale.label}`, tone: "red", group: "action", disposition: "Refresh your CBK rate snapshot so projections stay accurate." });
+          else if (rateStale?.isStale) exceptions.push({ key: "rates", label: `Rates ${rateStale.label} — consider refresh`, tone: "amber", group: "awareness", disposition: "Still usable; refresh when convenient." });
+          // Maturities: in LIVE mode a redemption is real cash you must redeploy
+          // (action); in TEST/projection the engine auto-reinvests it, so it is
+          // awareness only — the user knows whether it's on them.
+          if (maturitiesNext90.count > 0) {
+            const isLive = mode !== "sandbox";
+            exceptions.push({
+              key: "mat",
+              label: `${maturitiesNext90.count} maturit${maturitiesNext90.count === 1 ? "y" : "ies"} in next 90 days (${formatKESCompact(maturitiesNext90.faceTotal)})`,
+              tone: "amber",
+              group: isLive ? "action" : "awareness",
+              disposition: isLive
+                ? "Action needed — redeploy the redeemed cash when it lands."
+                : "Auto-reinvested by the engine — nothing to do.",
+            });
+          }
+          if (decision.pace.status === "behind") exceptions.push({ key: "pace", label: `Behind pace by ${formatKESCompact(decision.pace.shortfall)}`, tone: "red", group: "action", disposition: "Raise your step-up or extend the horizon to catch up." });
           const hasYield = (yieldSummary?.partCount ?? 0) > 0 && yieldSummary != null;
+          const actionItems = exceptions.filter((e) => e.group === "action");
+          const awarenessItems = exceptions.filter((e) => e.group === "awareness");
+          const renderItem = (e: typeof exceptions[number]) => (
+            <li key={e.key} className={`flex items-start gap-2 rounded-lg border p-2.5 text-sm ${e.group === "awareness" ? "bg-muted/40 border-border text-muted-foreground" : e.tone === "red" ? "bg-red-500/10 border-red-500/25 text-red-700 dark:text-red-300" : "bg-amber-500/10 border-amber-500/25 text-amber-700 dark:text-amber-300"}`}>
+              {e.group === "awareness" ? <Info className="w-4 h-4 shrink-0 mt-0.5" /> : <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />}
+              <span><span className={e.group === "awareness" ? "" : "font-medium"}>{e.label}</span>{e.disposition ? <span className="block text-xs opacity-80 mt-0.5">{e.disposition}</span> : null}</span>
+            </li>
+          );
           return (
             <div className="rounded-xl border border-border bg-card p-4">
               <div className="flex items-center justify-between mb-3">
                 <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Posture & exceptions</span>
-                <span className="text-[11px] text-muted-foreground">{exceptions.length === 0 ? "No exceptions" : `${exceptions.length} to review`}</span>
+                <span className="text-[11px] text-muted-foreground">{actionItems.length === 0 ? "Nothing needs action" : `${actionItems.length} to review`}</span>
               </div>
               <div className="grid gap-3 md:grid-cols-3">
-                {/* Exceptions */}
-                <div className="md:col-span-2">
-                  {exceptions.length === 0 ? (
-                    <div className="flex items-center gap-2 rounded-lg bg-emerald-500/10 border border-emerald-500/25 p-3 text-sm text-emerald-700 dark:text-emerald-300">
-                      <CheckCircle2 className="w-4 h-4 shrink-0" /> Nothing needs attention right now.
+                {/* Exceptions split into action vs awareness */}
+                <div className="md:col-span-2 space-y-3">
+                  <div>
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground mb-1.5">Needs your action</p>
+                    {actionItems.length === 0 ? (
+                      <div className="flex items-center gap-2 rounded-lg bg-emerald-500/10 border border-emerald-500/25 p-3 text-sm text-emerald-700 dark:text-emerald-300">
+                        <CheckCircle2 className="w-4 h-4 shrink-0" /> Nothing needs your action right now.
+                      </div>
+                    ) : (
+                      <ul className="space-y-1.5">{actionItems.map(renderItem)}</ul>
+                    )}
+                  </div>
+                  {awarenessItems.length > 0 && (
+                    <div>
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground mb-1.5">For your awareness</p>
+                      <ul className="space-y-1.5">{awarenessItems.map(renderItem)}</ul>
                     </div>
-                  ) : (
-                    <ul className="space-y-1.5">
-                      {exceptions.map((e) => (
-                        <li key={e.key} className={`flex items-center gap-2 rounded-lg border p-2.5 text-sm ${e.tone === "red" ? "bg-red-500/10 border-red-500/25 text-red-700 dark:text-red-300" : "bg-amber-500/10 border-amber-500/25 text-amber-700 dark:text-amber-300"}`}>
-                          <AlertTriangle className="w-4 h-4 shrink-0" /> {e.label}
-                        </li>
-                      ))}
-                    </ul>
                   )}
                 </div>
                 {/* Posture: yield vs benchmark */}
@@ -1278,16 +1346,27 @@ export default function Dashboard() {
                   href="/securities?sort=gain"
                   className="group rounded-xl border border-white/10 bg-white/[0.02] p-4 transition-colors hover:bg-white/[0.05] hover:border-white/20"
                 >
+                  {/* Part C1 — lead with the plain-language meaning. For sovereign
+                      paper held to maturity, the "unrealized gain" IS the interest
+                      your holdings have earned so far (discount paper accretes toward
+                      face; coupon bonds accrue their dirty-price premium). Calling it
+                      "Interest earned so far" is what a saver actually understands;
+                      the mark-to-model / cost-basis framing is demoted to detail.
+                      Same figure (v.unrealizedGain) — no new source of truth. */}
                   <div className="flex items-center gap-2 text-muted-foreground">
                     <GainIcon className={cn("w-4 h-4 shrink-0", positive ? "text-emerald-400" : "text-red-400")} />
-                    <p className="text-[11px] font-medium uppercase tracking-widest">Unrealized Gain</p>
+                    <p className="text-[11px] font-medium uppercase tracking-widest">Interest Earned So Far</p>
+                    <Tooltip>
+                      <TooltipTrigger asChild><HelpCircle className="w-3 h-3 text-muted-foreground/60 cursor-help shrink-0" /></TooltipTrigger>
+                      <TooltipContent side="top" className="max-w-xs text-xs">Interest accrued on your holdings to date: discount paper (T-bills / zero-coupon) accreting toward face value, plus coupon accrued on bonds since their last coupon. In accounting terms this is the <strong>unrealized gain</strong> — the mark-to-model value above the {formatKESCompact(v.totalCost)} you paid (cost basis). It is not yet cash in hand; it is realised as each holding pays out or matures.</TooltipContent>
+                    </Tooltip>
                     <ArrowUpRight className="w-3.5 h-3.5 ml-auto text-muted-foreground/50 transition-colors group-hover:text-foreground" />
                   </div>
                   <p className={cn("mt-2 text-2xl font-bold kes-amount", positive ? "text-emerald-400" : "text-red-400")}>
                     {positive ? "+" : "−"}{formatKES(Math.abs(v.unrealizedGain))}
                   </p>
                   <p className="text-xs text-muted-foreground mt-0.5">
-                    {positive ? "+" : "−"}{Math.abs(v.gainPct).toFixed(2)}% vs cost basis ({formatKESCompact(v.totalCost)})
+                    Accrued, not yet cash · unrealized gain {positive ? "+" : "−"}{Math.abs(v.gainPct).toFixed(2)}% vs cost basis
                   </p>
                 </Link>
                 {(() => {

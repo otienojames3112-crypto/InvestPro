@@ -1119,7 +1119,7 @@ export const aiIntakeAudit = mysqlTable("ai_intake_audit", {
   maintainerName: varchar("maintainerName", { length: 200 }),
   /** The model that actually ran (echoed from the LLM response; audit/cost only). */
   aiModel: varchar("aiModel", { length: 64 }),
-  /** For extract: "text" | "url" | "pdf". For discover: null. */
+  /** For extract: "text" | "url" | "pdf" | "image". For discover: null. */
   sourceKind: varchar("sourceKind", { length: 16 }),
   /** The human-cited source label (extract) — what document was read. */
   sourceLabel: varchar("sourceLabel", { length: 300 }),

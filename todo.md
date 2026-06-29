@@ -1011,3 +1011,24 @@
 - [x] Confirm invariants: ai_extracted tier floor; AdapterResult has no score slot; nulls-over-guesses; discovery writes nothing; admin-gated; end-user catalog hides AI-only rows (all covered by tests)
 - [x] Fixture-document extraction test (aiFixtureDocument.test.ts, 5 tests): present fields verbatim, absent->null, quote-less dropped, verdict stripped, ai_extracted tier, sanity flag, discovery dedupe/no-rank
 - [x] Type gate clean (tsc 0); full suite 1000 green (105 files); checkpoint next
+
+
+## Part 8.1 — thin-fetch nudge + image source input
+
+### Backend
+- [x] isThinFetch + THIN_FETCH_MIN_CHARS in service; fetchDocumentText now lets thin-but-nonempty through for the caller to judge
+- [x] aiExtract thin-fetch signal: URL fetch under THIN_FETCH_MIN_CHARS returns {thinFetch,fetchedChars,url} (signal, not a throw); still logged in audit
+- [x] Vision guard: isVisionCapableModel + resolveVisionModel; image path throws clear "can't read images — use Paste text" when none
+- [x] Image source path: ExtractionSource adds {kind:image}; aiExtractInstrument sends image_url to a resolved vision model; same schema; nulls-over-guesses reinforced by IMAGE_EXTRACTION_NOTE
+- [x] Image provenance: per-figure source label = "read from an uploaded screenshot of [cited source], [date]"; figures land as ai_extracted; instrument dataSource stamped the same
+- [x] Audit the image-source call like the others (sourceKind="image"); aiUploadDocument extended to accept PNG/JPG/WEBP (10MB cap)
+
+### Frontend
+- [x] Thin-fetch nudge after a URL fetch: amber honest message with char count, "Switch to Paste text" (pre-fills source URL) and "Switch to Upload an image" actions
+- [x] "Upload an image" fourth input mode (alongside Paste text / Fetch a URL / Upload a PDF); PNG/JPG/WEBP picker, base64 upload, then image extract
+- [x] Loud failure if model isn't vision-capable (procedure throws a user-friendly message surfaced via toast)
+
+### Tests + gate
+- [x] Mocked vision response test: correct fields, correct nulls, image provenance at ai_extracted trust (server/aiImageSource.test.ts)
+- [x] Thin-fetch detection unit test + vision allow-list + resolveVisionModel + vision-guard short-circuit (no LLM call)
+- [x] Type gate clean; full suite green (1011 passing); checkpoint

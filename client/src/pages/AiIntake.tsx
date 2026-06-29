@@ -138,7 +138,7 @@ function AiPrincipleBanner() {
 
 /* ── Panel 1: read a source document → ai_extracted figures ─────────────────── */
 
-type SourceKind = "text" | "url" | "pdf";
+type SourceKind = "text" | "url" | "pdf" | "image";
 
 function ExtractPanel() {
   const utils = trpc.useUtils();
@@ -146,6 +146,7 @@ function ExtractPanel() {
   const [documentText, setDocumentText] = useState("");
   const [docUrl, setDocUrl] = useState("");
   const [pdfFile, setPdfFile] = useState<File | null>(null);
+  const [imageFile, setImageFile] = useState<File | null>(null);
   const [sourceLabel, setSourceLabel] = useState("");
   const [sourceUrl, setSourceUrl] = useState("");
   const [hintName, setHintName] = useState("");
@@ -154,6 +155,12 @@ function ExtractPanel() {
   const upload = trpc.opportunities.aiUploadDocument.useMutation();
   const extract = trpc.opportunities.aiExtract.useMutation({
     onSuccess: (res) => {
+      // The procedure returns one of two shapes: an honest thin-fetch SIGNAL (a JS-rendered
+      // page the server could not read), or a real extraction result. Narrow before toasting.
+      if ("thinFetch" in res) {
+        toast.warning("That page returned almost no readable text — see the nudge below.");
+        return;
+      }
       toast.success(
         res.created
           ? `Drafted “${res.extraction.name}” with ${res.filled} AI-extracted figure${res.filled === 1 ? "" : "s"} — now in the review queue.`
@@ -168,9 +175,33 @@ function ExtractPanel() {
 
   const busy = extract.isPending || uploading;
   const sourceReady =
-    kind === "text" ? documentText.trim().length >= 20 : kind === "url" ? /^https?:\/\//.test(docUrl.trim()) : !!pdfFile;
+    kind === "text"
+      ? documentText.trim().length >= 20
+      : kind === "url"
+        ? /^https?:\/\//.test(docUrl.trim())
+        : kind === "pdf"
+          ? !!pdfFile
+          : !!imageFile;
   const canSubmit = sourceReady && sourceLabel.trim().length > 0 && !busy;
-  const result = extract.data;
+  const data = extract.data;
+  // The thin-fetch nudge and the success block are mutually exclusive views of `data`.
+  const thinFetch = data && "thinFetch" in data ? data : null;
+  const result = data && !("thinFetch" in data) ? data : null;
+
+  // When the user accepts the thin-fetch nudge, copy the URL into the paste box and switch
+  // to the Paste-text mode so they can paste what they can see.
+  function acceptThinFetchNudge(url: string) {
+    setKind("text");
+    setDocumentText((prev) => (prev.trim().length > 0 ? prev : `Source: ${url}\n\n`));
+    extract.reset();
+  }
+
+  const imageMimeFor = (file: File): "image/png" | "image/jpeg" | "image/webp" => {
+    const t = file.type.toLowerCase();
+    if (t.includes("webp")) return "image/webp";
+    if (t.includes("jpeg") || t.includes("jpg")) return "image/jpeg";
+    return "image/png";
+  };
 
   async function fileToBase64(file: File): Promise<string> {
     const buf = await file.arrayBuffer();
@@ -191,12 +222,26 @@ function ExtractPanel() {
         extract.mutate({ source: { kind: "text", text: documentText.trim() }, ...common });
       } else if (kind === "url") {
         extract.mutate({ source: { kind: "url", url: docUrl.trim() }, ...common });
-      } else if (pdfFile) {
+      } else if (kind === "pdf" && pdfFile) {
         setUploading(true);
         const base64 = await fileToBase64(pdfFile);
-        const { fileKey } = await upload.mutateAsync({ base64, fileName: pdfFile.name });
+        const { fileKey } = await upload.mutateAsync({
+          base64,
+          fileName: pdfFile.name,
+          mimeType: "application/pdf",
+        });
         setUploading(false);
         extract.mutate({ source: { kind: "pdf", fileKey }, ...common });
+      } else if (kind === "image" && imageFile) {
+        setUploading(true);
+        const base64 = await fileToBase64(imageFile);
+        const { fileKey } = await upload.mutateAsync({
+          base64,
+          fileName: imageFile.name,
+          mimeType: imageMimeFor(imageFile),
+        });
+        setUploading(false);
+        extract.mutate({ source: { kind: "image", fileKey }, ...common });
       }
     } catch (err) {
       setUploading(false);
@@ -249,7 +294,7 @@ function ExtractPanel() {
 
         {/* Source kind picker */}
         <div className="flex gap-1 rounded-lg border border-border p-1 w-fit">
-          {(["text", "url", "pdf"] as const).map((k) => (
+          {(["text", "url", "pdf", "image"] as const).map((k) => (
             <button
               key={k}
               type="button"
@@ -258,7 +303,13 @@ function ExtractPanel() {
                 kind === k ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
               }`}
             >
-              {k === "text" ? "Paste text" : k === "url" ? "Fetch a URL" : "Upload a PDF"}
+              {k === "text"
+                ? "Paste text"
+                : k === "url"
+                  ? "Fetch a URL"
+                  : k === "pdf"
+                    ? "Upload a PDF"
+                    : "Upload an image"}
             </button>
           ))}
         </div>
@@ -305,6 +356,66 @@ function ExtractPanel() {
                 {pdfFile.name} · {(pdfFile.size / 1024 / 1024).toFixed(2)} MB
               </p>
             )}
+          </div>
+        )}
+        {kind === "image" && (
+          <div className="space-y-1.5">
+            <Label htmlFor="doc-image" className="inline-flex items-center gap-1">
+              Screenshot / photo *
+              <InfoHint>
+                A picture of a quote board, fact-sheet table, or notice (PNG, JPG, or WEBP). A
+                vision-capable AI reads the figures printed in the image. Useful when a page is hard to
+                copy from. If the current AI model can’t read images, you’ll get a clear message asking
+                you to paste the text instead.
+              </InfoHint>
+            </Label>
+            <Input
+              id="doc-image"
+              type="file"
+              accept="image/png,image/jpeg,image/webp"
+              onChange={(e) => setImageFile(e.target.files?.[0] ?? null)}
+            />
+            {imageFile && (
+              <p className="text-[11px] text-muted-foreground">
+                {imageFile.name} · {(imageFile.size / 1024 / 1024).toFixed(2)} MB
+              </p>
+            )}
+            <p className="text-[11px] text-muted-foreground">
+              The AI transcribes only what is visibly printed in the image — it never infers a missing
+              number. Each figure is saved as <em>AI-extracted · unverified</em>, noted as read from an
+              uploaded screenshot, for you to confirm against the original.
+            </p>
+          </div>
+        )}
+
+        {/* Honest thin-fetch nudge: the page returned almost no text (likely JS-rendered). */}
+        {thinFetch && (
+          <div className="flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/[0.06] px-3 py-2.5 text-xs text-amber-700 dark:text-amber-400">
+            <ShieldAlert className="w-4 h-4 mt-0.5 shrink-0 text-amber-500" />
+            <div className="space-y-1.5">
+              <p className="leading-relaxed">
+                This page appears to be built with JavaScript — the server only saw{" "}
+                <strong>{thinFetch.fetchedChars} characters</strong> of text, far too little to extract
+                from reliably. Rather than guess, the AI did nothing. Try{" "}
+                <strong>pasting the text</strong> you can see on the page, or{" "}
+                <strong>uploading a screenshot</strong> of it instead.
+              </p>
+              <div className="flex gap-2 flex-wrap">
+                <Button size="sm" variant="outline" onClick={() => acceptThinFetchNudge(thinFetch.url ?? "")}>
+                  Switch to Paste text
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    setKind("image");
+                    extract.reset();
+                  }}
+                >
+                  Switch to Upload an image
+                </Button>
+              </div>
+            </div>
           </div>
         )}
 

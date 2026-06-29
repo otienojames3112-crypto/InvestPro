@@ -107,6 +107,7 @@ import {
   aiExtractInstrument,
   aiDiscoverCandidates,
   fetchDocumentText,
+  isThinFetch,
   type ExtractionSource,
 } from "./aiIntakeService";
 import { extractionToAdapterResult, aiInstrumentToProvenanceMap } from "../shared/aiAdapter";
@@ -1205,6 +1206,9 @@ export const appRouter = router({
             z.object({ kind: z.literal("text"), text: z.string().min(20).max(40000) }),
             z.object({ kind: z.literal("url"), url: z.string().url().max(500) }),
             z.object({ kind: z.literal("pdf"), fileKey: z.string().min(1).max(300) }),
+            // An uploaded screenshot/photo of a quote board, fact-sheet table, or notice.
+            // Read by a vision-capable model (OCR-grade transcription, no inference).
+            z.object({ kind: z.literal("image"), fileKey: z.string().min(1).max(300) }),
           ]),
           // The cited source document label (for the confirm-against-source UI).
           sourceLabel: z.string().min(1).max(200),
@@ -1238,19 +1242,44 @@ export const appRouter = router({
           // the source so a human can open and confirm against it.
           let llmSource: ExtractionSource;
           let defaultUrl: string | null = null;
+          // When the source is an uploaded screenshot, we stamp a distinct provenance quote
+          // so a human reviewer knows the figures were read off an image (and against what).
+          let imageProvenanceLabel: string | null = null;
           if (input.source.kind === "text") {
             llmSource = { kind: "text", text: input.source.text };
           } else if (input.source.kind === "url") {
             // Fetch + strip server-side (the model never browses; it reads the text we got).
             const text = await fetchDocumentText(input.source.url);
-            llmSource = { kind: "text", text };
             audit.inputChars = text.length;
             defaultUrl = input.source.url;
             if (!audit.sourceUrl) audit.sourceUrl = input.source.url;
-          } else {
+            // HONESTY NUDGE: a JS-rendered page often fetches to a few characters of
+            // boilerplate. Rather than send near-nothing to the model and report "nothing
+            // found" (which looks like a bug), we return a `thinFetch` SIGNAL so the UI can
+            // nudge the maintainer to paste the text or upload a screenshot instead. This is
+            // NOT a throw — it is an expected, informative outcome. We still log the call.
+            if (isThinFetch(text)) {
+              audit.resultName = null;
+              audit.figureCount = 0;
+              audit.error = `Thin fetch: only ${text.trim().length} chars of readable text (likely JS-rendered).`;
+              return {
+                thinFetch: true as const,
+                fetchedChars: text.trim().length,
+                url: input.source.url,
+              };
+            }
+            llmSource = { kind: "text", text };
+          } else if (input.source.kind === "pdf") {
             // PDF: hand the stored file to the model directly via a signed URL.
             const signed = await storageGetSignedUrl(input.source.fileKey);
             llmSource = { kind: "pdf", fileUrl: signed };
+          } else {
+            // IMAGE: hand the stored screenshot to a vision-capable model via a signed URL.
+            // aiExtractInstrument resolves a vision model and FAILS LOUDLY if none exists.
+            const signed = await storageGetSignedUrl(input.source.fileKey);
+            llmSource = { kind: "image", imageUrl: signed };
+            const day = new Date(Date.now()).toISOString().slice(0, 10);
+            imageProvenanceLabel = `read from an uploaded screenshot of ${input.sourceLabel}, ${day}`;
           }
 
           const { extraction, model } = await aiExtractInstrument({
@@ -1275,10 +1304,14 @@ export const appRouter = router({
           // exact AdapterResult shape the scrapers produce, then run the figures through
           // the AI-tier provenance map (which stamps ai_extracted AND applies the numeric
           // sanity gate, flagging implausible values for review rather than saving clean).
+          // For an image source, the per-figure provenance label records that the value was
+          // transcribed from an uploaded screenshot (and against which cited source/date),
+          // so a human reviewer is reminded to confirm against the original.
+          const effectiveSourceLabel = imageProvenanceLabel ?? input.sourceLabel;
           const adapterResult = extractionToAdapterResult({
             extraction,
             ref: input.ref ?? null,
-            sourceLabel: input.sourceLabel,
+            sourceLabel: effectiveSourceLabel,
             sourceUrl,
           });
           const inst = adapterResult.instruments[0];
@@ -1300,7 +1333,7 @@ export const appRouter = router({
             currency: inst.currency ?? "KES",
             market: inst.market ?? null,
             factNote: inst.factNote ?? null,
-            dataSource: input.sourceLabel,
+            dataSource: effectiveSourceLabel,
             dataAsOf: new Date(at),
             unverified: true,
             active: true,
@@ -1335,24 +1368,36 @@ export const appRouter = router({
         }
       }),
 
-    // Upload a PDF source document, returning its storage key for `aiExtract`.
+    // Upload a source document (PDF or image), returning its storage key for `aiExtract`.
     aiUploadDocument: adminProcedure
       .input(
         z.object({
-          // base64-encoded PDF bytes (the client reads the File and base64s it).
+          // base64-encoded bytes (the client reads the File and base64s it).
           base64: z.string().min(1),
           fileName: z.string().min(1).max(200),
+          // Document MIME type: a PDF (read directly) or an image screenshot (read by a
+          // vision-capable model). Defaults to PDF for backward compatibility.
+          mimeType: z
+            .enum(["application/pdf", "image/png", "image/jpeg", "image/webp"])
+            .default("application/pdf"),
         }),
       )
       .mutation(async ({ ctx, input }) => {
         const bytes = Buffer.from(input.base64, "base64");
         if (bytes.length === 0) throw new TRPCError({ code: "BAD_REQUEST", message: "Empty file." });
-        if (bytes.length > 15 * 1024 * 1024) {
-          throw new TRPCError({ code: "PAYLOAD_TOO_LARGE", message: "PDF exceeds 15MB." });
+        const isPdf = input.mimeType === "application/pdf";
+        // Images are typically smaller; cap at 10MB. PDFs may be larger; cap at 15MB.
+        const cap = isPdf ? 15 * 1024 * 1024 : 10 * 1024 * 1024;
+        if (bytes.length > cap) {
+          throw new TRPCError({
+            code: "PAYLOAD_TOO_LARGE",
+            message: isPdf ? "PDF exceeds 15MB." : "Image exceeds 10MB.",
+          });
         }
-        const safe = input.fileName.replace(/[^a-zA-Z0-9._-]+/g, "_").slice(0, 120) || "document.pdf";
-        const { key } = await storagePut(`ai-intake/${ctx.user.id}/${safe}`, bytes, "application/pdf");
-        return { fileKey: key };
+        const fallbackName = isPdf ? "document.pdf" : "screenshot.png";
+        const safe = input.fileName.replace(/[^a-zA-Z0-9._-]+/g, "_").slice(0, 120) || fallbackName;
+        const { key } = await storagePut(`ai-intake/${ctx.user.id}/${safe}`, bytes, input.mimeType);
+        return { fileKey: key, kind: isPdf ? ("pdf" as const) : ("image" as const) };
       }),
 
     // ── Part 8: universe discovery (suggestions only) ────────────────────────

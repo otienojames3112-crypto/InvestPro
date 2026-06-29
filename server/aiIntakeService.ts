@@ -39,9 +39,24 @@ export function htmlToText(html: string): string {
 }
 
 /**
+ * Below this many characters of stripped text, a fetched financial page is almost
+ * certainly JS-rendered (NSE quote boards, fact-sheet portals): the real figures load
+ * in the browser AFTER the HTML arrives, so a server-side fetch sees almost nothing.
+ * Rather than silently extract zero figures and confuse the user, we surface an honest
+ * nudge to paste or upload an image. This is a UX honesty threshold, NOT a scraper knob.
+ */
+export const THIN_FETCH_MIN_CHARS = 600;
+
+/** True when fetched text is implausibly thin for a financial page (likely JS-rendered). */
+export function isThinFetch(text: string): boolean {
+  return text.trim().length < THIN_FETCH_MIN_CHARS;
+}
+
+/**
  * Politely fetch a URL server-side and return its text content. Caps the body so a
  * huge page cannot blow the request budget. Throws a friendly error on failure so the
- * procedure can surface it.
+ * procedure can surface it. Note: a successful fetch may still be "thin" (JS-rendered) —
+ * callers should run `isThinFetch` and nudge the user rather than extract from nothing.
  */
 export async function fetchDocumentText(url: string, maxChars = 40000): Promise<string> {
   let res: Response;
@@ -58,7 +73,9 @@ export async function fetchDocumentText(url: string, maxChars = 40000): Promise<
   const body = await res.text();
   const text = ctype.includes("html") ? htmlToText(body) : body;
   const trimmed = text.trim();
-  if (trimmed.length < 20) throw new Error("The fetched page had no readable text to extract from.");
+  // Note: we deliberately allow a thin-but-nonempty result through (callers decide via
+  // isThinFetch). Only a truly empty page is a hard error.
+  if (trimmed.length === 0) throw new Error("The fetched page had no readable text to extract from.");
   return trimmed.slice(0, maxChars);
 }
 
@@ -289,29 +306,102 @@ function truncate(s: string, n: number): string {
  */
 export type ExtractionSource =
   | { kind: "text"; text: string }
-  | { kind: "pdf"; fileUrl: string };
+  | { kind: "pdf"; fileUrl: string }
+  | { kind: "image"; imageUrl: string };
+
+/**
+ * Image transcription is stricter than text: the model must read ONLY the digits/labels
+ * visibly printed in the screenshot and must never infer a missing field. This reinforces
+ * the base extraction prompt for the vision path (OCR-grade faithfulness).
+ */
+export const IMAGE_EXTRACTION_NOTE = `The source is an IMAGE (a screenshot or photo of a quote board, fact-sheet table, or notice).
+Transcribe ONLY figures that are visibly printed in the image. If a field is not shown in the image, omit it — never infer, complete, or compute it.
+For each figure, the "quote" must be the exact text you read in the image (e.g. the cell label and the number).`;
+
+/**
+ * Vision-capable model families. invokeLLM wraps an OpenAI-compatible gateway; only some
+ * model families accept image content. We check the configured/selected model id against
+ * this allow-list and FAIL LOUDLY (rather than silently returning empty) when an image is
+ * sent to a text-only model. Conservative substring match on the model id.
+ */
+export const VISION_CAPABLE_MODEL_PATTERNS = [
+  "gpt-4o", "gpt-4.1", "gpt-4-turbo", "gpt-5", "o1", "o3", "o4",
+  "claude-3", "claude-sonnet", "claude-opus", "claude-haiku", "claude-4",
+  "gemini", "vision", "pixtral", "llava", "qwen-vl", "qwen2-vl", "qwen2.5-vl",
+];
+
+/** True when the given model id looks vision-capable per the allow-list. */
+export function isVisionCapableModel(modelId: string | null | undefined): boolean {
+  if (!modelId) return false;
+  const id = modelId.toLowerCase();
+  return VISION_CAPABLE_MODEL_PATTERNS.some((p) => id.includes(p));
+}
+
+/**
+ * Resolve a vision-capable model id, or null if none is available. Asks the gateway for
+ * its model catalog and picks the first vision-capable id. Used to (a) pick a model for
+ * the image path and (b) decide whether to fail loudly when no vision model exists.
+ */
+export async function resolveVisionModel(): Promise<string | null> {
+  try {
+    const { listLLMModels } = await import("./_core/llm");
+    const { data } = await listLLMModels();
+    const hit = data.find((m) => isVisionCapableModel(m.id));
+    return hit?.id ?? null;
+  } catch {
+    return null;
+  }
+}
 
 export async function aiExtractInstrument(args: {
   source: ExtractionSource;
   hintName?: string | null;
 }): Promise<{ extraction: AiInstrumentExtraction | null; model: string | null }> {
   const hint = args.hintName ? `The document is about: ${args.hintName}\n\n` : "";
-  const userContent =
-    args.source.kind === "text"
-      ? `${hint}SOURCE DOCUMENT:\n${args.source.text}`
-      : ([
-          { type: "text" as const, text: `${hint}Extract the facts from the attached source document (PDF).` },
-          { type: "file_url" as const, file_url: { url: args.source.fileUrl, mime_type: "application/pdf" as const } },
-        ]);
+
+  // The image path needs a vision-capable model. Resolve one up front and FAIL LOUDLY if
+  // none is available, rather than sending an image to a text-only model and getting an
+  // empty result back (which would silently look like "nothing found").
+  let modelOverride: string | undefined;
+  if (args.source.kind === "image") {
+    const visionModel = await resolveVisionModel();
+    if (!visionModel) {
+      throw new Error(
+        "The current AI model can't read images. Use 'Paste text' instead and type the figures you can see.",
+      );
+    }
+    modelOverride = visionModel;
+  }
+
+  const systemContent =
+    args.source.kind === "image"
+      ? `${EXTRACTION_SYSTEM_PROMPT}\n\n${IMAGE_EXTRACTION_NOTE}`
+      : EXTRACTION_SYSTEM_PROMPT;
+
+  let userContent: string | Array<{ type: "text"; text: string } | { type: "file_url"; file_url: { url: string; mime_type: "application/pdf" } } | { type: "image_url"; image_url: { url: string; detail: "high" } }>;
+  if (args.source.kind === "text") {
+    userContent = `${hint}SOURCE DOCUMENT:\n${args.source.text}`;
+  } else if (args.source.kind === "pdf") {
+    userContent = [
+      { type: "text", text: `${hint}Extract the facts from the attached source document (PDF).` },
+      { type: "file_url", file_url: { url: args.source.fileUrl, mime_type: "application/pdf" } },
+    ];
+  } else {
+    userContent = [
+      { type: "text", text: `${hint}Transcribe the facts visibly printed in the attached image.` },
+      { type: "image_url", image_url: { url: args.source.imageUrl, detail: "high" } },
+    ];
+  }
 
   // Accuracy over speed: this is a maintainer tool with no latency pressure, so we run
   // at temperature 0 with structured-output mode — we want the most faithful, repeatable
   // read of the document, not a creative one.
   const res = await invokeLLM({
     messages: [
-      { role: "system", content: EXTRACTION_SYSTEM_PROMPT },
+      { role: "system", content: systemContent },
       { role: "user", content: userContent },
     ],
+    ...(modelOverride ? { model: modelOverride } : {}),
     temperature: 0,
     response_format: { type: "json_schema", json_schema: EXTRACTION_SCHEMA },
   });

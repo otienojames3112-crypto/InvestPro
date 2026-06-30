@@ -1272,3 +1272,15 @@
 - [x] ReviewArea: Manager (PortfolioReview) / Reconciliation / Income (MmfAccrual) / Tax (TaxSummary) tabs at /review
 - [x] Registered /research and /review routes; all child pages reused embedded (verbatim, no logic duplicated)
 - [x] Deep-link tabs verified (?tab=mmf-comparison, ?tab=tax); type gate clean; 1110 tests green
+
+
+### Phase 6 — navigation refactor + Simple/Manager mode (DONE)
+- [x] Added userMode (simple/manager) to PortfolioContext, localStorage-persisted, defaults to manager
+- [x] Rewrote navGroups into 7-area structure: Overview (Dashboard); Manage (Plan, Cashflows, Holdings); Analyse (Research, Review, Time Machine sandbox-only); Help (Guide, Learn); Setup (Rate Settings)
+- [x] match[] arrays so a parent nav item highlights on any of its now-tabbed legacy routes
+- [x] simpleHidden gating: Research, Review, Learn hidden in Simple mode; restored in Manager
+- [x] Moved area-level badges onto parents (drift→Dashboard, securities→Holdings, AI/conflicts→Research)
+- [x] UserModeSwitcher pill added under PortfolioSelector
+- [x] Getting Started relabeled "Guide" + grouped under Help
+- [x] Dashboard already a command centre (At a glance + Posture & exceptions + detailed analytics) — no slimming needed
+- [x] Type gate clean; full suite 1110 green; screenshots verified

@@ -231,47 +231,44 @@ function SidebarReviewBadge() {
   );
 }
 
+/**
+ * Phase 6 — consolidated 7-area navigation. Each former standalone page now
+ * lives as a tab inside one of these parent areas (the parent areas reuse the
+ * page components verbatim, embedded). Badges that used to sit on individual
+ * pages are surfaced on the parent area instead so nothing is lost.
+ *
+ * `simpleHidden: true` items are hidden when userMode === "simple" (the
+ * everyday view): Research and Review are manager-grade tooling. Dashboard,
+ * Plan, Cashflows and Holdings remain visible in both modes.
+ */
 const navGroups = [
   {
-    title: "Tracking",
+    title: "Overview",
     items: [
       { href: "/", label: "Dashboard", icon: LayoutDashboard },
-      { href: "/ledger", label: "Month Ledger", icon: BookOpen },
-      { href: "/contributions", label: "Contributions", icon: TrendingUp },
-      { href: "/securities", label: "CBK Securities", icon: Landmark },
-      { href: "/mmf-funds", label: "MMF Funds", icon: PiggyBank },
-      { href: "/other-assets", label: "Other Assets", icon: Briefcase },
-      { href: "/withdrawals", label: "Withdrawals", icon: ArrowUpCircle },
     ],
   },
   {
-    title: "Invest",
+    title: "Manage",
     items: [
-      { href: "/explore", label: "Explore Opportunities", icon: Compass },
-      { href: "/allocation-plan", label: "Allocation Plan", icon: Layers },
-      { href: "/ai-intake", label: "AI Intake", icon: Bot },
-      { href: "/ai-review", label: "AI Review", icon: ClipboardCheck },
-      { href: "/source-conflicts", label: "Source Conflicts", icon: GitCompareArrows },
+      { href: "/plan", label: "Plan", icon: LineChart, match: ["/plan", "/ledger", "/scenarios", "/allocation-plan"] },
+      { href: "/cashflows", label: "Cashflows", icon: ArrowDownCircle, match: ["/cashflows", "/deposits", "/withdrawals", "/contributions", "/reconciliation"] },
+      { href: "/holdings", label: "Holdings", icon: Briefcase, match: ["/holdings", "/mmf-funds", "/securities", "/bank-instruments", "/other-assets"] },
     ],
   },
   {
-    title: "Analysis",
+    title: "Analyse",
     items: [
-      { href: "/scenarios", label: "Scenarios", icon: BarChart3 },
-      { href: "/portfolio-review", label: "Portfolio Review", icon: ClipboardCheck },
-      { href: "/reconciliation", label: "Reconciliation", icon: Scale },
-      { href: "/mmf-accrual", label: "Daily Accrual", icon: CalendarClock },
-      { href: "/tax-summary", label: "Tax Summary", icon: Receipt },
+      { href: "/research", label: "Research", icon: Compass, simpleHidden: true, match: ["/research", "/explore", "/mmf-strategy", "/ai-intake", "/ai-review", "/source-conflicts"] },
+      { href: "/review", label: "Review", icon: ClipboardCheck, simpleHidden: true, match: ["/review", "/portfolio-review", "/mmf-accrual", "/tax-summary"] },
       { href: "/time-machine", label: "Time Machine", icon: Clock, sandboxOnly: true },
     ],
   },
   {
-    title: "Knowledge",
+    title: "Help",
     items: [
-      { href: "/learn", label: "Learn the Basics", icon: GraduationCap },
-      { href: "/mmf-strategy", label: "MMF Strategy", icon: PieChart },
-      { href: "/bank-instruments", label: "Bank Instruments", icon: Building2 },
-      { href: "/getting-started", label: "Getting Started", icon: MapPin },
+      { href: "/getting-started", label: "Guide", icon: MapPin, simpleHidden: false },
+      { href: "/learn", label: "Learn the Basics", icon: GraduationCap, simpleHidden: true },
     ],
   },
   {
@@ -281,6 +278,40 @@ const navGroups = [
     ],
   },
 ];
+
+/**
+ * Simple/Manager surface toggle. Simple hides the deeper Research & Review
+ * areas (and Learn) for an everyday view; Manager exposes the full surface.
+ * Persisted in PortfolioContext (localStorage). Nothing is deleted — switching
+ * back to Manager restores every area instantly.
+ */
+function UserModeSwitcher() {
+  const { userMode, setUserMode } = usePortfolio();
+  return (
+    <div className="flex items-center rounded-lg border border-sidebar-border bg-muted/40 p-0.5 text-xs">
+      {(["simple", "manager"] as const).map((m) => (
+        <button
+          key={m}
+          type="button"
+          onClick={() => setUserMode(m)}
+          className={cn(
+            "flex-1 rounded-md px-2 py-1 font-medium capitalize transition-colors",
+            userMode === m
+              ? "bg-primary text-primary-foreground"
+              : "text-muted-foreground hover:text-foreground"
+          )}
+          title={
+            m === "simple"
+              ? "Everyday view — Dashboard, Plan, Cashflows and Holdings only"
+              : "Full view — adds Research and Review analysis tools"
+          }
+        >
+          {m}
+        </button>
+      ))}
+    </div>
+  );
+}
 
 function SidebarContent({
   location,
@@ -301,7 +332,7 @@ function SidebarContent({
   appSubtitle: string;
   portfolioId: number | null | undefined;
 }) {
-  const { mode } = usePortfolio();
+  const { mode, userMode } = usePortfolio();
   return (
     <div className="flex flex-col h-full">
       {/* Logo */}
@@ -327,6 +358,7 @@ function SidebarContent({
       <div className="px-3 py-3 border-b border-sidebar-border space-y-3">
         <ModeSwitcher />
         <PortfolioSelector />
+        <UserModeSwitcher />
         <SidebarRateStaleness portfolioId={portfolioId} onNavClick={onNavClick} />
       </div>
 
@@ -346,9 +378,12 @@ function SidebarContent({
         </button>
 
         {navGroups.map((group) => {
-          const visibleItems = group.items.filter(
-            (it) => !(it as { sandboxOnly?: boolean }).sandboxOnly || mode === "sandbox",
-          );
+          const visibleItems = group.items.filter((it) => {
+            const meta = it as { sandboxOnly?: boolean; simpleHidden?: boolean };
+            if (meta.sandboxOnly && mode !== "sandbox") return false;
+            if (meta.simpleHidden && userMode === "simple") return false;
+            return true;
+          });
           if (visibleItems.length === 0) return null;
           return (
           <div key={group.title}>
@@ -356,8 +391,14 @@ function SidebarContent({
               {group.title}
             </p>
             <ul className="space-y-0.5">
-              {visibleItems.map(({ href, label, icon: Icon }) => {
-                const isActive = location === href;
+              {visibleItems.map((item) => {
+                const { href, label, icon: Icon } = item;
+                const match = (item as { match?: string[] }).match;
+                // A parent area highlights when the current location is the area
+                // root or any of the legacy/tab routes it now contains.
+                const isActive = match
+                  ? match.some((m) => location === m || location.startsWith(m + "?") || location.startsWith(m + "/"))
+                  : location === href;
                 return (
                   <li key={href}>
                     <Link href={href} onClick={onNavClick}>
@@ -376,11 +417,17 @@ function SidebarContent({
                           )}
                         />
                         <span className="flex-1">{label}</span>
+                        {/* Area-level badges: surfaced on the consolidated parent so
+                            no signal is lost now that the old pages are tabs. */}
                         {href === "/" && <SidebarDriftBadge portfolioId={portfolioId} onNavClick={onNavClick} />}
-                        {href === "/securities" && <SidebarSecuritiesBadge portfolioId={portfolioId} />}
-                        {href === "/ai-intake" && <SidebarCandidatesBadge />}
-                        {href === "/ai-review" && <SidebarReviewBadge />}
-                        {href === "/source-conflicts" && <SidebarConflictsBadge />}
+                        {href === "/holdings" && <SidebarSecuritiesBadge portfolioId={portfolioId} />}
+                        {href === "/research" && (
+                          <span className="flex items-center gap-1">
+                            <SidebarCandidatesBadge />
+                            <SidebarReviewBadge />
+                            <SidebarConflictsBadge />
+                          </span>
+                        )}
                         {isActive && <ChevronRight className="w-3 h-3 text-primary" />}
                       </div>
                     </Link>

@@ -34,9 +34,19 @@ interface Portfolio {
 
 type PortfolioMode = "live" | "sandbox";
 
+/**
+ * Surface complexity level. `simple` shows only the everyday areas (Dashboard,
+ * Plan, Cashflows) and hides the deeper analysis/research tooling; `manager`
+ * exposes the full 7-area surface. Stored in localStorage; defaults to manager
+ * so existing users see no functionality vanish on first load.
+ */
+type UserMode = "simple" | "manager";
+
 interface PortfolioContextValue {
   mode: PortfolioMode;
   setMode: (mode: PortfolioMode) => void;
+  userMode: UserMode;
+  setUserMode: (mode: UserMode) => void;
   portfolioId: number | null;
   portfolio: Portfolio | null;
   portfolios: Portfolio[];
@@ -48,6 +58,8 @@ interface PortfolioContextValue {
 const PortfolioContext = createContext<PortfolioContextValue>({
   mode: "live",
   setMode: () => {},
+  userMode: "manager",
+  setUserMode: () => {},
   portfolioId: null,
   portfolio: null,
   portfolios: [],
@@ -58,6 +70,7 @@ const PortfolioContext = createContext<PortfolioContextValue>({
 
 const STORAGE_KEY = "kes5m_active_portfolio_id";
 const MODE_KEY = "kes5m_portfolio_mode";
+const USER_MODE_KEY = "kes5m_user_mode";
 
 export function PortfolioProvider({ children }: { children: React.ReactNode }) {
   const { user } = useAuth();
@@ -66,6 +79,16 @@ export function PortfolioProvider({ children }: { children: React.ReactNode }) {
     const stored = localStorage.getItem(MODE_KEY);
     return stored === "sandbox" ? "sandbox" : "live";
   });
+
+  const [userMode, setUserModeState] = useState<UserMode>(() => {
+    const stored = localStorage.getItem(USER_MODE_KEY);
+    return stored === "simple" ? "simple" : "manager";
+  });
+
+  const setUserMode = useCallback((next: UserMode) => {
+    setUserModeState(next);
+    localStorage.setItem(USER_MODE_KEY, next);
+  }, []);
 
   // Active portfolio id is tracked per mode so switching modes restores the
   // last-selected portfolio in that mode.
@@ -114,7 +137,7 @@ export function PortfolioProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <PortfolioContext.Provider
-      value={{ mode, setMode, portfolioId, portfolio, portfolios, isLoading, setPortfolioId, refetch }}
+      value={{ mode, setMode, userMode, setUserMode, portfolioId, portfolio, portfolios, isLoading, setPortfolioId, refetch }}
     >
       {children}
     </PortfolioContext.Provider>

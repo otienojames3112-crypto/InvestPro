@@ -124,6 +124,12 @@ import {
   computeLevers,
   probabilityInsight,
   ALLOCATION_BUCKETS,
+  suggestTier,
+  resolveTierSelection,
+  glidedAllocation,
+  computeBucketGaps,
+  type GoalNature,
+  type ActualBucketValues,
 } from "../shared/allocationModel";
 import { storagePut, storageGetSignedUrl } from "./storage";
 import { stripVerdictFields } from "../shared/aiIntake";
@@ -6129,6 +6135,153 @@ export const appRouter = router({
           levers,
           insight,
           caveat: result.caveat,
+        };
+      }),
+
+    /**
+     * Part 4 — the per-goal tier state for the active portfolio: the
+     * horizon-derived suggestion (+ plain reason), the resolved selection
+     * (defaults to the suggestion until the user overrides), and whether the
+     * current choice is RISKIER than the horizon implies (a flag for the
+     * consequence readout, never a block). Horizon-remaining is measured from
+     * the goal's start date + horizon against the portfolio's effective clock
+     * (simulated under the Time Machine, else real) so it matches the rest of
+     * the app. Read-only.
+     */
+    goalTier: protectedProcedure
+      .input(z.object({ portfolioId: z.number().int().positive() }))
+      .query(async ({ ctx, input }) => {
+        const p = await requirePortfolio(input.portfolioId, ctx.user.id);
+        const startIso = normaliseDate(p?.startDate);
+        const horizon = p?.horizonMonths ?? 120;
+        const nowMs = (p?.simulatedDate as number | null) ?? Date.now();
+        const horizonRemainingMonths = Math.max(
+          0,
+          horizon - computeCurrentMonth(startIso, nowMs, horizon),
+        );
+        const goalNature: GoalNature = "standard";
+        const suggestion = suggestTier(horizonRemainingMonths, goalNature);
+        const selection = resolveTierSelection({
+          suggestion,
+          selected: (p?.allocationSelectedTier ?? null) as AllocationTier | null,
+        });
+        return {
+          portfolioId: input.portfolioId,
+          horizonRemainingMonths,
+          goalNature,
+          suggestion,
+          selection,
+        };
+      }),
+
+    /**
+     * Part 4 — choose (override) the tier for the active goal. Overriding to ANY
+     * tier is ALWAYS allowed and never blocked; a riskier-than-horizon choice is
+     * only FLAGGED (via resolveTierSelection.conflictsWithHorizon) so the UI can
+     * show the consequence. Persists the freshly-computed suggestion alongside
+     * the user's choice and the override flag. Returns the resolved selection.
+     */
+    setTier: protectedProcedure
+      .input(
+        z.object({
+          portfolioId: z.number().int().positive(),
+          tier: z.enum(
+            ALLOCATION_TIERS as readonly [AllocationTier, ...AllocationTier[]],
+          ),
+        }),
+      )
+      .mutation(async ({ ctx, input }) => {
+        const p = await requirePortfolio(input.portfolioId, ctx.user.id);
+        const startIso = normaliseDate(p?.startDate);
+        const horizon = p?.horizonMonths ?? 120;
+        const nowMs = (p?.simulatedDate as number | null) ?? Date.now();
+        const horizonRemainingMonths = Math.max(
+          0,
+          horizon - computeCurrentMonth(startIso, nowMs, horizon),
+        );
+        const goalNature: GoalNature = "standard";
+        const suggestion = suggestTier(horizonRemainingMonths, goalNature);
+        const selection = resolveTierSelection({
+          suggestion,
+          selected: input.tier,
+        });
+        await updatePortfolio(input.portfolioId, ctx.user.id, {
+          allocationSuggestedTier: suggestion.tier,
+          allocationSelectedTier: input.tier,
+          allocationTierOverridden: selection.userOverrode,
+        });
+        return { portfolioId: input.portfolioId, suggestion, selection };
+      }),
+
+    /**
+     * Part 4 — the FACTUAL gap between the goal's glided target mix (at the
+     * current journey point) and what the portfolio actually holds right now.
+     * Reuses the SINGLE net-worth builder (`buildAllocation` via
+     * loadAllocationInput) for the actual mix, maps it into the five behavior
+     * buckets, and diffs it in percentage points. Neutral facts only — never a
+     * buy/sell instruction. Read-only.
+     */
+    holdingsGap: protectedProcedure
+      .input(
+        z.object({
+          portfolioId: z.number().int().positive(),
+          /** Optional explicit tier; defaults to the goal's resolved selection. */
+          tier: z
+            .enum(ALLOCATION_TIERS as readonly [AllocationTier, ...AllocationTier[]])
+            .optional(),
+        }),
+      )
+      .query(async ({ ctx, input }) => {
+        const p = await requirePortfolio(input.portfolioId, ctx.user.id);
+        const startIso = normaliseDate(p?.startDate);
+        const horizon = p?.horizonMonths ?? 120;
+        const nowMs = (p?.simulatedDate as number | null) ?? Date.now();
+        const horizonRemainingMonths = Math.max(
+          0,
+          horizon - computeCurrentMonth(startIso, nowMs, horizon),
+        );
+        const goalNature: GoalNature = "standard";
+        const suggestion = suggestTier(horizonRemainingMonths, goalNature);
+        const selection = resolveTierSelection({
+          suggestion,
+          selected: (p?.allocationSelectedTier ?? null) as AllocationTier | null,
+        });
+        const tier = input.tier ?? selection.selectedTier;
+
+        // Time-remaining fraction along the glide (1 at plan start → 0 at the
+        // goal date), clamped. Same clock the rest of the app uses.
+        const totalHorizon = Math.max(1, Number(p?.horizonMonths) || 0);
+        const trf = Math.min(1, Math.max(0, horizonRemainingMonths / totalHorizon));
+
+        const [templates, glide] = await Promise.all([
+          listAllocationTemplates(),
+          getGlideParams(),
+        ]);
+        const templateMap = Object.fromEntries(
+          templates.map((t) => [t.tier, t.weights]),
+        ) as Record<AllocationTier, (typeof templates)[number]["weights"]>;
+        const target = glidedAllocation(tier, trf, glide.params, templateMap);
+
+        // Actual mix from the SINGLE shared net-worth builder.
+        const alloc = buildAllocation(await loadAllocationInput(input.portfolioId, p));
+        const actual: ActualBucketValues = {
+          cash: alloc.primaryMmf + alloc.secondaryMmf + alloc.bank,
+          gov: alloc.tbill + alloc.ifb + alloc.fxd,
+          equity: alloc.other["equity"] ?? 0,
+          reit: alloc.other["reit"] ?? 0,
+          offshore: alloc.other["offshore_fund"] ?? 0,
+          other: Object.entries(alloc.other)
+            .filter(([k]) => !["equity", "reit", "offshore_fund"].includes(k))
+            .reduce((s, [, v]) => s + (Number(v) || 0), 0),
+        };
+        const readout = computeBucketGaps({ template: target, actual });
+        return {
+          portfolioId: input.portfolioId,
+          tier,
+          timeRemainingFraction: trf,
+          horizonRemainingMonths,
+          target,
+          readout,
         };
       }),
   }),

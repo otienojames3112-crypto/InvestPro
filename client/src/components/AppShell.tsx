@@ -31,6 +31,7 @@ import {
   ClipboardCheck,
   Scale,
   Compass,
+  Layers,
   GitCompareArrows,
   Bot,
   X,
@@ -247,6 +248,7 @@ const navGroups = [
     title: "Invest",
     items: [
       { href: "/explore", label: "Explore Opportunities", icon: Compass },
+      { href: "/allocation-plan", label: "Allocation Plan", icon: Layers },
       { href: "/ai-intake", label: "AI Intake", icon: Bot },
       { href: "/ai-review", label: "AI Review", icon: ClipboardCheck },
       { href: "/source-conflicts", label: "Source Conflicts", icon: GitCompareArrows },

@@ -1123,3 +1123,38 @@
 - [x] Threshold messaging: LOW points to levers; COMFORTABLE names a VERIFIED safer tier (recomputed) with "not a recommendation"; editable thresholds flip the tone; caveat travels on every result
 - [x] Threshold validation: defaults ok; rejects out-of-range / high≤low / equal
 - [x] Type gate clean; full suite green (1061 → 1079, +18); risk-model + car-plan regression suites unchanged by the extracted lognormal core
+
+## Allocation Model — Part 4 (the illustrative-template surface) + full source export
+
+### Investigation (reuse, don't rebuild)
+- [x] Find the Explore screener route + preview/commit flow (Part 2/3 of the investment expansion) and how a class/sleeve is passed into it
+- [x] Find the existing diversification/drift readout machinery (liquid-reserve panel) to reuse for template-vs-actual drift
+- [x] Confirm per-goal tier fields (allocationSuggestedTier/allocationSelectedTier/override) + how a goal/portfolio is selected in the UI; find Test/Live (live/test) plumbing
+- [x] Confirm the allocation tRPC surface (templates, glidePath, glideParams, goalProbability, probabilityThresholds) shapes for the page
+- [x] Find how current holdings roll up into the 5 behavior-class buckets (for the factual gap readout)
+
+### Backend glue (read-only + override)
+- [x] Per-goal tier override mutation (override-always-wins; suggestion is only a starting point) — store selectedTier + userOverrode flag (allocation.setTier)
+- [x] Gap readout: template target weights vs current holdings rolled into the 5 buckets (factual pp gap per class), reusing existing rollup (computeBucketGaps + buildAllocation)
+- [x] Drift readout: reuse existing diversification/drift machinery to compare actual vs template (no second engine) — holdingsGap diffs the SINGLE buildAllocation builder
+
+### Template surface page (read-and-decide)
+- [x] New page under INVEST (and/or opens from a goal): suggested tier + plain reason + override-to-any-tier control
+- [x] Glided target mix at current journey point across the 5 buckets (simple breakdown)
+- [x] Probability + p50 + p10–p90 range + the neutral levers panel (no ranking/preferred)
+- [x] Scrubable full-glide journey (allocation bands over time; scrub to any future point)
+- [x] Gap readout per class ("template ~28% equity; you hold ~5%") — factual, not an instruction
+- [x] Drift readout once holdings exist ("38% vs 28% template — 10pp over") via existing machinery (over/under/aligned + signed pp)
+- [x] "Apply" routes to Explore screener + preview/commit (per class) via /explore?class=<assetClass>; NO auto-allocation, NO transact button, NO pre-filled basket, never picks an instrument
+- [x] Framing throughout: "illustrative … a starting point, not advice; you decide"; risk-calibrated tone; caveat on every probability/range; no best/recommended/optimal/top/preferred
+- [x] Layman tooltips on non-self-explanatory items (tier, glide, p10–p90, drift, buckets, etc.) via InfoHint
+- [x] Back/escape route from the page (AppShell sidebar); Test/Live respected (usePortfolio mode)
+
+### Tests + gate
+- [x] Gap/drift readout test (template vs actual buckets → correct pp gaps) — server/allocationGap.test.ts (15 tests)
+- [x] Override-always-wins test (selecting any tier overrides the suggestion; suggestion never blocks)
+- [x] Non-advisory copy: no banned words on the surface
+- [x] Type gate clean; full suite green (1091, +12); screenshots; checkpoint
+
+### Full source export
+- [x] Package the complete source (excluding node_modules/build artifacts) into a downloadable zip and deliver

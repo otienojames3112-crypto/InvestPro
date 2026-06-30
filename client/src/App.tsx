@@ -31,6 +31,7 @@ import SourceConflicts from "./pages/SourceConflicts";
 import AiIntake from "./pages/AiIntake";
 import AiReview from "./pages/AiReview";
 import AddInstrument from "./pages/AddInstrument";
+import AllocationPlan from "./pages/AllocationPlan";
 
 function Router() {
   return (
@@ -51,6 +52,7 @@ function Router() {
       <Route path="/bank-instruments" component={BankInstruments} />
       <Route path="/tax-summary" component={TaxSummary} />
       <Route path="/portfolio-review" component={PortfolioReview} />
+      <Route path="/allocation-plan" component={AllocationPlan} />
       <Route path="/reconciliation" component={Reconciliation} />
       <Route path="/other-assets" component={OtherAssets} />
       <Route path="/explore" component={Explore} />

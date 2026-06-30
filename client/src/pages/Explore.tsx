@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { AppShell } from "@/components/AppShell";
@@ -127,6 +127,26 @@ export default function Explore() {
     () => Array.from(new Set(rows.map((r) => r.currency))).sort(),
     [rows],
   );
+
+  // One-time deep link: the Allocation Plan page routes here with ?class=<assetClass>
+  // to pre-narrow the screener to the bucket the user chose to look at. The user
+  // still chooses what (if anything) to do; we only set the same filter they could
+  // set by hand, then clean the URL so a refresh doesn't re-apply it.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const c = params.get("class");
+    if (c && (ASSET_CLASSES as readonly string[]).includes(c)) {
+      setClassFilter(c);
+      params.delete("class");
+      const qs = params.toString();
+      window.history.replaceState(
+        {},
+        "",
+        `${window.location.pathname}${qs ? `?${qs}` : ""}`,
+      );
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const filtered = useMemo(() => {
     const minY = minYield.trim() === "" ? null : Number(minYield);

@@ -1321,3 +1321,178 @@ function round1signed(n: number): number {
 // Re-export the floor/ceil so consumers can label the clamp without importing
 // riskModel directly (single import surface for the allocation layer).
 export { PROBABILITY_FLOOR, PROBABILITY_CEIL };
+
+
+/* ═══════════════════════════════════════════════════════════════════════
+ * Allocation Model — Part 4: the factual gap / drift readout
+ *
+ * Presentation glue ONLY. This layer adds no financial logic: it takes the
+ * actual KES already rolled up by the app's single net-worth builder
+ * (`buildAllocation` in shared/actuals.ts) and diffs it, in percentage
+ * points, against a glided target template. The result is a neutral FACT
+ * ("template ~28% equity; you hold ~5% — 23pp under"), never an instruction
+ * to buy or sell. The page reuses this for both the "gap vs the template"
+ * readout and the "drift once you hold things" readout — one helper, one
+ * vocabulary, no second engine.
+ * ═══════════════════════════════════════════════════════════════════════ */
+
+/**
+ * Actual KES value already held in each of the five behavior buckets, plus an
+ * honest `other` remainder for anything that does not map to a target bucket
+ * (real estate, SACCO, pension, crypto, …). The caller derives these from the
+ * shared `buildAllocation` result — this helper does NOT re-value holdings.
+ *
+ * Mapping (mirrors `bucketForClass` + the car-plan vocabulary):
+ *   cash     = primary MMF + secondary MMF + bank deposits (cash-like)
+ *   gov      = T-bills + IFB + FXD (government fixed income)
+ *   equity   = other["equity"]
+ *   reit     = other["reit"]
+ *   offshore = other["offshore_fund"]
+ *   other    = every remaining tracked class (kept visible, never forced in)
+ */
+export interface ActualBucketValues {
+  cash: number;
+  gov: number;
+  equity: number;
+  reit: number;
+  offshore: number;
+  /** Tracked value that maps to no target bucket (shown honestly, excluded from gap %). */
+  other: number;
+}
+
+export interface ActualBucketRollup {
+  /** KES value per target bucket. */
+  valueKes: Record<AllocationBucket, number>;
+  /** KES that maps to no target bucket. */
+  otherKes: number;
+  /** Total tracked value across the five buckets (EXCLUDES `other`). */
+  classifiedKes: number;
+  /** Total tracked value INCLUDING the unclassified remainder. */
+  totalKes: number;
+  /**
+   * Percent of the CLASSIFIED total in each bucket (sums to ~100 across the
+   * five buckets). We compare against the template on the classified base so an
+   * unclassified asset (e.g. a house) does not silently dilute every weight.
+   */
+  pctOfClassified: Record<AllocationBucket, number>;
+  /** True when there is nothing to compare yet (no classified holdings). */
+  isEmpty: boolean;
+}
+
+/**
+ * Roll already-valued actual bucket sums into percentages of the classified
+ * base. PURE. Negative inputs are floored at 0; a zero classified base yields
+ * an `isEmpty` rollup with all-zero percentages (the page shows the gap as
+ * "you hold nothing in this class yet" rather than dividing by zero).
+ */
+export function rollupActualToBuckets(actual: ActualBucketValues): ActualBucketRollup {
+  const valueKes: Record<AllocationBucket, number> = {
+    cash: Math.max(0, Number(actual.cash) || 0),
+    gov: Math.max(0, Number(actual.gov) || 0),
+    equity: Math.max(0, Number(actual.equity) || 0),
+    reit: Math.max(0, Number(actual.reit) || 0),
+    offshore: Math.max(0, Number(actual.offshore) || 0),
+  };
+  const otherKes = Math.max(0, Number(actual.other) || 0);
+  const classifiedKes = ALLOCATION_BUCKETS.reduce((s, b) => s + valueKes[b], 0);
+  const totalKes = classifiedKes + otherKes;
+  const isEmpty = classifiedKes <= 0;
+  const pctOfClassified: Record<AllocationBucket, number> = {
+    cash: 0,
+    gov: 0,
+    equity: 0,
+    reit: 0,
+    offshore: 0,
+  };
+  if (!isEmpty) {
+    for (const b of ALLOCATION_BUCKETS) {
+      pctOfClassified[b] = round1signed((valueKes[b] / classifiedKes) * 100);
+    }
+  }
+  return { valueKes, otherKes, classifiedKes, totalKes, pctOfClassified, isEmpty };
+}
+
+/** Neutral direction label for one bucket's gap — never a buy/sell instruction. */
+export type GapDirection = "over" | "under" | "aligned";
+
+export interface BucketGap {
+  bucket: AllocationBucket;
+  /** Target weight from the glided template (whole %, may carry one decimal). */
+  templatePct: number;
+  /** Actual weight as % of the classified base. */
+  actualPct: number;
+  /** actual − template, in percentage points (signed; + = over the template). */
+  gapPp: number;
+  /** Neutral classification using a small dead-band so tiny noise reads "aligned". */
+  direction: GapDirection;
+  /** True when no classified holdings exist yet (gap is informational only). */
+  noHoldingsYet: boolean;
+}
+
+export interface GapReadout {
+  /** Per-bucket factual gaps, in the canonical bucket order. */
+  gaps: BucketGap[];
+  /** The rollup the gaps were computed against (for KES context in the UI). */
+  rollup: ActualBucketRollup;
+  /** The exact target template (glided) the gaps were measured against. */
+  template: AllocationWeights;
+  /** The disclaimer that must travel with the readout. */
+  caveat: string;
+  /** True when there are no classified holdings to compare. */
+  isEmpty: boolean;
+}
+
+/**
+ * Percentage-point dead-band: a |gap| at or below this reads as "aligned" so
+ * rounding noise never shows a spurious over/under. Two points is tighter than
+ * any template step and matches the tone of the existing concentration bands.
+ */
+export const GAP_ALIGNED_BAND_PP = 2;
+
+/**
+ * Compute the factual gap between a glided target template and the actual mix.
+ * PURE and presentation-only — it diffs two weight vectors the rest of the app
+ * already produced. `template` is the glided allocation for the journey point;
+ * `actual` is the rolled-up holdings. The output is a neutral set of facts in
+ * canonical bucket order; the caller decides how to phrase the (always
+ * self-directed) next step.
+ */
+export function computeBucketGaps(opts: {
+  template: AllocationWeights;
+  actual: ActualBucketValues;
+  /** Override the aligned dead-band (defaults to GAP_ALIGNED_BAND_PP). */
+  alignedBandPp?: number;
+}): GapReadout {
+  const rollup = rollupActualToBuckets(opts.actual);
+  const band = Math.max(0, Number(opts.alignedBandPp ?? GAP_ALIGNED_BAND_PP) || 0);
+  const gaps: BucketGap[] = ALLOCATION_BUCKETS.map((bucket) => {
+    const templatePct = round1signed(Number(opts.template[bucket]) || 0);
+    const actualPct = rollup.pctOfClassified[bucket];
+    const gapPp = round1signed(actualPct - templatePct);
+    let direction: GapDirection;
+    if (rollup.isEmpty) {
+      // No holdings yet: report the gap as the full template weight "under",
+      // but mark it informational so the UI frames it as "nothing here yet".
+      direction = templatePct > 0 ? "under" : "aligned";
+    } else if (Math.abs(gapPp) <= band) {
+      direction = "aligned";
+    } else {
+      direction = gapPp > 0 ? "over" : "under";
+    }
+    return {
+      bucket,
+      templatePct,
+      actualPct,
+      gapPp,
+      direction,
+      noHoldingsYet: rollup.isEmpty,
+    };
+  });
+  return {
+    gaps,
+    rollup,
+    template: { ...opts.template },
+    caveat: RISK_ASSUMPTION_CAVEAT,
+    isEmpty: rollup.isEmpty,
+  };
+}

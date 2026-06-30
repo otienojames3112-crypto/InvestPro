@@ -287,11 +287,15 @@ export default function TaxSummary({ embedded = false }: { embedded?: boolean } 
               </h1>
             </div>
             <p className="text-muted-foreground text-sm max-w-3xl">
-              An annualised, whole-portfolio view of the{" "}
+              An annualised view of the{" "}
               <GlossaryTerm id="wht">withholding tax (WHT)</GlossaryTerm>{" "}
               applied to each income source at current balances and rates, and a
               reconciliation of your <GlossaryTerm id="gross-yield"><strong>gross</strong> quoted yield</GlossaryTerm> against
               the <GlossaryTerm id="net-yield"><strong>net-of-tax</strong> return</GlossaryTerm> you actually keep.
+              This is computed on your <strong>income / tax base</strong> &mdash; the
+              income-producing assets (MMF, T-bill, IFB, FXD and bank instruments)
+              &mdash; not your whole-portfolio net worth, so non-income assets such
+              as equities or property do not dilute the blended yield.
             </p>
           </div>
           <div className="flex items-center gap-2 shrink-0 print:hidden">
@@ -419,7 +423,8 @@ export default function TaxSummary({ embedded = false }: { embedded?: boolean } 
             </CardTitle>
             <CardDescription>
               Blended across all your MMF account{secondaryMmfs.length > 0 ? "s" : ""}, T-bill, IFB and FXD balances
-              ({kes(fixedIncomeTotal)} total).
+              &mdash; the income / tax base ({kes(fixedIncomeTotal)} total), which is
+              narrower than Full Net Worth by design.
             </CardDescription>
           </CardHeader>
           <CardContent>

@@ -1320,3 +1320,17 @@
 - [x] UI states — client/src/pages/AllocationPlan.tsx CommitPlanBar: "Plan not committed yet" (preview), "Committed plan active", "Preview only — Ledger still follows your committed plan." (selected≠committed), "Ledger and projections updated." (after commit); ProbabilityCard headline follows activePolicyTier, not the previewed tier
 - [x] Reconciliation plan-policy check — shared/reconciliation.ts reconcilePlanPolicy({committed, committedTier, policyTierUsed}); routers.ts reconciliation procedure returns a planPolicy check; client/src/pages/Reconciliation.tsx renders a plan-policy card that goes red if the ledger ran a different tier than committed
 - [x] Tests: 11 integration tests (planToLedgerContract.test.ts) + 10 unit tests (strategyPolicy.test.ts) — tier divergence, balanced identity, buildStrategyPolicy monotonicity, reconcilePlanPolicy checks; type gate clean; full suite 1190 green (122 files)
+
+## Net-worth basis consistency (pasted Part 3/4) + Dashboard simplification
+
+- [x] Schema: add other_holdings.includeInGoal (NOT NULL DEFAULT TRUE), idempotent ALTER applied + recorded in drizzle/0012_other_holdings_include_in_goal.sql
+- [x] Canonical bases in snapshot: Full Net Worth (every pocket), Goal-Plan Assets (minus tagged-out other assets), Income/Tax Base (income-producing only); fields fullNetWorth/goalPlanAssets/otherAssetsExcludedFromGoal/otherAssetsTotal/incomeTaxBase
+- [x] Pure helper computeNetWorthBases() in shared/snapshot.ts; server builder calls it so persisted figures == tested math
+- [x] Seven page-facing selectors (selectFullNetWorth, selectGoalPlanAssets, selectIncomeTaxBase, selectDashboardHeadlineNetWorth, selectPortfolioReviewNetWorth, selectTaxSummaryBase, selectLedgerTodayComparableValue) all read the same fields
+- [x] Other Assets page: per-holding "in goal" toggle + badge wired through add/update/list procedures
+- [x] Tax Summary relabelled as the income-producing base (not whole-portfolio net worth)
+- [x] Reconciliation: Net-worth basis card (Full / Goal-plan / Income-tax) reads the same selectors; basis.fullOk folded into overall verdict
+- [x] Dashboard rebuilt into 5 sections via DashboardCommandCentre.tsx: Portfolio status (Full NW, Goal/Remaining, On-track, Reconciliation badge), This month (planned/actual/expected interest/next action/next maturity), Live actuals (MMF/gov/bank/other/interest/tax), Priority alerts (red-first, deep-linked), Projection summary (projected@goal, liquid%, best/worst, Plan→Ledger)
+- [x] Every command-centre card deep-links to its explaining page/tab; heavy analysis moved behind collapsible "Detailed analysis" (default collapsed) + Manager mode toggle
+- [x] Dashboard reconciliation badge mirrors the Reconciliation page verdict expression EXACTLY (same procedure, same checks) so no page disagrees
+- [x] Tests: 10 net-worth-basis tests (selectors + pure helper + the +200k equity acceptance matrix: Full NW +200k everywhere, Goal-Plan flat when tagged out, tax base unchanged without income); type gate clean; full suite 1200 green (123 files)

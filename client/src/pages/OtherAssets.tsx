@@ -12,7 +12,7 @@ import { Separator } from "@/components/ui/separator";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
-import { Plus, Pencil, Trash2, TrendingUp, BookOpen, AlertTriangle, Info, ChevronDown, ChevronUp, LogOut, Sparkles } from "lucide-react";
+import { Plus, Pencil, Trash2, TrendingUp, BookOpen, AlertTriangle, Info, ChevronDown, ChevronUp, LogOut, Sparkles, Target } from "lucide-react";
 import { formatKES } from "@/lib/format";
 
 const ASSET_CLASSES = [
@@ -61,6 +61,8 @@ type Holding = {
   } | null;
   provenance: { source: string | null; asOf: number | null };
   incomeRatePct: number | null;
+  // Net-worth basis (pasted Part 3/4): whether this asset counts toward the goal.
+  includeInGoal: boolean;
   purchaseValue: number | null;
   purchaseDate: string | null;
   assumedReturnConservative: number | null;
@@ -451,6 +453,22 @@ function HoldingCard({
     onError: (e) => toast.error(e.message),
   });
 
+  // Net-worth basis (pasted Part 3/4): toggle whether this asset counts toward
+  // the goal. Flipping it changes Goal-Plan Assets everywhere (Dashboard
+  // headline keeps it in Full Net Worth either way) via the shared selectors.
+  const goalToggle = trpc.otherHoldings.update.useMutation({
+    onSuccess: () => {
+      invalidatePortfolioMoney(utils, portfolioId);
+      utils.otherHoldings.list.invalidate({ portfolioId });
+      toast.success(
+        holding.includeInGoal
+          ? `${holding.name} removed from the goal plan.`
+          : `${holding.name} added to the goal plan.`,
+      );
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
   // Part 5: prefer the precise behaviour-class label (Equities / REITs / Offshore)
   // over the coarse register label, and value off the single mark-to-model figure.
   const assetLabel =
@@ -487,6 +505,27 @@ function HoldingCard({
             )}
           </div>
           <div className="flex items-center gap-1 shrink-0">
+            <Button
+              size="sm"
+              variant={holding.includeInGoal ? "secondary" : "outline"}
+              className="h-7 px-2 text-[11px] gap-1"
+              disabled={goalToggle.isPending}
+              onClick={() =>
+                goalToggle.mutate({
+                  id: holding.id,
+                  portfolioId,
+                  includeInGoal: !holding.includeInGoal,
+                })
+              }
+              title={
+                holding.includeInGoal
+                  ? "Counts toward your goal plan. Click to exclude (still in Full Net Worth)."
+                  : "Excluded from the goal plan. Click to include."
+              }
+            >
+              <Target className="w-3 h-3" />
+              {holding.includeInGoal ? "In goal" : "Not in goal"}
+            </Button>
             <Button size="icon" variant="ghost" className="h-7 w-7" onClick={onEdit} title="Edit">
               <Pencil className="w-3 h-3" />
             </Button>

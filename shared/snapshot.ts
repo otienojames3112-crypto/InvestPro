@@ -92,6 +92,23 @@ export interface SnapshotHoldings {
   buckets: BucketValues;
   /** Free-form per-asset-class "other" pocket (equity/reit/offshore/property/…). */
   other: Record<string, number>;
+  /**
+   * Net-worth basis split (pasted Part 3/4). The three bases share ONE
+   * underlying valuation; they differ only in WHICH pockets they sum:
+   *  - fullNetWorth  : every pocket, incl. ALL other assets (== netWorth).
+   *  - goalPlanAssets: core instruments + only other assets tagged includeInGoal.
+   *  - incomeTaxBase : only income-producing pockets being modelled for tax/yield.
+   * Surfacing them here lets every surface read the SAME number through a
+   * selector instead of re-deriving its own "net worth".
+   */
+  fullNetWorth: number;
+  goalPlanAssets: number;
+  /** Other-asset value tagged OUT of the goal plan (fullNetWorth - goalPlanAssets, other only). */
+  otherAssetsExcludedFromGoal: number;
+  /** Total "other" assets (sum of the `other` map), regardless of goal tag. */
+  otherAssetsTotal: number;
+  /** Income-producing base modelled for tax/yield (MMF + bank + gov + recorded other income). */
+  incomeTaxBase: number;
 }
 
 export interface AllocationGapRow {
@@ -204,6 +221,62 @@ export function selectNetWorth(s: PortfolioSnapshot): number {
   return s.holdings.netWorth;
 }
 
+// ── Canonical net-worth BASIS selectors (pasted Part 3/4) ────────────────────
+// These are the ONLY sanctioned way for a surface to read a "net worth" figure.
+// Reconciliation compares the very same selectors, so a page can never show a
+// number that the trust check would not also see.
+
+/**
+ * Full Net Worth — everything the user owns in the portfolio: primary + secondary
+ * MMFs, government securities, bank instruments, and ALL other assets. This is
+ * the canonical headline figure; it must never omit a pocket.
+ */
+export function selectFullNetWorth(s: PortfolioSnapshot): number {
+  return s.holdings.fullNetWorth;
+}
+
+/**
+ * Goal-Plan Assets — assets actively assigned to THIS goal: core instruments
+ * (MMFs + bank + government securities) plus only the other assets the user has
+ * tagged "counts toward this goal".
+ */
+export function selectGoalPlanAssets(s: PortfolioSnapshot): number {
+  return s.holdings.goalPlanAssets;
+}
+
+/**
+ * Income / Tax Base — only the income-producing assets being modelled for
+ * tax/yield (MMFs + bank + T-bills + FXD + IFB shown exempt + recorded other
+ * income). Deliberately NOT "whole-portfolio net worth".
+ */
+export function selectIncomeTaxBase(s: PortfolioSnapshot): number {
+  return s.holdings.incomeTaxBase;
+}
+
+/** The Dashboard headline callout uses Full Net Worth (never a pocket-omitting path). */
+export function selectDashboardHeadlineNetWorth(s: PortfolioSnapshot): number {
+  return selectFullNetWorth(s);
+}
+
+/** Portfolio Review uses the SAME Full Net Worth selector as the Dashboard. */
+export function selectPortfolioReviewNetWorth(s: PortfolioSnapshot): number {
+  return selectFullNetWorth(s);
+}
+
+/** Tax Summary renders the income-producing base — never the full net worth. */
+export function selectTaxSummaryBase(s: PortfolioSnapshot): number {
+  return selectIncomeTaxBase(s);
+}
+
+/**
+ * The value comparable to the Ledger's "today" row for goal-progress purposes:
+ * the goal-plan assets (what the committed plan is actually growing toward the
+ * target). Other assets tagged out of the goal do not move the ledger.
+ */
+export function selectLedgerTodayComparableValue(s: PortfolioSnapshot): number {
+  return selectGoalPlanAssets(s);
+}
+
 export interface GoalProgress {
   target: number;
   netWorthNow: number;
@@ -278,5 +351,49 @@ export function selectActualVsPlanned(s: PortfolioSnapshot): {
     totalActual: s.contributions.totalActual,
     variance: s.contributions.totalActual - s.contributions.totalPlanned,
     points: s.contributions.points,
+  };
+}
+
+
+// ── Pure basis computation (pasted Part 3/4) ─────────────────────────────────
+// The single sanctioned derivation of the three bases. The server snapshot
+// builder calls THIS so the math that produces the persisted fields is the same
+// math unit tests verify — no parallel formula can drift.
+
+export interface NetWorthBasesInput {
+  /** Canonical net worth (every pocket, incl. all other assets). */
+  netWorth: number;
+  /** Value (KES) of other assets the user tagged OUT of the goal. */
+  excludedOtherAssetsKes: number;
+  /** Total value (KES) of all other assets, regardless of goal tag. */
+  otherAssetsTotalKes: number;
+  /** Income-producing base modelled for tax/yield (MMF + bank + gov + recorded other income). */
+  incomeTaxBaseKes: number;
+}
+
+export interface NetWorthBases {
+  fullNetWorth: number;
+  goalPlanAssets: number;
+  otherAssetsExcludedFromGoal: number;
+  otherAssetsTotal: number;
+  incomeTaxBase: number;
+}
+
+/**
+ * Derive the three canonical bases from one valuation. Full Net Worth is the
+ * net worth verbatim; Goal-Plan Assets subtracts ONLY the tagged-out other
+ * assets; the income/tax base is passed through unchanged (it never inherits
+ * non-income asset value). Clamps keep every basis non-negative.
+ */
+export function computeNetWorthBases(input: NetWorthBasesInput): NetWorthBases {
+  const fullNetWorth = Math.max(0, input.netWorth);
+  const excluded = Math.max(0, input.excludedOtherAssetsKes);
+  const goalPlanAssets = Math.max(0, fullNetWorth - excluded);
+  return {
+    fullNetWorth,
+    goalPlanAssets,
+    otherAssetsExcludedFromGoal: excluded,
+    otherAssetsTotal: Math.max(0, input.otherAssetsTotalKes),
+    incomeTaxBase: Math.max(0, input.incomeTaxBaseKes),
   };
 }

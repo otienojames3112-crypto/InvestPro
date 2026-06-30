@@ -2,6 +2,7 @@ import { usePortfolio } from "@/contexts/PortfolioContext";
 import { useSimulatedNow } from "@/hooks/useSimulatedNow";
 import { AppShell } from "@/components/AppShell";
 import { SimulatedDateChip } from "@/components/SimulatedDateChip";
+import { DashboardCommandCentre, type CommandAlert } from "@/components/DashboardCommandCentre";
 import { trpc } from "@/lib/trpc";
 import { formatKES, formatKESCompact, formatPct, getPhaseName, getPhasePlainLabel, getPhasePlainHint, getPhaseColorClass, formatRelativeTime, isReconcileStale } from "@/lib/format";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -251,6 +252,18 @@ export default function Dashboard() {
     { portfolioId: portfolioId! },
     { enabled: !!portfolioId }
   );
+  // Canonical snapshot — the single source of money truth the command centre and
+  // every consolidated tab read through the pure selectors in shared/snapshot.ts.
+  const { data: snapshot } = trpc.portfolios.snapshot.useQuery(
+    { portfolioId: portfolioId! },
+    { enabled: !!portfolioId }
+  );
+  // Reconciliation verdict — drives the Dashboard health badge so the badge can
+  // never disagree with the Reconciliation page (same procedure, same checks).
+  const { data: recon } = trpc.projection.reconciliation.useQuery(
+    { portfolioId: portfolioId! },
+    { enabled: !!portfolioId }
+  );
   // Part 3 — front-page net & real yield (same computation as Portfolio Review).
   const yieldSummary = useBlendedYield(portfolioId);
     const { data: actualsSummary } = trpc.deposits.summary.useQuery(
@@ -388,6 +401,18 @@ export default function Dashboard() {
   // Part 5: progressive disclosure — the deep detailed analytics collapse by
   // default so the page opens with the investor strip + manager band only.
   const [showDetails, setShowDetails] = useState(false);
+  // Simple vs Manager mode: a normal user sees the focused command centre; a
+  // manager can flip on inline diagnostics (still terse, detail stays collapsed).
+  // Persisted so the choice survives reloads.
+  const [managerMode, setManagerMode] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    return window.localStorage.getItem("dashboard.managerMode") === "1";
+  });
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem("dashboard.managerMode", managerMode ? "1" : "0");
+    }
+  }, [managerMode]);
   const handleRecordDeposit = () => {
     if (mode === "sandbox") {
       setLiveDepositConfirmOpen(true);
@@ -1041,6 +1066,137 @@ export default function Dashboard() {
           </div>
         </div>
 
+        {/* ── Command centre (pasted Part 10): the focused, 30-second top.
+            Every figure reads from the canonical snapshot selectors the
+            Reconciliation trust-check also reads, so no card can disagree
+            with the Ledger or with Reconciliation. ──────────────────────── */}
+        {snapshot && (() => {
+          const inc = snapshot.income;
+          const incomeBase = snapshot.holdings.incomeTaxBase;
+          // Expected interest THIS month = income base × net yield ÷ 12.
+          const expectedInterest = Math.round((incomeBase * (inc.blendedNetYieldPct / 100)) / 12);
+          // This-month planned/actual from the contribution plan at the elapsed month.
+          const elapsed = snapshot.goal.elapsedMonths;
+          const thisPoint =
+            snapshot.contributions.points.find((p) => p.monthNumber === elapsed + 1) ??
+            snapshot.contributions.points.find((p) => p.monthNumber === elapsed) ??
+            null;
+          const plannedThis = thisPoint?.planned ?? snapshot.contributions.startingContribution;
+          const actualThis = thisPoint?.actual ?? 0;
+          // Next maturity from the canonical liquidity events.
+          const nextMat =
+            snapshot.liquidity
+              .filter((e) => e.kind === "maturity" && e.atMs >= snapshot.asOfMs)
+              .sort((a, b) => a.atMs - b.atMs)[0] ?? null;
+          // Next action — reuse the single most-important action text.
+          const rateStaleCc = (settings as any)?.ratesLastUpdatedAt
+            ? rateStaleness((settings as any).ratesLastUpdatedAt)
+            : null;
+          const ccBehind = decision?.pace.status === "behind";
+          const nextActionText = ccBehind && decision?.stepUp?.feasible
+            ? `Raise step-up by ${formatKES(decision.stepUp.recommendedStepUp)}/mo to stay on pace`
+            : rateStaleCc?.isStale
+              ? "Refresh your CBK rate snapshot"
+              : plannedThis > 0 && actualThis < plannedThis
+                ? "Record this month's contribution"
+                : "Nothing today — you're on track";
+          const nextActionHref = ccBehind
+            ? "/plan?tab=contributions"
+            : rateStaleCc?.isStale
+              ? "/review?tab=rates"
+              : "/cashflows?tab=record";
+          // Live actuals pockets.
+          const mmfTotal = (actualsSummary?.byBucket?.mmf ?? 0) + (actualsSummary?.secondaryMmfBalance ?? 0);
+          const govSecurities =
+            (actualsSummary?.byBucket?.tbill ?? 0) +
+            (actualsSummary?.byBucket?.ifb ?? 0) +
+            (actualsSummary?.byBucket?.fxd ?? 0);
+          const bankInstruments = actualsSummary?.bankBalance ?? 0;
+          const otherAssets = snapshot.holdings.otherAssetsTotal;
+          const interestToDate = inc.accruedNetInterest;
+          const taxToDate = snapshot.tax.base > 0 ? Math.round(snapshot.tax.base) : 0;
+          const annualisedTax = taxToDate; // tax.base is the annual taxable figure
+          // Priority alerts (red first), each deep-linked to where it's resolved.
+          const ccAlerts: CommandAlert[] = [];
+          if (plannedThis > 0 && actualThis <= 0)
+            ccAlerts.push({ id: "missed", label: "This month's contribution not recorded", detail: `${formatKES(plannedThis)} planned`, tone: "amber", href: "/cashflows?tab=record" });
+          if (maturitiesNext90.count > 0)
+            ccAlerts.push({ id: "mat", label: `${maturitiesNext90.count} maturit${maturitiesNext90.count === 1 ? "y" : "ies"} in next 90 days`, detail: formatKESCompact(maturitiesNext90.faceTotal), tone: "amber", href: "/holdings?tab=gov" });
+          if (rateStaleCc?.isVeryStale)
+            ccAlerts.push({ id: "rates", label: `Rates outdated — ${rateStaleCc.label}`, tone: "red", href: "/review?tab=rates" });
+          if (typeBreach?.breached)
+            ccAlerts.push({ id: "conc", label: "Concentration cap breach", tone: "amber", href: "/review?tab=concentration" });
+          if (snapshot.reconciliation && !snapshot.reconciliation.ok)
+            ccAlerts.push({ id: "recon", label: "Reconciliation mismatch", detail: "Sources disagree on today's value", tone: "red", href: "/review?tab=reconciliation" });
+          if (ccBehind)
+            ccAlerts.push({ id: "pace", label: `Behind pace by ${formatKESCompact(decision!.pace.shortfall)}`, tone: "red", href: "/plan?tab=contributions" });
+          // Sort red before amber.
+          ccAlerts.sort((a, b) => (a.tone === b.tone ? 0 : a.tone === "red" ? -1 : 1));
+          // Mirror the Reconciliation page's verdict EXACTLY (same procedure, same
+          // checks) so the Dashboard badge can never disagree with that page.
+          const reconVerdict = recon
+            ? {
+                reconciled:
+                  !!recon.full?.reconciled &&
+                  !!recon.mmf?.ok &&
+                  (recon.gov?.ok ?? true) &&
+                  (recon.bank?.ok ?? true) &&
+                  (recon.govAccrual?.ok ?? true) &&
+                  (recon.bankAccrual?.ok ?? true) &&
+                  (recon.planPolicy?.ok ?? true) &&
+                  (recon.basis?.fullOk ?? true),
+                basisOk: recon.basis ? !!recon.basis.fullOk : true,
+              }
+            : snapshot.reconciliation
+              ? { reconciled: snapshot.reconciliation.ok, basisOk: true }
+              : null;
+          return (
+            <DashboardCommandCentre
+              snapshot={snapshot}
+              decision={decision ? {
+                range: decision.range,
+                probabilityPct: decision.risk?.probability?.probabilityPct ?? null,
+                hasMaterialRisk: !!decision.risk?.hasMaterialRisk,
+                pace: { status: (decision as any).effectivePace?.status ?? decision.pace.status, shortfall: decision.pace.shortfall },
+              } : null}
+              reconciliation={reconVerdict}
+              alerts={ccAlerts}
+              actuals={{ mmfTotal, govSecurities, bankInstruments, otherAssets, interestToDate, taxToDate, annualisedTax }}
+              thisMonth={{ planned: plannedThis, actual: actualThis, expectedInterest, nextAction: nextActionText, nextActionHref, nextMaturity: nextMat ? { label: nextMat.label, atMs: nextMat.atMs, amount: nextMat.amount } : null }}
+              projection={{
+                projectedAtGoal: decision?.range.base ?? snapshot.goal.projectedFinalValue,
+                target: targetAmount,
+                liquidAtGoalPct: decision?.liquidity ? Math.round((decision.liquidity.liquidShare ?? 0) * 100) : (endStateSplit ? Math.round(((endStateSplit.liquidPot ?? 0) > 0 ? 1 : 0) * 100) : null),
+                worst: decision?.range.low ?? 0,
+                best: decision?.range.high ?? 0,
+              }}
+              goalDateLabel={goalDateLabel}
+              managerMode={managerMode}
+            />
+          );
+        })()}
+
+        {/* ── Detailed analysis (collapsed by default) ─────────────────────── */}
+        <div className="flex items-center justify-center pt-1">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setShowDetails((v) => !v)}
+            className="bg-card text-sm"
+          >
+            {showDetails ? <ChevronUp className="w-4 h-4 mr-1.5" /> : <ChevronDown className="w-4 h-4 mr-1.5" />}
+            {showDetails ? "Hide detailed analysis" : "Show detailed analysis"}
+          </Button>
+          <label className="ml-3 inline-flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer select-none">
+            <input type="checkbox" className="accent-primary" checked={managerMode} onChange={(e) => setManagerMode(e.target.checked)} />
+            Manager mode
+          </label>
+        </div>
+
+        {/* Everything below — the former command/analysis stack — now lives
+            inside the collapsible detailed-analysis region. */}
+        <div className={showDetails ? "space-y-6" : "hidden"}>
+
         {/* ── Part 5: Role-aware top — investor strip + manager band ───────── */}
         {decision && (() => {
           const liveNetWorth = concentration?.netWorth ?? (actualsSummary?.totalContributed ?? 0);
@@ -1329,22 +1485,6 @@ export default function Dashboard() {
             </div>
           );
         })()}
-
-        {/* ── Part 5: progressive disclosure toggle for deep analytics ─────── */}
-        <div className="flex items-center justify-center">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setShowDetails((v) => !v)}
-            className="bg-card text-sm"
-          >
-            {showDetails ? <ChevronUp className="w-4 h-4 mr-1.5" /> : <ChevronDown className="w-4 h-4 mr-1.5" />}
-            {showDetails ? "Hide detailed analytics" : "Show detailed analytics"}
-          </Button>
-        </div>
-
-        {/* Deep analytics below collapse behind the toggle. */}
-        <div className={showDetails ? "space-y-6" : "hidden"}>
 
         {/* ── R50/R51: Securities portfolio summary (current vs face vs gain) ── */}
         {portfolioValuation.lots > 0 && (() => {

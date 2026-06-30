@@ -2950,6 +2950,12 @@ export const appRouter = router({
       // Time Machine: reconciliation's "today" must follow the simulated clock too.
       const reconNow = getNow(p);
 
+      // Net-worth basis (pasted Part 3/4): read the three canonical bases from the
+      // SAME snapshot the pages render through their selectors. Reconciliation must
+      // not recompute a "correct" value separately (rule #6) — these ARE the
+      // page-facing figures, surfaced as their own reconciled section.
+      const basisSnapshot = await buildPortfolioSnapshot(input.portfolioId, p);
+
       // ── Principal-basis sources (the same path the Dashboard uses) ──
       const summary = await getActualsSummary(
         input.portfolioId,
@@ -3255,8 +3261,25 @@ export const appRouter = router({
         activeLabel: tierLabel(planPolicyRaw.policyTierUsed),
       };
 
+      // Net-worth basis section: the exact figures the Dashboard headline,
+      // Portfolio Review, and Tax Summary render — proven here as one reconciled
+      // unit so a page can never show a number this trust check does not see.
+      const fullRecon = reconcile(inputs);
+      const basis = {
+        fullNetWorth: basisSnapshot.holdings.fullNetWorth,
+        goalPlanAssets: basisSnapshot.holdings.goalPlanAssets,
+        incomeTaxBase: basisSnapshot.holdings.incomeTaxBase,
+        otherAssetsExcludedFromGoal: basisSnapshot.holdings.otherAssetsExcludedFromGoal,
+        otherAssetsTotal: basisSnapshot.holdings.otherAssetsTotal,
+        // Sum-of-parts reference for the full basis: the same reconcile() reference.
+        reference: fullRecon.reference,
+        // The Full Net Worth basis must equal the sum-of-parts reference within
+        // tolerance; if a page total ever drifts, this flips red.
+        fullOk: Math.abs(basisSnapshot.holdings.fullNetWorth - fullRecon.reference) <= 5,
+      };
+
       return {
-        full: reconcile(inputs),
+        full: fullRecon,
         mmf: reconcileMmf(inputs.accrualLedgerMmfTotal, inputs.primaryMmfBalance, inputs.secondaryMmfBalances),
         gov: reconcileGov(securityFaceValues, netLinkedGov),
         bank: reconcileBank(bankHoldingPrincipals, bankDepositAmounts, bankWithdrawalAmounts),
@@ -3264,6 +3287,7 @@ export const appRouter = router({
         bankAccrual,
         holdings,
         planPolicy,
+        basis,
       };
     }),
 
@@ -4702,6 +4726,8 @@ export const appRouter = router({
             purchaseDate: h.purchaseDate ? normaliseDate(h.purchaseDate) : null,
             notes: h.notes ?? null,
             incomeRatePct: h.incomeRatePct ? parseFloat(String(h.incomeRatePct)) : null,
+            // Net-worth basis (pasted Part 3/4): goal assignment flag.
+            includeInGoal: (h as { includeInGoal?: boolean }).includeInGoal ?? true,
             assumedReturnConservative: h.assumedReturnConservative ? parseFloat(String(h.assumedReturnConservative)) : null,
             assumedReturnBase: h.assumedReturnBase ? parseFloat(String(h.assumedReturnBase)) : null,
             assumedReturnOptimistic: h.assumedReturnOptimistic ? parseFloat(String(h.assumedReturnOptimistic)) : null,
@@ -4746,10 +4772,13 @@ export const appRouter = router({
         volatilityPct: z.number().min(0).max(200).optional(),
         correlationGroup: z.enum(["kes_rates", "kes_equity", "property", "offshore_equity", "cash"]).optional(),
         riskSource: z.string().max(200).optional(),
+        // Net-worth basis (pasted Part 3/4): is this asset assigned to the goal?
+        includeInGoal: z.boolean().optional(),
       }))
       .mutation(async ({ ctx, input }) => {
         await requirePortfolio(input.portfolioId, ctx.user.id);
         await addOtherHolding({
+          includeInGoal: input.includeInGoal ?? true,
           portfolioId: input.portfolioId,
           assetClass: input.assetClass,
           name: input.name,
@@ -4787,6 +4816,8 @@ export const appRouter = router({
         volatilityPct: z.number().min(0).max(200).nullable().optional(),
         correlationGroup: z.enum(["kes_rates", "kes_equity", "property", "offshore_equity", "cash"]).nullable().optional(),
         riskSource: z.string().max(200).nullable().optional(),
+        // Net-worth basis (pasted Part 3/4): toggle goal assignment.
+        includeInGoal: z.boolean().optional(),
       }))
       .mutation(async ({ ctx, input }) => {
         await requirePortfolio(input.portfolioId, ctx.user.id);
@@ -4807,6 +4838,7 @@ export const appRouter = router({
           ...(rest.volatilityPct !== undefined && { volatilityPct: rest.volatilityPct != null ? String(rest.volatilityPct) : null }),
           ...(rest.correlationGroup !== undefined && { correlationGroup: rest.correlationGroup ?? null }),
           ...(rest.riskSource !== undefined && { riskSource: rest.riskSource ?? null }),
+          ...(rest.includeInGoal !== undefined && { includeInGoal: rest.includeInGoal }),
           ...(riskTouched && { riskAsOf: new Date() }),
         });
         return { success: true };

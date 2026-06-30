@@ -648,6 +648,13 @@ export const otherHoldings = mysqlTable("other_holdings", {
   riskSource: varchar("riskSource", { length: 200 }),
   /** Provenance: as-of timestamp for the risk assumption. */
   riskAsOf: timestamp("riskAsOf"),
+  /**
+   * Net-worth basis (pasted Part 3/4) — whether this asset is actively assigned
+   * to THIS goal plan. Full Net Worth always counts every holding; Goal-Plan
+   * Assets counts MMFs/bank/gov + only the other assets the user tags here.
+   * Default true so existing rows keep counting toward the goal as before.
+   */
+  includeInGoal: boolean("includeInGoal").default(true).notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });

@@ -44,6 +44,7 @@ export default function Reconciliation({ embedded = false }: { embedded?: boolea
   const govAccrual = data?.govAccrual;
   const bankAccrual = data?.bankAccrual;
   const planPolicy = data?.planPolicy;
+  const basis = data?.basis;
   const reconciled =
     !!full?.reconciled &&
     !!mmf?.ok &&
@@ -51,7 +52,8 @@ export default function Reconciliation({ embedded = false }: { embedded?: boolea
     (bank?.ok ?? true) &&
     (govAccrual?.ok ?? true) &&
     (bankAccrual?.ok ?? true) &&
-    (planPolicy?.ok ?? true);
+    (planPolicy?.ok ?? true) &&
+    (basis?.fullOk ?? true);
 
   // Round 43 (Fix #3): the banner's "largest gap" must span EVERY check, not just
   // the six whole-portfolio sources. Previously it read only full.maxDiff, so a
@@ -198,6 +200,77 @@ export default function Reconciliation({ embedded = false }: { embedded?: boolea
                         {planPolicy.ok
                           ? "Matches the committed plan."
                           : "Does not match — re-commit on the Allocation Plan to realign."}
+                      </p>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Net-worth basis (pasted Part 3/4) — the three canonical bases every
+                surface reads through shared selectors. Full Net Worth must equal
+                the sum-of-parts reference; Goal-plan and Income/Tax are narrower
+                views of the SAME valuation, shown so a manager can see exactly
+                which pockets each page is summing. */}
+            {basis && (
+              <Card className={basis.fullOk ? undefined : "border-amber-500/40 bg-amber-500/5"}>
+                <CardHeader>
+                  <CardTitle className="text-base flex items-center gap-2">
+                    Net-worth basis
+                    {basis.fullOk ? (
+                      <Badge className="bg-emerald-500/15 text-emerald-600 hover:bg-emerald-500/15 border-0">
+                        Consistent
+                      </Badge>
+                    ) : (
+                      <Badge variant="destructive">Mismatch</Badge>
+                    )}
+                  </CardTitle>
+                  <CardDescription>
+                    The same valuation, three sanctioned views. Every page reads
+                    these through one shared selector, so no surface can show a
+                    &ldquo;net worth&rdquo; this check does not also see.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="grid gap-4 sm:grid-cols-3">
+                    <div className="rounded-md border p-4">
+                      <p className="text-xs text-muted-foreground">
+                        Full Net Worth
+                      </p>
+                      <p className="text-lg font-semibold tabular-nums mt-1">
+                        {formatKES(basis.fullNetWorth, 2)}
+                      </p>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Every pocket incl. all other assets. Used by the Dashboard
+                        headline and Portfolio Review. {basis.fullOk
+                          ? `Matches sum-of-parts (${formatKES(basis.reference, 2)}).`
+                          : `Differs from sum-of-parts (${formatKES(basis.reference, 2)}).`}
+                      </p>
+                    </div>
+                    <div className="rounded-md border p-4">
+                      <p className="text-xs text-muted-foreground">
+                        Goal-Plan Assets
+                      </p>
+                      <p className="text-lg font-semibold tabular-nums mt-1">
+                        {formatKES(basis.goalPlanAssets, 2)}
+                      </p>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Core instruments + only other assets tagged into the goal.
+                        {basis.otherAssetsExcludedFromGoal > 0
+                          ? ` Excludes ${formatKES(basis.otherAssetsExcludedFromGoal, 0)} of other assets.`
+                          : " Nothing excluded."}
+                      </p>
+                    </div>
+                    <div className="rounded-md border p-4">
+                      <p className="text-xs text-muted-foreground">
+                        Income / Tax Base
+                      </p>
+                      <p className="text-lg font-semibold tabular-nums mt-1">
+                        {formatKES(basis.incomeTaxBase, 2)}
+                      </p>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Income-producing assets the Tax Summary blends yield across
+                        &mdash; not whole-portfolio net worth.
                       </p>
                     </div>
                   </div>

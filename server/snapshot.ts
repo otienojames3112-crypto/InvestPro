@@ -61,6 +61,7 @@ import type {
   FreshnessWarning,
   NextAction,
 } from "../shared/snapshot";
+import { computeNetWorthBases } from "../shared/snapshot";
 
 type Portfolio = NonNullable<Awaited<ReturnType<typeof getPortfolio>>>;
 
@@ -366,6 +367,33 @@ export async function buildPortfolioSnapshot(
   const alloc = buildAllocation(allocInput);
   const netWorth = round2(alloc.netWorth);
 
+  // ── Net-worth basis split (pasted Part 3/4) ─────────────────────────────────
+  // Full Net Worth is the canonical figure (== alloc.netWorth, every pocket).
+  // Goal-Plan Assets excludes ONLY the other assets the user tagged out of the
+  // goal. We value each other holding with the single valueHolding source so the
+  // exclusion is computed on the exact same KES value folded into net worth.
+  const otherAssetsTotal = round2(Object.values(alloc.other).reduce((a, b) => a + b, 0));
+  const excludedOtherAssets = round2(
+    otherRows
+      .filter((h) => (h as { includeInGoal?: boolean }).includeInGoal === false)
+      .reduce(
+        (s, h) =>
+          s +
+          valueHolding({
+            assetClass: h.assetClass,
+            behaviorClass: h.behaviorClass ?? null,
+            currentValue: h.currentValue,
+            units: h.units ?? null,
+            unitPrice: h.unitPrice ?? null,
+            currency: h.currency ?? null,
+            fxRateToKes: h.fxRateToKes ?? null,
+            dataSource: h.dataSource ?? null,
+            dataAsOf: h.dataAsOf ?? null,
+          }).valueKes,
+        0,
+      ),
+  );
+
   // ── Goal / horizon (effective clock) ────────────────────────────────────────
   const startIso = normaliseDate(p.startDate);
   const horizon = p.horizonMonths ?? 120;
@@ -441,6 +469,16 @@ export async function buildPortfolioSnapshot(
     whtRate: settings.withholdingTax,
   });
   const taxBase = blendedNet.base;
+  // Canonical bases (pasted Part 3/4) — derived once via the shared pure helper
+  // so the persisted figures match what unit tests verify.
+  const bases = computeNetWorthBases({
+    netWorth,
+    excludedOtherAssetsKes: excludedOtherAssets,
+    otherAssetsTotalKes: otherAssetsTotal,
+    incomeTaxBaseKes: round2(taxBase),
+  });
+  const fullNetWorth = bases.fullNetWorth;
+  const goalPlanAssets = round2(bases.goalPlanAssets);
 
   // ── Contribution plan + actual-vs-planned ───────────────────────────────────
   const overrideByMonth = new Map<number, number>();
@@ -617,6 +655,14 @@ export async function buildPortfolioSnapshot(
       other: Object.fromEntries(
         Object.entries(alloc.other).map(([k, v]) => [k, round2(v)]),
       ),
+      fullNetWorth,
+      goalPlanAssets,
+      otherAssetsExcludedFromGoal: excludedOtherAssets,
+      otherAssetsTotal,
+      // Income/tax base: the income-producing fixed-income/cash base the blended
+      // yield is computed across (MMF + bank + gov). Other assets enter only when
+      // the user records income for them, so the modelled base stays honest.
+      incomeTaxBase: round2(taxBase),
     },
     allocation: {
       tier,

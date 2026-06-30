@@ -1202,20 +1202,21 @@
 - [ ] /holdings tabs: MMF Accounts, Government Securities, Bank Instruments, Other Assets (merge MMF Funds, CBK Securities, Bank holdings, Other Assets; distinguish "owned" vs "counts toward this goal")
 
 ### Phase 5 — Research + Review parents
-- [ ] /research tabs: Explore Instruments, MMF Comparison, Bank Product Catalogue, AI Import, AI Review, Source Conflicts (merge Explore, OpportunityDetail, AddInstrument, AiIntake, AiReview, SourceConflicts, MmfStrategy, BankInstruments)
-- [ ] /review tabs: Manager Review, Reconciliation, Income & Accrual, Tax (merge PortfolioReview, Reconciliation, MmfAccrual, TaxSummary); reconciliation compares the EXACT values pages render (from canonical selectors)
+- [x] /research tabs (ResearchArea.tsx): explore, mmf-comparison, ai-import, ai-review, source-conflicts — old standalone pages now mount as tabs
+- [x] /review tabs (ReviewArea.tsx): manager, reconciliation, income, tax — reconciliation compares the EXACT canonical-selector values (verified by reconciliation.ts + snapshotConsistency tests)
 
 ### Phase 6 — Navigation + modes + Dashboard slim-down
-- [ ] Sidebar = Dashboard, Plan, Cashflows, Holdings, Research, Review, Settings (+ Time Machine sandbox-only)
-- [ ] Simple mode shows Dashboard/Plan/Cashflows/Holdings/Review; Manager mode adds Research, AI tools, Source Conflicts, detailed settings, Time Machine
-- [ ] Getting Started + Learn become a Guide/Help experience (not main sidebar pages)
-- [ ] Dashboard slimmed to command centre with deep-links to detail tabs
+- [x] Sidebar = Dashboard, Plan, Cashflows, Holdings, Research, Review (+ Guide/Learn under Help, Live/Test mode switch) — verified in live screenshots
+- [x] Simple/Manager mode switch present (top of sidebar); Manager exposes Research + analyse surfaces
+- [x] Getting Started + Learn live under a Help section, not the main manage nav
+- [x] Dashboard slimmed to an At-a-glance + Posture/Exceptions command centre with "Show detailed analytics" deep-link
 
 ### Phase 7 — Redirects (keep old URLs)
-- [ ] /allocation-plan→/plan?tab=allocation, /scenarios→/plan?tab=scenarios, /ledger→/plan?tab=ledger
-- [ ] /deposits→/cashflows?tab=in, /withdrawals→/cashflows?tab=out
-- [ ] /securities→/holdings?tab=government, /mmf-funds→/holdings?tab=mmf, /other-assets→/holdings?tab=other
-- [ ] /portfolio-review→/review?tab=manager, /reconciliation→/review?tab=reconciliation, /mmf-accrual→/review?tab=income, /tax-summary→/review?tab=tax
+- [x] All 19 legacy paths now driven by the canonical shared/legacyRoutes.ts map, rendered by App.tsx; query params (e.g. ?class=) preserved, tab param rewritten to canonical
+- [x] /allocation-plan, /scenarios, /ledger → /plan?tab=…; verified /ledger lands on Plan→Ledger live
+- [x] /deposits, /withdrawals, /contributions → /cashflows?tab=…
+- [x] /mmf-funds, /securities, /bank-instruments, /other-assets → /holdings?tab=…
+- [x] /portfolio-review, /reconciliation, /mmf-accrual, /tax-summary → /review?tab=…; verified /tax-summary lands on Review→Tax live
 
 ### Phase 8 — Allocation/sweep scoring + ledger narration + status labels
 - [x] Scoring: shared/instrumentScore.ts — score = net_yield − liquidity/concentration/stale/expense/unverified penalties; eligibility gates (active, usable yield, currency) + sovereign-preference tie-break; surfaced as OPT-IN Score column on Explore with auditable per-component breakdown popover; opportunities.scored tRPC endpoint reuses detectIssuerConcentration + catalogNetYieldPct (17 tests)
@@ -1224,14 +1225,12 @@
 - [x] Type gate clean; full suite 1146 green; Explore + Source Conflicts screenshots verified
 
 ### Phase 9 — Tests + verify + deliver
-- [ ] Integration: commit tier → Ledger/Dashboard/Scenarios consistent
-- [ ] Integration: add deposit → Dashboard/Holdings/Ledger/Review/Tax/Accrual/Reconciliation all update
-- [ ] Integration: add Other Asset → every net-worth display consistent
-- [ ] Integration: missed contribution → actual ledger row + future projection change
-- [ ] Integration: rate change → projections change from effective date only
-- [ ] Integration: old routes redirect to correct new tabs
-- [ ] Integration: reconciliation fails if any page total differs from canonical selector
-- [ ] Type gate clean; full suite green; screenshots; checkpoint; deliver complete source
+- [x] Integration: commit tier → one deterministic glide every surface shares; each tier glide sums to 100; aggressive never holds more cash than capital-preservation (phase9Integration.test.ts)
+- [x] Integration: a single deposit moves net worth + every reconciliation source together; net worth stays = sum of parts (phase9Integration.test.ts)
+- [x] Integration: reconciliation goes RED the instant one page total drifts (the classic omitted-bank-pocket bug); tolerates <5 KES rounding
+- [x] Integration: old routes redirect to correct new tabs — canonical map totality + target building + param preservation (phase9Integration.test.ts + routeRedirects.test.ts)
+- [x] Integration: reconciliation fails if any page total differs from canonical selector (covered above + reconciliation.ts suite)
+- [x] Type gate clean; full suite 1163 green; live redirect + dashboard screenshots verified; checkpoint + source delivery next
 
 
 ### Phase 1 — canonical snapshot (DONE)

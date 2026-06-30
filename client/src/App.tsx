@@ -17,6 +17,7 @@ import CashflowsArea from "./pages/CashflowsArea";
 import HoldingsArea from "./pages/HoldingsArea";
 import ResearchArea from "./pages/ResearchArea";
 import ReviewArea from "./pages/ReviewArea";
+import { LEGACY_REDIRECTS } from "@shared/legacyRoutes";
 
 /**
  * Legacy-route redirect. Each old standalone page now lives as a tab inside one
@@ -57,35 +58,14 @@ function Router() {
       <Route path="/explore/new" component={AddInstrument} />
       <Route path="/explore/:ref" component={OpportunityDetail} />
 
-      {/* ---- Legacy route redirects → new area + tab ---- */}
-      {/* Plan area */}
-      <Route path="/allocation-plan">{() => <TabRedirect area="plan" tab="allocation" />}</Route>
-      <Route path="/scenarios">{() => <TabRedirect area="plan" tab="scenarios" />}</Route>
-      <Route path="/ledger">{() => <TabRedirect area="plan" tab="ledger" />}</Route>
-
-      {/* Cashflows area */}
-      <Route path="/deposits">{() => <TabRedirect area="cashflows" tab="record-in" />}</Route>
-      <Route path="/withdrawals">{() => <TabRedirect area="cashflows" tab="withdraw" />}</Route>
-      <Route path="/contributions">{() => <TabRedirect area="cashflows" tab="scheduled" />}</Route>
-
-      {/* Holdings area */}
-      <Route path="/mmf-funds">{() => <TabRedirect area="holdings" tab="mmf" />}</Route>
-      <Route path="/securities">{() => <TabRedirect area="holdings" tab="gov" />}</Route>
-      <Route path="/bank-instruments">{() => <TabRedirect area="holdings" tab="bank" />}</Route>
-      <Route path="/other-assets">{() => <TabRedirect area="holdings" tab="other" />}</Route>
-
-      {/* Research area */}
-      <Route path="/explore">{() => <TabRedirect area="research" tab="explore" />}</Route>
-      <Route path="/mmf-strategy">{() => <TabRedirect area="research" tab="mmf-comparison" />}</Route>
-      <Route path="/ai-intake">{() => <TabRedirect area="research" tab="ai-import" />}</Route>
-      <Route path="/ai-review">{() => <TabRedirect area="research" tab="ai-review" />}</Route>
-      <Route path="/source-conflicts">{() => <TabRedirect area="research" tab="source-conflicts" />}</Route>
-
-      {/* Review area */}
-      <Route path="/portfolio-review">{() => <TabRedirect area="review" tab="manager" />}</Route>
-      <Route path="/reconciliation">{() => <TabRedirect area="review" tab="reconciliation" />}</Route>
-      <Route path="/mmf-accrual">{() => <TabRedirect area="review" tab="income" />}</Route>
-      <Route path="/tax-summary">{() => <TabRedirect area="review" tab="tax" />}</Route>
+      {/* ---- Legacy route redirects → new area + tab (driven by the canonical
+           LEGACY_REDIRECTS map in shared/legacyRoutes.ts so routes and their
+           coverage test can never drift) ---- */}
+      {LEGACY_REDIRECTS.map((r) => (
+        <Route key={r.from} path={r.from}>
+          {() => <TabRedirect area={r.area} tab={r.tab} />}
+        </Route>
+      ))}
 
       <Route path="/404" component={NotFound} />
       <Route component={NotFound} />

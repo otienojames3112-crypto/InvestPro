@@ -6228,6 +6228,70 @@ export const appRouter = router({
       }),
 
     /**
+     * Phase 2 — COMMIT PLAN contract. Atomically persists the committed strategy
+     * (allocation tier + optional policy + optional contribution schedule) and
+     * stamps `planCommittedAt`. The projection/ledger/scenarios/probability all
+     * already read these persisted portfolio fields (allocationPolicy +
+     * contribution schedule + target/horizon), so committing here is exactly what
+     * makes "the plan you see" become "the plan the ledger executes". The commit
+     * marker is surfaced by the canonical snapshot so every tab agrees the plan
+     * is committed (vs a draft/suggestion). Override-always-wins is preserved:
+     * any tier may be committed; a riskier-than-horizon choice is only flagged.
+     */
+    commitPlan: protectedProcedure
+      .input(
+        z.object({
+          portfolioId: z.number().int().positive(),
+          tier: z.enum(
+            ALLOCATION_TIERS as readonly [AllocationTier, ...AllocationTier[]],
+          ),
+          allocationPolicy: z
+            .enum(["balanced", "yield_first", "custom"])
+            .optional(),
+          startingContribution: z.number().nonnegative().optional(),
+          stepUpAmount: z.number().nonnegative().optional(),
+          stepUpMonths: z.number().int().positive().optional(),
+        }),
+      )
+      .mutation(async ({ ctx, input }) => {
+        const p = await requirePortfolio(input.portfolioId, ctx.user.id);
+        const startIso = normaliseDate(p?.startDate);
+        const horizon = p?.horizonMonths ?? 120;
+        const nowMs = (p?.simulatedDate as number | null) ?? Date.now();
+        const horizonRemainingMonths = Math.max(
+          0,
+          horizon - computeCurrentMonth(startIso, nowMs, horizon),
+        );
+        const goalNature: GoalNature = "standard";
+        const suggestion = suggestTier(horizonRemainingMonths, goalNature);
+        const selection = resolveTierSelection({
+          suggestion,
+          selected: input.tier,
+        });
+        const committedAt = nowMs;
+        await updatePortfolio(input.portfolioId, ctx.user.id, {
+          allocationSuggestedTier: suggestion.tier,
+          allocationSelectedTier: input.tier,
+          allocationTierOverridden: selection.userOverrode,
+          ...(input.allocationPolicy ? { allocationPolicy: input.allocationPolicy } : {}),
+          ...(input.startingContribution != null
+            ? { startingContribution: String(input.startingContribution) }
+            : {}),
+          ...(input.stepUpAmount != null
+            ? { stepUpAmount: String(input.stepUpAmount) }
+            : {}),
+          ...(input.stepUpMonths != null ? { stepUpMonths: input.stepUpMonths } : {}),
+          planCommittedAt: committedAt,
+        });
+        return {
+          portfolioId: input.portfolioId,
+          suggestion,
+          selection,
+          committedAt,
+        };
+      }),
+
+    /**
      * Part 4 — the FACTUAL gap between the goal's glided target mix (at the
      * current journey point) and what the portfolio actually holds right now.
      * Reuses the SINGLE net-worth builder (`buildAllocation` via

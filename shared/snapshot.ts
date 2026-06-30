@@ -44,6 +44,10 @@ export interface SnapshotIdentity {
   allocationPolicy: "balanced" | "yield_first" | "custom";
   committedTier: string | null;
   tierOverridden: boolean;
+  /** Unix-ms when the plan was last committed; null = never (draft/suggestion). */
+  planCommittedAt: number | null;
+  /** Derived: "committed" once the user has committed; else "draft". */
+  planStatus: "committed" | "draft";
 }
 
 export interface SnapshotGoal {
@@ -242,6 +246,18 @@ export function selectReconciliationStatus(
   s: PortfolioSnapshot,
 ): SnapshotReconciliation {
   return s.reconciliation;
+}
+
+/**
+ * Whether the plan has been committed (the ledger executes a committed plan) or
+ * is still a draft/suggestion. Surfaces the single commit marker so no tab has
+ * to re-derive commit state.
+ */
+export function selectPlanStatus(s: PortfolioSnapshot): {
+  status: "committed" | "draft";
+  committedAtMs: number | null;
+} {
+  return { status: s.identity.planStatus, committedAtMs: s.identity.planCommittedAt };
 }
 
 export function selectActualVsPlanned(s: PortfolioSnapshot): {

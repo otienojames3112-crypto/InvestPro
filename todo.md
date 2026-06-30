@@ -1239,3 +1239,11 @@
 - [x] portfolios.snapshot tRPC query wired (auth-checked)
 - [x] snapshotConsistency.test.ts: selectors read canonical figures; bucket roll-up == buildAllocation netWorth; gap rows == computeBucketGaps (7 tests)
 - [x] Type gate clean; full suite 1109 green; dev server healthy
+
+
+### Phase 2 — commit contract (DONE)
+- [x] schema: portfolios.planCommittedAt (bigint, nullable) + migration 0011 applied to DB
+- [x] allocation.commitPlan mutation: atomically writes tier + override flag + optional policy + optional contribution schedule, stamps planCommittedAt
+- [x] snapshot identity surfaces planCommittedAt + derived planStatus ("committed"/"draft"); selectPlanStatus selector
+- [x] projection/ledger/scenarios/probability already read persisted allocationPolicy + contribution schedule + target/horizon — commit makes plan-you-see == plan-ledger-executes
+- [x] consistency test for selectPlanStatus (committed + draft); type gate clean; full suite 1110 green

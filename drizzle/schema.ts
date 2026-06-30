@@ -227,6 +227,15 @@ export const portfolios = mysqlTable("portfolios", {
   allocationSuggestedTier: varchar("allocationSuggestedTier", { length: 24 }),
   allocationSelectedTier: varchar("allocationSelectedTier", { length: 24 }),
   allocationTierOverridden: boolean("allocationTierOverridden").notNull().default(false),
+  /**
+   * Phase 2 (commit contract) — Unix-ms timestamp of when the user last
+   * COMMITTED the plan (allocation tier + policy + contribution schedule) so the
+   * ledger/projection execute it. Null = never committed (the plan is still a
+   * draft / suggestion). Surfaced by the canonical snapshot so every tab agrees
+   * on "this is the committed plan". Additive + nullable; no existing behaviour
+   * changes when null.
+   */
+  planCommittedAt: bigint("planCommittedAt", { mode: "number" }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });

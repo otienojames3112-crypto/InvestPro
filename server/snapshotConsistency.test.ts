@@ -6,6 +6,7 @@ import {
   selectAllocationGap,
   selectLedgerRows,
   selectReconciliationStatus,
+  selectPlanStatus,
   type PortfolioSnapshot,
 } from "../shared/snapshot";
 import { buildAllocation } from "../shared/actuals";
@@ -35,6 +36,8 @@ function makeSnapshot(): PortfolioSnapshot {
       allocationPolicy: "balanced",
       committedTier: "growth",
       tierOverridden: false,
+      planCommittedAt: 1_790_000_000_000,
+      planStatus: "committed",
     },
     goal: {
       target: 1_200_000,
@@ -156,6 +159,20 @@ describe("composition invariants the builder depends on", () => {
     expect(bucketSum).toBeCloseTo(alloc.netWorth, 6);
   });
 
+  it("selectPlanStatus reads the canonical commit marker (no re-derivation)", () => {
+    const base = makeSnapshot();
+    const committed = selectPlanStatus(base);
+    expect(committed.status).toBe("committed");
+    expect(committed.committedAtMs).toBe(1_790_000_000_000);
+    // A draft snapshot (no commit marker) reports "draft".
+    const draft: PortfolioSnapshot = {
+      ...base,
+      identity: { ...base.identity, planCommittedAt: null, planStatus: "draft" },
+    };
+    const d = selectPlanStatus(draft);
+    expect(d.status).toBe("draft");
+    expect(d.committedAtMs).toBeNull();
+  });
   it("gap rows equal computeBucketGaps(target glide, actual buckets)", () => {
     const target = glidedAllocation("growth", 0.9);
     const actual = { cash: 150_000, gov: 100_000, equity: 0, reit: 0, offshore: 0, other: 0 };

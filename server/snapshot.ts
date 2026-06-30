@@ -570,6 +570,10 @@ export async function buildPortfolioSnapshot(
           | "custom",
       committedTier: (p.allocationSelectedTier ?? null) as string | null,
       tierOverridden: !!p.allocationTierOverridden,
+      planCommittedAt: ((p as { planCommittedAt?: number | null }).planCommittedAt ?? null),
+      planStatus: ((p as { planCommittedAt?: number | null }).planCommittedAt != null
+        ? "committed"
+        : "draft") as "committed" | "draft",
     },
     goal: {
       target,

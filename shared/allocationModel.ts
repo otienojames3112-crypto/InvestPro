@@ -27,7 +27,19 @@
  */
 
 import type { AssetClass } from "./assetModel";
-import { type RiskTolerance, RISK_TOLERANCES } from "./riskModel";
+import {
+  type RiskTolerance,
+  RISK_TOLERANCES,
+  type RiskAssumption,
+  type EndValueDistribution,
+  type GoalProbability,
+  buildEndValueDistribution,
+  endValueFromParams,
+  goalProbability,
+  resolveRiskAssumption,
+  PROBABILITY_FLOOR,
+  PROBABILITY_CEIL,
+} from "./riskModel";
 
 /* ───────────────────────────── Risk tiers ────────────────────────────── */
 
@@ -841,3 +853,471 @@ export function validateGlideParams(
 
   return { ok: errors.length === 0, errors };
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * Allocation Model — Part 3 of 4: the goal-probability feedback loop.
+ *
+ * WHAT THIS IS
+ *   For a goal's selected tier + the Part 2 glide + a contribution plan, this
+ *   computes (a) a TIME-VARYING end-value distribution along the glide and a
+ *   floor/ceil-clamped goal PROBABILITY, and (b) the three neutral LEVERS (more
+ *   time, more contribution, more risk) each quantified as its effect on that
+ *   probability, plus a two-sided, strictly-factual message keyed off editable
+ *   high/low thresholds.
+ *
+ * WHAT THIS IS NOT (invariants)
+ *   - NO second probability engine. The lognormal/correlation math is riskModel's
+ *     `buildEndValueDistribution` (used per glide period to read each month's
+ *     return + vol) and `endValueFromParams` + `goalProbability` for the final
+ *     fold. Probability is NEVER shown as 0% or 100% — the floor/ceil clamp in
+ *     `goalProbability` carries straight through.
+ *   - NO hardcoded return/vol/correlation. The caller resolves a per-bucket
+ *     `RiskAssumption` from the sourced layer (`resolveRiskAssumption`) and passes
+ *     it in; defaults are only the documented riskModel per-class defaults.
+ *   - NO preferred lever. The levers are returned as a flat, unsorted set with
+ *     their numbers; the "more risk" lever ALWAYS also reports its worsened
+ *     downside (p10), so more risk is never made to look free.
+ *   - NO advice. The two-sided message is a factual statement about the math
+ *     ("you could reach this at a lower tier; odds stay above X%"), never a
+ *     recommendation to act.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+/**
+ * The representative behavior `AssetClass` used to source each allocation
+ * bucket's risk assumption. A bucket is modeled by the class that dominates its
+ * risk character; the GOVERNMENT bucket is mapped to `gov_coupon` (the more
+ * volatile, longer-duration end of the government sleeve) so the band is honest
+ * rather than flattering. This is the single bucket→class bridge the probability
+ * layer uses; weights still come from the glide, assumptions from riskModel.
+ */
+export const BUCKET_RISK_CLASS: Record<AllocationBucket, AssetClass> = {
+  cash: "cash_mmf",
+  gov: "gov_coupon",
+  equity: "equity",
+  reit: "reit",
+  offshore: "offshore_fund",
+};
+
+/** The caveat that MUST accompany every figure depending on risky assets. */
+export const RISK_ASSUMPTION_CAVEAT =
+  "Based on assumed returns; outcomes will vary.";
+
+/** A per-bucket resolved risk assumption set (sourced by the caller). */
+export type BucketRiskAssumptions = Record<AllocationBucket, RiskAssumption>;
+
+/**
+ * Resolve the per-bucket risk assumptions from the sourced layer. `overrides`
+ * lets the caller thread stored per-class edits through `resolveRiskAssumption`
+ * (return/vol/correlation), exactly like the existing recompute path; omitted
+ * buckets fall back to the riskModel per-class defaults. Nothing is hardcoded
+ * here — this is a thin adapter from buckets to riskModel's class assumptions.
+ */
+export function resolveBucketAssumptions(
+  overrides?: Partial<
+    Record<
+      AllocationBucket,
+      { expectedReturnPct?: number | null; volatilityPct?: number | null; correlationGroup?: string | null }
+    >
+  >,
+): BucketRiskAssumptions {
+  const out = {} as BucketRiskAssumptions;
+  for (const b of ALLOCATION_BUCKETS) {
+    const cls = BUCKET_RISK_CLASS[b];
+    const r = resolveRiskAssumption(cls, overrides?.[b] ?? undefined);
+    out[b] = {
+      expectedReturnPct: r.expectedReturnPct,
+      volatilityPct: r.volatilityPct,
+      correlationGroup: r.correlationGroup,
+    };
+  }
+  return out;
+}
+
+/**
+ * The effective (time-averaged) annual return and volatility of a tier's GLIDED
+ * mix across the horizon. Because the mix de-risks over time, a single static
+ * mix would misstate the risk; instead we sample the glide month-by-month and,
+ * for EACH month, reuse `buildEndValueDistribution` over that month's bucket
+ * weights to read the period's portfolio return and volatility (so the
+ * correlation/variance math is riskModel's, not a copy). We then average the
+ * per-period return and the per-period VARIANCE across the horizon — variance
+ * (not stdev) averages correctly for an independent-increments approximation —
+ * and report the resulting effective annual return + vol.
+ */
+export interface GlideEffectiveRisk {
+  annualReturnPct: number;
+  annualVolPct: number;
+  /** Number of periods sampled. */
+  periods: number;
+}
+
+export function glideEffectiveRisk(opts: {
+  tier: AllocationTier;
+  horizonMonths: number;
+  assumptions: BucketRiskAssumptions;
+  params?: GlideParams;
+  templates?: Partial<Record<AllocationTier, AllocationWeights>>;
+}): GlideEffectiveRisk {
+  const params = opts.params ?? DEFAULT_GLIDE_PARAMS;
+  const horizon = Math.max(1, Math.round(Number(opts.horizonMonths) || 0));
+  const points = sampleGlidePath({
+    tier: opts.tier,
+    horizonMonths: horizon,
+    params,
+    templates: opts.templates,
+  });
+
+  let sumReturn = 0;
+  let sumVariance = 0;
+  let n = 0;
+  for (const pt of points) {
+    // Build a notional position set for THIS month's mix and let riskModel
+    // compute the period's portfolio return + vol from the resolved assumptions.
+    const positions = ALLOCATION_BUCKETS.filter((b) => pt.weights[b] > 0).map((b) => ({
+      valueKes: pt.weights[b], // weight as a notional KES value; only ratios matter
+      assetClass: BUCKET_RISK_CLASS[b],
+      assumption: opts.assumptions[b],
+    }));
+    if (positions.length === 0) continue;
+    const slice = buildEndValueDistribution({ positions, horizonYears: 1 });
+    sumReturn += slice.portfolioReturnPct;
+    sumVariance += slice.portfolioVolPct * slice.portfolioVolPct;
+    n += 1;
+  }
+
+  if (n === 0) return { annualReturnPct: 0, annualVolPct: 0, periods: 0 };
+  const avgReturn = sumReturn / n;
+  const avgVol = Math.sqrt(sumVariance / n);
+  return {
+    annualReturnPct: Math.round(avgReturn * 100) / 100,
+    annualVolPct: Math.round(avgVol * 100) / 100,
+    periods: n,
+  };
+}
+
+/**
+ * The full probability picture for a plan under a tier's glide. `riskyValue` is
+ * the amount that follows the glided risky/growth allocation (typically the
+ * plan's projected end value of the contributed pot), and `extraCertainEndValue`
+ * is any deterministic chunk (e.g. a held-to-maturity core) folded in unchanged.
+ * Reuses `endValueFromParams` (the shared lognormal core) + `goalProbability`
+ * (floor/ceil clamp) — no second engine.
+ */
+export interface GlideProbabilityResult {
+  tier: AllocationTier;
+  horizonMonths: number;
+  goal: number;
+  effective: GlideEffectiveRisk;
+  distribution: EndValueDistribution;
+  probability: GoalProbability;
+  caveat: string;
+}
+
+export function glideGoalProbability(opts: {
+  tier: AllocationTier;
+  horizonMonths: number;
+  goal: number;
+  /** The KES amount that follows the glided risky allocation. */
+  riskyValue: number;
+  /** Deterministic end value folded in (no modeled price volatility). Default 0. */
+  extraCertainEndValue?: number;
+  assumptions: BucketRiskAssumptions;
+  params?: GlideParams;
+  templates?: Partial<Record<AllocationTier, AllocationWeights>>;
+}): GlideProbabilityResult {
+  const horizonMonths = Math.max(1, Math.round(Number(opts.horizonMonths) || 0));
+  const goal = Math.max(0, Number(opts.goal) || 0);
+  const certain = Math.max(0, Number(opts.extraCertainEndValue) || 0);
+  const effective = glideEffectiveRisk({
+    tier: opts.tier,
+    horizonMonths,
+    assumptions: opts.assumptions,
+    params: opts.params,
+    templates: opts.templates,
+  });
+  const distribution = endValueFromParams({
+    riskyValue: Math.max(0, Number(opts.riskyValue) || 0),
+    annualReturnPct: effective.annualReturnPct,
+    annualVolPct: effective.annualVolPct,
+    horizonYears: horizonMonths / 12,
+    extraCertainEndValue: certain,
+  });
+  const probability = goalProbability({
+    dist: distribution,
+    deterministicEndValue: certain || distribution.p50,
+    goal,
+  });
+  return {
+    tier: opts.tier,
+    horizonMonths,
+    goal,
+    effective,
+    distribution,
+    probability,
+    caveat: RISK_ASSUMPTION_CAVEAT,
+  };
+}
+
+/* ───────────────────────────── The three levers ──────────────────────────── */
+
+/** The kind of lever; a flat, neutral set — never ranked or preferred. */
+export type LeverKind = "more_time" | "more_contribution" | "more_risk";
+
+/**
+ * One lever option: a concrete step and the probability it produces. For the
+ * `more_risk` lever, `downsideP10` is ALSO populated (the new, lower 10th-
+ * percentile end value) so the worsened downside is shown alongside the higher
+ * central probability — more risk is never presented as free.
+ */
+export interface LeverOption {
+  kind: LeverKind;
+  /** A short, factual label, e.g. "+6 months" or "Growth tier". */
+  label: string;
+  /** The probability percentage AFTER applying this step (1..99). */
+  probabilityPct: number;
+  /** Change in probability points vs the current plan (can be negative). */
+  deltaPct: number;
+  /** Only for `more_risk`: the new 10th-percentile end value (KES). */
+  downsideP10?: number;
+  /** Only for `more_risk`: the current 10th-percentile end value (KES), for contrast. */
+  baselineP10?: number;
+}
+
+/** Editable lever step sizes (mechanics, not preferences). */
+export interface LeverSteps {
+  /** Extra months to test, e.g. [3, 6, 12]. */
+  monthSteps: number[];
+  /** Extra monthly contribution KES to test, e.g. [5000, 10000]. */
+  contributionSteps: number[];
+}
+
+export const DEFAULT_LEVER_STEPS: LeverSteps = {
+  monthSteps: [3, 6, 12],
+  contributionSteps: [5000, 10000],
+};
+
+/**
+ * Estimate the additional risky end value contributed by raising the monthly
+ * contribution, compounded along the glide at the effective return. This reuses
+ * the effective-return number already computed for the plan — it does not invent
+ * a parallel projection; it is a transparent annuity future-value of the EXTRA
+ * contributions only, added to the existing risky value.
+ */
+function extraContributionFutureValue(
+  extraMonthly: number,
+  horizonMonths: number,
+  annualReturnPct: number,
+): number {
+  const m = Math.max(0, Number(extraMonthly) || 0);
+  if (m <= 0) return 0;
+  const monthlyRate = Math.pow(1 + annualReturnPct / 100, 1 / 12) - 1;
+  const nMonths = Math.max(0, Math.round(horizonMonths));
+  if (monthlyRate <= 1e-9) return m * nMonths;
+  return m * ((Math.pow(1 + monthlyRate, nMonths) - 1) / monthlyRate);
+}
+
+/**
+ * Compute the three levers for a plan, each quantified, as a FLAT NEUTRAL SET.
+ * The result is intentionally NOT sorted by effect and marks no option as
+ * preferred. The caller passes the current plan inputs; each lever re-runs
+ * `glideGoalProbability` with one input perturbed — the same function the live
+ * picture uses, so applying a lever later recomputes identically.
+ */
+export function computeLevers(opts: {
+  tier: AllocationTier;
+  horizonMonths: number;
+  goal: number;
+  riskyValue: number;
+  extraCertainEndValue?: number;
+  assumptions: BucketRiskAssumptions;
+  params?: GlideParams;
+  templates?: Partial<Record<AllocationTier, AllocationWeights>>;
+  steps?: LeverSteps;
+}): LeverOption[] {
+  const steps = opts.steps ?? DEFAULT_LEVER_STEPS;
+  const base = glideGoalProbability(opts);
+  const basePct = base.probability.probabilityPct;
+  const levers: LeverOption[] = [];
+
+  // Lever 1 — more time: push the goal date out by each step.
+  for (const dm of steps.monthSteps) {
+    const r = glideGoalProbability({ ...opts, horizonMonths: opts.horizonMonths + dm });
+    levers.push({
+      kind: "more_time",
+      label: `+${dm} months`,
+      probabilityPct: r.probability.probabilityPct,
+      deltaPct: round1signed(r.probability.probabilityPct - basePct),
+    });
+  }
+
+  // Lever 2 — more contribution: add the extra pot's future value to riskyValue.
+  for (const dc of steps.contributionSteps) {
+    const extra = extraContributionFutureValue(
+      dc,
+      opts.horizonMonths,
+      base.effective.annualReturnPct,
+    );
+    const r = glideGoalProbability({ ...opts, riskyValue: opts.riskyValue + extra });
+    levers.push({
+      kind: "more_contribution",
+      label: `+KES ${Math.round(dc).toLocaleString()}/month`,
+      probabilityPct: r.probability.probabilityPct,
+      deltaPct: round1signed(r.probability.probabilityPct - basePct),
+    });
+  }
+
+  // Lever 3 — more risk: move up one tier (if any). ALWAYS report the worsened
+  // downside (the new, lower p10) so the higher central case is never shown alone.
+  const rank = tierRank(opts.tier);
+  if (rank < ALLOCATION_TIERS.length - 1) {
+    const higher = ALLOCATION_TIERS[rank + 1];
+    const r = glideGoalProbability({ ...opts, tier: higher });
+    levers.push({
+      kind: "more_risk",
+      label: `${tierSpec(higher).label} tier`,
+      probabilityPct: r.probability.probabilityPct,
+      deltaPct: round1signed(r.probability.probabilityPct - basePct),
+      downsideP10: r.distribution.p10,
+      baselineP10: base.distribution.p10,
+    });
+  }
+
+  return levers;
+}
+
+/* ─────────────────────── Two-sided threshold messaging ────────────────────── */
+
+/** Editable thresholds for the two-sided insight. Percentages in 0..100. */
+export interface ProbabilityThresholds {
+  /** At/above this, surface the factual "reachable at a lower tier" insight. */
+  highPct: number;
+  /** At/below this, surface the levers to improve the odds. */
+  lowPct: number;
+}
+
+export const DEFAULT_PROBABILITY_THRESHOLDS: ProbabilityThresholds = {
+  highPct: 85,
+  lowPct: 60,
+};
+
+export type InsightTone = "comfortable" | "in_between" | "low";
+
+/**
+ * The two-sided insight. STRICTLY FACTUAL: it describes what the math shows,
+ * never what the user "should" do.
+ *   - comfortable (prob ≥ highPct) AND a safer tier keeps prob ≥ highPct:
+ *       state that the goal is reachable at a lower tier (odds stay above X%).
+ *   - low (prob ≤ lowPct): point to the levers (computed separately).
+ *   - in between: neutral — show probability + levers without editorializing.
+ * The lower-tier check actually recomputes the safer tier's probability, so the
+ * claim is verified, not assumed.
+ */
+export interface ProbabilityInsight {
+  tone: InsightTone;
+  message: string;
+  /** For the comfortable case: the safer tier that still clears highPct, if any. */
+  lowerTier?: AllocationTier | null;
+  lowerTierProbabilityPct?: number | null;
+}
+
+export function probabilityInsight(opts: {
+  tier: AllocationTier;
+  horizonMonths: number;
+  goal: number;
+  riskyValue: number;
+  extraCertainEndValue?: number;
+  assumptions: BucketRiskAssumptions;
+  params?: GlideParams;
+  templates?: Partial<Record<AllocationTier, AllocationWeights>>;
+  thresholds?: ProbabilityThresholds;
+}): ProbabilityInsight {
+  const thresholds = opts.thresholds ?? DEFAULT_PROBABILITY_THRESHOLDS;
+  const base = glideGoalProbability(opts);
+  const pct = base.probability.probabilityPct;
+
+  // LOW — surface the improvement levers (the levers themselves are computed by
+  // computeLevers; here we only set the tone + factual framing).
+  if (pct <= thresholds.lowPct) {
+    return {
+      tone: "low",
+      message:
+        `On the assumed figures, the modeled chance of reaching this goal is about ${pct}%. ` +
+        `The levers below show, each on its own, what more time, a higher monthly amount, or a higher risk tier does to that number. ${RISK_ASSUMPTION_CAVEAT}`,
+      lowerTier: null,
+      lowerTierProbabilityPct: null,
+    };
+  }
+
+  // COMFORTABLE — only if a SAFER tier still keeps the odds at/above highPct.
+  if (pct >= thresholds.highPct) {
+    const rank = tierRank(opts.tier);
+    let lowerTier: AllocationTier | null = null;
+    let lowerPct: number | null = null;
+    // Walk DOWN from the current tier; report the LOWEST tier that still clears.
+    for (let r = rank - 1; r >= 0; r--) {
+      const candidate = ALLOCATION_TIERS[r];
+      const rr = glideGoalProbability({ ...opts, tier: candidate });
+      if (rr.probability.probabilityPct >= thresholds.highPct) {
+        lowerTier = candidate;
+        lowerPct = rr.probability.probabilityPct;
+      } else {
+        break; // tiers below this only get safer/lower — stop at the first miss
+      }
+    }
+    if (lowerTier) {
+      return {
+        tone: "comfortable",
+        message:
+          `On the assumed figures, the modeled chance is about ${pct}%. ` +
+          `You could reach this goal at a lower risk tier (${tierSpec(lowerTier).label}) and the modeled odds stay above ${thresholds.highPct}% (about ${lowerPct}%). ` +
+          `This is a statement about the math, not a recommendation. ${RISK_ASSUMPTION_CAVEAT}`,
+        lowerTier,
+        lowerTierProbabilityPct: lowerPct,
+      };
+    }
+    // Comfortable but no safer tier clears — fall through to neutral framing.
+    return {
+      tone: "comfortable",
+      message:
+        `On the assumed figures, the modeled chance is about ${pct}%. ` +
+        `No lower risk tier keeps the modeled odds above ${thresholds.highPct}%. ${RISK_ASSUMPTION_CAVEAT}`,
+      lowerTier: null,
+      lowerTierProbabilityPct: null,
+    };
+  }
+
+  // IN BETWEEN — neutral.
+  return {
+    tone: "in_between",
+    message:
+      `On the assumed figures, the modeled chance of reaching this goal is about ${pct}%. ` +
+      `The levers below show what each change would do to that number. ${RISK_ASSUMPTION_CAVEAT}`,
+    lowerTier: null,
+    lowerTierProbabilityPct: null,
+  };
+}
+
+/** Validate editable probability thresholds: both in [1,99], high > low. */
+export function validateProbabilityThresholds(
+  t: Partial<ProbabilityThresholds> | null | undefined,
+): { ok: boolean; errors: string[] } {
+  const errors: string[] = [];
+  const hi = Number(t?.highPct);
+  const lo = Number(t?.lowPct);
+  if (!Number.isFinite(hi) || hi < 1 || hi > 99) errors.push("High threshold must be between 1 and 99.");
+  if (!Number.isFinite(lo) || lo < 1 || lo > 99) errors.push("Low threshold must be between 1 and 99.");
+  if (Number.isFinite(hi) && Number.isFinite(lo) && !(hi > lo)) {
+    errors.push("High threshold must be strictly greater than the low threshold.");
+  }
+  return { ok: errors.length === 0, errors };
+}
+
+/** Round to one decimal, preserving sign (so a +0.0/−0.0 reads cleanly as 0). */
+function round1signed(n: number): number {
+  const r = Math.round((Number(n) || 0) * 10) / 10;
+  return r === 0 ? 0 : r;
+}
+
+// Re-export the floor/ceil so consumers can label the clamp without importing
+// riskModel directly (single import surface for the allocation layer).
+export { PROBABILITY_FLOOR, PROBABILITY_CEIL };

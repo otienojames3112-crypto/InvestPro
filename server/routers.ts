@@ -104,6 +104,7 @@ import {
   listAiIntakeAudit,
   listAllocationTemplates,
   getGlideParams,
+  getProbabilityThresholds,
 } from "./db";
 import { OPPORTUNITY_SEED } from "./opportunitySeed";
 import {
@@ -118,6 +119,11 @@ import {
   ALLOCATION_TIERS,
   type AllocationTier,
   sampleGlidePath,
+  resolveBucketAssumptions,
+  glideGoalProbability,
+  computeLevers,
+  probabilityInsight,
+  ALLOCATION_BUCKETS,
 } from "../shared/allocationModel";
 import { storagePut, storageGetSignedUrl } from "./storage";
 import { stripVerdictFields } from "../shared/aiIntake";
@@ -6041,6 +6047,89 @@ export const appRouter = router({
           templates: templateMap,
         });
         return { tier: input.tier, params: glide.params, points };
+      }),
+
+    /** The editable two-sided probability thresholds + provenance. */
+    probabilityThresholds: publicProcedure.query(async () => {
+      return await getProbabilityThresholds();
+    }),
+
+    /**
+     * The goal-probability feedback loop (Part 3) for a hypothetical plan under a
+     * tier's glide. Given the goal, the KES amount that follows the glided risky
+     * allocation, and any deterministic chunk, it returns the time-varying
+     * end-value distribution, the floor/ceil-clamped probability, the three
+     * neutral levers (more time / more contribution / more risk — the risk lever
+     * also reporting its worsened downside), and a strictly factual two-sided
+     * insight keyed off the editable thresholds.
+     *
+     * Read-only and pure: it RESOLVES per-bucket risk assumptions from the sourced
+     * riskModel layer (no hardcoded return/vol) and reuses the SAME
+     * buildEndValueDistribution / goalProbability machinery the live recompute
+     * path uses — there is no parallel probability engine. Optional per-bucket
+     * assumption overrides let a caller thread stored edits through unchanged.
+     */
+    goalProbability: publicProcedure
+      .input(
+        z.object({
+          tier: z.enum(
+            ALLOCATION_TIERS as readonly [AllocationTier, ...AllocationTier[]],
+          ),
+          horizonMonths: z.number().int().positive().max(600),
+          goal: z.number().nonnegative(),
+          riskyValue: z.number().nonnegative(),
+          extraCertainEndValue: z.number().nonnegative().optional(),
+          /** Optional per-bucket risk-assumption overrides (sourced upstream). */
+          assumptionOverrides: z
+            .record(
+              z.enum(ALLOCATION_BUCKETS as readonly [string, ...string[]]),
+              z.object({
+                expectedReturnPct: z.number().nullable().optional(),
+                volatilityPct: z.number().nullable().optional(),
+                correlationGroup: z.string().nullable().optional(),
+              }),
+            )
+            .optional(),
+        }),
+      )
+      .query(async ({ input }) => {
+        const [templates, glide, thresholdsRow] = await Promise.all([
+          listAllocationTemplates(),
+          getGlideParams(),
+          getProbabilityThresholds(),
+        ]);
+        const templateMap = Object.fromEntries(
+          templates.map((t) => [t.tier, t.weights]),
+        ) as Record<AllocationTier, (typeof templates)[number]["weights"]>;
+        const assumptions = resolveBucketAssumptions(input.assumptionOverrides);
+        const common = {
+          tier: input.tier,
+          horizonMonths: input.horizonMonths,
+          goal: input.goal,
+          riskyValue: input.riskyValue,
+          extraCertainEndValue: input.extraCertainEndValue ?? 0,
+          assumptions,
+          params: glide.params,
+          templates: templateMap,
+        };
+        const result = glideGoalProbability(common);
+        const levers = computeLevers(common);
+        const insight = probabilityInsight({
+          ...common,
+          thresholds: thresholdsRow.thresholds,
+        });
+        return {
+          tier: input.tier,
+          horizonMonths: input.horizonMonths,
+          goal: input.goal,
+          thresholds: thresholdsRow.thresholds,
+          effective: result.effective,
+          distribution: result.distribution,
+          probability: result.probability,
+          levers,
+          insight,
+          caveat: result.caveat,
+        };
       }),
   }),
 });

@@ -219,6 +219,53 @@ export const MATERIAL_RISK_VOL_THRESHOLD = 0.03; // 3% portfolio vol
  * fixed-income engine's own projected end value of the liquid core / ladder)
  * that should grow with the plan but carry no modeled price volatility.
  */
+/**
+ * The single lognormal CORE, factored out so the per-position builder AND the
+ * time-varying glide path (Allocation Model Part 3) share ONE implementation —
+ * there is no second distribution engine. Given an already-computed risky value,
+ * effective annual return and annual volatility, it produces the same
+ * median / P10 / P90 band and `hasMaterialRisk` flag the builder reports.
+ *
+ * The glide path computes its effective (time-averaged) return + vol by calling
+ * the per-period `buildEndValueDistribution` along the glide, then folds the
+ * aggregate through THIS helper — so the correlation/variance math is reused
+ * verbatim and only the time-averaging lives in the allocation layer.
+ */
+export function endValueFromParams(opts: {
+  riskyValue: number;
+  annualReturnPct: number;
+  annualVolPct: number;
+  horizonYears: number;
+  extraCertainEndValue?: number;
+}): EndValueDistribution {
+  const years = Math.max(0, Number(opts.horizonYears) || 0);
+  const riskyValue = Math.max(0, Number(opts.riskyValue) || 0);
+  const certain = Math.max(0, Number(opts.extraCertainEndValue) || 0);
+  const mu = (Number(opts.annualReturnPct) || 0) / 100;
+  const sigmaAnnual = Math.max(0, (Number(opts.annualVolPct) || 0) / 100);
+
+  const riskyMean = riskyValue * Math.pow(1 + mu, years);
+  const sigmaHorizon = sigmaAnnual * Math.sqrt(years);
+  const median = riskyMean * Math.exp(-(sigmaHorizon * sigmaHorizon) / 2);
+  const p10Risky = median * Math.exp(Z_P10 * sigmaHorizon);
+  const p90Risky = median * Math.exp(Z_P90 * sigmaHorizon);
+  const hasMaterialRisk = sigmaAnnual >= MATERIAL_RISK_VOL_THRESHOLD && riskyValue > 0;
+
+  return {
+    horizonYears: years,
+    mean: round0(riskyMean + certain),
+    p50: round0(median + certain),
+    p10: round0(p10Risky + certain),
+    p90: round0(p90Risky + certain),
+    portfolioVolPct: round2(sigmaAnnual * 100),
+    portfolioReturnPct: round2(mu * 100),
+    sigmaHorizon,
+    riskyMedian: round0(median),
+    certainEndValue: round0(certain),
+    hasMaterialRisk,
+  };
+}
+
 export function buildEndValueDistribution(opts: {
   positions: RiskPosition[];
   horizonYears: number;

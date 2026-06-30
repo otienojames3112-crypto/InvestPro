@@ -41,6 +41,8 @@ import {
   type AllocationTemplateRow,
   allocationGlideParams,
   type AllocationGlideParamsRow,
+  allocationProbabilityThresholds,
+  type AllocationProbabilityThresholdsRow,
 } from "../drizzle/schema";
 import { ENV } from "./_core/env";
 import { computeActualsTotals, estInterestToDate, govAccruedInterestTotal } from "../shared/actuals";
@@ -1931,6 +1933,9 @@ import {
   type GlideParams,
   DEFAULT_GLIDE_PARAMS,
   validateGlideParams,
+  type ProbabilityThresholds,
+  DEFAULT_PROBABILITY_THRESHOLDS,
+  validateProbabilityThresholds,
 } from "../shared/allocationModel";
 
 /** Parse a YYYY-MM-DD provenance date into a Date, or null when absent/invalid. */
@@ -2155,6 +2160,112 @@ export async function saveGlideParams(args: {
     await db.insert(allocationGlideParams).values({
       singletonKey: GLIDE_PARAMS_KEY,
       params,
+      source: args.source ?? null,
+      asOfDate,
+      notes: args.notes ?? null,
+    });
+  }
+  return { ok: true, errors: [] };
+}
+
+/* ── Allocation Model Part 3: editable two-sided probability thresholds ─────── */
+
+/** The sentinel key for the single global probability-thresholds row. */
+const PROBABILITY_THRESHOLDS_KEY = "global";
+
+/** Coerce a stored thresholds blob into a clean ProbabilityThresholds. */
+function coerceThresholds(raw: unknown): ProbabilityThresholds {
+  const src = (raw ?? {}) as Record<string, unknown>;
+  const num = (v: unknown, fallback: number) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : fallback;
+  };
+  return {
+    highPct: num(src.highPct, DEFAULT_PROBABILITY_THRESHOLDS.highPct),
+    lowPct: num(src.lowPct, DEFAULT_PROBABILITY_THRESHOLDS.lowPct),
+  };
+}
+
+/** The stored thresholds with provenance, for an editor/display. */
+export interface StoredProbabilityThresholds {
+  thresholds: ProbabilityThresholds;
+  source: string | null;
+  asOf: string | null;
+  notes: string | null;
+  updatedAt: number | null;
+}
+
+function rowToThresholds(row: AllocationProbabilityThresholdsRow): StoredProbabilityThresholds {
+  return {
+    thresholds: coerceThresholds(row.thresholds),
+    source: row.source ?? null,
+    asOf: row.asOfDate ? String(row.asOfDate) : null,
+    notes: row.notes ?? null,
+    updatedAt: row.updatedAt ? new Date(row.updatedAt).getTime() : null,
+  };
+}
+
+/**
+ * Read the global two-sided probability thresholds. Falls back to the documented
+ * defaults when no row is present. Read-only.
+ */
+export async function getProbabilityThresholds(): Promise<StoredProbabilityThresholds> {
+  const db = await getDb();
+  if (db) {
+    const rows = await db
+      .select()
+      .from(allocationProbabilityThresholds)
+      .where(eq(allocationProbabilityThresholds.singletonKey, PROBABILITY_THRESHOLDS_KEY))
+      .limit(1);
+    if (rows[0]) return rowToThresholds(rows[0]);
+  }
+  return {
+    thresholds: { ...DEFAULT_PROBABILITY_THRESHOLDS },
+    source: "Default thresholds (illustrative; editable)",
+    asOf: null,
+    notes: null,
+    updatedAt: null,
+  };
+}
+
+/**
+ * Save (upsert) the global probability thresholds. VALIDATED first (both in
+ * [1,99], high strictly greater than low); a non-conforming pair is REJECTED and
+ * never written. Provenance recorded alongside.
+ */
+export async function saveProbabilityThresholds(args: {
+  thresholds: ProbabilityThresholds;
+  source?: string | null;
+  asOf?: string | null;
+  notes?: string | null;
+}): Promise<{ ok: boolean; errors: string[] }> {
+  const validation = validateProbabilityThresholds(args.thresholds);
+  if (!validation.ok) return { ok: false, errors: validation.errors };
+
+  const db = await getDb();
+  if (!db) return { ok: false, errors: ["Database unavailable."] };
+
+  const thresholds = {
+    highPct: Number(args.thresholds.highPct),
+    lowPct: Number(args.thresholds.lowPct),
+  };
+  const asOfDate = parseAsOfDate(args.asOf);
+
+  const existing = await db
+    .select({ id: allocationProbabilityThresholds.id })
+    .from(allocationProbabilityThresholds)
+    .where(eq(allocationProbabilityThresholds.singletonKey, PROBABILITY_THRESHOLDS_KEY))
+    .limit(1);
+
+  if (existing[0]) {
+    await db
+      .update(allocationProbabilityThresholds)
+      .set({ thresholds, source: args.source ?? null, asOfDate, notes: args.notes ?? null })
+      .where(eq(allocationProbabilityThresholds.singletonKey, PROBABILITY_THRESHOLDS_KEY));
+  } else {
+    await db.insert(allocationProbabilityThresholds).values({
+      singletonKey: PROBABILITY_THRESHOLDS_KEY,
+      thresholds,
       source: args.source ?? null,
       asOfDate,
       notes: args.notes ?? null,

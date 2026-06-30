@@ -1092,3 +1092,34 @@
 - [x] Param validation: defaults ok; rejects steepness<1, non-ascending thresholds, out-of-(0,1)
 - [x] CAR-PLAN REGRESSION: engineBucketsForPhase + ENGINE_PHASE_BUCKETS pinned byte-for-byte against LIVE getPhaseAllocation (+short-horizon); glide thresholds line up with getPhaseBoundaries
 - [x] Type gate clean; full suite green (1041 → 1061, +20); no existing behavior changed
+
+## Allocation Model — Part 3 (the goal-probability feedback loop)
+
+### Investigation
+- [x] buildEndValueDistribution(positions: RiskPosition[], horizonYears, extraCertainEndValue?) → {p10,p50,p90,mean,portfolioReturnPct,portfolioVolPct,hasMaterialRisk,...}; lognormal risky sleeve + deterministic chunk; vol from coarse correlation matrix
+- [x] goalProbability({dist, deterministicEndValue, goal}) → {probabilityPct,...}; PROBABILITY_FLOOR 0.01 / CEIL 0.99 already clamp so never 0/100%
+- [x] Assumptions resolve via resolveRiskAssumption(class, sourced overrides) → DEFAULT_RISK_BY_CLASS; never hardcoded in the loop
+- [x] Buckets→class bridge: cash→cash_mmf, gov→gov_coupon (honest volatile end), equity→equity, reit→reit, offshore→offshore_fund (BUCKET_RISK_CLASS)
+- [x] Live recompute path (routers.ts ~2700) builds dist from real holdings; Part 3 is the forward hypothetical over the glide and REUSES endValueFromParams (shared lognormal core extracted from buildEndValueDistribution) + goalProbability — no parallel engine
+
+### Probability loop (shared/allocationModel.ts, reusing riskModel)
+- [x] glideEffectiveRisk: samples the glide month-by-month, reuses buildEndValueDistribution per period to read each month's return+vol, averages period return + period VARIANCE → effective annual return/vol (time-varying, not one static mix)
+- [x] glideGoalProbability folds the effective μ/σ through endValueFromParams + goalProbability; floor/ceil enforced (never 0/100%)
+- [x] Lever 1 — more time (+3/+6/+12 mo): re-runs glideGoalProbability with extended horizon
+- [x] Lever 2 — more contribution (+5k/+10k): annuity FV of EXTRA contributions at the effective return added to riskyValue, re-run
+- [x] Lever 3 — more risk (up one tier): re-run AND report downsideP10 + baselineP10 (widened downside shown alongside) — never free
+- [x] computeLevers returns a FLAT unsorted set; no highlight/pre-select/"we suggest"
+- [x] probabilityInsight: ≥high AND a safer tier still clears high → factual "reachable at a lower tier (odds stay above X%)" (VERIFIED by recomputing the safer tier); ≤low → point to levers; else neutral; thresholds editable; strictly factual, explicit "not a recommendation"
+- [x] RISK_ASSUMPTION_CAVEAT "Based on assumed returns; outcomes will vary." on every result + insight
+
+### Wiring + storage
+- [x] allocation.goalProbability read-only query: resolves sourced bucket assumptions, runs glideGoalProbability + computeLevers + probabilityInsight through the stored templates+glide+thresholds; allocation.probabilityThresholds read query
+- [x] allocation_probability_thresholds singleton table (default 85/60) + getProbabilityThresholds/saveProbabilityThresholds (validated, provenance), mirroring Part 2 glide-params storage
+
+### Tests + gate
+- [x] Monotonicity: more time + more contribution each raise the CENTRAL probability monotonically with step size (server/allocationProbability.test.ts)
+- [x] More-risk honesty: in this model tiers share similar expected returns but rising VOL (cones widen), so the suite pins effective vol strictly monotonic in tier; the more-risk lever ALWAYS reports widened downside (p10 falls vs baseline)
+- [x] Floor/ceil clamping: overfunded caps below 100% (≤ ceil), hopeless floors above 0% (≥ floor)
+- [x] Threshold messaging: LOW points to levers; COMFORTABLE names a VERIFIED safer tier (recomputed) with "not a recommendation"; editable thresholds flip the tone; caveat travels on every result
+- [x] Threshold validation: defaults ok; rejects out-of-range / high≤low / equal
+- [x] Type gate clean; full suite green (1061 → 1079, +18); risk-model + car-plan regression suites unchanged by the extracted lognormal core

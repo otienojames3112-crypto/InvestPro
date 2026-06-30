@@ -931,6 +931,31 @@ export type AllocationGlideParamsRow = typeof allocationGlideParams.$inferSelect
 export type InsertAllocationGlideParamsRow = typeof allocationGlideParams.$inferInsert;
 
 /**
+ * Allocation Model Part 3 — editable two-sided probability thresholds. A single
+ * global row holding { highPct, lowPct } with provenance, mirroring the
+ * glide-params storage. `highPct` is the "comfortable" line (a goal reachable at
+ * a lower tier above this stays comfortable); `lowPct` is the line below which
+ * the improvement levers are surfaced. Strictly factual framing, not advice.
+ */
+export const allocationProbabilityThresholds = mysqlTable("allocation_probability_thresholds", {
+  id: int("id").autoincrement().primaryKey(),
+  /** Sentinel singleton key so there is exactly one global row. */
+  singletonKey: varchar("singletonKey", { length: 16 }).notNull().unique(),
+  /** { highPct, lowPct } — the editable thresholds (percentages 1..99). */
+  thresholds: json("thresholds").$type<Record<string, number>>().notNull(),
+  /** Provenance: methodology note / rationale for the chosen thresholds. */
+  source: varchar("source", { length: 500 }),
+  /** "As of" / last-reviewed date (YYYY-MM-DD), provenance only. */
+  asOfDate: date("asOfDate"),
+  /** Free-text rationale or edit note. */
+  notes: text("notes"),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type AllocationProbabilityThresholdsRow = typeof allocationProbabilityThresholds.$inferSelect;
+export type InsertAllocationProbabilityThresholdsRow = typeof allocationProbabilityThresholds.$inferInsert;
+
+/**
  * Audit log — change trail for rate and deposit edits (defensibility).
  * Records who changed what, when, and the before/after values.
  */

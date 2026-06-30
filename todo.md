@@ -1334,3 +1334,15 @@
 - [x] Every command-centre card deep-links to its explaining page/tab; heavy analysis moved behind collapsible "Detailed analysis" (default collapsed) + Manager mode toggle
 - [x] Dashboard reconciliation badge mirrors the Reconciliation page verdict expression EXACTLY (same procedure, same checks) so no page disagrees
 - [x] Tests: 10 net-worth-basis tests (selectors + pure helper + the +200k equity acceptance matrix: Full NW +200k everywhere, Goal-Plan flat when tagged out, tax base unchanged without income); type gate clean; full suite 1200 green (123 files)
+
+## Scenarios basis toggle (pasted Part 5/6 — Scenarios)
+
+- [x] Engine: runScenarios accepts a ScenarioActualBasis (overrides, actualDeposits, actualSecurities) so an actual-basis scenario at the current step-up reproduces the run()/Ledger ending value EXACTLY (proven by scenarioBasis.test.ts); clean basis (null) stays schedule-only
+- [x] Engine tests: actual==Ledger at current step-up; clean vs actual diverge on missed contributions; default==clean; deriveStepUps(79k) includes 79k & spreads >100k; target follows portfolio (1.2M vs 5M)
+- [x] scenarios procedure takes a basis input ("actual" default | "clean"); threads overrides/deposits/securities/secondary/bank when actual; returns { basis, scenarios, meta }
+- [x] meta exposes baseline projected value, target, shortfall/surplus, recommended step-up, dynamic step-up ladder (deriveStepUps centred on current, not fixed 0–5,000)
+- [x] Scenarios page: basis toggle (default "From actual portfolio today"); clean basis clearly labelled "clean schedule — not your recorded actuals"; basis-aware intro copy
+- [x] Chart/table range is the dynamic ladder (deriveStepUps) so +79,000 plans include 79k and nearby values
+- [x] Levers (ScenarioLevers.tsx + projection.levers procedure): effect of more time, lump-sum, and each risk tier — all re-projected from the engine under the same basis
+- [x] Recommendation text is solver/grid-generated: smallest step-up that reaches the portfolio's own target; no hardcoded "5M"/"3,000"/"original PDF" strings
+- [x] Tests: 1206 green (124 files) incl. 1.2M/12mo vs 5M targets, +79k ladder, actual-basis baseline == run() ending value, clean ignores actuals; type gate clean

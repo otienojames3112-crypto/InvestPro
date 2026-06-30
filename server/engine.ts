@@ -2193,18 +2193,44 @@ export function projectedLiquidSplit(
 
 // ─── Scenarios ────────────────────────────────────────────────────────────────
 
+/**
+ * Optional ACTUAL-portfolio basis for scenarios. When supplied, every scenario
+ * is projected from the user's real recorded history (deposits, missed/extra
+ * contributions via overrides, and tracked securities) exactly the way the
+ * Dashboard/Ledger baseline (`run`) does — so the scenario at the portfolio's
+ * own current step-up reproduces the Ledger ending value. When omitted, the
+ * scenario uses the CLEAN scheduled plan only (no recorded actuals).
+ */
+export interface ScenarioActualBasis {
+  overrides: MonthlyContributionOverride[];
+  actualDeposits: ActualDeposit[];
+  actualSecurities: ActualSecurity[];
+}
+
 export function runScenarios(
   baseSettings: EngineSettings,
   stepUps: number[] = SCENARIO_STEPUPS,
   rateHistory: RateSnapshot[] = [],
   secondaryMmfs: SecondaryMmfInput[] = [],
   bankHoldings: ActualBankHolding[] = [],
-  primaryFundId: number | null = null
+  primaryFundId: number | null = null,
+  actualBasis: ScenarioActualBasis | null = null
 ): ScenarioResult[] {
   const horizonMonths = baseSettings.horizonMonths ?? 120;
   return stepUps.map((stepUp) => {
     const settings = { ...baseSettings, stepUpAmount: stepUp };
-    const results = runProjection(settings, [], rateHistory, [], [], secondaryMmfs, bankHoldings, primaryFundId);
+    const results = actualBasis
+      ? runProjection(
+          settings,
+          actualBasis.overrides,
+          rateHistory,
+          actualBasis.actualDeposits,
+          actualBasis.actualSecurities,
+          secondaryMmfs,
+          bankHoldings,
+          primaryFundId,
+        )
+      : runProjection(settings, [], rateHistory, [], [], secondaryMmfs, bankHoldings, primaryFundId);
     const last = results[results.length - 1];
 
     let totalContributed = 0;

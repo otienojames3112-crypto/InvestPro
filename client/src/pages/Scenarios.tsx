@@ -16,8 +16,11 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { BarChart3, CheckCircle2, XCircle, Info, AlertTriangle, Lightbulb } from "lucide-react";
+import { BarChart3, CheckCircle2, XCircle, Info, AlertTriangle, Lightbulb, Wallet, ClipboardList } from "lucide-react";
 import { SecondaryWhatIf } from "@/components/SecondaryWhatIf";
+import { ScenarioLevers } from "@/components/ScenarioLevers";
+import { useState } from "react";
+import { cn } from "@/lib/utils";
 
 function CustomTooltip({ active, payload, label }: { active?: boolean; payload?: Array<{ value: number; name: string }>; label?: string }) {
   if (!active || !payload?.length) return null;
@@ -34,13 +37,22 @@ function CustomTooltip({ active, payload, label }: { active?: boolean; payload?:
   );
 }
 
+type ScenarioBasis = "actual" | "clean";
+
 export default function Scenarios({ embedded = false }: { embedded?: boolean } = {}) {
   const { portfolioId, portfolio } = usePortfolio();
 
-  const { data: scenarios, isLoading } = trpc.projection.scenarios.useQuery(
-    { portfolioId: portfolioId! },
+  // R-Scenarios: the basis is explicit and user-selectable. "actual" projects
+  // forward from real recorded history (matches Dashboard/Ledger); "clean"
+  // projects the scheduled plan only. Default to "actual".
+  const [basis, setBasis] = useState<ScenarioBasis>("actual");
+
+  const { data: scenarioData, isLoading } = trpc.projection.scenarios.useQuery(
+    { portfolioId: portfolioId!, basis },
     { enabled: !!portfolioId }
   );
+  const scenarios = scenarioData?.scenarios;
+  const meta = scenarioData?.meta;
   // The user's CURRENT plan projection — single source of truth for surplus/shortfall.
   const { data: projection, isLoading: projLoading } = trpc.projection.run.useQuery(
     { portfolioId: portfolioId! },
@@ -58,8 +70,12 @@ export default function Scenarios({ embedded = false }: { embedded?: boolean } =
   const currentStepUp = Number(portfolio?.stepUpAmount ?? 0);
   const currentStart = Number(portfolio?.startingContribution ?? 0);
 
-  // The user's current projected ending value (last row of their real projection).
-  const currentEndingValue = projection?.length ? projection[projection.length - 1].totalEnd : 0;
+  // Baseline projected ending value. Under the "actual" basis this comes from the
+  // scenario meta (the scenario at the portfolio's own step-up), which equals the
+  // Dashboard/Ledger projection. Under "clean" it is the schedule-only baseline.
+  // We fall back to the run() projection while the scenario query is loading.
+  const runEndingValue = projection?.length ? projection[projection.length - 1].totalEnd : 0;
+  const currentEndingValue = meta?.baselineProjectedEndingValue ?? runEndingValue;
   const currentGap = currentEndingValue - targetAmount;
   const currentHits = currentGap >= 0;
 
@@ -91,9 +107,9 @@ export default function Scenarios({ embedded = false }: { embedded?: boolean } =
             Side-by-side projections for different step-up amounts — see which path reaches {formatKES(targetAmount)} over {horizonMonths} months
           </p>
           <p className="text-xs text-muted-foreground/80 mt-1.5 max-w-3xl">
-            These are <strong>forward-looking</strong> projections from today over the full {horizonMonths}-month horizon. They start from your scheduled
-            primary contribution and include your tracked secondary MMF accounts, but they do <strong>not</strong> replay past recorded deposits —
-            every scenario uses the same engine, target and accounts so the only thing that differs between them is the step-up.
+            These are <strong>forward-looking</strong> projections over the full {horizonMonths}-month horizon. Every scenario uses the same engine,
+            target and accounts, so the only thing that differs between them is the step-up. What they <strong>start</strong> from depends on the
+            basis you choose below.
           </p>
           <p className="text-xs text-muted-foreground/80 mt-1.5 max-w-3xl">
             Each line here is a single contribution-and-interest path for your fixed-income core, so it is shown as one number. If you hold
@@ -101,6 +117,62 @@ export default function Scenarios({ embedded = false }: { embedded?: boolean } =
             Dashboard reflects that uncertainty, which these step-up lines deliberately do not.
           </p>
         </div>
+
+        {/* ── Scenario basis toggle (R-Scenarios) ── */}
+        <Card>
+          <CardContent className="p-4">
+            <div className="flex flex-col gap-3">
+              <div className="flex items-center justify-between gap-3 flex-wrap">
+                <div>
+                  <p className="text-sm font-semibold text-foreground">Scenario basis</p>
+                  <p className="text-xs text-muted-foreground">Choose what every scenario below starts from.</p>
+                </div>
+                <div className="inline-flex rounded-lg border border-border bg-muted/30 p-0.5" role="tablist" aria-label="Scenario basis">
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={basis === "actual"}
+                    onClick={() => setBasis("actual")}
+                    className={cn(
+                      "inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors",
+                      basis === "actual" ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+                    )}
+                  >
+                    <Wallet className="w-3.5 h-3.5" />
+                    From actual portfolio today
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={basis === "clean"}
+                    onClick={() => setBasis("clean")}
+                    className={cn(
+                      "inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors",
+                      basis === "clean" ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+                    )}
+                  >
+                    <ClipboardList className="w-3.5 h-3.5" />
+                    Clean scheduled plan
+                  </button>
+                </div>
+              </div>
+
+              {basis === "actual" ? (
+                <div className="rounded-md bg-emerald-500/10 border border-emerald-500/25 p-3 text-xs text-muted-foreground leading-relaxed">
+                  <strong className="text-foreground">From actual portfolio today.</strong> Starts from your real current balances and replays your
+                  recorded deposits, missed contributions, secondary MMFs, bank instruments, government securities, and Other Assets tagged to the
+                  goal — then projects forward using your committed strategy. This matches your <strong>Dashboard</strong> and <strong>Ledger</strong> baseline.
+                </div>
+              ) : (
+                <div className="rounded-md bg-amber-500/10 border border-amber-500/30 p-3 text-xs text-muted-foreground leading-relaxed">
+                  <strong className="text-amber-300">Clean schedule — not your recorded actuals.</strong> Ignores your messy history and projects a
+                  fresh plan from your target, horizon, planned contribution and selected fund/rates. Useful for planning “what should happen” from a
+                  clean start; it does <strong>not</strong> reflect your real balances and will not match the Dashboard or Ledger.
+                </div>
+              )}
+            </div>
+          </CardContent>
+        </Card>
 
         {/* ── Your current plan: real status from the solver/projection ── */}
         <Card className={currentHits ? "border-emerald-500/30" : "border-amber-500/30"}>
@@ -398,6 +470,9 @@ export default function Scenarios({ embedded = false }: { embedded?: boolean } =
             )}
           </CardContent>
         </Card>
+
+        {/* Other levers: more time, lump sum, risk tier — same engine + basis */}
+        {portfolioId && <ScenarioLevers portfolioId={portfolioId} basis={basis} />}
 
         {/* What-if overlay for secondary MMF contributions */}
         {portfolioId && (

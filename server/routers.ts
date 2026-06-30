@@ -166,6 +166,7 @@ import { parse as parseCookie } from "cookie";
 import {
   runProjection,
   runScenarios,
+  type ScenarioActualBasis,
   projectedLiquidSplit,
   type ProjectedLiquidHomeInput,
   deriveStepUps,
@@ -2541,7 +2542,20 @@ export const appRouter = router({
       );
     }),
 
-    scenarios: protectedProcedure.input(portfolioIdInput).query(async ({ ctx, input }) => {
+    scenarios: protectedProcedure
+      .input(z.object({
+        portfolioId: z.number(),
+        /**
+         * Scenario basis (R-Scenarios). "actual" projects forward from the
+         * user's REAL recorded history (deposits, missed/extra contributions,
+         * securities) exactly like the Dashboard/Ledger baseline, so the
+         * current-step-up scenario reproduces the Ledger ending value.
+         * "clean" ignores recorded actuals and projects the scheduled plan.
+         * Defaults to "actual" so Scenarios agrees with the rest of the app.
+         */
+        basis: z.enum(["actual", "clean"]).default("actual"),
+      }))
+      .query(async ({ ctx, input }) => {
       const p = await requirePortfolio(input.portfolioId, ctx.user.id);
       const [rates, fundEar] = await Promise.all([getRateSettings(input.portfolioId), getSelectedFundEar(p)]);
       const settings = dbToEngine(rates, p, fundEar);
@@ -2551,8 +2565,183 @@ export const appRouter = router({
       const bankHoldings = mapActualBankHoldings(await getBankInstrumentHoldings(input.portfolioId));
       const currentStepUp = Number(p?.stepUpAmount ?? 0);
       const stepUps = deriveStepUps(currentStepUp);
-      return runScenarios(settings, stepUps, rh, secondaryMmfs, bankHoldings, p.mmfFundId ?? null);
+
+      // Build the ACTUAL-portfolio basis (same inputs as `run`) when requested.
+      let actualBasis: ScenarioActualBasis | null = null;
+      if (input.basis === "actual") {
+        const overrides = await getContributionOverrides(input.portfolioId);
+        const mappedOverrides = overrides.map((o) => ({
+          monthNumber: o.monthNumber,
+          overrideAmount: o.overrideAmount ? parseFloat(String(o.overrideAmount)) : undefined,
+          lumpSum: o.lumpSum ? parseFloat(String(o.lumpSum)) : undefined,
+        }));
+        const depositRows = await getDepositEntries(input.portfolioId);
+        const withdrawalRows = await getWithdrawalEntries(input.portfolioId);
+        const actualDeposits = [
+          ...mapActualDeposits(depositRows),
+          ...mapPrimaryMmfWithdrawalsAsDeposits(withdrawalRows, p.mmfFundId ?? null),
+        ];
+        const actualSecurities = mapActualSecurities(await getSecurities(input.portfolioId));
+        actualBasis = { overrides: mappedOverrides, actualDeposits, actualSecurities };
+      }
+
+      const results = runScenarios(settings, stepUps, rh, secondaryMmfs, bankHoldings, p.mmfFundId ?? null, actualBasis);
+
+      // Baseline = the scenario at the portfolio's OWN current step-up. Under the
+      // "actual" basis this equals the Dashboard/Ledger projected ending value.
+      const baseline = results.find((r) => r.stepUp === currentStepUp) ?? results[0];
+      const targetAmount = settings.targetAmount;
+      const baselineEnd = baseline?.projectedEndingValue ?? 0;
+      const gap = baselineEnd - targetAmount;
+      // Recommended step-up: the LOWEST grid step-up whose projection hits target
+      // under the SAME basis (never hardcoded).
+      const recommended = results
+        .slice()
+        .sort((a, b) => a.stepUp - b.stepUp)
+        .find((r) => r.hitsTarget) ?? null;
+
+      return {
+        basis: input.basis,
+        scenarios: results,
+        meta: {
+          currentStepUp,
+          stepUpMonths: settings.stepUpMonths ?? 6,
+          targetAmount,
+          baselineStepUp: baseline?.stepUp ?? currentStepUp,
+          baselineProjectedEndingValue: baselineEnd,
+          surplus: gap >= 0 ? gap : 0,
+          shortfall: gap < 0 ? -gap : 0,
+          hitsTarget: gap >= 0,
+          recommendedStepUp: recommended?.stepUp ?? null,
+          recommendedProjectedEndingValue: recommended?.projectedEndingValue ?? null,
+          stepUps,
+        },
+      };
     }),
+
+    /**
+     * R-Scenarios levers — the effect of MORE TIME, a one-off LUMP SUM, and
+     * changing the RISK TIER, each computed from the SAME engine and the SAME
+     * basis the Scenarios page is showing. Every delta is solver-generated; no
+     * figure is hardcoded.
+     */
+    levers: protectedProcedure
+      .input(z.object({
+        portfolioId: z.number(),
+        basis: z.enum(["actual", "clean"]).default("actual"),
+        /** Extra months to test for the “more time” lever. */
+        extraMonths: z.number().int().min(1).max(120).default(12),
+        /** One-off lump sum (KES) added in the first projected month. */
+        lumpSum: z.number().min(0).max(100_000_000).default(100_000),
+      }))
+      .query(async ({ ctx, input }) => {
+        const p = await requirePortfolio(input.portfolioId, ctx.user.id);
+        const [rates, fundEar] = await Promise.all([getRateSettings(input.portfolioId), getSelectedFundEar(p)]);
+        const settings = dbToEngine(rates, p, fundEar);
+        const rh = mapRateHistory(await getRateHistory(input.portfolioId));
+        const secondaryMmfs = mapSecondaryMmfs(await getSecondaryMmfs(input.portfolioId));
+        const bankHoldings = mapActualBankHoldings(await getBankInstrumentHoldings(input.portfolioId));
+        const fundId = p.mmfFundId ?? null;
+
+        // Actual-basis inputs (empty under the clean basis).
+        let overrides: { monthNumber: number; overrideAmount?: number; lumpSum?: number }[] = [];
+        let actualDeposits: ActualDeposit[] = [];
+        let actualSecurities = [] as ReturnType<typeof mapActualSecurities>;
+        if (input.basis === "actual") {
+          overrides = (await getContributionOverrides(input.portfolioId)).map((o) => ({
+            monthNumber: o.monthNumber,
+            overrideAmount: o.overrideAmount ? parseFloat(String(o.overrideAmount)) : undefined,
+            lumpSum: o.lumpSum ? parseFloat(String(o.lumpSum)) : undefined,
+          }));
+          actualDeposits = [
+            ...mapActualDeposits(await getDepositEntries(input.portfolioId)),
+            ...mapPrimaryMmfWithdrawalsAsDeposits(await getWithdrawalEntries(input.portfolioId), fundId),
+          ];
+          actualSecurities = mapActualSecurities(await getSecurities(input.portfolioId));
+        }
+
+        const endOf = (s: EngineSettings, extraOverrides: typeof overrides = []) => {
+          const series = runProjection(
+            s,
+            [...overrides, ...extraOverrides],
+            rh,
+            actualDeposits,
+            actualSecurities,
+            secondaryMmfs,
+            bankHoldings,
+            fundId,
+          );
+          return series[series.length - 1]?.totalEnd ?? 0;
+        };
+
+        const target = settings.targetAmount;
+        const baselineEnd = endOf(settings);
+
+        // 1) More time: extend the horizon by extraMonths.
+        const moreTimeEnd = endOf({ ...settings, horizonMonths: (settings.horizonMonths ?? 120) + input.extraMonths });
+
+        // 2) Lump sum: a one-off contribution in the first projected month.
+        //    Find the first forward month (current month + 1) and attach a lumpSum override.
+        const nowMs = settings.nowOverride != null ? settings.nowOverride : Date.now();
+        const currentMonth = computeCurrentMonth(
+          settings.startDate ?? new Date().toISOString().split("T")[0],
+          nowMs,
+          settings.horizonMonths ?? 120,
+        );
+        const lumpMonth = Math.max(1, currentMonth + 1);
+        const existingAtLumpMonth = overrides.find((o) => o.monthNumber === lumpMonth);
+        const lumpOverride = existingAtLumpMonth
+          ? [{ ...existingAtLumpMonth, lumpSum: (existingAtLumpMonth.lumpSum ?? 0) + input.lumpSum }]
+          : [{ monthNumber: lumpMonth, lumpSum: input.lumpSum }];
+        // Replace any existing override at that month so we don't double-add.
+        const lumpEnd = (() => {
+          const series = runProjection(
+            settings,
+            [...overrides.filter((o) => o.monthNumber !== lumpMonth), ...lumpOverride],
+            rh,
+            actualDeposits,
+            actualSecurities,
+            secondaryMmfs,
+            bankHoldings,
+            fundId,
+          );
+          return series[series.length - 1]?.totalEnd ?? 0;
+        })();
+
+        // 3) Risk tier: re-run under each tier (asset mix changes the path).
+        const tiers = ALLOCATION_TIERS.map((tier) => {
+          const end = endOf({ ...settings, strategyTier: tier });
+          return {
+            tier,
+            label: ALLOCATION_TIER_SPECS[tier].label,
+            projectedEndingValue: end,
+            delta: end - baselineEnd,
+            hitsTarget: end >= target,
+            isCurrent: (settings.strategyTier ?? "balanced") === tier,
+          };
+        });
+
+        return {
+          basis: input.basis,
+          target,
+          baselineProjectedEndingValue: baselineEnd,
+          moreTime: {
+            extraMonths: input.extraMonths,
+            newHorizonMonths: (settings.horizonMonths ?? 120) + input.extraMonths,
+            projectedEndingValue: moreTimeEnd,
+            delta: moreTimeEnd - baselineEnd,
+            hitsTarget: moreTimeEnd >= target,
+          },
+          lumpSum: {
+            amount: input.lumpSum,
+            atMonth: lumpMonth,
+            projectedEndingValue: lumpEnd,
+            delta: lumpEnd - baselineEnd,
+            hitsTarget: lumpEnd >= target,
+          },
+          tiers,
+        };
+      }),
 
     /**
      * R69.3 — projected END-STATE liquid split. Runs the same liquid-reserve

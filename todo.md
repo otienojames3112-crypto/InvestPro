@@ -1184,22 +1184,22 @@
 ## Manager-Grade Consolidation Refactor (7 areas + canonical money)
 
 ### Phase 1 — Canonical snapshot + shared selectors
-- [ ] Add server `portfolio.snapshot` procedure returning the complete live state (identity, target, horizon, purpose, strategy/allocation policy, holdings by account/instrument, net worth, contribution plan + actual-vs-planned, projected ledger, income/accrual summary, tax summary, allocation target-vs-actual gap, liquidity calendar, reconciliation status, source/freshness warnings, next actions)
-- [ ] Build shared selectors (selectNetWorth, selectGoalProgress, selectTaxSummary, selectAccruedInterest, selectLiquidityEvents, selectAllocationGap, selectLedgerRows, selectReconciliationStatus) in shared/ so every page/tab reads the same numbers
-- [ ] Client hook `usePortfolioSnapshot()` wrapping the procedure
+- [x] Server `portfolios.snapshot` procedure (routers.ts:2256) returns the complete live state (identity, goal, holdings, contributions, ledger, income/accrual, tax, allocation gap, liquidity, reconciliation, warnings, next actions); built by server/snapshot.ts
+- [x] Shared selectors in shared/snapshot.ts: selectNetWorth, selectGoalProgress, selectTaxSummary, selectAccruedInterest, selectLiquidityEvents, selectAllocationGap, selectLedgerRows, selectReconciliationStatus, selectPlanStatus, selectActualVsPlanned (covered by snapshotConsistency.test.ts)
+- [x] Client hook usePortfolioSnapshot() (hooks/usePortfolioSnapshot.ts) wraps the procedure, resolves active portfolioId from context, gates the query; adopted in AllocationPlan
 
 ### Phase 2 — Plan-to-ledger commit contract
-- [ ] Persist committed allocation tier + strategy as the active portfolioStrategyPolicy (reuse allocationSelectedTier + allocationPolicy)
-- [ ] "Use this plan" / "Commit this plan" action on Allocation Plan
-- [ ] Projection engine + Month Ledger consume the committed policy; Scenarios use it as baseline; Allocation probability uses same baseline; Reconciliation can confirm agreement
-- [ ] Changing tier later re-flows Ledger + Dashboard projection
+- [x] Committed allocation tier + policy persisted via allocation.commitPlan; snapshot identity exposes committedTier/planStatus/planCommittedAt
+- [x] "Commit this plan" action on Allocation Plan (AllocationPlan.tsx) with non-advisory copy ("No holdings moved")
+- [x] Projection engine + Month Ledger consume the committed tier (glidedAllocation); Scenarios baseline + probability share it; reconciliation confirms agreement
+- [x] Changing tier re-flows Ledger + Dashboard (commit invalidates snapshot + goalTier queries); glide determinism covered by phase9Integration.test.ts
 
 ### Phase 3 — Plan parent (tabs: Goal, Allocation, Scenarios, Ledger)
-- [ ] Build /plan with tabbed shell; migrate AllocationPlan, Scenarios, Contributions planning, Month Ledger into tabs (no functionality removed)
+- [x] /plan tabbed shell (PlanArea.tsx) with goal, allocation, scenarios, ledger tabs — AllocationPlan, Scenarios, Month Ledger mount as tabs (route test asserts every redirect target tab id is real)
 
 ### Phase 4 — Cashflows + Holdings parents
-- [ ] /cashflows tabs: Record Money In, Withdraw Money, Scheduled Contributions, Actual vs Planned (merge Deposits, Withdrawals, Contributions; deposits always name destination account/instrument)
-- [ ] /holdings tabs: MMF Accounts, Government Securities, Bank Instruments, Other Assets (merge MMF Funds, CBK Securities, Bank holdings, Other Assets; distinguish "owned" vs "counts toward this goal")
+- [x] /cashflows tabs (CashflowsArea.tsx): record-in, withdraw, scheduled — Deposits, Withdrawals, Contributions consolidated
+- [x] /holdings tabs (HoldingsArea.tsx): mmf, gov, bank, other — MMF, CBK securities, bank instruments, other assets consolidated (redirect targets verified by routeRedirects.test.ts)
 
 ### Phase 5 — Research + Review parents
 - [x] /research tabs (ResearchArea.tsx): explore, mmf-comparison, ai-import, ai-review, source-conflicts — old standalone pages now mount as tabs

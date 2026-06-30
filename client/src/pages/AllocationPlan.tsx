@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { useLocation } from "wouter";
 import { AppShell } from "@/components/AppShell";
 import { trpc } from "@/lib/trpc";
+import { usePortfolioSnapshot } from "@/hooks/usePortfolioSnapshot";
 import { usePortfolio } from "@/contexts/PortfolioContext";
 import {
   Card,
@@ -313,7 +314,7 @@ function CommitPlanBar({
   selectedTier: AllocationTier;
 }) {
   const utils = trpc.useUtils();
-  const snapQ = trpc.portfolios.snapshot.useQuery({ portfolioId });
+  const { query: snapQ } = usePortfolioSnapshot({ portfolioId });
   const commit = trpc.allocation.commitPlan.useMutation({
     onSuccess: () => {
       utils.portfolios.snapshot.invalidate({ portfolioId });

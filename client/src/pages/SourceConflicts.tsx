@@ -38,7 +38,7 @@ function fmtAsOf(ms: number | null): string {
   return new Date(ms).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 }
 
-export default function SourceConflicts() {
+export default function SourceConflicts({ embedded = false }: { embedded?: boolean } = {}) {
   const { isAuthenticated, user } = useAuth();
   const isMaintainer = user?.role === "admin";
   const utils = trpc.useUtils();
@@ -63,7 +63,7 @@ export default function SourceConflicts() {
 
   if (!isMaintainer) {
     return (
-      <AppShell>
+      <AppShell embedded={embedded}>
         <div className="container py-10 max-w-3xl">
           <Card>
             <CardHeader>
@@ -90,7 +90,7 @@ export default function SourceConflicts() {
   const conflicts = data?.conflicts ?? [];
 
   return (
-    <AppShell>
+    <AppShell embedded={embedded}>
       <div className="container py-8 max-w-4xl space-y-6">
         <div>
           <h1 className="text-2xl font-semibold flex items-center gap-2">

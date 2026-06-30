@@ -76,7 +76,7 @@ function nextCouponDate(issueDate: string | Date, maturityDate: string | Date, n
   return next.toLocaleDateString("en-KE", { day: "numeric", month: "short", year: "numeric" });
 }
 
-export default function Securities() {
+export default function Securities({ embedded = false }: { embedded?: boolean } = {}) {
   const { portfolioId } = usePortfolio();
   // R75 — effective "now" (simulated date under the Time Machine, else real),
   // so current value / accretion / days-left match the server reconciliation.
@@ -564,7 +564,7 @@ export default function Securities() {
   );
 
   return (
-    <AppShell>
+    <AppShell embedded={embedded}>
       <div className="p-6 lg:p-8 space-y-6">
         <div className="flex items-start justify-between">
           <div>

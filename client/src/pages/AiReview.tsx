@@ -66,13 +66,13 @@ const FIELD_LABELS: Record<string, string> = {
  * Rows whose every figure is still ai_extracted are HIDDEN from the public catalog until
  * at least one figure is confirmed — this page is where that first confirmation happens.
  */
-export default function AiReview() {
+export default function AiReview({ embedded = false }: { embedded?: boolean } = {}) {
   const { isAuthenticated, user } = useAuth();
   const isMaintainer = user?.role === "admin";
 
   if (!isMaintainer) {
     return (
-      <AppShell>
+      <AppShell embedded={embedded}>
         <div className="container py-10 max-w-3xl">
           <Card>
             <CardHeader>
@@ -97,7 +97,7 @@ export default function AiReview() {
   }
 
   return (
-    <AppShell>
+    <AppShell embedded={embedded}>
       <div className="container py-8 max-w-4xl space-y-6">
         <div>
           <h1 className="text-2xl font-semibold flex items-center gap-2">

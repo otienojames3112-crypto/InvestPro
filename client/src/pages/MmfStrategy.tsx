@@ -242,7 +242,7 @@ function CompositionDetail({ row, onEdit }: { row: CompositionRow; onEdit: () =>
   );
 }
 
-export default function MmfStrategy() {
+export default function MmfStrategy({ embedded = false }: { embedded?: boolean } = {}) {
   const fund = useSelectedFund();
   const utils = trpc.useUtils();
   const { data: rows, isLoading } = trpc.mmfComposition.list.useQuery();
@@ -414,7 +414,7 @@ export default function MmfStrategy() {
   }
 
   return (
-    <AppShell>
+    <AppShell embedded={embedded}>
       <div className="space-y-6">
         {/* Header */}
         <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-3">

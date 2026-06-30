@@ -161,7 +161,7 @@ function FundFormDialog({
   );
 }
 
-export default function MmfFunds() {
+export default function MmfFunds({ embedded = false }: { embedded?: boolean } = {}) {
   const { portfolioId, portfolio } = usePortfolio();
   const utils = trpc.useUtils();
 
@@ -286,7 +286,7 @@ export default function MmfFunds() {
   const selectedFund = funds.find((f) => f.id === selectedFundId);
 
   return (
-    <AppShell>
+    <AppShell embedded={embedded}>
     <div className="p-6 lg:p-8 space-y-6 max-w-6xl">
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>

@@ -23,7 +23,7 @@ import { formatKES, formatRelativeTime } from "@/lib/format";
 import { Sparkline } from "@/components/Sparkline";
 import { GlossaryTerm } from "@/components/GlossaryTerm";
 
-export default function Reconciliation() {
+export default function Reconciliation({ embedded = false }: { embedded?: boolean } = {}) {
   const { portfolioId, portfolio } = usePortfolio();
 
   const { data, isLoading } = trpc.projection.reconciliation.useQuery(
@@ -78,7 +78,7 @@ export default function Reconciliation() {
   );
 
   return (
-    <AppShell>
+    <AppShell embedded={embedded}>
       <div className="space-y-6">
         {/* Header */}
         <div className="flex flex-col gap-2">

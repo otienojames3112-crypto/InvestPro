@@ -67,13 +67,13 @@ const FIELD_LABELS: Record<string, string> = {
  *      becomes a normal human-authored instrument).
  * Neither path ranks, scores, or recommends; both always end at a human action.
  */
-export default function AiIntake() {
+export default function AiIntake({ embedded = false }: { embedded?: boolean } = {}) {
   const { isAuthenticated, user } = useAuth();
   const isMaintainer = user?.role === "admin";
 
   if (!isMaintainer) {
     return (
-      <AppShell>
+      <AppShell embedded={embedded}>
         <div className="container py-10 max-w-3xl">
           <Card>
             <CardHeader>
@@ -98,7 +98,7 @@ export default function AiIntake() {
   }
 
   return (
-    <AppShell>
+    <AppShell embedded={embedded}>
       <div className="container py-8 max-w-4xl space-y-8">
         <div>
           <h1 className="text-2xl font-semibold flex items-center gap-2">

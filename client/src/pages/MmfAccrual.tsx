@@ -83,7 +83,7 @@ interface AccrualAccount {
   whtRate: number;
 }
 
-export default function MmfAccrual() {
+export default function MmfAccrual({ embedded = false }: { embedded?: boolean } = {}) {
   const { portfolioId } = usePortfolio();
   const fund = useSelectedFund();
 
@@ -361,7 +361,7 @@ export default function MmfAccrual() {
   const headerWht = isBlended ? null : selectedAccount?.whtRate ?? 15;
 
   return (
-    <AppShell>
+    <AppShell embedded={embedded}>
       <div className="space-y-6">
         {/* Header */}
         <div className="flex flex-col gap-2">

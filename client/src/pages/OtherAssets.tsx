@@ -638,7 +638,7 @@ function HoldingCard({
   );
 }
 
-export default function OtherAssets() {
+export default function OtherAssets({ embedded = false }: { embedded?: boolean } = {}) {
   const { portfolioId, portfolio } = usePortfolio();
   const portfolioLabel = portfolio?.name?.trim() || "your investment portfolio";
   const utils = trpc.useUtils();
@@ -692,7 +692,7 @@ export default function OtherAssets() {
     .sort((a, b) => b.total - a.total);
 
   return (
-    <AppShell>
+    <AppShell embedded={embedded}>
     <div className="p-6 lg:p-8 space-y-6 max-w-4xl">
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>

@@ -48,6 +48,8 @@ import {
   Wallet,
   Layers,
   Info,
+  CheckCircle2,
+  Lock,
 } from "lucide-react";
 
 /* ───────────────────────── presentation helpers ───────────────────────── */
@@ -78,13 +80,13 @@ function pct(n: number, dp = 0): string {
 
 /* ───────────────────────────── the page ───────────────────────────────── */
 
-export default function AllocationPlan() {
+export default function AllocationPlan({ embedded = false }: { embedded?: boolean } = {}) {
   const { portfolioId, portfolio } = usePortfolio();
   const [, navigate] = useLocation();
 
   if (portfolioId == null) {
     return (
-      <AppShell>
+      <AppShell embedded={embedded}>
         <div className="container py-10">
           <EmptyGoalState />
         </div>
@@ -93,7 +95,7 @@ export default function AllocationPlan() {
   }
 
   return (
-    <AppShell>
+    <AppShell embedded={embedded}>
       <div className="container max-w-5xl py-8 space-y-6">
         <PageHeader goalName={portfolio?.name ?? "this goal"} />
         <PlanBody
@@ -176,6 +178,8 @@ function PlanBody({
         saving={setTier.isPending}
         onPick={(tier) => setTier.mutate({ portfolioId, tier })}
       />
+
+      <CommitPlanBar portfolioId={portfolioId} selectedTier={selectedTier} />
 
       <ProbabilityCard
         portfolioId={portfolioId}
@@ -285,6 +289,80 @@ function TierCard({
             </p>
           </div>
         )}
+      </CardContent>
+    </Card>
+  );
+}
+
+/* ────────────────────── 1b. Commit plan to the ledger ──────────────────── */
+
+/**
+ * CommitPlanBar — turns the chosen tier into the *committed* plan.
+ *
+ * The selected tier already persists on every pick (allocation.setTier). This
+ * bar adds the explicit, dated commitment the rest of the app reads through the
+ * canonical snapshot's `planStatus`: once committed, the Dashboard, Ledger and
+ * Review all agree "this is the plan in force". It changes no holdings and moves
+ * no money — it only records the decision.
+ */
+function CommitPlanBar({
+  portfolioId,
+  selectedTier,
+}: {
+  portfolioId: number;
+  selectedTier: AllocationTier;
+}) {
+  const utils = trpc.useUtils();
+  const snapQ = trpc.portfolios.snapshot.useQuery({ portfolioId });
+  const commit = trpc.allocation.commitPlan.useMutation({
+    onSuccess: () => {
+      utils.portfolios.snapshot.invalidate({ portfolioId });
+      utils.allocation.goalTier.invalidate({ portfolioId });
+      toast.success("Plan committed", {
+        description:
+          "Recorded as the plan in force. No holdings moved — you still act when you choose.",
+      });
+    },
+    onError: (e) => toast.error("Could not commit plan", { description: e.message }),
+  });
+
+  const committedAt = snapQ.data?.identity.planCommittedAt ?? null;
+  const isCommitted = (snapQ.data?.identity.planStatus ?? "draft") === "committed";
+
+  return (
+    <Card>
+      <CardContent className="py-4">
+        <div className="flex items-center justify-between gap-4 flex-wrap">
+          <div className="flex items-start gap-2.5 min-w-0">
+            {isCommitted ? (
+              <CheckCircle2 className="w-5 h-5 shrink-0 text-emerald-600 mt-0.5" />
+            ) : (
+              <Lock className="w-5 h-5 shrink-0 text-muted-foreground mt-0.5" />
+            )}
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-foreground">
+                {isCommitted ? "Plan committed" : "Plan not committed yet"}{" "}
+                <InfoHint label="">
+                  Committing records the chosen tier as the plan in force, so the Dashboard, Ledger and
+                  Review all read the same strategy. It never moves money or changes a holding.
+                </InfoHint>
+              </p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                {isCommitted && committedAt
+                  ? `Last committed ${new Date(committedAt).toLocaleString()}. Re-commit to record a changed tier.`
+                  : "Recording the plan keeps every screen in agreement. Nothing changes your holdings."}
+              </p>
+            </div>
+          </div>
+          <Button
+            onClick={() => commit.mutate({ portfolioId, tier: selectedTier })}
+            disabled={commit.isPending}
+            variant={isCommitted ? "outline" : "default"}
+            className={isCommitted ? "bg-background" : ""}
+          >
+            {commit.isPending ? "Saving…" : isCommitted ? "Re-commit plan" : "Commit this plan"}
+          </Button>
+        </div>
       </CardContent>
     </Card>
   );

@@ -34,7 +34,7 @@ function CustomTooltip({ active, payload, label }: { active?: boolean; payload?:
   );
 }
 
-export default function Scenarios() {
+export default function Scenarios({ embedded = false }: { embedded?: boolean } = {}) {
   const { portfolioId, portfolio } = usePortfolio();
 
   const { data: scenarios, isLoading } = trpc.projection.scenarios.useQuery(
@@ -81,7 +81,7 @@ export default function Scenarios() {
   const everythingLoading = isLoading || projLoading || solverLoading;
 
   return (
-    <AppShell>
+    <AppShell embedded={embedded}>
       <div className="p-6 lg:p-8 space-y-6">
         <div>
           <h1 className="text-2xl font-bold text-foreground" style={{ fontFamily: "'Playfair Display', serif" }}>

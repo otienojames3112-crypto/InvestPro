@@ -71,7 +71,7 @@ const GOV_META = {
   fxd: { label: "FXD Bonds", icon: <Landmark className="w-4 h-4" />, color: "text-orange-400" },
 } as const;
 
-export default function Withdrawals() {
+export default function Withdrawals({ embedded = false }: { embedded?: boolean } = {}) {
   const { portfolioId, portfolio } = usePortfolio();
   const { fundName, fundEar } = useSelectedFund();
   const utils = trpc.useUtils();
@@ -275,7 +275,7 @@ export default function Withdrawals() {
   const netWorth = summary?.totalContributed ?? 0;
 
   return (
-    <AppShell>
+    <AppShell embedded={embedded}>
     <div className="p-6 lg:p-8 max-w-5xl space-y-6">
       <div>
         <h1 className="text-2xl font-bold text-foreground" style={{ fontFamily: "'Playfair Display', serif" }}>

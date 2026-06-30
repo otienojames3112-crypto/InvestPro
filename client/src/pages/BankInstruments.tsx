@@ -91,7 +91,7 @@ const EMPTY = {
   source: "",
 };
 
-export default function BankInstruments() {
+export default function BankInstruments({ embedded = false }: { embedded?: boolean } = {}) {
   const utils = trpc.useUtils();
   const { data: rows, isLoading } = trpc.bankInstruments.list.useQuery();
 
@@ -263,7 +263,7 @@ export default function BankInstruments() {
   }
 
   return (
-    <AppShell>
+    <AppShell embedded={embedded}>
       <div className="space-y-6">
         {/* Header */}
         <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-3">

@@ -32,35 +32,37 @@ import AiIntake from "./pages/AiIntake";
 import AiReview from "./pages/AiReview";
 import AddInstrument from "./pages/AddInstrument";
 import AllocationPlan from "./pages/AllocationPlan";
+import PlanArea from "./pages/PlanArea";
 
 function Router() {
   return (
     <Switch>
       <Route path="/" component={Dashboard} />
-      <Route path="/ledger" component={Ledger} />
-      <Route path="/contributions" component={Contributions} />
-      <Route path="/securities" component={Securities} />
-      <Route path="/scenarios" component={Scenarios} />
-      <Route path="/settings" component={Settings} />
+      <Route path="/ledger">{() => <Ledger />}</Route>
+      <Route path="/contributions">{() => <Contributions />}</Route>
+      <Route path="/securities">{() => <Securities />}</Route>
+      <Route path="/scenarios">{() => <Scenarios />}</Route>
+      <Route path="/settings">{() => <Settings />}</Route>
+      <Route path="/plan" component={PlanArea} />
       <Route path="/getting-started" component={GettingStarted} />
       <Route path="/learn" component={Learn} />
       <Route path="/deposits" component={Deposits} />
-      <Route path="/withdrawals" component={Withdrawals} />
-      <Route path="/mmf-funds" component={MmfFunds} />
-      <Route path="/mmf-accrual" component={MmfAccrual} />
-      <Route path="/mmf-strategy" component={MmfStrategy} />
-      <Route path="/bank-instruments" component={BankInstruments} />
-      <Route path="/tax-summary" component={TaxSummary} />
-      <Route path="/portfolio-review" component={PortfolioReview} />
-      <Route path="/allocation-plan" component={AllocationPlan} />
-      <Route path="/reconciliation" component={Reconciliation} />
-      <Route path="/other-assets" component={OtherAssets} />
-      <Route path="/explore" component={Explore} />
+      <Route path="/withdrawals">{() => <Withdrawals />}</Route>
+      <Route path="/mmf-funds">{() => <MmfFunds />}</Route>
+      <Route path="/mmf-accrual">{() => <MmfAccrual />}</Route>
+      <Route path="/mmf-strategy">{() => <MmfStrategy />}</Route>
+      <Route path="/bank-instruments">{() => <BankInstruments />}</Route>
+      <Route path="/tax-summary">{() => <TaxSummary />}</Route>
+      <Route path="/portfolio-review">{() => <PortfolioReview />}</Route>
+      <Route path="/allocation-plan">{() => <AllocationPlan />}</Route>
+      <Route path="/reconciliation">{() => <Reconciliation />}</Route>
+      <Route path="/other-assets">{() => <OtherAssets />}</Route>
+      <Route path="/explore">{() => <Explore />}</Route>
       <Route path="/explore/new" component={AddInstrument} />
       <Route path="/explore/:ref" component={OpportunityDetail} />
-      <Route path="/source-conflicts" component={SourceConflicts} />
-      <Route path="/ai-intake" component={AiIntake} />
-      <Route path="/ai-review" component={AiReview} />
+      <Route path="/source-conflicts">{() => <SourceConflicts />}</Route>
+      <Route path="/ai-intake">{() => <AiIntake />}</Route>
+      <Route path="/ai-review">{() => <AiReview />}</Route>
       <Route path="/time-machine" component={TimeMachine} />
       <Route path="/404" component={NotFound} />
       <Route component={NotFound} />

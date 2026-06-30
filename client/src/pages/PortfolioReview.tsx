@@ -100,7 +100,7 @@ function daysUntil(d: string | Date, nowMs: number = Date.now()): number {
   return Math.ceil((t - nowMs) / (1000 * 60 * 60 * 24));
 }
 
-export default function PortfolioReview() {
+export default function PortfolioReview({ embedded = false }: { embedded?: boolean } = {}) {
   const { portfolioId, portfolio } = usePortfolio();
   // R75 — effective "now" (simulated under the Time Machine, else real) so the
   // duration / concentration / breach numbers match the server reconciliation.
@@ -513,7 +513,7 @@ export default function PortfolioReview() {
   };
 
   return (
-    <AppShell>
+    <AppShell embedded={embedded}>
       <div className="space-y-6 print:space-y-4">
         {/* Header */}
         <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-3">

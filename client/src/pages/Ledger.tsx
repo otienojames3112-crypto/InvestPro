@@ -32,7 +32,7 @@ function useFocusMonth(): number | null {
   }, []);
 }
 
-export default function Ledger() {
+export default function Ledger({ embedded = false }: { embedded?: boolean } = {}) {
   const { portfolioId, portfolio } = usePortfolio();
   const { data: projection, isLoading } = trpc.projection.run.useQuery(
     { portfolioId: portfolioId! },
@@ -257,7 +257,7 @@ export default function Ledger() {
   );
 
   return (
-    <AppShell>
+    <AppShell embedded={embedded}>
       <TooltipProvider delayDuration={150}>
       <div className="p-6 lg:p-8 space-y-6">
         <div className="flex items-start justify-between">

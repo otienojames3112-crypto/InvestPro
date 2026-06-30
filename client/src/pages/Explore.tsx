@@ -103,7 +103,7 @@ function fmtPrice(v: string | null, currency: string): string {
   return n === null ? "—" : `${currency} ${n.toLocaleString("en-KE", { maximumFractionDigits: 2 })}`;
 }
 
-export default function Explore() {
+export default function Explore({ embedded = false }: { embedded?: boolean } = {}) {
   const { mode } = usePortfolio();
   const { user } = useAuth();
   const isMaintainer = user?.role === "admin";
@@ -219,7 +219,7 @@ export default function Explore() {
   };
 
   return (
-    <AppShell>
+    <AppShell embedded={embedded}>
       <div className="p-6 lg:p-8 space-y-6 max-w-6xl">
         {/* Header */}
         <div className="flex items-start justify-between gap-4 flex-wrap">

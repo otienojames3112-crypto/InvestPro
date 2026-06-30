@@ -419,7 +419,18 @@ function SidebarContent({
   );
 }
 
-export function AppShell({ children }: { children: React.ReactNode }) {
+export function AppShell({
+  children,
+  embedded = false,
+}: {
+  children: React.ReactNode;
+  /**
+   * When true, render ONLY the page body (no sidebar, header, or banners). Used
+   * when a page component is reused inside a consolidated parent tab so we never
+   * nest two shells. The parent area supplies the single AppShell + tab strip.
+   */
+  embedded?: boolean;
+}) {
   const { user, loading, isAuthenticated, logout } = useAuth();
   const [location] = useLocation();
   const { openDrawer } = useDepositDrawer();
@@ -446,6 +457,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     navGroups
       .flatMap((g) => g.items)
       .find((n) => n.href === location)?.label ?? appTitle;
+
+  // Embedded mode: the parent area already owns the shell; just render the body.
+  // (Auth is already guaranteed by the parent area's own AppShell.)
+  if (embedded) {
+    return <>{children}</>;
+  }
 
   if (loading) {
     return (

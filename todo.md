@@ -1247,3 +1247,12 @@
 - [x] snapshot identity surfaces planCommittedAt + derived planStatus ("committed"/"draft"); selectPlanStatus selector
 - [x] projection/ledger/scenarios/probability already read persisted allocationPolicy + contribution schedule + target/horizon — commit makes plan-you-see == plan-ledger-executes
 - [x] consistency test for selectPlanStatus (committed + draft); type gate clean; full suite 1110 green
+
+
+### Phase 3 — Plan parent area (DONE)
+- [x] AppShell gains `embedded` prop (renders children only, no sidebar/header) so page bodies reuse inside tabs
+- [x] Codemod added `embedded` prop to 18 migrated pages + Settings; App.tsx routes switched to render-prop form so prop type doesn't clash with wouter
+- [x] Reusable TabbedArea component: URL-driven (?tab=), only active panel mounted, layman hint per tab, animated underline
+- [x] PlanArea: Goal & Plan (Settings) / Allocation (AllocationPlan) / Scenarios / Ledger tabs at /plan
+- [x] CommitPlanBar on Allocation tab: reads snapshot planStatus, calls allocation.commitPlan, shows committed timestamp; non-advisory copy ("no holdings moved")
+- [x] Type gate clean; full suite 1110 green; screenshots verified (tabs, embedded pages, commit bar)

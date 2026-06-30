@@ -46,7 +46,7 @@ interface TaxLine {
   note: string;
 }
 
-export default function TaxSummary() {
+export default function TaxSummary({ embedded = false }: { embedded?: boolean } = {}) {
   const { portfolioId, portfolio } = usePortfolio();
   const fund = useSelectedFund();
 
@@ -272,7 +272,7 @@ export default function TaxSummary() {
   };
 
   return (
-    <AppShell>
+    <AppShell embedded={embedded}>
       <div className="space-y-6">
         {/* Header */}
         <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-3">

@@ -154,7 +154,7 @@ function RateHistorySection({ portfolioId }: { portfolioId: number }) {
   );
 }
 
-export default function Settings() {
+export default function Settings({ embedded = false }: { embedded?: boolean } = {}) {
   const { portfolioId, portfolio, refetch: refetchPortfolios } = usePortfolio();
   const { fundLabel: selectedFundLabel, fundEar: selectedFundEar, hasFund } = useSelectedFund();
   const utils = trpc.useUtils();
@@ -391,14 +391,14 @@ export default function Settings() {
 
   if (!portfolioId) {
     return (
-      <AppShell>
+      <AppShell embedded={embedded}>
         <div className="p-8 text-muted-foreground text-sm">Select a portfolio to view settings.</div>
       </AppShell>
     );
   }
 
   return (
-    <AppShell>
+    <AppShell embedded={embedded}>
       <div className="p-6 lg:p-8 space-y-6 max-w-3xl">
         <div>
           <h1 className="text-2xl font-bold text-foreground" style={{ fontFamily: "'Playfair Display', serif" }}>

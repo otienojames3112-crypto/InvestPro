@@ -21,7 +21,7 @@ interface OverrideForm {
   reason: string;
 }
 
-export default function Contributions() {
+export default function Contributions({ embedded = false }: { embedded?: boolean } = {}) {
   const { portfolioId, portfolio } = usePortfolio();
   const utils = trpc.useUtils();
   const { data: schedule, isLoading: schedLoading } = trpc.projection.contributionSchedule.useQuery({ portfolioId: portfolioId! }, { enabled: !!portfolioId });
@@ -103,7 +103,7 @@ export default function Contributions() {
   }
 
   return (
-    <AppShell>
+    <AppShell embedded={embedded}>
       <div className="p-6 lg:p-8 space-y-6">
         <div className="flex items-start justify-between">
           <div>

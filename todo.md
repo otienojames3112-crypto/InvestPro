@@ -1265,3 +1265,10 @@
 - [x] Registered /cashflows + /holdings routes (render-prop, ?tab= deep-linkable)
 - [x] Verified all tabs render embedded (no doubled shell), deep-links land correctly
 - [x] Type gate clean; full suite 1110 green
+
+
+### Phase 5 — Research + Review parent areas (DONE)
+- [x] ResearchArea: Explore / MMF Comparison (MmfStrategy) / Bank Catalogue (BankInstruments) / AI Import (AiIntake) / AI Review / Source Conflicts tabs at /research
+- [x] ReviewArea: Manager (PortfolioReview) / Reconciliation / Income (MmfAccrual) / Tax (TaxSummary) tabs at /review
+- [x] Registered /research and /review routes; all child pages reused embedded (verbatim, no logic duplicated)
+- [x] Deep-link tabs verified (?tab=mmf-comparison, ?tab=tax); type gate clean; 1110 tests green

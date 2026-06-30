@@ -35,6 +35,8 @@ import AllocationPlan from "./pages/AllocationPlan";
 import PlanArea from "./pages/PlanArea";
 import CashflowsArea from "./pages/CashflowsArea";
 import HoldingsArea from "./pages/HoldingsArea";
+import ResearchArea from "./pages/ResearchArea";
+import ReviewArea from "./pages/ReviewArea";
 
 function Router() {
   return (
@@ -48,6 +50,8 @@ function Router() {
       <Route path="/plan" component={PlanArea} />
       <Route path="/cashflows" component={CashflowsArea} />
       <Route path="/holdings" component={HoldingsArea} />
+      <Route path="/research" component={ResearchArea} />
+      <Route path="/review" component={ReviewArea} />
       <Route path="/getting-started" component={GettingStarted} />
       <Route path="/learn" component={Learn} />
       <Route path="/deposits">{() => <Deposits />}</Route>

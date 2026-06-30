@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { usePortfolio } from "@/contexts/PortfolioContext";
 import { trpc } from "@/lib/trpc";
+import { invalidatePortfolioMoney } from "@/lib/invalidatePortfolioMoney";
 import { cn } from "@/lib/utils";
 import { Button } from "./ui/button";
 import {
@@ -30,7 +31,7 @@ export function ModeSwitcher() {
 
   const seed = trpc.testMode.seedSample.useMutation({
     onSuccess: async (res) => {
-      await utils.portfolios.list.invalidate();
+      await invalidatePortfolioMoney(utils, null);
       await refetch();
       if (res?.portfolioId) setPortfolioId(res.portfolioId);
       toast.success("Sample portfolio created", {
@@ -42,7 +43,7 @@ export function ModeSwitcher() {
 
   const reset = trpc.testMode.reset.useMutation({
     onSuccess: async (res) => {
-      await utils.portfolios.list.invalidate();
+      await invalidatePortfolioMoney(utils, null);
       await refetch();
       toast.success(
         res?.deleted ? `Cleared ${res.deleted} sample portfolio${res.deleted === 1 ? "" : "s"}` : "Sandbox cleared"
@@ -174,13 +175,7 @@ export function TimeMachineBanner() {
   const { active, label, materialised } = useSimulatedNow();
   const reset = trpc.timeMachine.reset.useMutation({
     onSuccess: async () => {
-      await Promise.all([
-        utils.timeMachine.status.invalidate(),
-        utils.projection.invalidate(),
-        utils.deposits.invalidate(),
-        utils.securities.invalidate(),
-        utils.ledger.invalidate(),
-      ]);
+      await invalidatePortfolioMoney(utils, portfolioId);
       toast.success("Reset to today");
     },
     onError: (e) => toast.error("Could not reset", { description: e.message }),

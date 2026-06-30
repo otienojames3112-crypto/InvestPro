@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { usePortfolio } from "@/contexts/PortfolioContext";
 import { useSelectedFund } from "@/hooks/useSelectedFund";
 import { trpc } from "@/lib/trpc";
+import { invalidatePortfolioMoney } from "@/lib/invalidatePortfolioMoney";
 import { formatKES } from "@/lib/format";
 import { BANK_INSTRUMENT_TYPES, isTermBankInstrument, bankInstrumentLabel, type BankInstrumentType } from "@shared/const";
 import {
@@ -144,10 +145,7 @@ export function DepositDrawer({ open, onClose }: DepositDrawerProps) {
 
   const addMutation = trpc.deposits.add.useMutation({
     onSuccess: () => {
-      utils.deposits.list.invalidate();
-      utils.deposits.summary.invalidate();
-      utils.secondaryMmfs.list.invalidate();
-      utils.bankHoldings.list.invalidate();
+      invalidatePortfolioMoney(utils, portfolioId);
       toast.success("Deposit recorded");
       setFormOpen(false);
       resetForm();
@@ -161,8 +159,7 @@ export function DepositDrawer({ open, onClose }: DepositDrawerProps) {
 
   const deleteMutation = trpc.deposits.delete.useMutation({
     onSuccess: () => {
-      utils.deposits.list.invalidate();
-      utils.deposits.summary.invalidate();
+      invalidatePortfolioMoney(utils, portfolioId);
       toast.success("Deposit removed");
       setDeleteId(null);
     },
@@ -414,7 +411,7 @@ export function DepositDrawer({ open, onClose }: DepositDrawerProps) {
           maturityAction: isTerm ? ("redeploy" as const) : undefined,
         });
         if (!res?.id) { toast.error("Could not open the bank deposit"); return; }
-        await utils.bankHoldings.list.invalidate();
+        await invalidatePortfolioMoney(utils, portfolioId);
         addMutation.mutate({
           portfolioId,
           amount,

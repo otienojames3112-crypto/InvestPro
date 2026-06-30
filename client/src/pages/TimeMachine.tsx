@@ -2,6 +2,7 @@ import { useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { usePortfolio } from "@/contexts/PortfolioContext";
 import { trpc } from "@/lib/trpc";
+import { invalidatePortfolioMoney } from "@/lib/invalidatePortfolioMoney";
 import { formatKES } from "@/lib/format";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -96,13 +97,10 @@ export function TimeMachine() {
 
   const refresh = async () => {
     await Promise.all([
-      utils.timeMachine.status.invalidate(),
-      utils.timeMachine.upcomingEvents.invalidate(),
-      // Date-sensitive surfaces re-read the moved boundary.
-      utils.projection.invalidate(),
-      utils.deposits.invalidate(),
-      utils.securities.invalidate(),
-      utils.ledger.invalidate(),
+      // Every money-dependent surface (snapshot, holdings, projection, ledger,
+      // tax, accrual, reconciliation, allocation) re-reads the moved boundary.
+      invalidatePortfolioMoney(utils, portfolioId),
+      // Time-machine-only views + the audit trail are not in the money helper.
       utils.audit.invalidate(),
     ]);
   };

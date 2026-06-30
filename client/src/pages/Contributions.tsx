@@ -1,6 +1,7 @@
 import { usePortfolio } from "@/contexts/PortfolioContext";
 import { AppShell } from "@/components/AppShell";
 import { trpc } from "@/lib/trpc";
+import { invalidatePortfolioMoney } from "@/lib/invalidatePortfolioMoney";
 import { formatKES, getMonthLabel } from "@/lib/format";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -34,8 +35,7 @@ export default function Contributions({ embedded = false }: { embedded?: boolean
   const upsertMutation = trpc.contributions.upsert.useMutation({
     onSuccess: () => {
       toast.success("Contribution override saved");
-      utils.contributions.list.invalidate();
-      utils.projection.run.invalidate();
+      invalidatePortfolioMoney(utils, portfolioId);
       setOpen(false);
     },
     onError: () => toast.error("Failed to save override"),
@@ -44,8 +44,7 @@ export default function Contributions({ embedded = false }: { embedded?: boolean
   const deleteMutation = trpc.contributions.delete.useMutation({
     onSuccess: () => {
       toast.success("Override removed");
-      utils.contributions.list.invalidate();
-      utils.projection.run.invalidate();
+      invalidatePortfolioMoney(utils, portfolioId);
     },
     onError: () => toast.error("Failed to remove override"),
   });

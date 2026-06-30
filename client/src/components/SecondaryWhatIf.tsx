@@ -15,6 +15,7 @@
  */
 import { useMemo, useState } from "react";
 import { trpc } from "@/lib/trpc";
+import { invalidatePortfolioMoney } from "@/lib/invalidatePortfolioMoney";
 import { formatKES, formatKESCompact } from "@/lib/format";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -97,10 +98,7 @@ export function SecondaryWhatIf({
 
   const applyMutation = trpc.projection.applyWhatIf.useMutation({
     onSuccess: async (res) => {
-      await Promise.all([
-        utils.secondaryMmfs.list.invalidate({ portfolioId }),
-        utils.projection.invalidate(),
-      ]);
+      await invalidatePortfolioMoney(utils, portfolioId);
       onApplied?.();
       toast.success("What-if applied", {
         description:

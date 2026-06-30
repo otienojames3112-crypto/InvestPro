@@ -2,6 +2,7 @@ import { usePortfolio } from "@/contexts/PortfolioContext";
 import { useSimulatedNow } from "@/hooks/useSimulatedNow";
 import { AppShell } from "@/components/AppShell";
 import { trpc } from "@/lib/trpc";
+import { invalidatePortfolioMoney } from "@/lib/invalidatePortfolioMoney";
 import { formatKES, formatPct, getSecurityLabel } from "@/lib/format";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -96,7 +97,7 @@ export default function Securities({ embedded = false }: { embedded?: boolean } 
   const addMutation = trpc.securities.add.useMutation({
     onSuccess: () => {
       toast.success("Security added to register");
-      utils.securities.list.invalidate();
+      invalidatePortfolioMoney(utils, portfolioId);
       setOpen(false);
     },
     onError: () => toast.error("Failed to add security"),
@@ -104,16 +105,12 @@ export default function Securities({ embedded = false }: { embedded?: boolean } 
   const deleteMutation = trpc.securities.delete.useMutation({
     onSuccess: () => {
       toast.success("Security removed");
-      utils.securities.list.invalidate();
+      invalidatePortfolioMoney(utils, portfolioId);
     },
     onError: () => toast.error("Failed to remove security"),
   });
   function invalidateAll() {
-    utils.securities.list.invalidate();
-    utils.deposits.list.invalidate({ portfolioId: portfolioId! });
-    utils.deposits.summary.invalidate({ portfolioId: portfolioId! });
-    utils.projection.run.invalidate({ portfolioId: portfolioId! });
-    utils.projection.milestones.invalidate({ portfolioId: portfolioId! });
+    void invalidatePortfolioMoney(utils, portfolioId);
   }
   const updateMutation = trpc.securities.update.useMutation({
     onSuccess: (res) => {

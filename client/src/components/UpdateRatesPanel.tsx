@@ -7,6 +7,7 @@
 
 import { useState, useEffect } from "react";
 import { trpc } from "@/lib/trpc";
+import { invalidatePortfolioMoney } from "@/lib/invalidatePortfolioMoney";
 import { useSelectedFund } from "@/hooks/useSelectedFund";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -89,10 +90,7 @@ export function UpdateRatesPanel({ portfolioId }: Props) {
     onSuccess: () => {
       toast.success("Rates saved and history snapshot recorded.");
       setChangeNote("");
-      utils.settings.get.invalidate({ portfolioId });
-      utils.settings.getRateHistory.invalidate({ portfolioId });
-      utils.projection.run.invalidate({ portfolioId });
-      utils.projection.milestones.invalidate({ portfolioId });
+      invalidatePortfolioMoney(utils, portfolioId);
     },
     onError: (err) => toast.error(`Failed to save rates: ${err.message}`),
   });

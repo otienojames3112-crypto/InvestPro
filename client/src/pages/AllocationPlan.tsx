@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { useLocation } from "wouter";
 import { AppShell } from "@/components/AppShell";
 import { trpc } from "@/lib/trpc";
+import { invalidatePortfolioMoney } from "@/lib/invalidatePortfolioMoney";
 import { usePortfolioSnapshot } from "@/hooks/usePortfolioSnapshot";
 import { usePortfolio } from "@/contexts/PortfolioContext";
 import {
@@ -147,8 +148,7 @@ function PlanBody({
 
   const setTier = trpc.allocation.setTier.useMutation({
     onSuccess: () => {
-      utils.allocation.goalTier.invalidate({ portfolioId });
-      utils.allocation.holdingsGap.invalidate();
+      invalidatePortfolioMoney(utils, portfolioId);
       toast.success("Target tier updated", {
         description: "This changes the plan only — none of your holdings moved.",
       });
@@ -317,8 +317,7 @@ function CommitPlanBar({
   const { query: snapQ } = usePortfolioSnapshot({ portfolioId });
   const commit = trpc.allocation.commitPlan.useMutation({
     onSuccess: () => {
-      utils.portfolios.snapshot.invalidate({ portfolioId });
-      utils.allocation.goalTier.invalidate({ portfolioId });
+      invalidatePortfolioMoney(utils, portfolioId);
       toast.success("Plan committed", {
         description:
           "Recorded as the plan in force. No holdings moved — you still act when you choose.",

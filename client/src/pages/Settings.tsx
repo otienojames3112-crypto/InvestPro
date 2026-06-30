@@ -1,5 +1,6 @@
 import { AppShell } from "@/components/AppShell";
 import { trpc } from "@/lib/trpc";
+import { invalidatePortfolioMoney } from "@/lib/invalidatePortfolioMoney";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -201,11 +202,7 @@ export default function Settings({ embedded = false }: { embedded?: boolean } = 
   const saveRatesMutation = trpc.rateUpdate.save.useMutation({
     onSuccess: () => {
       toast.success("Rates saved — projection recalculated");
-      utils.settings.get.invalidate({ portfolioId: portfolioId! });
-      utils.projection.run.invalidate({ portfolioId: portfolioId! });
-      utils.projection.scenarios.invalidate({ portfolioId: portfolioId! });
-      utils.projection.milestones.invalidate({ portfolioId: portfolioId! });
-      utils.deposits.summary.invalidate({ portfolioId: portfolioId! });
+      invalidatePortfolioMoney(utils, portfolioId);
     },
     onError: () => toast.error("Failed to save rates"),
   });
@@ -232,7 +229,7 @@ export default function Settings({ embedded = false }: { embedded?: boolean } = 
   const saveHorizonMutation = trpc.settings.updateLiquidityHorizon.useMutation({
     onSuccess: () => {
       toast.success("Liquidity horizon saved — duration-risk hint updated");
-      utils.settings.get.invalidate({ portfolioId: portfolioId! });
+      invalidatePortfolioMoney(utils, portfolioId);
     },
     onError: () => toast.error("Failed to save liquidity horizon"),
   });
@@ -302,10 +299,7 @@ export default function Settings({ embedded = false }: { embedded?: boolean } = 
     onSuccess: () => {
       toast.success("Portfolio plan updated");
       refetchPortfolios();
-      utils.portfolios.list.invalidate();
-      utils.projection.run.invalidate({ portfolioId: portfolioId! });
-      utils.projection.milestones.invalidate({ portfolioId: portfolioId! });
-      utils.projection.scenarios.invalidate({ portfolioId: portfolioId! });
+      invalidatePortfolioMoney(utils, portfolioId);
     },
     // R69.1 — surface the real server/DB error (e.g. a missing enum value) instead
     // of a generic message, so silent persistence failures are visible.

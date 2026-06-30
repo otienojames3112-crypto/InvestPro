@@ -17,6 +17,7 @@ import {
 import { useState, useEffect, useMemo } from "react";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
+import { invalidatePortfolioMoney } from "@/lib/invalidatePortfolioMoney";
 import { Link } from "wouter";
 import { GLOSSARY } from "@/lib/glossary";
 
@@ -1175,8 +1176,12 @@ function MmfFundCard({ fund }: { fund: MmfFundInfo }) {
 
 export default function GettingStarted() {
   const { portfolioId, mode, setMode } = usePortfolio();
+  const utils = trpc.useUtils();
   const seedSample = trpc.testMode.seedSample.useMutation({
-    onSuccess: () => toast.success("Sample data loaded in Test mode. Explore freely — your live data is untouched."),
+    onSuccess: () => {
+      invalidatePortfolioMoney(utils, null);
+      toast.success("Sample data loaded in Test mode. Explore freely — your live data is untouched.");
+    },
     onError: (err) => toast.error(`Could not load sample data: ${err.message}`),
   });
   const { fundName, fundLabel, fundCompany } = useSelectedFund();
@@ -1212,7 +1217,6 @@ export default function GettingStarted() {
   const [searchQuery, setSearchQuery] = useState("");
   const [activeCategory, setActiveCategory] = useState<FundCategory | "all">("all");
   const [activeTab, setActiveTab] = useState<"primary" | "all-mmfs">("primary");
-  const utils = trpc.useUtils();
 
   // Load account statuses from database
   const { data: dbStatuses = [] } = trpc.accountStatus.list.useQuery(
@@ -1221,7 +1225,7 @@ export default function GettingStarted() {
   );
   const upsertMutation = trpc.accountStatus.upsert.useMutation({
     onSuccess: () => {
-      utils.accountStatus.list.invalidate();
+      invalidatePortfolioMoney(utils, portfolioId);
       toast.success("Account status saved.");
       setOpenDialog(null);
     },

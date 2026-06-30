@@ -1293,3 +1293,18 @@
 - [x] Verified live: /securities → Holdings/Government, /tax-summary → Review/Tax, /explore?class=equity → Research/Explore pre-filtered to equity (deep-link survived)
 - [x] Added server/routeRedirects.test.ts (4 tests): every redirect target is a real tab id; all 20 promised legacy paths covered; consolidated pages no longer mount directly
 - [x] Type gate clean; full suite green
+
+
+## Live-Sync Fix — invalidatePortfolioMoney
+- [x] Create shared client helper invalidatePortfolioMoney(utils, portfolioId) covering all money-dependent namespaces
+- [x] Wire helper into deposit add/edit/delete (DepositDrawer add+delete+inline bankHolding; Deposits delete/addBank/updateBank/deleteBank/breakNow)
+- [x] Wire helper into withdrawal add/edit/delete (Withdrawals invalidateAll body replaced)
+- [x] Wire helper into security add/edit/delete/recycle/mature (Securities add/delete + invalidateAll covering update/recycle/mature)
+- [x] Bank instrument holdings confirmed to flow through bankHoldings.add/update/remove (DepositDrawer + Deposits) — BankInstruments.tsx is the public catalog, not money, correctly left alone
+- [x] Wire helper into secondary MMF add/edit/delete/select primary (MmfFunds all money mutations; SecondaryWhatIf applyWhatIf)
+- [x] Wire helper into other asset add/edit/delete/update value (OtherAssets income + holding mutations)
+- [x] Wire helper into rate setting update (UpdateRatesPanel saveRates; Settings rate/horizon/portfolio update)
+- [x] Wire helper into contribution override update (Contributions upsert/delete)
+- [x] Wire helper into allocation tier commit/update (AllocationPlan setTier + commitPlan)
+- [x] Wire helper into time-machine simulated actual/materialization (TimeMachine refresh; ModeSwitcher reset + seed/reset); also ModelDrawer commit + GettingStarted seedSample/accountStatus
+- [x] Added coverage unit test (6 tests, asserts all spec namespaces + missing/rejecting-namespace tolerance); type gate clean; full suite 1169 green; 4 key surfaces screenshot-verified

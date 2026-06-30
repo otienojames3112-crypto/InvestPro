@@ -41,6 +41,7 @@ import {
 } from "@shared/provenance";
 import { usePortfolio } from "@/contexts/PortfolioContext";
 import { trpc } from "@/lib/trpc";
+import { invalidatePortfolioMoney } from "@/lib/invalidatePortfolioMoney";
 import { toast } from "sonner";
 
 /**
@@ -185,7 +186,7 @@ export function ModelDrawer({
           onClick: () => navigate("/other-assets"),
         },
       });
-      utils.otherHoldings.invalidate();
+      invalidatePortfolioMoney(utils, portfolioId);
       utils.projection.decisionSurface.invalidate();
       onOpenChange(false);
     },

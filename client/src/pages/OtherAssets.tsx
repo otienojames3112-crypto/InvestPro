@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { trpc } from "@/lib/trpc";
+import { invalidatePortfolioMoney } from "@/lib/invalidatePortfolioMoney";
 import { usePortfolio } from "@/contexts/PortfolioContext";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -443,7 +444,7 @@ function HoldingCard({
   const addIncomeMutation = trpc.otherHoldings.addIncome.useMutation({
     onSuccess: () => {
       utils.otherHoldings.listIncome.invalidate({ holdingId: holding.id, portfolioId });
-      utils.otherHoldings.list.invalidate();
+      invalidatePortfolioMoney(utils, portfolioId);
       setAddIncomeOpen(false);
       toast.success("Income logged.");
     },
@@ -654,22 +655,22 @@ export default function OtherAssets({ embedded = false }: { embedded?: boolean }
   const [exitHolding, setExitHolding] = useState<Holding | null>(null);
 
   const addMutation = trpc.otherHoldings.add.useMutation({
-    onSuccess: () => { utils.otherHoldings.list.invalidate(); setAddOpen(false); toast.success("Asset added."); },
+    onSuccess: () => { invalidatePortfolioMoney(utils, portfolioId); setAddOpen(false); toast.success("Asset added."); },
     onError: (e) => toast.error(e.message),
   });
   const updateMutation = trpc.otherHoldings.update.useMutation({
-    onSuccess: () => { utils.otherHoldings.list.invalidate(); setEditHolding(null); toast.success("Asset updated."); },
+    onSuccess: () => { invalidatePortfolioMoney(utils, portfolioId); setEditHolding(null); toast.success("Asset updated."); },
     onError: (e) => toast.error(e.message),
   });
   const deleteMutation = trpc.otherHoldings.delete.useMutation({
-    onSuccess: () => { utils.otherHoldings.list.invalidate(); setDeleteId(null); toast.success("Asset removed."); },
+    onSuccess: () => { invalidatePortfolioMoney(utils, portfolioId); setDeleteId(null); toast.success("Asset removed."); },
     onError: (e) => toast.error(e.message),
   });
   // Exit = realise the holding (return-of-capital). We reuse the existing delete
   // path, which cascades its income records, after the user has seen the realised
   // result in the exit preview.
   const exitMutation = trpc.otherHoldings.delete.useMutation({
-    onSuccess: () => { utils.otherHoldings.list.invalidate(); setExitHolding(null); toast.success("Exit recorded — holding realised and removed."); },
+    onSuccess: () => { invalidatePortfolioMoney(utils, portfolioId); setExitHolding(null); toast.success("Exit recorded — holding realised and removed."); },
     onError: (e) => toast.error(e.message),
   });
 

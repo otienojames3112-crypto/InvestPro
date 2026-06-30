@@ -3,6 +3,7 @@ import { useSelectedFund } from "@/hooks/useSelectedFund";
 import { useDepositDrawer } from "@/contexts/DepositDrawerContext";
 import { useMemo, useState, useEffect, useRef } from "react";
 import { trpc } from "@/lib/trpc";
+import { invalidatePortfolioMoney } from "@/lib/invalidatePortfolioMoney";
 import { formatKES } from "@/lib/format";
 import { earlyBreakWhatIf } from "@shared/actuals";
 import { BANK_INSTRUMENT_TYPES, isTermBankInstrument, bankInstrumentLabel, type BankInstrumentType } from "@shared/const";
@@ -116,10 +117,7 @@ export default function Deposits({ embedded: _embedded = false }: { embedded?: b
 
   const deleteMutation = trpc.deposits.delete.useMutation({
     onSuccess: () => {
-      utils.deposits.list.invalidate();
-      utils.deposits.summary.invalidate();
-      utils.secondaryMmfs.list.invalidate();
-      utils.bankHoldings.list.invalidate();
+      invalidatePortfolioMoney(utils, portfolioId);
       toast.success("Deposit removed");
       setDeleteId(null);
     },
@@ -128,8 +126,7 @@ export default function Deposits({ embedded: _embedded = false }: { embedded?: b
 
   const addBank = trpc.bankHoldings.add.useMutation({
     onSuccess: () => {
-      utils.bankHoldings.list.invalidate();
-      utils.deposits.summary.invalidate();
+      invalidatePortfolioMoney(utils, portfolioId);
       toast.success("Bank instrument saved");
       setBankDialogOpen(false);
       setBankForm(EMPTY_BANK);
@@ -138,8 +135,7 @@ export default function Deposits({ embedded: _embedded = false }: { embedded?: b
   });
   const updateBank = trpc.bankHoldings.update.useMutation({
     onSuccess: () => {
-      utils.bankHoldings.list.invalidate();
-      utils.deposits.summary.invalidate();
+      invalidatePortfolioMoney(utils, portfolioId);
       toast.success("Bank instrument updated");
       setBankDialogOpen(false);
       setBankForm(EMPTY_BANK);
@@ -148,8 +144,7 @@ export default function Deposits({ embedded: _embedded = false }: { embedded?: b
   });
   const deleteBank = trpc.bankHoldings.remove.useMutation({
     onSuccess: () => {
-      utils.bankHoldings.list.invalidate();
-      utils.deposits.summary.invalidate();
+      invalidatePortfolioMoney(utils, portfolioId);
       toast.success("Bank instrument removed");
       setDeleteBankId(null);
     },
@@ -196,10 +191,7 @@ export default function Deposits({ embedded: _embedded = false }: { embedded?: b
   }, [breakHolding, breakAmount]);
   const breakNow = trpc.withdrawals.add.useMutation({
     onSuccess: (res) => {
-      utils.bankHoldings.list.invalidate();
-      utils.deposits.summary.invalidate();
-      utils.deposits.list.invalidate();
-      utils.withdrawals.list.invalidate();
+      invalidatePortfolioMoney(utils, portfolioId);
       const forfeited = Number((res as { forfeitedInterest?: number }).forfeitedInterest ?? 0);
       toast.success(
         forfeited > 0

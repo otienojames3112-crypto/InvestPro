@@ -3,6 +3,7 @@ import { AppShell } from "@/components/AppShell";
 import { usePortfolio } from "@/contexts/PortfolioContext";
 import { useSelectedFund } from "@/hooks/useSelectedFund";
 import { trpc } from "@/lib/trpc";
+import { invalidatePortfolioMoney } from "@/lib/invalidatePortfolioMoney";
 import { formatKES } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -98,14 +99,7 @@ export default function Withdrawals({ embedded = false }: { embedded?: boolean }
   );
 
   const invalidateAll = () => {
-    utils.withdrawals.list.invalidate();
-    utils.deposits.summary.invalidate();
-    utils.deposits.list.invalidate();
-    utils.secondaryMmfs.list.invalidate();
-    utils.bankHoldings.list.invalidate();
-    utils.securities.list.invalidate();
-    utils.projection.run.invalidate();
-    utils.projection.reconciliation.invalidate();
+    void invalidatePortfolioMoney(utils, portfolioId);
   };
 
   const addMutation = trpc.withdrawals.add.useMutation({

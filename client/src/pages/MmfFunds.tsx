@@ -1,6 +1,7 @@
 import { useState, useMemo } from "react";
 import { AppShell } from "@/components/AppShell";
 import { trpc } from "@/lib/trpc";
+import { invalidatePortfolioMoney } from "@/lib/invalidatePortfolioMoney";
 import { usePortfolio } from "@/contexts/PortfolioContext";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -184,15 +185,15 @@ export default function MmfFunds({ embedded = false }: { embedded?: boolean } = 
   const [secondaryForm, setSecondaryForm] = useState({ mmfFundId: "", label: "", currentBalance: "", monthlyContribution: "", notes: "" });
 
   const addSecondaryMutation = trpc.secondaryMmfs.add.useMutation({
-    onSuccess: () => { utils.secondaryMmfs.list.invalidate({ portfolioId: portfolioId! }); setAddSecondaryOpen(false); setSecondaryForm({ mmfFundId: "", label: "", currentBalance: "", monthlyContribution: "", notes: "" }); toast.success("Additional MMF account added."); },
+    onSuccess: () => { invalidatePortfolioMoney(utils, portfolioId); setAddSecondaryOpen(false); setSecondaryForm({ mmfFundId: "", label: "", currentBalance: "", monthlyContribution: "", notes: "" }); toast.success("Additional MMF account added."); },
     onError: (e) => toast.error(e.message),
   });
   const updateSecondaryMutation = trpc.secondaryMmfs.update.useMutation({
-    onSuccess: () => { utils.secondaryMmfs.list.invalidate({ portfolioId: portfolioId! }); setEditSecondary(null); toast.success("Account updated."); },
+    onSuccess: () => { invalidatePortfolioMoney(utils, portfolioId); setEditSecondary(null); toast.success("Account updated."); },
     onError: (e) => toast.error(e.message),
   });
   const removeSecondaryMutation = trpc.secondaryMmfs.remove.useMutation({
-    onSuccess: () => { utils.secondaryMmfs.list.invalidate({ portfolioId: portfolioId! }); toast.success("Account removed."); },
+    onSuccess: () => { invalidatePortfolioMoney(utils, portfolioId); toast.success("Account removed."); },
     onError: (e) => toast.error(e.message),
   });
 
@@ -221,26 +222,20 @@ export default function MmfFunds({ embedded = false }: { embedded?: boolean } = 
   }
 
   const addMutation = trpc.mmfFunds.add.useMutation({
-    onSuccess: () => { utils.mmfFunds.list.invalidate(); setAddOpen(false); toast.success("Fund added."); },
+    onSuccess: () => { invalidatePortfolioMoney(utils, portfolioId); setAddOpen(false); toast.success("Fund added."); },
     onError: (e) => toast.error(e.message),
   });
   const updateMutation = trpc.mmfFunds.update.useMutation({
-    onSuccess: () => { utils.mmfFunds.list.invalidate(); setEditFund(null); toast.success("Fund updated."); },
+    onSuccess: () => { invalidatePortfolioMoney(utils, portfolioId); setEditFund(null); toast.success("Fund updated."); },
     onError: (e) => toast.error(e.message),
   });
   const deactivateMutation = trpc.mmfFunds.deactivate.useMutation({
-    onSuccess: () => { utils.mmfFunds.list.invalidate(); setDeleteId(null); toast.success("Fund removed."); },
+    onSuccess: () => { invalidatePortfolioMoney(utils, portfolioId); setDeleteId(null); toast.success("Fund removed."); },
     onError: (e) => toast.error(e.message),
   });
   const selectFundMutation = trpc.mmfFunds.selectFund.useMutation({
     onSuccess: () => {
-      utils.portfolios.list.invalidate();
-      if (portfolioId) {
-        utils.portfolios.get.invalidate({ portfolioId });
-        utils.projection.run.invalidate({ portfolioId });
-        utils.projection.milestones.invalidate({ portfolioId });
-        utils.projection.scenarios.invalidate({ portfolioId });
-      }
+      invalidatePortfolioMoney(utils, portfolioId);
       toast.success("Fund selection saved. Projection updated.");
     },
     onError: (e) => toast.error(e.message),

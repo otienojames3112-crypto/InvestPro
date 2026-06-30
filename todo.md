@@ -1358,3 +1358,15 @@
 - [x] LedgerBasisCard rendered above the table: Ledger actual current row, Dashboard live net worth, Portfolio Review net worth, the gap, and a generated basis explanation; goes amber when a gap is unexplained
 - [x] Other-Assets goal-exclusion distinction made visible (full net worth includes them; goal Ledger projection excludes them, stated in plain language)
 - [x] Type gate clean; full suite 1213 green (125 files); live verify; checkpoint
+
+## Cross-Page Integrity Test Suites (server/integrity/)
+
+- [x] Suite 1 — Money mutation sync (moneySync.test.ts, 6 tests)
+- [x] Suite 2 — Other Assets net worth incl. +200k equity (otherAssetsNetWorth.test.ts, 3 tests)
+- [x] Suite 3 — Allocation commit divergence: Capital Preservation vs Growth via runProjection + balanced byte-identity (allocationCommit.test.ts, 6 tests)
+- [x] Suite 4 — Reconciliation honesty / no green-badge theater (reconciliationHonesty.test.ts, 5 tests)
+- [x] Suite 5 — Time Machine: nowOverride drives currentMonth at boundaries / goal month (timeMachine.test.ts, 5 tests)
+- [x] Suite 6 — Actual vs planned: missed contribution rebases projection, reconciliation stays green (actualVsPlanned.test.ts, 5 tests)
+- [x] Suite 7 — Rate effective date: mid-month MMF rate change splits accrual by date (rateEffectiveDate.test.ts, 6 tests)
+- [x] Suite 8 — Ledger CSV headers match displayed labels incl. "MMF Interest" / "Swept to Securities" (csvHeaders.test.ts, 6 tests)
+- [x] All 8 suites green (42 tests); full suite 1255 green (133 files); tsc clean

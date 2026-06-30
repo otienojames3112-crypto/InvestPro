@@ -23,6 +23,7 @@ import {
 import { useState, useMemo, useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { toCsv, downloadCsv, slugify } from "@shared/csv";
+import { LEDGER_CSV_HEADERS } from "@shared/ledgerColumns";
 
 /** Read the ?focus=<month> query param once on mount (deep-link from the Dashboard timeline). */
 function useFocusMonth(): number | null {
@@ -291,10 +292,10 @@ export default function Ledger({ embedded = false }: { embedded?: boolean } = {}
       toast.error("Nothing to export yet");
       return;
     }
-    const headers = [
-      "Month", "Basis", "Off-plan", "Date", "Save", "CBK In", "Bank In", "Swept → Securities",
-      "Main Action", "MMF End", "MMF Interest", "T-Bill 91d", "T-Bill 182d", "T-Bill 364d", "IFB", "FXD", "Bank", "Total", "Phase",
-    ];
+    // Header row comes from the shared column definitions so the CSV and the
+    // on-screen table can never silently drift (see shared/ledgerColumns.ts and
+    // the ledgerCsvHeaders integrity test).
+    const headers = LEDGER_CSV_HEADERS;
     const rows = rowsSrc.map((r) => [
       r.monthNumber,
       r.isActual ? "Actual" : "Projected",

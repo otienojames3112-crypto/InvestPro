@@ -17,6 +17,7 @@ import {
   Info,
 } from "lucide-react";
 import { InfoHint } from "@/components/InfoHint";
+import { isVerificationState, viewerStateLabel } from "@shared/provenance";
 /** Friendly label for a figure key (falls back to the key itself). */
 const FIELD_LABELS: Record<string, string> = {
   price: "Price",
@@ -205,14 +206,12 @@ export default function SourceConflicts({ embedded = false }: { embedded?: boole
   );
 }
 
-/** Safe state label without leaning on the typed enum at the call site. */
+/**
+ * Safe state label without leaning on the typed enum at the call site. Phase 8c:
+ * delegates to the shared provenance vocabulary so it can never drift from the
+ * labels every other surface shows; only falls back to the raw string for an
+ * unrecognised value.
+ */
 function stateLabelSafe(s: string): string {
-  switch (s) {
-    case "human_verified":
-      return "Verified by you";
-    case "human_entered":
-      return "Entered by you";
-    default:
-      return s;
-  }
+  return isVerificationState(s) ? viewerStateLabel(s) : s;
 }

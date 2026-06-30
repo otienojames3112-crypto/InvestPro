@@ -24,6 +24,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { InfoHint } from "@/components/InfoHint";
 import {
   Search,
@@ -39,6 +40,7 @@ import {
   ShieldCheck,
   PlusCircle,
   Bot,
+  Calculator,
 } from "lucide-react";
 import { ASSET_CLASSES, profileFor, type AssetClass } from "@shared/assetModel";
 import {
@@ -73,8 +75,11 @@ type Opportunity = inferRouterOutputs<AppRouter>["opportunities"]["list"][number
  *    which respects the current Live/Test mode just like the deposit CTA.
  */
 
-type SortKey = "name" | "assetClass" | "currency" | "yieldPct" | "trailingReturnPct";
+type SortKey = "name" | "assetClass" | "currency" | "yieldPct" | "trailingReturnPct" | "score";
 type SortDir = "asc" | "desc";
+
+type ScoredResult = inferRouterOutputs<AppRouter>["opportunities"]["scored"];
+type ScoreEntry = ScoredResult["scores"][number];
 
 const LIQUIDITY_LABELS: Record<string, string> = {
   daily: "Daily",
@@ -104,11 +109,29 @@ function fmtPrice(v: string | null, currency: string): string {
 }
 
 export default function Explore({ embedded = false }: { embedded?: boolean } = {}) {
-  const { mode } = usePortfolio();
+  const { mode, portfolioId } = usePortfolio();
   const { user } = useAuth();
   const isMaintainer = user?.role === "admin";
   const [, navigate] = useLocation();
   const { data: rows = [], isLoading } = trpc.opportunities.list.useQuery();
+
+  // Phase 8a — the optional, transparent instrument score. It is OFF by default so
+  // the catalog opens in its neutral order; the user turns it on. When a portfolio is
+  // active we pass it so the score's issuer-concentration penalty reflects the user's
+  // own holdings. The score is a factual composite, never a recommendation.
+  const scoredInput = useMemo(
+    () => (portfolioId ? { portfolioId } : {}),
+    [portfolioId],
+  );
+  const { data: scored } = trpc.opportunities.scored.useQuery(scoredInput, {
+    staleTime: 60_000,
+  });
+  const scoreByRef = useMemo(() => {
+    const m = new Map<string, ScoreEntry>();
+    for (const s of scored?.scores ?? []) m.set(s.ref, s);
+    return m;
+  }, [scored]);
+  const [showScore, setShowScore] = useState(false);
 
   // ── User-controlled filters (the user narrows; the tool never pre-filters) ──
   const [search, setSearch] = useState("");
@@ -167,24 +190,34 @@ export default function Explore({ embedded = false }: { embedded?: boolean } = {
     if (sortKey) {
       const dir = sortDir === "asc" ? 1 : -1;
       out = [...out].sort((a, b) => {
-        let av: string | number | null;
-        let bv: string | number | null;
         if (sortKey === "yieldPct" || sortKey === "trailingReturnPct") {
-          av = num(a[sortKey]);
-          bv = num(b[sortKey]);
+          const av = num(a[sortKey]);
+          const bv = num(b[sortKey]);
           // Nulls always sort last regardless of direction (no implied ranking).
           if (av === null && bv === null) return 0;
           if (av === null) return 1;
           if (bv === null) return -1;
           return (av - bv) * dir;
         }
-        av = (a[sortKey] ?? "").toString().toLowerCase();
-        bv = (b[sortKey] ?? "").toString().toLowerCase();
+        if (sortKey === "score") {
+          // The composite score lives in the scored map. Ineligible/absent rows
+          // (no eligible score) always sort last regardless of direction.
+          const sa = scoreByRef.get(a.ref);
+          const sb = scoreByRef.get(b.ref);
+          const av = sa && sa.eligible && Number.isFinite(sa.score) ? sa.score : null;
+          const bv = sb && sb.eligible && Number.isFinite(sb.score) ? sb.score : null;
+          if (av === null && bv === null) return 0;
+          if (av === null) return 1;
+          if (bv === null) return -1;
+          return (av - bv) * dir;
+        }
+        const av = (a[sortKey] ?? "").toString().toLowerCase();
+        const bv = (b[sortKey] ?? "").toString().toLowerCase();
         return av < bv ? -1 * dir : av > bv ? 1 * dir : 0;
       });
     }
     return out;
-  }, [rows, search, classFilter, currencyFilter, liquidityFilter, minYield, maxYield, sortKey, sortDir]);
+  }, [rows, search, classFilter, currencyFilter, liquidityFilter, minYield, maxYield, sortKey, sortDir, scoreByRef]);
 
   function toggleSort(key: SortKey) {
     if (sortKey === key) {
@@ -229,11 +262,30 @@ export default function Explore({ embedded = false }: { embedded?: boolean } = {
             </h1>
             <p className="text-muted-foreground text-sm mt-1 max-w-2xl">
               A neutral catalog of investable instruments with publicly sourced facts.
-              Nothing here is ranked, scored, or recommended — you decide what to look at,
-              filter, and compare.
+              Nothing here is recommended. You decide what to look at, filter, and compare —
+              and you can optionally turn on a transparent factual Score that combines the
+              published facts (it is never advice).
             </p>
           </div>
           <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant={showScore ? "default" : "outline"}
+              onClick={() => {
+                const next = !showScore;
+                setShowScore(next);
+                // Turning the score off also drops a score-sort so the catalog returns
+                // to its neutral order; turning it on never auto-sorts.
+                if (!next && sortKey === "score") {
+                  setSortKey(null);
+                  setSortDir("asc");
+                }
+              }}
+              className="active:scale-[0.97] transition-transform"
+              aria-pressed={showScore}
+            >
+              <Calculator className="w-4 h-4 mr-1.5" /> {showScore ? "Hide score" : "Show score"}
+            </Button>
             {isMaintainer && (
               <Button
                 size="sm"
@@ -383,6 +435,14 @@ export default function Explore({ embedded = false }: { embedded?: boolean } = {
                         </span>
                       </TableHead>
                       <TableHead className="text-right">Price</TableHead>
+                      {showScore && (
+                        <TableHead className="text-right">
+                          <span className="inline-flex items-center justify-end gap-1 w-full">
+                            <SortHead k="score" numeric>Score</SortHead>
+                            <InfoHint side="left">A transparent, factual composite: net yield (after tax) minus point penalties for term lock-ups, issuer concentration against your own holdings, stale or unverified figures, and fees. It is a calculation you can audit by clicking a score — not a recommendation. Rows missing a usable yield show no score.</InfoHint>
+                          </span>
+                        </TableHead>
+                      )}
                       <TableHead>
                         <span className="inline-flex items-center gap-1">
                           Source &amp; freshness
@@ -394,7 +454,13 @@ export default function Explore({ embedded = false }: { embedded?: boolean } = {
                   </TableHeader>
                   <TableBody>
                     {filtered.map((r) => (
-                      <OpportunityRow key={r.ref} r={r} />
+                      <OpportunityRow
+                        key={r.ref}
+                        r={r}
+                        showScore={showScore}
+                        score={scoreByRef.get(r.ref)}
+                        weights={scored?.weights}
+                      />
                     ))}
                   </TableBody>
                 </Table>
@@ -414,8 +480,103 @@ export default function Explore({ embedded = false }: { embedded?: boolean } = {
   );
 }
 
+/**
+ * The optional Score cell. Shows the composite as a plain number with a click-to-open
+ * breakdown that itemises every signed component (the exact facts that moved it) plus a
+ * standing reminder that it is a calculation, not advice. Ineligible/absent rows render
+ * a neutral dash with the reason — never a low score that could read as "avoid".
+ */
+function ScoreCell({
+  score,
+  weights,
+}: {
+  score?: ScoreEntry;
+  weights?: ScoredResult["weights"];
+}) {
+  const REASON_LABELS: Record<string, string> = {
+    inactive: "Not currently active",
+    no_yield_figure: "No usable yield figure",
+    currency_excluded: "Currency outside the chosen set",
+  };
+  if (!score) {
+    return <span className="text-muted-foreground">—</span>;
+  }
+  if (!score.eligible) {
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span className="text-muted-foreground cursor-help underline decoration-dotted underline-offset-2">—</span>
+        </TooltipTrigger>
+        <TooltipContent side="left" className="max-w-xs text-xs leading-relaxed">
+          No score: {score.ineligibleReasons.map((x) => REASON_LABELS[x] ?? x).join(", ")}.
+          This is an exclusion from the calculation, not a low rating.
+        </TooltipContent>
+      </Tooltip>
+    );
+  }
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button className="inline-flex items-center gap-1 font-semibold text-foreground hover:text-primary underline decoration-dotted underline-offset-2 active:scale-[0.97] transition-transform">
+          {score.score.toFixed(1)}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent side="left" align="start" className="w-80 text-left">
+        <div className="space-y-2">
+          <div className="flex items-baseline justify-between">
+            <p className="text-sm font-semibold">Score breakdown</p>
+            <span className="text-lg font-bold tabular-nums">{score.score.toFixed(1)}</span>
+          </div>
+          <p className="text-[11px] text-muted-foreground leading-relaxed">
+            A transparent sum of the facts below. Positive points come from net yield;
+            negative points are penalties for risk/quality factors. This is a calculation
+            you can audit — it is not a recommendation.
+          </p>
+          <div className="divide-y divide-border rounded-md border">
+            {score.components.map((c) => (
+              <div key={c.key} className="flex items-start justify-between gap-3 px-2.5 py-1.5">
+                <div className="min-w-0">
+                  <p className="text-xs font-medium">{c.label}</p>
+                  <p className="text-[10px] text-muted-foreground leading-snug">{c.detail}</p>
+                </div>
+                <span
+                  className={`text-xs font-semibold tabular-nums shrink-0 ${
+                    c.points > 0
+                      ? "text-emerald-600 dark:text-emerald-400"
+                      : c.points < 0
+                        ? "text-red-600 dark:text-red-400"
+                        : "text-muted-foreground"
+                  }`}
+                >
+                  {c.points > 0 ? "+" : ""}{c.points.toFixed(1)}
+                </span>
+              </div>
+            ))}
+          </div>
+          {weights && (
+            <p className="text-[10px] text-muted-foreground">
+              Net yield is scored at {weights.netYieldPerPct} point(s) per percentage point.
+              The same weights apply to every instrument.
+            </p>
+          )}
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 /** A single catalog row. Kept neutral: facts + provenance, one hypothetical action. */
-function OpportunityRow({ r }: { r: Opportunity }) {
+function OpportunityRow({
+  r,
+  showScore,
+  score,
+  weights,
+}: {
+  r: Opportunity;
+  showScore: boolean;
+  score?: ScoreEntry;
+  weights?: ScoredResult["weights"];
+}) {
   const profile = profileFor(r.assetClass as AssetClass);
   const stale = rateStaleness(r.dataAsOf);
   const trailing = num(r.trailingReturnPct);
@@ -495,6 +656,11 @@ function OpportunityRow({ r }: { r: Opportunity }) {
         )}
       </TableCell>
       <TableCell className="text-right tabular-nums text-sm">{fmtPrice(r.lastPrice, r.currency)}</TableCell>
+      {showScore && (
+        <TableCell className="text-right tabular-nums">
+          <ScoreCell score={score} weights={weights} />
+        </TableCell>
+      )}
       <TableCell>
         <div className="text-xs text-muted-foreground max-w-[200px]">{r.dataSource ?? "Source not recorded"}</div>
         <div className="flex items-center gap-1 mt-0.5">

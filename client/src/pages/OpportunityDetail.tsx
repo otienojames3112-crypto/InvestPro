@@ -19,13 +19,10 @@ import {
   PencilLine,
   ExternalLink,
   ShieldCheck,
-  UserCheck,
-  Bot,
 } from "lucide-react";
 import { profileFor, type AssetClass } from "@shared/assetModel";
 import {
   effectiveState,
-  viewerStateLabel,
   isHumanChecked,
   humanCheckedCount,
   figureCount,
@@ -33,6 +30,7 @@ import {
   type FieldProvenance,
   type FieldProvenanceMap,
 } from "@shared/provenance";
+import { StatusBadge } from "@/components/StatusBadge";
 import { rateStaleness } from "@/lib/rateStaleness";
 import { usePortfolio } from "@/contexts/PortfolioContext";
 import { useAuth } from "@/_core/hooks/useAuth";
@@ -65,40 +63,14 @@ function fmtPct(v: string | null | undefined): string {
 
 const NOW = Date.now();
 
-/** Small coloured badge describing a figure's effective verification state. */
+/**
+ * Small coloured badge describing a figure's effective verification state. Phase
+ * 8c: now a thin wrapper over the shared <StatusBadge> so every surface renders
+ * the same colour, icon and wording. The emphatic ai_extracted filled chip is
+ * handled inside StatusBadge's tone map.
+ */
 function VerificationBadge({ p }: { p: FieldProvenance }) {
-  const eff = effectiveState(p, NOW);
-  const label = viewerStateLabel(eff);
-  // ai_extracted is the lowest-trust tier and must read as provisional UNMISTAKABLY:
-  // a filled orange chip (not a thin outline) with a bot icon, distinct from the
-  // ordinary "unverified scrape" amber outline.
-  if (eff === "ai_extracted") {
-    return (
-      <Badge
-        variant="outline"
-        className="text-[10px] gap-1 border-orange-500/60 bg-orange-500/15 text-orange-700 dark:text-orange-300 font-medium"
-      >
-        <Bot className="w-2.5 h-2.5" />
-        {label}
-      </Badge>
-    );
-  }
-  const cls =
-    eff === "human_verified"
-      ? "border-emerald-500/40 text-emerald-600 dark:text-emerald-400"
-      : eff === "human_entered"
-        ? "border-sky-500/40 text-sky-600 dark:text-sky-400"
-        : eff === "stale"
-          ? "border-red-500/40 text-red-600 dark:text-red-400"
-          : "border-amber-500/40 text-amber-600 dark:text-amber-400";
-  const Icon =
-    eff === "human_verified" ? ShieldCheck : eff === "human_entered" ? UserCheck : eff === "stale" ? Clock : Info;
-  return (
-    <Badge variant="outline" className={`text-[10px] gap-1 ${cls}`}>
-      <Icon className="w-2.5 h-2.5" />
-      {label}
-    </Badge>
-  );
+  return <StatusBadge state={effectiveState(p, NOW)} />;
 }
 
 /**

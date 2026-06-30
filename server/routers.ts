@@ -146,7 +146,15 @@ import {
   summariseState,
   isAiProvisionalRow,
   countAiFigures,
+  effectiveState,
+  type VerificationState,
 } from "../shared/provenance";
+import {
+  scoreAndRank,
+  catalogNetYieldPct,
+  DEFAULT_SCORE_WEIGHTS,
+  type ScoreInput,
+} from "../shared/instrumentScore";
 import type { InsertOpportunity, InsertAiIntakeAudit } from "../drizzle/schema";
 import { runAdapter } from "./ingestion/runner";
 import { ADAPTERS } from "./ingestion/adapters";
@@ -1018,6 +1026,120 @@ export const appRouter = router({
         (r) => !isAiProvisionalRow((r.fieldProvenance ?? {}) as FieldProvenanceMap),
       );
     }),
+
+    // Phase 8a — unified, transparent instrument SCORE for the Explore surface.
+    // This is a FACTUAL composite (net yield minus liquidity / issuer-concentration
+    // / staleness / fee / unverified penalties, with the same gov-outranks-bank-when
+    // -close tie-break the engine already uses) and it is NEVER a recommendation. The
+    // client only sorts by it when the user explicitly chooses to; the default order
+    // stays neutral. Every score ships with its signed, itemised breakdown so the user
+    // can read exactly which facts moved it.
+    scored: protectedProcedure
+      .input(
+        z
+          .object({
+            // When provided, the user's own holdings drive the issuer-concentration
+            // penalty (an instrument from an issuer already over the cap is penalised).
+            portfolioId: z.number().int().positive().optional(),
+          })
+          .optional(),
+      )
+      .query(async ({ ctx, input }) => {
+        if ((await countOpportunities()) === 0) {
+          for (const row of OPPORTUNITY_SEED) await upsertOpportunity(row);
+        }
+        const rows = (await listOpportunities()).filter(
+          (r) => !isAiProvisionalRow((r.fieldProvenance ?? {}) as FieldProvenanceMap),
+        );
+
+        // Derive the concentrated-issuer set from the user's bank holdings, reusing
+        // the SAME detectIssuerConcentration the Dashboard risk-limits panel uses.
+        let concentratedIssuers: string[] = [];
+        const pid = input?.portfolioId;
+        if (pid) {
+          try {
+            const p = await getPortfolio(pid, ctx.user.id);
+            if (p) {
+              const rates = await ensureRateSettings(pid);
+              const fundEar = await getSelectedFundEar(p);
+              const settings = dbToEngine(rates, p, fundEar);
+              const summary = await getActualsSummary(
+                pid,
+                settings.targetAmount,
+                settings.withholdingTax,
+                settings.fxdCouponRate,
+                settings.mmfYield,
+                settings.tbill364Rate,
+              );
+              const netWorth = summary ? summary.totalContributed : 0;
+              const bankRows = await getBankInstrumentHoldings(pid);
+              const issuerValues = bankRows
+                .filter((r) => r.isActive)
+                .map((r) => ({
+                  issuer: r.bankName,
+                  value: Math.max(Number(r.currentValue) || 0, Number(r.principal) || 0),
+                }));
+              const capPct = parseFloat(
+                String((p as { concentrationCapPct?: string }).concentrationCapPct ?? "25"),
+              );
+              const cap = (Number.isFinite(capPct) && capPct > 0 ? capPct : 25) / 100;
+              concentratedIssuers = detectIssuerConcentration(issuerValues, netWorth, cap).map(
+                (b) => b.issuer,
+              );
+            }
+          } catch {
+            // Concentration context is best-effort: if the portfolio can't be read we
+            // simply score without the concentration penalty rather than failing.
+            concentratedIssuers = [];
+          }
+        }
+
+        const nowMs = Date.now();
+        const inputs: ScoreInput[] = rows.map((r) => {
+          const fp = (r.fieldProvenance ?? {}) as FieldProvenanceMap;
+          const yieldProv = fp.yield;
+          const effState = yieldProv
+            ? effectiveState(yieldProv, nowMs)
+            : (r.verificationState as VerificationState);
+          return {
+            ref: r.ref,
+            name: r.name,
+            assetClass: r.assetClass,
+            issuer: r.issuer ?? null,
+            currency: r.currency,
+            netYieldPct: catalogNetYieldPct({
+              yieldPct: r.yieldPct === null ? null : Number(r.yieldPct),
+              yieldKind: r.yieldKind ?? null,
+              assetClass: r.assetClass,
+              factNote: r.factNote ?? null,
+            }),
+            expenseRatioPct: r.expenseRatioPct === null ? null : Number(r.expenseRatioPct),
+            liquidity: (r.liquidity as ScoreInput["liquidity"]) ?? null,
+            dataAsOf: r.dataAsOf ? new Date(r.dataAsOf).getTime() : null,
+            verificationState: effState,
+            active: r.active,
+          };
+        });
+
+        const ranked = scoreAndRank(inputs, { nowMs, concentratedIssuers });
+        // Return a compact, ref-keyed map so the client can merge scores onto the rows
+        // it already has from `list` (no row duplication, no money math on the client).
+        return {
+          weights: DEFAULT_SCORE_WEIGHTS,
+          scoredAt: nowMs,
+          concentratedIssuers,
+          scores: ranked.map((s, i) => ({
+            ref: s.ref,
+            rank: i + 1,
+            score: s.score,
+            netYieldPct: Math.round(s.netYieldPct * 100) / 100,
+            bucket: s.bucket,
+            eligible: s.eligible,
+            ineligibleReasons: s.ineligibleReasons,
+            components: s.components,
+          })),
+        };
+      }),
 
     // Admin-only: the FULL catalog INCLUDING AI-provisional rows hidden from `list`.
     // Used by the maintainer review queue so a maintainer can see and confirm rows that

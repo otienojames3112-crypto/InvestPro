@@ -8,8 +8,10 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
-import { BookOpen, RefreshCw, Search, Info, Download, ChevronDown } from "lucide-react";
+import { BookOpen, RefreshCw, Search, Info, Download, ChevronDown, MessageSquareText } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { explainLedgerRow } from "@shared/ledgerExplain";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -487,6 +489,45 @@ export default function Ledger({ embedded = false }: { embedded?: boolean } = {}
                           <td className="px-4 py-2.5 text-muted-foreground max-w-xs">
                             <div className="flex items-start gap-1.5">
                               <span className="truncate" title={r.mainAction}>{r.mainAction}</span>
+                              <Popover>
+                                <PopoverTrigger asChild>
+                                  <button
+                                    type="button"
+                                    className="mt-0.5 shrink-0 text-muted-foreground/70 hover:text-primary transition-colors active:scale-[0.97]"
+                                    aria-label="Explain this month in plain language"
+                                  >
+                                    <MessageSquareText className="w-3.5 h-3.5" />
+                                  </button>
+                                </PopoverTrigger>
+                                <PopoverContent side="top" align="start" className="w-80 text-xs p-3 space-y-2">
+                                  {(() => {
+                                    const ex = explainLedgerRow(r);
+                                    return (
+                                      <>
+                                        <div className="flex items-center justify-between gap-2">
+                                          <p className="font-semibold text-foreground">{ex.lede}</p>
+                                          {ex.offPlan && (
+                                            <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-amber-500/40 text-amber-500">Off-plan</Badge>
+                                          )}
+                                        </div>
+                                        <div className="space-y-1.5">
+                                          {ex.lines.map((l) => (
+                                            <div key={l.key} className="flex items-start justify-between gap-3">
+                                              <span className="text-muted-foreground leading-snug">{l.detail}</span>
+                                              {l.sign !== "neutral" && l.amount > 0 && (
+                                                <span className={`tabular-nums shrink-0 font-medium ${l.sign === "in" ? "text-emerald-500" : "text-primary"}`}>
+                                                  {l.sign === "in" ? "+" : "\u2212"}{formatKES(l.amount)}
+                                                </span>
+                                              )}
+                                            </div>
+                                          ))}
+                                        </div>
+                                        <p className="text-muted-foreground border-t border-border/50 pt-1.5 leading-snug">{ex.closing}</p>
+                                      </>
+                                    );
+                                  })()}
+                                </PopoverContent>
+                              </Popover>
                               {r.sweepRationale && (
                                 <TooltipProvider delayDuration={150}>
                                   <Tooltip>

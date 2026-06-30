@@ -1218,9 +1218,10 @@
 - [ ] /portfolio-review→/review?tab=manager, /reconciliation→/review?tab=reconciliation, /mmf-accrual→/review?tab=income, /tax-summary→/review?tab=tax
 
 ### Phase 8 — Allocation/sweep scoring + ledger narration + status labels
-- [ ] Scoring: score = net_yield − liquidity_penalty − issuer_risk_penalty − concentration_penalty − stale_data_penalty; eligibility gates (matures by goal/liquid, fresh rate, min amount, WHT known, concentration cap, safety floor); gov usually outranks bank when close
-- [ ] Ledger explains: deposited, swept, instrument chosen + why, matured, where interest went, what stayed liquid, actual vs projected
-- [ ] Consistent statuses everywhere: Reference data / Modelled / Suggested by plan / User confirmed / Actual recorded; never imply it executed a transaction
+- [x] Scoring: shared/instrumentScore.ts — score = net_yield − liquidity/concentration/stale/expense/unverified penalties; eligibility gates (active, usable yield, currency) + sovereign-preference tie-break; surfaced as OPT-IN Score column on Explore with auditable per-component breakdown popover; opportunities.scored tRPC endpoint reuses detectIssuerConcentration + catalogNetYieldPct (17 tests)
+- [x] Ledger explains: shared/ledgerExplain.ts — per-row plain-language popover (saved, returned from CBK/bank, swept out, MMF interest, end balances, phase), tense-matched to settled/projected, headline mirrors engine mainAction verbatim, non-advisory (10 tests)
+- [x] Consistent statuses everywhere: shared/statusLabels.ts canonical descriptor (label/tone/iconKey/description) + client StatusBadge; OpportunityDetail badge + SourceConflicts label now consume the shared vocabulary so surfaces never drift (5 tests)
+- [x] Type gate clean; full suite 1146 green; Explore + Source Conflicts screenshots verified
 
 ### Phase 9 — Tests + verify + deliver
 - [ ] Integration: commit tier → Ledger/Dashboard/Scenarios consistent

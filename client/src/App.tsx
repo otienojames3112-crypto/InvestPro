@@ -1,77 +1,92 @@
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/NotFound";
-import { Route, Switch } from "wouter";
+import { Route, Switch, Redirect, useSearch } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import { DepositDrawerProvider } from "./contexts/DepositDrawerContext";
 import { PortfolioProvider } from "./contexts/PortfolioContext";
 import Dashboard from "./pages/Dashboard";
-import Ledger from "./pages/Ledger";
-import Contributions from "./pages/Contributions";
-import Settings from "./pages/Settings";
-import Securities from "./pages/Securities";
-import Scenarios from "./pages/Scenarios";
 import GettingStarted from "./pages/GettingStarted";
-import Deposits from "./pages/Deposits";
-import MmfFunds from "./pages/MmfFunds";
-import OtherAssets from "./pages/OtherAssets";
-import MmfAccrual from "./pages/MmfAccrual";
-import TaxSummary from "./pages/TaxSummary";
-import MmfStrategy from "./pages/MmfStrategy";
-import BankInstruments from "./pages/BankInstruments";
-import PortfolioReview from "./pages/PortfolioReview";
-import Reconciliation from "./pages/Reconciliation";
-import Withdrawals from "./pages/Withdrawals";
 import Learn from "./pages/Learn";
 import { TimeMachine } from "./pages/TimeMachine";
-import Explore from "./pages/Explore";
 import OpportunityDetail from "./pages/OpportunityDetail";
-import SourceConflicts from "./pages/SourceConflicts";
-import AiIntake from "./pages/AiIntake";
-import AiReview from "./pages/AiReview";
 import AddInstrument from "./pages/AddInstrument";
-import AllocationPlan from "./pages/AllocationPlan";
 import PlanArea from "./pages/PlanArea";
 import CashflowsArea from "./pages/CashflowsArea";
 import HoldingsArea from "./pages/HoldingsArea";
 import ResearchArea from "./pages/ResearchArea";
 import ReviewArea from "./pages/ReviewArea";
 
+/**
+ * Legacy-route redirect. Each old standalone page now lives as a tab inside one
+ * of the consolidated parent areas, so every old path forwards to
+ * `/<area>?tab=<id>`. Any extra query params on the old URL (e.g. the
+ * allocation→explore `?class=` handoff) are preserved so deep-links keep working.
+ */
+function TabRedirect({ area, tab }: { area: string; tab: string }) {
+  const search = useSearch();
+  const existing = new URLSearchParams(search);
+  existing.set("tab", tab);
+  return <Redirect to={`/${area}?${existing.toString()}`} replace />;
+}
+
 function Router() {
   return (
     <Switch>
       <Route path="/" component={Dashboard} />
-      <Route path="/ledger">{() => <Ledger />}</Route>
-      <Route path="/contributions">{() => <Contributions />}</Route>
-      <Route path="/securities">{() => <Securities />}</Route>
-      <Route path="/scenarios">{() => <Scenarios />}</Route>
-      <Route path="/settings">{() => <Settings />}</Route>
+
+      {/* ---- Consolidated parent areas (the 7 manager-grade surfaces) ---- */}
       <Route path="/plan" component={PlanArea} />
       <Route path="/cashflows" component={CashflowsArea} />
       <Route path="/holdings" component={HoldingsArea} />
       <Route path="/research" component={ResearchArea} />
       <Route path="/review" component={ReviewArea} />
+
+      {/* ---- Guide / Help ---- */}
       <Route path="/getting-started" component={GettingStarted} />
       <Route path="/learn" component={Learn} />
-      <Route path="/deposits">{() => <Deposits />}</Route>
-      <Route path="/withdrawals">{() => <Withdrawals />}</Route>
-      <Route path="/mmf-funds">{() => <MmfFunds />}</Route>
-      <Route path="/mmf-accrual">{() => <MmfAccrual />}</Route>
-      <Route path="/mmf-strategy">{() => <MmfStrategy />}</Route>
-      <Route path="/bank-instruments">{() => <BankInstruments />}</Route>
-      <Route path="/tax-summary">{() => <TaxSummary />}</Route>
-      <Route path="/portfolio-review">{() => <PortfolioReview />}</Route>
-      <Route path="/allocation-plan">{() => <AllocationPlan />}</Route>
-      <Route path="/reconciliation">{() => <Reconciliation />}</Route>
-      <Route path="/other-assets">{() => <OtherAssets />}</Route>
-      <Route path="/explore">{() => <Explore />}</Route>
+
+      {/* ---- Setup ---- */}
+      <Route path="/settings">{() => <TabRedirect area="plan" tab="goal" />}</Route>
+
+      {/* ---- Sandbox-only ---- */}
+      <Route path="/time-machine" component={TimeMachine} />
+
+      {/* ---- Full-screen deep pages (kept standalone; opened from Research→Explore) ---- */}
       <Route path="/explore/new" component={AddInstrument} />
       <Route path="/explore/:ref" component={OpportunityDetail} />
-      <Route path="/source-conflicts">{() => <SourceConflicts />}</Route>
-      <Route path="/ai-intake">{() => <AiIntake />}</Route>
-      <Route path="/ai-review">{() => <AiReview />}</Route>
-      <Route path="/time-machine" component={TimeMachine} />
+
+      {/* ---- Legacy route redirects → new area + tab ---- */}
+      {/* Plan area */}
+      <Route path="/allocation-plan">{() => <TabRedirect area="plan" tab="allocation" />}</Route>
+      <Route path="/scenarios">{() => <TabRedirect area="plan" tab="scenarios" />}</Route>
+      <Route path="/ledger">{() => <TabRedirect area="plan" tab="ledger" />}</Route>
+
+      {/* Cashflows area */}
+      <Route path="/deposits">{() => <TabRedirect area="cashflows" tab="record-in" />}</Route>
+      <Route path="/withdrawals">{() => <TabRedirect area="cashflows" tab="withdraw" />}</Route>
+      <Route path="/contributions">{() => <TabRedirect area="cashflows" tab="scheduled" />}</Route>
+
+      {/* Holdings area */}
+      <Route path="/mmf-funds">{() => <TabRedirect area="holdings" tab="mmf" />}</Route>
+      <Route path="/securities">{() => <TabRedirect area="holdings" tab="gov" />}</Route>
+      <Route path="/bank-instruments">{() => <TabRedirect area="holdings" tab="bank" />}</Route>
+      <Route path="/other-assets">{() => <TabRedirect area="holdings" tab="other" />}</Route>
+
+      {/* Research area */}
+      <Route path="/explore">{() => <TabRedirect area="research" tab="explore" />}</Route>
+      <Route path="/mmf-strategy">{() => <TabRedirect area="research" tab="mmf-comparison" />}</Route>
+      <Route path="/ai-intake">{() => <TabRedirect area="research" tab="ai-import" />}</Route>
+      <Route path="/ai-review">{() => <TabRedirect area="research" tab="ai-review" />}</Route>
+      <Route path="/source-conflicts">{() => <TabRedirect area="research" tab="source-conflicts" />}</Route>
+
+      {/* Review area */}
+      <Route path="/portfolio-review">{() => <TabRedirect area="review" tab="manager" />}</Route>
+      <Route path="/reconciliation">{() => <TabRedirect area="review" tab="reconciliation" />}</Route>
+      <Route path="/mmf-accrual">{() => <TabRedirect area="review" tab="income" />}</Route>
+      <Route path="/tax-summary">{() => <TabRedirect area="review" tab="tax" />}</Route>
+
       <Route path="/404" component={NotFound} />
       <Route component={NotFound} />
     </Switch>

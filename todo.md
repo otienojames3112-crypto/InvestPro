@@ -1284,3 +1284,12 @@
 - [x] Getting Started relabeled "Guide" + grouped under Help
 - [x] Dashboard already a command centre (At a glance + Posture & exceptions + detailed analytics) — no slimming needed
 - [x] Type gate clean; full suite 1110 green; screenshots verified
+
+
+### Phase 7 — legacy route redirects (DONE)
+- [x] Added TabRedirect helper that forwards old paths to /<area>?tab=<id>, preserving extra query params (e.g. ?class= on the allocation→explore handoff)
+- [x] All 19 consolidated standalone routes now redirect (allocation-plan/scenarios/ledger → plan; deposits/withdrawals/contributions → cashflows; mmf-funds/securities/bank-instruments/other-assets → holdings; explore/mmf-strategy/ai-intake/ai-review/source-conflicts → research; portfolio-review/reconciliation/mmf-accrual/tax-summary → review); /settings → plan?tab=goal
+- [x] Kept full-screen deep pages standalone: /explore/new, /explore/:ref, /time-machine, /getting-started, /learn, / (Dashboard)
+- [x] Verified live: /securities → Holdings/Government, /tax-summary → Review/Tax, /explore?class=equity → Research/Explore pre-filtered to equity (deep-link survived)
+- [x] Added server/routeRedirects.test.ts (4 tests): every redirect target is a real tab id; all 20 promised legacy paths covered; consolidated pages no longer mount directly
+- [x] Type gate clean; full suite green

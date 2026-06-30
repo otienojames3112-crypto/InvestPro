@@ -1256,3 +1256,12 @@
 - [x] PlanArea: Goal & Plan (Settings) / Allocation (AllocationPlan) / Scenarios / Ledger tabs at /plan
 - [x] CommitPlanBar on Allocation tab: reads snapshot planStatus, calls allocation.commitPlan, shows committed timestamp; non-advisory copy ("no holdings moved")
 - [x] Type gate clean; full suite 1110 green; screenshots verified (tabs, embedded pages, commit bar)
+
+
+### Phase 4 — Cashflows + Holdings parent areas (DONE)
+- [x] CashflowsArea: Record In (Deposits) / Withdraw (Withdrawals) / Scheduled (Contributions) / Actual vs Planned (Reconciliation)
+- [x] HoldingsArea: MMF (MmfFunds) / Government (Securities) / Bank (BankInstruments) / Other (OtherAssets)
+- [x] Added embedded prop to Deposits; switched /deposits route to render-prop form
+- [x] Registered /cashflows + /holdings routes (render-prop, ?tab= deep-linkable)
+- [x] Verified all tabs render embedded (no doubled shell), deep-links land correctly
+- [x] Type gate clean; full suite 1110 green

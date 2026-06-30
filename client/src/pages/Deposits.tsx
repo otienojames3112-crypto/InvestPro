@@ -86,7 +86,7 @@ const EMPTY_BANK = {
   notes: "",
 };
 
-export default function Deposits() {
+export default function Deposits({ embedded: _embedded = false }: { embedded?: boolean } = {}) {
   const { portfolioId, portfolio } = usePortfolio();
   const { fundName, fundLabel } = useSelectedFund();
   const { openDrawer } = useDepositDrawer();

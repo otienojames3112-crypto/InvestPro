@@ -33,6 +33,8 @@ import AiReview from "./pages/AiReview";
 import AddInstrument from "./pages/AddInstrument";
 import AllocationPlan from "./pages/AllocationPlan";
 import PlanArea from "./pages/PlanArea";
+import CashflowsArea from "./pages/CashflowsArea";
+import HoldingsArea from "./pages/HoldingsArea";
 
 function Router() {
   return (
@@ -44,9 +46,11 @@ function Router() {
       <Route path="/scenarios">{() => <Scenarios />}</Route>
       <Route path="/settings">{() => <Settings />}</Route>
       <Route path="/plan" component={PlanArea} />
+      <Route path="/cashflows" component={CashflowsArea} />
+      <Route path="/holdings" component={HoldingsArea} />
       <Route path="/getting-started" component={GettingStarted} />
       <Route path="/learn" component={Learn} />
-      <Route path="/deposits" component={Deposits} />
+      <Route path="/deposits">{() => <Deposits />}</Route>
       <Route path="/withdrawals">{() => <Withdrawals />}</Route>
       <Route path="/mmf-funds">{() => <MmfFunds />}</Route>
       <Route path="/mmf-accrual">{() => <MmfAccrual />}</Route>

@@ -389,3 +389,60 @@ export function reconcileAccrual(
     ok: Math.abs(grossDiff) <= RECON_TOLERANCE_KES && Math.abs(whtDiff) <= RECON_TOLERANCE_KES,
   };
 }
+
+
+/**
+ * Ledger "Total" basis comparison (Ledger ambiguity fix).
+ *
+ * The Month Ledger Total follows the GOAL-PLAN asset scope (the engine never
+ * sweeps Other Assets the user tagged OUT of the goal). The Dashboard headline
+ * and Portfolio Review show FULL net worth. So those two figures are EXPECTED to
+ * differ by exactly the goal-excluded other-asset value — this is a basis
+ * difference to explain, not a discrepancy to hide.
+ *
+ * This pure helper takes the figures the pages already produce (via the snapshot
+ * selectors) and decides whether the gap is the expected basis gap. Kept free of
+ * any valuation logic so it can be unit-tested in isolation.
+ */
+export interface LedgerBasisInputs {
+  /** Last actual Ledger row total (engine/goal-plan basis); null when nothing recorded. */
+  ledgerActualValue: number | null;
+  /** The goal-plan comparable the Ledger total should match (snapshot selector). */
+  ledgerComparable: number;
+  /** Dashboard headline net worth (full-net-worth basis). */
+  dashboardNetWorth: number;
+  /** Portfolio Review net worth (full-net-worth basis). */
+  portfolioReviewNetWorth: number;
+  /** Goal-plan assets (full minus goal-excluded other assets). */
+  goalPlanAssets: number;
+  /** Value of Other Assets tagged OUT of the goal. */
+  otherAssetsExcludedFromGoal: number;
+}
+
+export interface LedgerBasisResult {
+  /** Dashboard full net worth minus goal-plan assets. */
+  fullVsGoalGap: number;
+  /** The gap we EXPECT (== goal-excluded other assets). */
+  expectedGap: number;
+  /** True when the full-vs-goal gap equals the goal-excluded value (basis is explained). */
+  gapExplained: boolean;
+  /** True when the Ledger actual row sits on the goal-plan basis as expected. */
+  ledgerMatchesGoalBasis: boolean;
+  /** True when Dashboard and Portfolio Review agree (both full-net-worth basis). */
+  dashboardMatchesReview: boolean;
+}
+
+export function compareLedgerBases(input: LedgerBasisInputs): LedgerBasisResult {
+  const fullVsGoalGap = round2(input.dashboardNetWorth - input.goalPlanAssets);
+  const expectedGap = round2(input.otherAssetsExcludedFromGoal);
+  return {
+    fullVsGoalGap,
+    expectedGap,
+    gapExplained: Math.abs(fullVsGoalGap - expectedGap) <= RECON_TOLERANCE_KES,
+    ledgerMatchesGoalBasis:
+      input.ledgerActualValue === null ||
+      Math.abs(input.ledgerActualValue - input.ledgerComparable) <= RECON_TOLERANCE_KES,
+    dashboardMatchesReview:
+      Math.abs(input.dashboardNetWorth - input.portfolioReviewNetWorth) <= RECON_TOLERANCE_KES,
+  };
+}

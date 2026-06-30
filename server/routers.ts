@@ -197,6 +197,7 @@ import {
   reconcileAccrual,
   reconcileHoldings,
   reconcilePlanPolicy,
+  compareLedgerBases,
   type AccrualReconItem,
 } from "../shared/reconciliation";
 import { valueHolding } from "../shared/holdingValue";
@@ -237,6 +238,12 @@ import {
 } from "../shared/modeling";
 import { buildAllocation, blendedYield } from "../shared/actuals";
 import { buildPortfolioSnapshot } from "./snapshot";
+import {
+  selectDashboardHeadlineNetWorth,
+  selectPortfolioReviewNetWorth,
+  selectGoalPlanAssets,
+  selectLedgerTodayComparableValue,
+} from "../shared/snapshot";
 import {
   buildProjectionRange,
   assessPace,
@@ -2540,6 +2547,95 @@ export const appRouter = router({
         bankHoldings,
         p.mmfFundId ?? null
       );
+    }),
+
+    /**
+     * Ledger "Total" ambiguity fix. The Month Ledger's Total column is the
+     * engine's projected totalEnd, which values securities on a
+     * projection/face/accretion basis and — critically — follows the GOAL-PLAN
+     * asset scope (it never sweeps Other Assets the user tagged OUT of the goal).
+     * The Dashboard headline and Portfolio Review show FULL net worth (every
+     * pocket). So the Ledger's actual current row and the Dashboard net worth are
+     * EXPECTED to differ by exactly the goal-excluded other-asset value.
+     *
+     * This procedure surfaces all three figures from the SAME snapshot selectors
+     * the pages render through, plus the engine's last actual row, so the page can
+     * show a reconciliation that explains (not hides) the basis difference.
+     */
+    ledgerReconciliation: protectedProcedure.input(portfolioIdInput).query(async ({ ctx, input }) => {
+      const round2 = (n: number) => Math.round(n * 100) / 100;
+      const p = await requirePortfolio(input.portfolioId, ctx.user.id);
+      const [rates, fundEar] = await Promise.all([getRateSettings(input.portfolioId), getSelectedFundEar(p)]);
+      const settings = dbToEngine(rates, p, fundEar);
+      const overrides = await getContributionOverrides(input.portfolioId);
+      const mappedOverrides = overrides.map((o) => ({
+        monthNumber: o.monthNumber,
+        overrideAmount: o.overrideAmount ? parseFloat(String(o.overrideAmount)) : undefined,
+        lumpSum: o.lumpSum ? parseFloat(String(o.lumpSum)) : undefined,
+      }));
+      const rh = mapRateHistory(await getRateHistory(input.portfolioId));
+      const depositRows = await getDepositEntries(input.portfolioId);
+      const withdrawalRows = await getWithdrawalEntries(input.portfolioId);
+      const actualDeposits = [
+        ...mapActualDeposits(depositRows),
+        ...mapPrimaryMmfWithdrawalsAsDeposits(withdrawalRows, p.mmfFundId ?? null),
+      ];
+      const actualSecurities = mapActualSecurities(await getSecurities(input.portfolioId));
+      const secondaryMmfs = mapSecondaryMmfs(await getSecondaryMmfs(input.portfolioId));
+      const bankHoldings = mapActualBankHoldings(await getBankInstrumentHoldings(input.portfolioId));
+      const rows = runProjection(
+        settings,
+        mappedOverrides,
+        rh,
+        actualDeposits,
+        actualSecurities,
+        secondaryMmfs,
+        bankHoldings,
+        p.mmfFundId ?? null,
+      );
+
+      // The Ledger's "actual current" value = the last month seeded from real
+      // holdings (isActual). Falls back to null when nothing is recorded yet.
+      const actualRows = rows.filter((r) => r.isActual);
+      const lastActual = actualRows.length > 0 ? actualRows[actualRows.length - 1] : null;
+      const ledgerActualValue = lastActual ? round2(lastActual.totalEnd) : null;
+      const lastActualMonth = lastActual ? lastActual.monthNumber : 0;
+
+      // Same snapshot selectors the Dashboard / Portfolio Review render through.
+      const snap = await buildPortfolioSnapshot(input.portfolioId, p);
+      const dashboardNetWorth = round2(selectDashboardHeadlineNetWorth(snap));
+      const portfolioReviewNetWorth = round2(selectPortfolioReviewNetWorth(snap));
+      const goalPlanAssets = round2(selectGoalPlanAssets(snap));
+      const ledgerComparable = round2(selectLedgerTodayComparableValue(snap));
+      const otherAssetsExcludedFromGoal = round2(snap.holdings.otherAssetsExcludedFromGoal);
+
+      // The Ledger total follows the goal-plan scope. Where Other Assets are
+      // tagged OUT of the goal, the Ledger is EXPECTED to sit below Dashboard net
+      // worth by exactly that excluded value — that is the basis difference, not a
+      // discrepancy. The pure helper decides whether the gap is the expected one.
+      const cmp = compareLedgerBases({
+        ledgerActualValue,
+        ledgerComparable,
+        dashboardNetWorth,
+        portfolioReviewNetWorth,
+        goalPlanAssets,
+        otherAssetsExcludedFromGoal,
+      });
+
+      return {
+        hasActuals: lastActual !== null,
+        lastActualMonth,
+        // Engine/goal-plan basis (what the Ledger Total column shows for actuals).
+        ledgerActualValue,
+        ledgerComparable,
+        // Full-net-worth basis (what the Dashboard headline + Portfolio Review show).
+        dashboardNetWorth,
+        portfolioReviewNetWorth,
+        goalPlanAssets,
+        otherAssetsExcludedFromGoal,
+        // Difference + whether it is the expected basis gap (from the pure helper).
+        ...cmp,
+      };
     }),
 
     scenarios: protectedProcedure

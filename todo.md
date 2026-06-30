@@ -1346,3 +1346,15 @@
 - [x] Levers (ScenarioLevers.tsx + projection.levers procedure): effect of more time, lump-sum, and each risk tier — all re-projected from the engine under the same basis
 - [x] Recommendation text is solver/grid-generated: smallest step-up that reaches the portfolio's own target; no hardcoded "5M"/"3,000"/"original PDF" strings
 - [x] Tests: 1206 green (124 files) incl. 1.2M/12mo vs 5M targets, +79k ladder, actual-basis baseline == run() ending value, clean ignores actuals; type gate clean
+
+## Ledger "Total" ambiguity fix (plan-to-ledger value basis)
+
+- [x] Server projection.ledgerReconciliation procedure: re-runs the same projection as run(); returns the Ledger actual current row (last actual month totalEnd, goal-plan/engine basis), the ledger goal-plan comparable, Dashboard full net worth, Portfolio Review net worth, goal-plan assets, other-assets-excluded-from-goal, full-vs-goal gap, expected gap, gapExplained, ledgerMatchesGoalBasis, dashboardMatchesReview
+- [x] Reads the SAME shared snapshot selectors the pages read (selectDashboardHeadlineNetWorth, selectPortfolioReviewNetWorth, selectGoalPlanAssets, selectLedgerTodayComparableValue) via buildPortfolioSnapshot — invents no new valuation
+- [x] Pure compareLedgerBases helper (shared/reconciliation.ts) holds the basis-identity math; routed through it so the server return == the tested logic
+- [x] Unit tests (server/ledgerBasis.test.ts): gap == excluded other-assets → gapExplained true; unexplained gap → false; no-exclusion same-scope match; dashboard==review check
+- [x] Ledger value column renamed "Total" → "Projected / Actual Value"; per-row Basis column shows Actual vs Proj. tags
+- [x] Column tooltip: actual rows use recorded holdings; projected rows use the engine future-value model; goal-plan scope excludes Other Assets tagged out; differences from live net worth expected where market-priced assets sit on a different basis
+- [x] LedgerBasisCard rendered above the table: Ledger actual current row, Dashboard live net worth, Portfolio Review net worth, the gap, and a generated basis explanation; goes amber when a gap is unexplained
+- [x] Other-Assets goal-exclusion distinction made visible (full net worth includes them; goal Ledger projection excludes them, stated in plain language)
+- [x] Type gate clean; full suite 1213 green (125 files); live verify; checkpoint

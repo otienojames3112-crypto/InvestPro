@@ -34,9 +34,143 @@ function useFocusMonth(): number | null {
   }, []);
 }
 
+type LedgerReconData = {
+  hasActuals: boolean;
+  lastActualMonth: number;
+  ledgerActualValue: number | null;
+  ledgerComparable: number;
+  dashboardNetWorth: number;
+  portfolioReviewNetWorth: number;
+  goalPlanAssets: number;
+  otherAssetsExcludedFromGoal: number;
+  fullVsGoalGap: number;
+  expectedGap: number;
+  gapExplained: boolean;
+  ledgerMatchesGoalBasis: boolean;
+  dashboardMatchesReview: boolean;
+};
+
+/**
+ * "Ledger value basis" reconciliation card. Explains why the Ledger's actual
+ * current value (goal-plan scope, engine basis) can differ from the Dashboard's
+ * live net worth (full net worth) — the gap is the value of Other Assets tagged
+ * OUT of the goal. Reads only the figures the server derives from the shared
+ * snapshot selectors; it invents no new valuation.
+ */
+function LedgerBasisCard({ recon }: { recon: LedgerReconData | undefined }) {
+  if (!recon) return null;
+  const excluded = recon.otherAssetsExcludedFromGoal;
+  const hasExclusion = excluded > 5;
+  const allHealthy = recon.gapExplained && recon.ledgerMatchesGoalBasis && recon.dashboardMatchesReview;
+
+  const rows: Array<{ label: string; value: number | null; sub: string }> = [
+    {
+      label: recon.hasActuals
+        ? `Ledger actual value (month ${recon.lastActualMonth})`
+        : "Ledger comparable (no actuals yet)",
+      value: recon.hasActuals ? recon.ledgerActualValue : recon.ledgerComparable,
+      sub: "Goal-plan scope · engine basis",
+    },
+    {
+      label: "Dashboard live net worth",
+      value: recon.dashboardNetWorth,
+      sub: "Full net worth · every pocket",
+    },
+    {
+      label: "Portfolio Review net worth",
+      value: recon.portfolioReviewNetWorth,
+      sub: "Full net worth · sum of allocation rows",
+    },
+  ];
+
+  return (
+    <Card className={allHealthy ? "border-border" : "border-amber-500/50"}>
+      <CardHeader className="pb-3">
+        <div className="flex items-center gap-2">
+          <Info className={`w-4 h-4 ${allHealthy ? "text-primary" : "text-amber-400"}`} />
+          <CardTitle className="text-sm font-semibold">Ledger value basis</CardTitle>
+          <Badge
+            variant="outline"
+            className={`ml-auto text-[10px] ${
+              allHealthy
+                ? "border-emerald-500/40 text-emerald-300"
+                : "border-amber-500/40 text-amber-300"
+            }`}
+          >
+            {allHealthy ? "Bases reconcile" : "Check basis"}
+          </Badge>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          {rows.map((r) => (
+            <div key={r.label} className="rounded-lg border border-border/60 bg-muted/20 px-3 py-2.5">
+              <div className="text-[11px] text-muted-foreground leading-tight">{r.label}</div>
+              <div className="text-base font-bold text-foreground kes-amount mt-0.5">
+                {r.value === null ? "–" : formatKES(r.value)}
+              </div>
+              <div className="text-[10px] text-muted-foreground/70 mt-0.5">{r.sub}</div>
+            </div>
+          ))}
+        </div>
+
+        <div className="rounded-lg border border-border/60 bg-background/40 px-3 py-2.5 text-xs leading-relaxed">
+          {hasExclusion ? (
+            <p className="text-muted-foreground">
+              The Ledger follows your <span className="text-foreground font-medium">goal-plan</span> scope, so it does
+              {" "}<span className="text-foreground font-medium">not</span> include{" "}
+              <span className="text-foreground font-medium kes-amount">{formatKES(excluded)}</span> of Other Assets you
+              tagged out of this goal. Your Dashboard net worth is higher by that amount — this is a basis difference, not a
+              discrepancy.
+              {recon.gapExplained ? (
+                <span className="text-emerald-400"> The full-vs-goal gap matches the excluded value exactly.</span>
+              ) : (
+                <span className="text-amber-400">
+                  {" "}But the full-vs-goal gap ({formatKES(recon.fullVsGoalGap)}) does not match the excluded value
+                  ({formatKES(recon.expectedGap)}) — {formatKES(Math.abs(recon.fullVsGoalGap - recon.expectedGap))} is
+                  unexplained.
+                </span>
+              )}
+            </p>
+          ) : (
+            <p className="text-muted-foreground">
+              No Other Assets are tagged out of this goal, so the Ledger actual value and your Dashboard live net worth use
+              the same asset scope and{" "}
+              {recon.gapExplained ? (
+                <span className="text-emerald-400">reconcile within rounding.</span>
+              ) : (
+                <span className="text-amber-400">
+                  should match — but they differ by {formatKES(Math.abs(recon.fullVsGoalGap))}, which is unexplained.
+                </span>
+              )}
+            </p>
+          )}
+          {!recon.dashboardMatchesReview && (
+            <p className="text-amber-400 mt-1.5">
+              Dashboard and Portfolio Review disagree by{" "}
+              {formatKES(Math.abs(recon.dashboardNetWorth - recon.portfolioReviewNetWorth))} — a page may be omitting a
+              pocket.
+            </p>
+          )}
+          {recon.hasActuals && !recon.ledgerMatchesGoalBasis && (
+            <p className="text-amber-400 mt-1.5">
+              The Ledger actual row drifts from its goal-plan comparable by{" "}
+              {formatKES(Math.abs((recon.ledgerActualValue ?? 0) - recon.ledgerComparable))}.
+            </p>
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function Ledger({ embedded = false }: { embedded?: boolean } = {}) {
   const { portfolioId, portfolio } = usePortfolio();
   const { data: projection, isLoading } = trpc.projection.run.useQuery(
+    { portfolioId: portfolioId! },
+    { enabled: !!portfolioId }
+  );
+  const { data: ledgerRecon } = trpc.projection.ledgerReconciliation.useQuery(
     { portfolioId: portfolioId! },
     { enabled: !!portfolioId }
   );
@@ -229,6 +363,7 @@ export default function Ledger({ embedded = false }: { embedded?: boolean } = {}
     FXD: "Value held in Fixed Coupon Treasury Bonds at month-end, kept at face (par) value. FXD coupons are paid into your MMF every 6 months, net of withholding tax.",
     Bank: "Value held in bank instruments at month-end — call deposits, fixed deposits, or savings accounts — including interest accrued so far.",
     Total: "Your entire portfolio value at month-end: MMF + all CBK securities + bank instruments. This is what you'd be worth that month.",
+    "Projected / Actual Value": "Actual rows use your recorded holdings; projected rows use the engine's future-value model (securities shown accreting toward face). This column follows your GOAL-PLAN scope, so it excludes Other Assets you've tagged out of the goal. Differences from your live net worth on the Dashboard are expected where market-priced assets sit on a different valuation basis — see the 'Ledger value basis' card above.",
     Phase: "The strategy stage for this month. Foundation: build a cash cushion. Growth: invest surplus into securities for yield. De-risking: stop buying long instruments. Final: let everything mature to cash so you're fully liquid by your goal date.",
   };
   const ColHead = ({
@@ -317,6 +452,8 @@ export default function Ledger({ embedded = false }: { embedded?: boolean } = {}
           </div>
         </div>
 
+        <LedgerBasisCard recon={ledgerRecon} />
+
         <Card>
           <CardHeader className="pb-3">
             <div className="flex items-center gap-3">
@@ -360,7 +497,7 @@ export default function Ledger({ embedded = false }: { embedded?: boolean } = {}
                     <ColHead label="IFB" />
                     <ColHead label="FXD" />
                     <ColHead label="Bank" />
-                    <ColHead label="Total" />
+                    <ColHead label="Projected / Actual Value" />
                     <ColHead label="Phase" align="left" />
                   </tr>
                 </thead>
@@ -648,7 +785,19 @@ export default function Ledger({ embedded = false }: { embedded?: boolean } = {}
                             {r.bankEnd > 0 ? formatKES(r.bankEnd) : "–"}
                           </td>
                           <td className="px-4 py-2.5 text-right kes-amount font-bold text-foreground">
-                            {formatKES(r.totalEnd)}
+                            <span className="tabular-nums">{formatKES(r.totalEnd)}</span>
+                            <span
+                              className={`block text-[10px] font-medium uppercase tracking-wide ${
+                                r.isActual ? "text-emerald-400/80" : "text-muted-foreground/70"
+                              }`}
+                              title={
+                                r.isActual
+                                  ? "Recorded holdings (goal-plan scope)"
+                                  : "Engine future-value model"
+                              }
+                            >
+                              {r.isActual ? "Actual" : "Projected"}
+                            </span>
                           </td>
                           <td className="px-4 py-2.5">
                             <Badge

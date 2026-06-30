@@ -1180,3 +1180,62 @@
 - [x] Brief 2: CSV "MMF->Securities" -> "Swept -> Securities" to match on-screen header label
 - [x] Regression test server/mmfInterestColumn.test.ts (5 tests: present/non-neg, positive while earning, reconciles via engine's gross-then-WHT path, mmfEnd unchanged, Car-sample shape)
 - [x] Type gate clean; full suite 1102 green (+5); screenshots confirm column renders + aligns
+
+## Manager-Grade Consolidation Refactor (7 areas + canonical money)
+
+### Phase 1 — Canonical snapshot + shared selectors
+- [ ] Add server `portfolio.snapshot` procedure returning the complete live state (identity, target, horizon, purpose, strategy/allocation policy, holdings by account/instrument, net worth, contribution plan + actual-vs-planned, projected ledger, income/accrual summary, tax summary, allocation target-vs-actual gap, liquidity calendar, reconciliation status, source/freshness warnings, next actions)
+- [ ] Build shared selectors (selectNetWorth, selectGoalProgress, selectTaxSummary, selectAccruedInterest, selectLiquidityEvents, selectAllocationGap, selectLedgerRows, selectReconciliationStatus) in shared/ so every page/tab reads the same numbers
+- [ ] Client hook `usePortfolioSnapshot()` wrapping the procedure
+
+### Phase 2 — Plan-to-ledger commit contract
+- [ ] Persist committed allocation tier + strategy as the active portfolioStrategyPolicy (reuse allocationSelectedTier + allocationPolicy)
+- [ ] "Use this plan" / "Commit this plan" action on Allocation Plan
+- [ ] Projection engine + Month Ledger consume the committed policy; Scenarios use it as baseline; Allocation probability uses same baseline; Reconciliation can confirm agreement
+- [ ] Changing tier later re-flows Ledger + Dashboard projection
+
+### Phase 3 — Plan parent (tabs: Goal, Allocation, Scenarios, Ledger)
+- [ ] Build /plan with tabbed shell; migrate AllocationPlan, Scenarios, Contributions planning, Month Ledger into tabs (no functionality removed)
+
+### Phase 4 — Cashflows + Holdings parents
+- [ ] /cashflows tabs: Record Money In, Withdraw Money, Scheduled Contributions, Actual vs Planned (merge Deposits, Withdrawals, Contributions; deposits always name destination account/instrument)
+- [ ] /holdings tabs: MMF Accounts, Government Securities, Bank Instruments, Other Assets (merge MMF Funds, CBK Securities, Bank holdings, Other Assets; distinguish "owned" vs "counts toward this goal")
+
+### Phase 5 — Research + Review parents
+- [ ] /research tabs: Explore Instruments, MMF Comparison, Bank Product Catalogue, AI Import, AI Review, Source Conflicts (merge Explore, OpportunityDetail, AddInstrument, AiIntake, AiReview, SourceConflicts, MmfStrategy, BankInstruments)
+- [ ] /review tabs: Manager Review, Reconciliation, Income & Accrual, Tax (merge PortfolioReview, Reconciliation, MmfAccrual, TaxSummary); reconciliation compares the EXACT values pages render (from canonical selectors)
+
+### Phase 6 — Navigation + modes + Dashboard slim-down
+- [ ] Sidebar = Dashboard, Plan, Cashflows, Holdings, Research, Review, Settings (+ Time Machine sandbox-only)
+- [ ] Simple mode shows Dashboard/Plan/Cashflows/Holdings/Review; Manager mode adds Research, AI tools, Source Conflicts, detailed settings, Time Machine
+- [ ] Getting Started + Learn become a Guide/Help experience (not main sidebar pages)
+- [ ] Dashboard slimmed to command centre with deep-links to detail tabs
+
+### Phase 7 — Redirects (keep old URLs)
+- [ ] /allocation-plan→/plan?tab=allocation, /scenarios→/plan?tab=scenarios, /ledger→/plan?tab=ledger
+- [ ] /deposits→/cashflows?tab=in, /withdrawals→/cashflows?tab=out
+- [ ] /securities→/holdings?tab=government, /mmf-funds→/holdings?tab=mmf, /other-assets→/holdings?tab=other
+- [ ] /portfolio-review→/review?tab=manager, /reconciliation→/review?tab=reconciliation, /mmf-accrual→/review?tab=income, /tax-summary→/review?tab=tax
+
+### Phase 8 — Allocation/sweep scoring + ledger narration + status labels
+- [ ] Scoring: score = net_yield − liquidity_penalty − issuer_risk_penalty − concentration_penalty − stale_data_penalty; eligibility gates (matures by goal/liquid, fresh rate, min amount, WHT known, concentration cap, safety floor); gov usually outranks bank when close
+- [ ] Ledger explains: deposited, swept, instrument chosen + why, matured, where interest went, what stayed liquid, actual vs projected
+- [ ] Consistent statuses everywhere: Reference data / Modelled / Suggested by plan / User confirmed / Actual recorded; never imply it executed a transaction
+
+### Phase 9 — Tests + verify + deliver
+- [ ] Integration: commit tier → Ledger/Dashboard/Scenarios consistent
+- [ ] Integration: add deposit → Dashboard/Holdings/Ledger/Review/Tax/Accrual/Reconciliation all update
+- [ ] Integration: add Other Asset → every net-worth display consistent
+- [ ] Integration: missed contribution → actual ledger row + future projection change
+- [ ] Integration: rate change → projections change from effective date only
+- [ ] Integration: old routes redirect to correct new tabs
+- [ ] Integration: reconciliation fails if any page total differs from canonical selector
+- [ ] Type gate clean; full suite green; screenshots; checkpoint; deliver complete source
+
+
+### Phase 1 — canonical snapshot (DONE)
+- [x] shared/snapshot.ts: PortfolioSnapshot type + pure selectors (netWorth, goalProgress, tax, accrual, liquidity, allocation gap, ledger, reconciliation, actual-vs-planned)
+- [x] server/snapshot.ts: buildPortfolioSnapshot composes buildAllocation (net worth) + runProjection (ledger) + allocation tier/gap model + reconcile() + getActualsSummary (income/tax) — no new money math
+- [x] portfolios.snapshot tRPC query wired (auth-checked)
+- [x] snapshotConsistency.test.ts: selectors read canonical figures; bucket roll-up == buildAllocation netWorth; gap rows == computeBucketGaps (7 tests)
+- [x] Type gate clean; full suite 1109 green; dev server healthy

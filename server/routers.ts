@@ -225,6 +225,7 @@ import {
   registerClassForAssetClass,
 } from "../shared/modeling";
 import { buildAllocation, blendedYield } from "../shared/actuals";
+import { buildPortfolioSnapshot } from "./snapshot";
 import {
   buildProjectionRange,
   assessPace,
@@ -2120,6 +2121,19 @@ export const appRouter = router({
           : null,
         createdAt: p.createdAt,
       };
+    }),
+
+    /**
+     * CANONICAL SNAPSHOT — the single source of money truth. Composes the same
+     * helpers the individual procedures use (buildAllocation for net worth,
+     * runProjection for the ledger, the allocation tier/gap model, the
+     * reconciliation cross-check, getActualsSummary for income/tax) into ONE
+     * object the consolidated tabs read via the pure selectors in
+     * `shared/snapshot.ts`. No surface re-derives money locally.
+     */
+    snapshot: protectedProcedure.input(portfolioIdInput).query(async ({ ctx, input }) => {
+      const p = await requirePortfolio(input.portfolioId, ctx.user.id);
+      return buildPortfolioSnapshot(input.portfolioId, p);
     }),
 
     /**

@@ -1308,3 +1308,15 @@
 - [x] Wire helper into allocation tier commit/update (AllocationPlan setTier + commitPlan)
 - [x] Wire helper into time-machine simulated actual/materialization (TimeMachine refresh; ModeSwitcher reset + seed/reset); also ModelDrawer commit + GettingStarted seedSample/accountStatus
 - [x] Added coverage unit test (6 tests, asserts all spec namespaces + missing/rejecting-namespace tolerance); type gate clean; full suite 1169 green; 4 key surfaces screenshot-verified
+
+
+## Plan-to-Ledger Contract — committed tier becomes the active operating policy
+- [x] Audit: how selectedTier is stored today; how the projection engine picks allocation/sweep path; where Ledger/Dashboard/Scenarios/probability/reconciliation read policy (committed tier lives in portfolio.allocationSelectedTier + allocationPolicy + planCommittedAt; engine sweep allocation is the single divergence site)
+- [x] Formalize portfolioStrategyPolicy — shared/strategyPolicy.ts: pure tieredPhaseMix(base, tier) + buildStrategyPolicy() derive a concrete operating policy (phase mix tilt, bandWidthMultiplier, safetyFloorMultiplier, familyCapFrac) from a committed tier
+- [x] Persist policy on "Commit this plan" — allocation.commitPlan already stamps committedTier + derived policy + planCommittedAt; snapshot identity now exposes committedTier/planStatus/planCommittedAt
+- [x] Projection engine consumes the committed policy — server/engine.ts: EngineSettings.strategyTier threads through to the sweep allocation via tieredPhaseMix; balanced/undefined is byte-for-byte identical (back-compat guarantee)
+- [x] Ledger, Dashboard projection, Scenarios baseline, Allocation probability, Reconciliation all use the same active policy — both engine-setting sources (routers.ts dbToEngine + server/snapshot.ts toEngineSettings) thread the committed tier; snapshot identity exposes activePolicyTier (the tier the projection actually ran)
+- [x] Tier change changes projected path — proven by planToLedgerContract.test.ts: Growth builds a material long-bond path (>100k peak) while Capital Preservation stays ~100% liquid (avg liquid share ≈ 1); CP stays more liquid than Aggressive over the horizon
+- [x] UI states — client/src/pages/AllocationPlan.tsx CommitPlanBar: "Plan not committed yet" (preview), "Committed plan active", "Preview only — Ledger still follows your committed plan." (selected≠committed), "Ledger and projections updated." (after commit); ProbabilityCard headline follows activePolicyTier, not the previewed tier
+- [x] Reconciliation plan-policy check — shared/reconciliation.ts reconcilePlanPolicy({committed, committedTier, policyTierUsed}); routers.ts reconciliation procedure returns a planPolicy check; client/src/pages/Reconciliation.tsx renders a plan-policy card that goes red if the ledger ran a different tier than committed
+- [x] Tests: 11 integration tests (planToLedgerContract.test.ts) + 10 unit tests (strategyPolicy.test.ts) — tier divergence, balanced identity, buildStrategyPolicy monotonicity, reconcilePlanPolicy checks; type gate clean; full suite 1190 green (122 files)

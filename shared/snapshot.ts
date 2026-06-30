@@ -48,6 +48,13 @@ export interface SnapshotIdentity {
   planCommittedAt: number | null;
   /** Derived: "committed" once the user has committed; else "draft". */
   planStatus: "committed" | "draft";
+  /**
+   * The tier the projection engine ACTUALLY executed for this snapshot's ledger.
+   * Equals `committedTier` only once committed; before commit it is "balanced"
+   * (the default path), so surfaces can prove the Ledger matches the committed
+   * Allocation-Plan selection — or flag an uncommitted preview.
+   */
+  activePolicyTier: string;
 }
 
 export interface SnapshotGoal {

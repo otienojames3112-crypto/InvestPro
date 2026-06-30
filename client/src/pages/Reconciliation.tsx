@@ -43,13 +43,15 @@ export default function Reconciliation({ embedded = false }: { embedded?: boolea
   const bank = data?.bank;
   const govAccrual = data?.govAccrual;
   const bankAccrual = data?.bankAccrual;
+  const planPolicy = data?.planPolicy;
   const reconciled =
     !!full?.reconciled &&
     !!mmf?.ok &&
     (gov?.ok ?? true) &&
     (bank?.ok ?? true) &&
     (govAccrual?.ok ?? true) &&
-    (bankAccrual?.ok ?? true);
+    (bankAccrual?.ok ?? true) &&
+    (planPolicy?.ok ?? true);
 
   // Round 43 (Fix #3): the banner's "largest gap" must span EVERY check, not just
   // the six whole-portfolio sources. Previously it read only full.maxDiff, so a
@@ -146,6 +148,62 @@ export default function Reconciliation({ embedded = false }: { embedded?: boolea
                 </div>
               </CardContent>
             </Card>
+
+            {/* Plan-policy check — the projection's in-force tier MUST equal the
+                committed tier on the Allocation Plan, or the Ledger and the plan
+                disagree about which strategy is running. */}
+            {planPolicy && (
+              <Card className={planPolicy.ok ? undefined : "border-amber-500/40 bg-amber-500/5"}>
+                <CardHeader>
+                  <CardTitle className="text-base flex items-center gap-2">
+                    Plan policy check
+                    {planPolicy.ok ? (
+                      <Badge className="bg-emerald-500/15 text-emerald-600 hover:bg-emerald-500/15 border-0">
+                        In agreement
+                      </Badge>
+                    ) : (
+                      <Badge variant="destructive">Mismatch</Badge>
+                    )}
+                  </CardTitle>
+                  <CardDescription>
+                    The strategy the projection engine (Ledger, Dashboard,
+                    Scenarios) actually runs must match the tier committed on the
+                    Allocation Plan. Otherwise the goal odds and the projected path
+                    would follow different models.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div className="rounded-md border p-4">
+                      <p className="text-xs text-muted-foreground">
+                        Committed tier (Allocation Plan)
+                      </p>
+                      <p className="text-lg font-semibold mt-1">
+                        {planPolicy.committedLabel}
+                      </p>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        {planPolicy.committed
+                          ? "Recorded as the plan in force."
+                          : "No plan committed yet — the default path is used."}
+                      </p>
+                    </div>
+                    <div className="rounded-md border p-4">
+                      <p className="text-xs text-muted-foreground">
+                        Tier the projection is running
+                      </p>
+                      <p className="text-lg font-semibold mt-1">
+                        {planPolicy.activeLabel}
+                      </p>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        {planPolicy.ok
+                          ? "Matches the committed plan."
+                          : "Does not match — re-commit on the Allocation Plan to realign."}
+                      </p>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
 
             {/* Full-portfolio sources */}
             <Card>

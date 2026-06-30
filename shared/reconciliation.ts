@@ -272,6 +272,40 @@ export function reconcileHoldings(
 }
 
 /**
+ * Plan-to-ledger contract check. The tier the projection engine ACTUALLY used
+ * to build the ledger (`policyTierUsed`) must equal the tier the user committed
+ * and sees on the Allocation Plan (`committedTier`). If they diverge, a page is
+ * showing a probability/headline from one model while the Ledger follows
+ * another — the exact silent disagreement this check exists to surface.
+ *
+ * `committed` is false when the plan has never been committed; in that state the
+ * Ledger legitimately runs the default path and this is a benign "preview"
+ * state, not a mismatch — so `ok` stays true while `committed` is false.
+ */
+export interface ReconPlanPolicyResult {
+  committed: boolean;
+  committedTier: string;
+  policyTierUsed: string;
+  ok: boolean;
+}
+
+export function reconcilePlanPolicy(args: {
+  committed: boolean;
+  committedTier: string | null;
+  policyTierUsed: string;
+}): ReconPlanPolicyResult {
+  const committedTier = args.committedTier ?? "balanced";
+  // Before commit, the engine runs the default path on purpose — not a drift.
+  const ok = !args.committed || committedTier === args.policyTierUsed;
+  return {
+    committed: args.committed,
+    committedTier,
+    policyTierUsed: args.policyTierUsed,
+    ok,
+  };
+}
+
+/**
  * Round 40 (R40.6) — accrued-interest + WHT reconciliation sub-checks.
  *
  * The Daily Accrual page renders a day-by-day schedule (built by

@@ -52,6 +52,7 @@ import {
   Info,
   CheckCircle2,
   Lock,
+  Eye,
 } from "lucide-react";
 
 /* ───────────────────────── presentation helpers ───────────────────────── */
@@ -144,6 +145,7 @@ function PlanBody({
   navigate: (to: string) => void;
 }) {
   const tierQ = trpc.allocation.goalTier.useQuery({ portfolioId });
+  const { query: snapQ } = usePortfolioSnapshot({ portfolioId });
   const utils = trpc.useUtils();
 
   const setTier = trpc.allocation.setTier.useMutation({
@@ -170,6 +172,14 @@ function PlanBody({
   const { suggestion, selection, horizonRemainingMonths } = tierQ.data;
   const selectedTier = selection.selectedTier;
 
+  // Plan-to-ledger contract: the tier the Ledger/Dashboard/Scenarios ACTUALLY
+  // execute. Before commit this is the default "balanced" path; once committed it
+  // is the committed tier. The probability MUST follow this same tier so a page
+  // never shows odds from one model while the Ledger follows another.
+  const committed = (snapQ.data?.identity.planStatus ?? "draft") === "committed";
+  const activePolicyTier = (snapQ.data?.identity.activePolicyTier ?? "balanced") as AllocationTier;
+  const isPreview = selectedTier !== activePolicyTier;
+
   return (
     <div className="space-y-6">
       <TierCard
@@ -180,12 +190,21 @@ function PlanBody({
         onPick={(tier) => setTier.mutate({ portfolioId, tier })}
       />
 
-      <CommitPlanBar portfolioId={portfolioId} selectedTier={selectedTier} />
+      <CommitPlanBar
+        portfolioId={portfolioId}
+        selectedTier={selectedTier}
+        committed={committed}
+        activePolicyTier={activePolicyTier}
+        isPreview={isPreview}
+      />
 
       <ProbabilityCard
         portfolioId={portfolioId}
         goal={targetAmount}
         tier={selectedTier}
+        activePolicyTier={activePolicyTier}
+        committed={committed}
+        isPreview={isPreview}
         horizonRemainingMonths={horizonRemainingMonths}
       />
 
@@ -309,58 +328,91 @@ function TierCard({
 function CommitPlanBar({
   portfolioId,
   selectedTier,
+  committed,
+  activePolicyTier,
+  isPreview,
 }: {
   portfolioId: number;
   selectedTier: AllocationTier;
+  /** Whether a plan has ever been committed (snapshot.planStatus === committed). */
+  committed: boolean;
+  /** The tier the Ledger/Dashboard/Scenarios actually execute right now. */
+  activePolicyTier: AllocationTier;
+  /** True when the selected tier differs from the active (committed) one. */
+  isPreview: boolean;
 }) {
   const utils = trpc.useUtils();
   const { query: snapQ } = usePortfolioSnapshot({ portfolioId });
   const commit = trpc.allocation.commitPlan.useMutation({
     onSuccess: () => {
       invalidatePortfolioMoney(utils, portfolioId);
-      toast.success("Plan committed", {
-        description:
-          "Recorded as the plan in force. No holdings moved — you still act when you choose.",
+      toast.success("Ledger and projections updated", {
+        description: `${ALLOCATION_TIER_SPECS[selectedTier].label} is now the plan in force. The Ledger, Dashboard and Scenarios follow it. No holdings moved.`,
       });
     },
     onError: (e) => toast.error("Could not commit plan", { description: e.message }),
   });
 
   const committedAt = snapQ.data?.identity.planCommittedAt ?? null;
-  const isCommitted = (snapQ.data?.identity.planStatus ?? "draft") === "committed";
+
+  // Three states: never committed (draft); committed and in agreement; committed
+  // but previewing a different tier (selection ahead of the in-force plan).
+  const headline = !committed
+    ? "Plan not committed yet"
+    : isPreview
+      ? "Preview only — Ledger still follows your committed plan"
+      : "Committed plan active";
+
+  const subtext = !committed
+    ? "This page is only a preview. Commit to make the Ledger, Dashboard and Scenarios follow this tier. Nothing moves your holdings."
+    : isPreview
+      ? `Your Ledger, Dashboard and Scenarios are running the ${ALLOCATION_TIER_SPECS[activePolicyTier].label} plan you committed${committedAt ? ` on ${new Date(committedAt).toLocaleDateString()}` : ""}. The figures above preview ${ALLOCATION_TIER_SPECS[selectedTier].label} — commit to put it in force.`
+      : `The Ledger, Dashboard and Scenarios are running this ${ALLOCATION_TIER_SPECS[activePolicyTier].label} plan${committedAt ? `, committed ${new Date(committedAt).toLocaleString()}` : ""}. Pick a different tier above to preview an alternative.`;
+
+  const Icon = !committed ? Lock : isPreview ? Eye : CheckCircle2;
+  const iconClass = !committed
+    ? "text-muted-foreground"
+    : isPreview
+      ? "text-amber-600"
+      : "text-emerald-600";
+
+  // The button only offers an action when it would change the in-force plan:
+  // first commit, or committing a previewed tier. When already in agreement it
+  // is a disabled confirmation.
+  const actionable = !committed || isPreview;
+  const buttonLabel = commit.isPending
+    ? "Saving…"
+    : !committed
+      ? "Commit this plan"
+      : isPreview
+        ? `Commit ${ALLOCATION_TIER_SPECS[selectedTier].label}`
+        : "Plan in force";
 
   return (
-    <Card>
+    <Card className={isPreview ? "border-amber-300 dark:border-amber-800" : undefined}>
       <CardContent className="py-4">
         <div className="flex items-center justify-between gap-4 flex-wrap">
           <div className="flex items-start gap-2.5 min-w-0">
-            {isCommitted ? (
-              <CheckCircle2 className="w-5 h-5 shrink-0 text-emerald-600 mt-0.5" />
-            ) : (
-              <Lock className="w-5 h-5 shrink-0 text-muted-foreground mt-0.5" />
-            )}
+            <Icon className={`w-5 h-5 shrink-0 mt-0.5 ${iconClass}`} />
             <div className="min-w-0">
               <p className="text-sm font-medium text-foreground">
-                {isCommitted ? "Plan committed" : "Plan not committed yet"}{" "}
+                {headline}{" "}
                 <InfoHint label="">
                   Committing records the chosen tier as the plan in force, so the Dashboard, Ledger and
-                  Review all read the same strategy. It never moves money or changes a holding.
+                  Review all read the same strategy and the goal odds match the projected path. It never
+                  moves money or changes a holding.
                 </InfoHint>
               </p>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                {isCommitted && committedAt
-                  ? `Last committed ${new Date(committedAt).toLocaleString()}. Re-commit to record a changed tier.`
-                  : "Recording the plan keeps every screen in agreement. Nothing changes your holdings."}
-              </p>
+              <p className="text-xs text-muted-foreground mt-0.5">{subtext}</p>
             </div>
           </div>
           <Button
             onClick={() => commit.mutate({ portfolioId, tier: selectedTier })}
-            disabled={commit.isPending}
-            variant={isCommitted ? "outline" : "default"}
-            className={isCommitted ? "bg-background" : ""}
+            disabled={commit.isPending || !actionable}
+            variant={actionable ? "default" : "outline"}
+            className={actionable ? "" : "bg-background"}
           >
-            {commit.isPending ? "Saving…" : isCommitted ? "Re-commit plan" : "Commit this plan"}
+            {buttonLabel}
           </Button>
         </div>
       </CardContent>
@@ -374,14 +426,29 @@ function ProbabilityCard({
   portfolioId,
   goal,
   tier,
+  activePolicyTier,
+  committed,
+  isPreview,
   horizonRemainingMonths,
 }: {
   portfolioId: number;
   /** The portfolio's REAL goal target (KES) — identical to the Dashboard's. */
   goal: number;
+  /** The tier currently SELECTED on the page (may be a preview). */
   tier: AllocationTier;
+  /** The tier the Ledger/Dashboard/Scenarios actually execute. */
+  activePolicyTier: AllocationTier;
+  committed: boolean;
+  /** True when the selected tier differs from the active (committed) one. */
+  isPreview: boolean;
   horizonRemainingMonths: number;
 }) {
+  // Plan-to-ledger contract: the headline odds MUST be computed on the SAME tier
+  // the Ledger executes (activePolicyTier), never the un-committed preview — that
+  // is the exact "probability from one model, Ledger from another" trap. When the
+  // user is previewing a different tier we still compute the preview odds, but we
+  // label them as a comparison rather than the in-force number.
+  const headlineTier = activePolicyTier;
   // The probability is only honest if all three inputs come from the REAL
   // portfolio: (1) goal target — passed in as `goal` (= portfolio.targetAmount);
   // (2) horizon — `horizonRemainingMonths`; (3) the plan's own projected end
@@ -391,7 +458,7 @@ function ProbabilityCard({
   // part (classified holdings that follow the glided mix → modeled stochastically)
   // and the deterministic remainder (contributions + fixed income → folded in as
   // `extraCertainEndValue`). This keeps the page consistent with the Dashboard.
-  const gapQ = trpc.allocation.holdingsGap.useQuery({ portfolioId, tier });
+  const gapQ = trpc.allocation.holdingsGap.useQuery({ portfolioId, tier: headlineTier });
   const projQ = trpc.projection.run.useQuery({ portfolioId });
 
   // The price-volatile pot that follows the glided risky mix today.
@@ -409,13 +476,31 @@ function ProbabilityCard({
 
   const probQ = trpc.allocation.goalProbability.useQuery(
     {
-      tier,
+      tier: headlineTier,
       horizonMonths: Math.max(1, horizonRemainingMonths),
       goal: Math.max(0, goal),
       riskyValue,
       extraCertainEndValue,
     },
     { enabled: gapQ.isSuccess && projQ.isSuccess },
+  );
+
+  // When previewing a different tier, compute that tier's odds too, purely as a
+  // labelled "if you committed this" comparison — it never replaces the headline.
+  const previewGapQ = trpc.allocation.holdingsGap.useQuery(
+    { portfolioId, tier },
+    { enabled: isPreview },
+  );
+  const previewRisky = Math.max(0, previewGapQ.data?.readout.rollup.classifiedKes ?? 0);
+  const previewProbQ = trpc.allocation.goalProbability.useQuery(
+    {
+      tier,
+      horizonMonths: Math.max(1, horizonRemainingMonths),
+      goal: Math.max(0, goal),
+      riskyValue: previewRisky,
+      extraCertainEndValue: Math.max(0, projectedEndValue - previewRisky),
+    },
+    { enabled: isPreview && previewGapQ.isSuccess && projQ.isSuccess },
   );
 
   if (gapQ.isLoading || projQ.isLoading || probQ.isLoading) {
@@ -449,12 +534,21 @@ function ProbabilityCard({
         ? "text-amber-600"
         : "text-foreground";
 
+  const previewPct = previewProbQ.data?.probability.probabilityPct ?? null;
+
   return (
     <Card>
       <CardHeader>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <TrendingUp className="w-4 h-4 text-primary" />
           <CardTitle className="text-base">Chance of reaching your goal</CardTitle>
+          <Badge
+            variant="outline"
+            className={`ml-auto ${committed ? "border-emerald-300 text-emerald-700 dark:text-emerald-400" : "border-muted-foreground/30 text-muted-foreground"}`}
+          >
+            {committed ? "In force: " : "Default path: "}
+            {ALLOCATION_TIER_SPECS[activePolicyTier].label}
+          </Badge>
         </div>
         <CardDescription>
           A{" "}
@@ -462,10 +556,31 @@ function ProbabilityCard({
             An estimate from running many simulated futures using assumed average returns and typical
             swings for each asset. Real markets will differ — treat it as a guide, not a guarantee.
           </InfoHint>{" "}
-          of finishing at or above {formatKESCompact(goal)} on this plan.
+          of finishing at or above {formatKESCompact(goal)}, modeled on the{" "}
+          <span className="font-medium text-foreground">{ALLOCATION_TIER_SPECS[activePolicyTier].label}</span>{" "}
+          plan your Ledger actually follows.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-5">
+        {isPreview && (
+          <div className="rounded-lg border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 p-3 text-xs text-amber-800 dark:text-amber-300 flex items-start gap-2">
+            <Eye className="w-4 h-4 shrink-0 mt-0.5" />
+            <span>
+              These odds are for your committed{" "}
+              <span className="font-medium">{ALLOCATION_TIER_SPECS[activePolicyTier].label}</span> plan.
+              {previewPct != null ? (
+                <>
+                  {" "}If you commit the previewed{" "}
+                  <span className="font-medium">{ALLOCATION_TIER_SPECS[tier].label}</span> tier, the modeled
+                  chance becomes <span className="font-medium">{pct(previewPct)}</span>. Commit it above to
+                  put it in force.
+                </>
+              ) : (
+                <> Commit the previewed {ALLOCATION_TIER_SPECS[tier].label} tier above to model and use it.</>
+              )}
+            </span>
+          </div>
+        )}
         <div className="flex items-end gap-4 flex-wrap">
           <div>
             <div className={`text-5xl font-bold tabular-nums ${toneColor}`}>{pct(probPct)}</div>

@@ -117,6 +117,7 @@ import {
 import { extractionToAdapterResult, aiInstrumentToProvenanceMap } from "../shared/aiAdapter";
 import {
   ALLOCATION_TIERS,
+  ALLOCATION_TIER_SPECS,
   type AllocationTier,
   sampleGlidePath,
   resolveBucketAssumptions,
@@ -194,6 +195,7 @@ import {
   reconcileBank,
   reconcileAccrual,
   reconcileHoldings,
+  reconcilePlanPolicy,
   type AccrualReconItem,
 } from "../shared/reconciliation";
 import { valueHolding } from "../shared/holdingValue";
@@ -342,6 +344,15 @@ function dbToEngine(
         | "yield_first"
         | "custom"
         | undefined) ?? "balanced",
+    // Plan-to-ledger contract: the engine executes the COMMITTED tier only. The
+    // tier becomes operative the moment the user commits (planCommittedAt set);
+    // until then the ledger stays on the default/balanced path, so an uncommitted
+    // tier change is a PREVIEW that does not move the committed projection. A
+    // committed "balanced" is the identity, so nothing changes for that tier.
+    strategyTier:
+      p && p.planCommittedAt && p.allocationSelectedTier
+        ? (p.allocationSelectedTier as EngineSettings["strategyTier"])
+        : undefined,
     // Time Machine (sandbox only): a simulated "today" overrides the real clock
     // for the whole projection (actual/projected boundary, lot ages, maturity &
     // coupon timing). Only honoured for sandbox portfolios; Live always real.
@@ -3225,6 +3236,25 @@ export const appRouter = router({
       // but invisible to the proof).
       const holdings = reconcileHoldings(otherAssetValues, otherTotal, otherHoldingRows.length);
 
+      // Plan-to-ledger contract: prove the projection that built THIS reconciliation
+      // ran the tier the user committed and sees on the Allocation Plan. The engine
+      // executes the committed selected tier only (else the default "balanced"
+      // path), derived identically to dbToEngine.strategyTier above.
+      const committed = p.planCommittedAt != null;
+      const policyTierUsed = settings.strategyTier ?? "balanced";
+      const planPolicyRaw = reconcilePlanPolicy({
+        committed,
+        committedTier: (p.allocationSelectedTier ?? null) as string | null,
+        policyTierUsed,
+      });
+      const tierLabel = (t: string) =>
+        (ALLOCATION_TIER_SPECS as Record<string, { label: string }>)[t]?.label ?? t;
+      const planPolicy = {
+        ...planPolicyRaw,
+        committedLabel: tierLabel(planPolicyRaw.committedTier),
+        activeLabel: tierLabel(planPolicyRaw.policyTierUsed),
+      };
+
       return {
         full: reconcile(inputs),
         mmf: reconcileMmf(inputs.accrualLedgerMmfTotal, inputs.primaryMmfBalance, inputs.secondaryMmfBalances),
@@ -3233,6 +3263,7 @@ export const appRouter = router({
         govAccrual,
         bankAccrual,
         holdings,
+        planPolicy,
       };
     }),
 

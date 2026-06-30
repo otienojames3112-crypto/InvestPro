@@ -144,6 +144,13 @@ function toEngineSettings(
         | "yield_first"
         | "custom"
         | undefined) ?? "balanced",
+    // Plan-to-ledger contract: the snapshot ledger executes the COMMITTED tier
+    // only (planCommittedAt set + a selected tier). Mirrors dbToEngine in
+    // routers.ts so the snapshot can never drift from Ledger/Dashboard/Scenarios.
+    strategyTier:
+      p.planCommittedAt && p.allocationSelectedTier
+        ? (p.allocationSelectedTier as EngineSettings["strategyTier"])
+        : undefined,
     nowOverride,
   };
 }
@@ -574,6 +581,14 @@ export async function buildPortfolioSnapshot(
       planStatus: ((p as { planCommittedAt?: number | null }).planCommittedAt != null
         ? "committed"
         : "draft") as "committed" | "draft",
+      // Plan-to-ledger contract: the tier the projection engine ACTUALLY executed
+      // for this snapshot's ledger. Equals the selected tier only once committed;
+      // before commit the engine runs the default path, surfaced here as
+      // "balanced" so the UI/reconciliation can prove the ledger and the
+      // Allocation-Plan selection agree (or flag a pending preview).
+      activePolicyTier: ((p.planCommittedAt && p.allocationSelectedTier)
+        ? (p.allocationSelectedTier as string)
+        : "balanced") as string,
     },
     goal: {
       target,

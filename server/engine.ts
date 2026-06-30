@@ -1,4 +1,5 @@
 import { tenorRateFromMap } from "../shared/securityTenor";
+import { tieredPhaseMix, type EngineTier } from "../shared/strategyPolicy";
 import {
   tbillPrice,
   zeroCouponPrice,
@@ -126,6 +127,15 @@ export interface EngineSettings {
    * concentrates in the highest net-yield home; "custom" uses the user-set caps.
    */
   allocationPolicy?: "balanced" | "yield_first" | "custom";
+  /**
+   * Plan-to-ledger contract: the COMMITTED allocation tier. When set, the sweep
+   * re-weights its per-phase asset mix by this tier (via tieredPhaseMix) so a
+   * Capital-Preservation plan executes a different ledger path than an Aggressive
+   * one (mix, sweep destination, long-bond allowance, working-cash buffer). When
+   * undefined or "balanced", the engine reproduces its historical default path
+   * exactly. Capital preservation additionally forbids new IFB/FXD lots.
+   */
+  strategyTier?: EngineTier;
   /**
    * Time Machine (sandbox only): override for "today" as Unix-ms (UTC). When
    * provided, the engine treats this as the current date for the actual/projected
@@ -1690,7 +1700,13 @@ export function runProjection(
     const guard = liquidityGuardForMonth(m, horizonMonths);
     // No new long bonds either in the final-liquidity phase (legacy rule) OR
     // whenever a 24-month bond would mature past the horizon (new rule).
-    const noNewLongBonds = m > deRiskingEnd || !guard.allowLongBonds;
+    // Capital preservation NEVER buys IFB/FXD — fold the tier's long-bond ban
+    // into the existing no-new-long-bonds gate so the rest of the sweep logic is
+    // untouched. (tieredPhaseMix already zeroes their weight, but this also stops
+    // the leftover-lots fallback from ever landing on a long bond.)
+    const tierForbidsLongBonds = settings.strategyTier === "capital_preservation";
+    const noNewLongBonds =
+      m > deRiskingEnd || !guard.allowLongBonds || tierForbidsLongBonds;
     const tbillTenorThisMonth = guard.maxTbillTenor;
 
     if (!isActualMonth && guard.allowed) {
@@ -1725,7 +1741,15 @@ export function runProjection(
       const maxLots = Math.floor(investableBase / SWEEP_LOT_SIZE);
 
       if (maxLots > 0) {
-        const alloc = getPhaseAllocation(phase, isShortHorizon);
+        // Plan-to-ledger contract: re-weight the engine's per-phase mix by the
+        // COMMITTED tier. `balanced`/undefined is the identity, so the default
+        // path is byte-for-byte unchanged; safer tiers pull toward MMF/T-bills,
+        // riskier tiers push toward IFB/FXD — which changes the sweep
+        // destination, the held mix, and therefore end-state liquidity.
+        const alloc = tieredPhaseMix(
+          getPhaseAllocation(phase, isShortHorizon),
+          settings.strategyTier ?? "balanced",
+        );
 
         // Current KES already held in each non-MMF bucket (face value).
         const held = { tbill: 0, ifb: 0, fxd: 0 };

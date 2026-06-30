@@ -131,6 +131,7 @@ export default function Ledger() {
       cbkCashIn: sum((r) => r.cbkCashIn),
       bankCashIn: sum((r) => r.bankCashIn),
       mmfToDhow: sum((r) => r.mmfToDhow),
+      mmfInterestNet: sum((r) => r.mmfInterestNet),
       endMmf: last?.mmfEnd ?? 0,
       endTbill: last?.tbillEnd ?? 0,
       endTbill91: last?.tbill91End ?? 0,
@@ -155,8 +156,8 @@ export default function Ledger() {
       return;
     }
     const headers = [
-      "Month", "Basis", "Off-plan", "Date", "Save", "CBK In", "Bank In", "MMF->Securities",
-      "Main Action", "MMF End", "T-Bill 91d", "T-Bill 182d", "T-Bill 364d", "IFB", "FXD", "Bank", "Total", "Phase",
+      "Month", "Basis", "Off-plan", "Date", "Save", "CBK In", "Bank In", "Swept → Securities",
+      "Main Action", "MMF End", "MMF Interest", "T-Bill 91d", "T-Bill 182d", "T-Bill 364d", "IFB", "FXD", "Bank", "Total", "Phase",
     ];
     const rows = rowsSrc.map((r) => [
       r.monthNumber,
@@ -169,6 +170,7 @@ export default function Ledger() {
       r.mmfToDhow,
       r.mainAction ?? "",
       r.mmfEnd,
+      r.mmfInterestNet,
       r.tbill91End,
       r.tbill182End,
       r.tbill364End,
@@ -188,7 +190,7 @@ export default function Ledger() {
       flowSum((r) => r.bankCashIn),
       flowSum((r) => r.mmfToDhow),
       `Ending balances at month ${last.monthNumber}`,
-      last.mmfEnd, last.tbill91End, last.tbill182End, last.tbill364End, last.ifbEnd, last.fxdEnd, last.bankEnd, last.totalEnd,
+      last.mmfEnd, flowSum((r) => r.mmfInterestNet), last.tbill91End, last.tbill182End, last.tbill364End, last.ifbEnd, last.fxdEnd, last.bankEnd, last.totalEnd,
       "",
     ];
     const csv = toCsv(headers, [...rows, totalRow]);
@@ -208,7 +210,8 @@ export default function Ledger() {
   // R55.3 — plain-language explanations for every ledger column, surfaced as a
   // hover tooltip on each header so non-finance users understand what they read.
   const COL_HELP: Record<string, string> = {
-    Mth: "The month number in your plan, counted from your start date. Month 1 is your first month.",
+    Month: "The month number in your plan, counted from your start date. Month 1 is your first month.",
+    "MMF Interest": "Net interest your MMF earned this month, after 15% withholding tax. This amount is already included in the MMF End balance.",
     Basis: "Actual = built from money you've actually recorded. Projected = the engine's forecast for a future month.",
     Date: "The calendar month this row represents.",
     Save: "Your scheduled contribution that month — new money you add. It always lands in your MMF first, then gets invested from there.",
@@ -339,7 +342,7 @@ export default function Ledger() {
               <table className="w-full text-xs">
                 <thead>
                   <tr className="border-b border-border bg-muted/30">
-                    <ColHead label="Mth" align="left" />
+                    <ColHead label="Month" align="left" />
                     <ColHead label="Basis" align="left" />
                     <ColHead label="Date" align="left" />
                     <ColHead label="Save" />
@@ -348,6 +351,7 @@ export default function Ledger() {
                     <ColHead label="Swept&nbsp;&rarr;&nbsp;Securities" />
                     <ColHead label="Main Action" align="left" nowrap={false} />
                     <ColHead label="MMF End" />
+                    <ColHead label="MMF Interest" />
                     <ColHead label="T-Bill 91d" />
                     <ColHead label="T-Bill 182d" />
                     <ColHead label="T-Bill 364d" />
@@ -362,7 +366,7 @@ export default function Ledger() {
                   {isLoading
                     ? Array.from({ length: 10 }).map((_, i) => (
                         <tr key={i} className="border-b border-border/50">
-                          {Array.from({ length: 13 }).map((_, j) => (
+                          {Array.from({ length: 18 }).map((_, j) => (
                             <td key={j} className="px-4 py-3">
                               <Skeleton className="h-3 w-full" />
                             </td>
@@ -574,6 +578,9 @@ export default function Ledger() {
                               formatKES(r.mmfEnd)
                             )}
                           </td>
+                          <td className="px-4 py-2.5 text-right kes-amount text-emerald-300/90">
+                            {r.mmfInterestNet > 0 ? formatKES(r.mmfInterestNet) : "–"}
+                          </td>
                           <td className="px-4 py-2.5 text-right kes-amount text-muted-foreground">
                             {r.tbill91End > 0 ? formatKES(r.tbill91End) : "–"}
                           </td>
@@ -627,6 +634,7 @@ export default function Ledger() {
                         Ending balances · month {totals.lastMonth}
                       </td>
                       <td className="px-4 py-3 text-right kes-amount">{formatKES(totals.endMmf)}</td>
+                      <td className="px-4 py-3 text-right kes-amount text-emerald-300/90">{totals.mmfInterestNet > 0 ? formatKES(totals.mmfInterestNet) : "–"}</td>
                       <td className="px-4 py-3 text-right kes-amount">{totals.endTbill91 > 0 ? formatKES(totals.endTbill91) : "–"}</td>
                       <td className="px-4 py-3 text-right kes-amount">{totals.endTbill182 > 0 ? formatKES(totals.endTbill182) : "–"}</td>
                       <td className="px-4 py-3 text-right kes-amount">{totals.endTbill364 > 0 ? formatKES(totals.endTbill364) : "–"}</td>

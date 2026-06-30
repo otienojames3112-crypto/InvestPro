@@ -352,6 +352,8 @@ export interface MonthResult {
   mmfToDhow: number;
   mainAction: string;
   mmfEnd: number;
+  /** Net MMF interest earned this month (gross − WHT), the amount that compounds into mmfEnd. */
+  mmfInterestNet: number;
   tbillEnd: number;
   /** Round 39: T-bill balance split by tenor so the ledger can show 91/182/364. */
   tbill91End: number;
@@ -1398,6 +1400,10 @@ export function runProjection(
 
     let contribution = 0;
     let whtThisMonth = 0;
+    // Net MMF interest (gross − WHT) earned by the PRIMARY MMF this month — the
+    // amount that actually compounds into mmfEnd. Surfaced for the ledger; the
+    // compounding math below is unchanged.
+    let mmfInterestNet = 0;
 
     if (!isActualMonth) {
       // Forward (future) months: scheduled contribution + overrides flow to MMF.
@@ -1422,6 +1428,7 @@ export function runProjection(
       const interestGross = mmf * monthlyRate(rates.mmfYield);
       const interestWHT = interestGross * wht;
       whtThisMonth += interestWHT;
+      mmfInterestNet += interestGross - interestWHT;
       mmf = mmf * (1 + mmfMonthly);
     }
 
@@ -2048,6 +2055,7 @@ export function runProjection(
       mmfToDhow:    Math.round(mmfToDhow    * 100) / 100,
       mainAction,
       mmfEnd:   Math.round(mmf     * 100) / 100,
+      mmfInterestNet: Math.round(mmfInterestNet * 100) / 100,
       tbillEnd: Math.round(tbillEnd * 100) / 100,
       tbill91End:  Math.round(tbill91End  * 100) / 100,
       tbill182End: Math.round(tbill182End * 100) / 100,

@@ -1168,3 +1168,15 @@
 - [x] Regression test (server/allocationGoalCoherence.test.ts, 6 tests): Car sample (1.2M target, ~1.43M plan) → high probability, ~1.2M–1.5M range; old 5M/no-certain state reproduces the broken ~1% / sub-250k symptom; lower target easier than higher
 - [x] Type gate clean; full suite green (1097, +6); James O. page verified: goal reads KES 5.00M matching Dashboard, 99% with range centered ~5.01M matching "Projected ≈ KES 5.01M"
 - [x] Checkpoint + re-package source
+
+## Ledger — surface per-month net MMF interest + CSV/header parity
+
+- [x] Brief 1A: engine MonthResult gains `mmfInterestNet` (month-scoped accumulator, gross - 15% WHT; read-only surfacing, compounding unchanged)
+- [x] Brief 1B: `results.push` emits `mmfInterestNet` with 2dp rounding
+- [x] Brief 1C: Ledger table adds "MMF Interest" column after "MMF End" (header + data cell + footer total + skeleton count 13->18)
+- [x] Brief 1D: layman header tooltip for MMF Interest ("Net interest ... after 15% WHT ... already included in MMF End")
+- [x] Brief 1: CSV export adds "MMF Interest" header + per-row value + summed total-row value
+- [x] Brief 2: CSV "Month" now matches on-screen header (renamed on-screen "Mth" -> "Month")
+- [x] Brief 2: CSV "MMF->Securities" -> "Swept -> Securities" to match on-screen header label
+- [x] Regression test server/mmfInterestColumn.test.ts (5 tests: present/non-neg, positive while earning, reconciles via engine's gross-then-WHT path, mmfEnd unchanged, Car-sample shape)
+- [x] Type gate clean; full suite 1102 green (+5); screenshots confirm column renders + aligns

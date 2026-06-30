@@ -99,6 +99,7 @@ export default function AllocationPlan() {
         <PlanBody
           portfolioId={portfolioId}
           goalName={portfolio?.name ?? "this goal"}
+          targetAmount={Number((portfolio as { targetAmount?: number } | null)?.targetAmount) || 0}
           navigate={navigate}
         />
       </div>
@@ -129,10 +130,13 @@ function PageHeader({ goalName }: { goalName: string }) {
 function PlanBody({
   portfolioId,
   goalName,
+  targetAmount,
   navigate,
 }: {
   portfolioId: number;
   goalName: string;
+  /** The portfolio's REAL goal target (KES) — same field the Dashboard reads. */
+  targetAmount: number;
   navigate: (to: string) => void;
 }) {
   const tierQ = trpc.allocation.goalTier.useQuery({ portfolioId });
@@ -175,7 +179,7 @@ function PlanBody({
 
       <ProbabilityCard
         portfolioId={portfolioId}
-        portfolio={undefined}
+        goal={targetAmount}
         tier={selectedTier}
         horizonRemainingMonths={horizonRemainingMonths}
       />
@@ -290,34 +294,53 @@ function TierCard({
 
 function ProbabilityCard({
   portfolioId,
+  goal,
   tier,
   horizonRemainingMonths,
 }: {
   portfolioId: number;
-  portfolio: undefined;
+  /** The portfolio's REAL goal target (KES) — identical to the Dashboard's. */
+  goal: number;
   tier: AllocationTier;
   horizonRemainingMonths: number;
 }) {
-  // We feed the probability model the goal's own figures. The backend resolves
-  // the actual target/contribution; here we read the holdings gap to get the
-  // classified value that follows the glided mix, and the goal target from the
-  // portfolio. To keep this page self-contained we ask the dedicated query.
+  // The probability is only honest if all three inputs come from the REAL
+  // portfolio: (1) goal target — passed in as `goal` (= portfolio.targetAmount);
+  // (2) horizon — `horizonRemainingMonths`; (3) the plan's own projected end
+  // value (driven by the real contribution schedule + rates), which we read from
+  // the SAME projection engine the Dashboard uses (`projection.run`) rather than
+  // any default. We then split that projected end value into the price-volatile
+  // part (classified holdings that follow the glided mix → modeled stochastically)
+  // and the deterministic remainder (contributions + fixed income → folded in as
+  // `extraCertainEndValue`). This keeps the page consistent with the Dashboard.
   const gapQ = trpc.allocation.holdingsGap.useQuery({ portfolioId, tier });
+  const projQ = trpc.projection.run.useQuery({ portfolioId });
 
-  const riskyValue = gapQ.data?.readout.rollup.classifiedKes ?? 0;
-  const goal = 5_000_000; // KES 5M plan target (the app's headline goal)
+  // The price-volatile pot that follows the glided risky mix today.
+  const riskyValue = Math.max(0, gapQ.data?.readout.rollup.classifiedKes ?? 0);
+  // The plan's projected end value at the goal date (last projected month),
+  // exactly the figure the Dashboard shows as "Projected ≈ …".
+  const projectedEndValue = (() => {
+    const rows = projQ.data;
+    if (!rows || rows.length === 0) return 0;
+    return Math.max(0, Number(rows[rows.length - 1]?.totalEnd) || 0);
+  })();
+  // Everything the plan reaches that ISN'T the modeled risky pot arrives with
+  // (modeled) certainty — contributions compounded + fixed-income growth.
+  const extraCertainEndValue = Math.max(0, projectedEndValue - riskyValue);
 
   const probQ = trpc.allocation.goalProbability.useQuery(
     {
       tier,
       horizonMonths: Math.max(1, horizonRemainingMonths),
-      goal,
-      riskyValue: Math.max(0, riskyValue),
+      goal: Math.max(0, goal),
+      riskyValue,
+      extraCertainEndValue,
     },
-    { enabled: gapQ.isSuccess },
+    { enabled: gapQ.isSuccess && projQ.isSuccess },
   );
 
-  if (gapQ.isLoading || probQ.isLoading) {
+  if (gapQ.isLoading || projQ.isLoading || probQ.isLoading) {
     return (
       <Card>
         <CardHeader>

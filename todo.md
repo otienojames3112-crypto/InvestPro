@@ -1158,3 +1158,13 @@
 
 ### Full source export
 - [x] Package the complete source (excluding node_modules/build artifacts) into a downloadable zip and deliver
+
+## Bugfix — Allocation Plan goal was hardcoded to KES 5M
+
+- [x] Remove the `const goal = 5_000_000` hardcode in AllocationPlan.tsx ProbabilityCard
+- [x] Read the REAL target: thread `portfolio.targetAmount` (same field Dashboard reads) into the goalProbability query
+- [x] Use the per-portfolio horizon (`horizonRemainingMonths`) — confirmed already real, not defaulted
+- [x] Feed the plan's actual contribution-driven projected end value: read `projection.run` last-row `totalEnd` (same engine the Dashboard uses) and split into riskyValue (classified holdings) + extraCertainEndValue (remainder)
+- [x] Regression test (server/allocationGoalCoherence.test.ts, 6 tests): Car sample (1.2M target, ~1.43M plan) → high probability, ~1.2M–1.5M range; old 5M/no-certain state reproduces the broken ~1% / sub-250k symptom; lower target easier than higher
+- [x] Type gate clean; full suite green (1097, +6); James O. page verified: goal reads KES 5.00M matching Dashboard, 99% with range centered ~5.01M matching "Projected ≈ KES 5.01M"
+- [x] Checkpoint + re-package source

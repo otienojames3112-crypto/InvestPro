@@ -1082,7 +1082,12 @@ export default function Dashboard() {
             snapshot.contributions.points.find((p) => p.monthNumber === elapsed) ??
             null;
           const plannedThis = thisPoint?.planned ?? snapshot.contributions.startingContribution;
-          const actualThis = thisPoint?.actual ?? 0;
+          // Money contributed this month across EVERY destination (primary MMF,
+          // secondary MMF, bank instruments, gov securities). The "needs
+          // attention" alert and next-action use THIS so recording a contribution
+          // into any destination clears the alert — not only the primary MMF.
+          const actualThis =
+            thisPoint?.actualAllDestinations ?? thisPoint?.actual ?? 0;
           // Next maturity from the canonical liquidity events.
           const nextMat =
             snapshot.liquidity
@@ -1097,7 +1102,7 @@ export default function Dashboard() {
             ? `Raise step-up by ${formatKES(decision.stepUp.recommendedStepUp)}/mo to stay on pace`
             : rateStaleCc?.isStale
               ? "Refresh your CBK rate snapshot"
-              : plannedThis > 0 && actualThis < plannedThis
+              : plannedThis > 0 && actualThis <= 0
                 ? "Record this month's contribution"
                 : "Nothing today — you're on track";
           const nextActionHref = ccBehind

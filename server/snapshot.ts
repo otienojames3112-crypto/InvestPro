@@ -50,6 +50,7 @@ import {
   runProjection,
   getScheduledContribution,
   computeCurrentMonth,
+  monthOffsetFromStart,
   type EngineSettings,
   type ActualDeposit,
   type ActualSecurity,
@@ -261,6 +262,57 @@ function mapSecondaryMmfs(rows: Awaited<ReturnType<typeof getSecondaryMmfs>>): S
  * Build the canonical snapshot for a portfolio. `p` must already be
  * authorisation-checked by the caller (requirePortfolio).
  */
+/**
+ * Sum REAL money contributed per month across EVERY destination — primary MMF,
+ * secondary MMF, bank instruments, and government-security purchases — bucketed
+ * by the SAME 1-based month index the projection engine uses
+ * (`monthOffsetFromStart`, clamped into the elapsed/actual window).
+ *
+ * This is the single source of truth behind `ContributionPlanPoint.actualAllDestinations`,
+ * which the Dashboard's "needs attention" alert and "recorded so far" strip read
+ * so the alert clears once the user contributes ANYWHERE, not only the primary
+ * MMF. Exported (and pure) so a regression test can pin the behaviour without a DB.
+ */
+export function contributedByMonthAllDestinations(args: {
+  startIso: string;
+  elapsedMonths: number;
+  deposits: Array<{ depositDate: string | null | undefined; amount: number }>;
+  securities: Array<{
+    issueDate: string | null | undefined;
+    faceValue: number;
+    purchasePrice?: number | null;
+    isMatured: boolean;
+  }>;
+  bankHoldings: Array<{ startDate?: string | null | undefined; principal: number; isActive?: boolean }>;
+}): Map<number, number> {
+  const { startIso, elapsedMonths, deposits, securities, bankHoldings } = args;
+  const startDateObj = new Date((startIso ?? new Date().toISOString().split("T")[0]) + "T12:00:00Z");
+  const byMonth = new Map<number, number>();
+  const bump = (iso: string | null | undefined, amount: number) => {
+    if (!amount) return;
+    const offset = monthOffsetFromStart(iso, startDateObj);
+    if (offset == null) return;
+    const placeMonth = Math.max(1, Math.min(offset, Math.max(1, elapsedMonths)));
+    byMonth.set(placeMonth, (byMonth.get(placeMonth) ?? 0) + amount);
+  };
+  // Deposits into any destination (primary MMF, secondary MMF, bank, gov via
+  // deposit rows). Withdrawals arrive as negative deposits and correctly net out.
+  for (const d of deposits) bump(d.depositDate, d.amount);
+  // Government-security purchases: cash committed is the purchase price for
+  // discount instruments, else the face value.
+  for (const s of securities) {
+    if (s.isMatured) continue;
+    const cash = s.purchasePrice != null && s.purchasePrice > 0 ? s.purchasePrice : s.faceValue;
+    bump(s.issueDate, cash);
+  }
+  // Bank instruments: principal committed at the deposit's start date.
+  for (const b of bankHoldings) {
+    if (b.isActive === false) continue;
+    bump(b.startDate, b.principal);
+  }
+  return byMonth;
+}
+
 export async function buildPortfolioSnapshot(
   portfolioId: number,
   p: Portfolio,
@@ -546,6 +598,20 @@ export async function buildPortfolioSnapshot(
   for (const o of mappedOverrides) {
     if (o.overrideAmount !== undefined) overrideByMonth.set(o.monthNumber, o.overrideAmount);
   }
+  // All-destination contributed-per-month map. The legacy `actual` field only
+  // counts PRIMARY-MMF deposits, so a contribution made into a secondary MMF, a
+  // bank instrument, or a government security never cleared the Dashboard's
+  // "missed contribution" alert. This map sums REAL money committed this month
+  // across every destination (computed by the shared pure helper below), so the
+  // alert clears the moment the user contributes anywhere.
+  const allDestByMonth = contributedByMonthAllDestinations({
+    startIso,
+    elapsedMonths,
+    deposits: actualDeposits,
+    securities: actualSecurities,
+    bankHoldings,
+  });
+
   const points: ContributionPlanPoint[] = months.map((m) => {
     const planned = getScheduledContribution(m.monthNumber, {
       startingContribution: settings.startingContribution,
@@ -553,7 +619,10 @@ export async function buildPortfolioSnapshot(
       stepUpMonths: settings.stepUpMonths,
     });
     const actual = m.isActual ? round2(m.contribution ?? 0) : null;
-    return { monthNumber: m.monthNumber, planned: round2(planned), actual };
+    const actualAllDestinations = m.isActual
+      ? round2(allDestByMonth.get(m.monthNumber) ?? 0)
+      : null;
+    return { monthNumber: m.monthNumber, planned: round2(planned), actual, actualAllDestinations };
   });
   const totalPlanned = round2(points.reduce((a, b) => a + b.planned, 0));
   const totalActual = round2(

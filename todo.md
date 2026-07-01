@@ -1432,4 +1432,22 @@
 - [x] Verify Reconciliation "Full portfolio value" turns green in both LIVE and TEST environments
 - [x] Regression test: engine-today == sum-of-holdings when a discounted T-bill is held (no -discount gap)
 - [x] Full suite + tsc green; checkpoint
-- [ ] Package and deliver the entire codebase as a ZIP
+- [x] Package and deliver the entire codebase as a ZIP
+
+
+## Dashboard "Needs attention" not clearing (bug fix)
+
+- [ ] Root cause: missed-contribution alert uses actualThis = primary-MMF-only contribution; contributing to secondary MMF / bank / gov security does not clear it
+- [ ] Compute per-month ALL-destination contributed amount in snapshot builder
+- [ ] Expose actualAllDestinations on ContributionPlanPoint
+- [ ] Dashboard missed-contribution alert + "recorded so far" strip use all-destination figure
+- [ ] Regression test: recording a deposit into any destination this month clears the alert
+- [ ] Full suite + type gate green; checkpoint
+
+## Dashboard "Needs attention" clears (all-destination contribution) — COMPLETE
+- [x] Root cause: per-month actual counted PRIMARY-MMF deposits only, so contributing to secondary MMF / bank / gov security never cleared the missed-contribution alert
+- [x] Added exported pure helper contributedByMonthAllDestinations (single source of truth) summing all destinations, engine-consistent month bucketing + clamp
+- [x] Exposed ContributionPlanPoint.actualAllDestinations; snapshot builder populates it
+- [x] Dashboard alert + next-action + "Recorded so far" strip now read the all-destination figure
+- [x] Regression suite server/integrity/needsAttentionClears.test.ts (8 tests)
+- [x] Full suite green (138 files / 1310 tests), type gate clean

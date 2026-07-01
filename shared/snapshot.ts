@@ -131,7 +131,17 @@ export interface SnapshotAllocation {
 export interface ContributionPlanPoint {
   monthNumber: number;
   planned: number;
+  /** Contribution attributed to the PRIMARY MMF this month (legacy field). */
   actual: number | null;
+  /**
+   * Total real money contributed this month across EVERY destination — primary
+   * MMF, secondary MMF, bank instruments, and government-security purchases.
+   * `null` for forward (not-yet-actual) months. The Dashboard's
+   * "missed contribution" alert and "recorded so far" strip read THIS field so
+   * the alert clears once the user contributes to any destination, not only the
+   * primary MMF.
+   */
+  actualAllDestinations: number | null;
 }
 
 export interface SnapshotContributions {

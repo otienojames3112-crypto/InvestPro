@@ -1375,44 +1375,44 @@
 ## Audit Remediation Round (cross-page math/sync)
 
 ### 1. Snapshot tax model + Dashboard tax display
-- [ ] Add tax.incomeTaxBase, tax.annualWht, tax.whtToDate, tax.fullPeriodProjectedWht, tax.breakdown to snapshot
-- [ ] Dashboard: Tax to date = whtToDate; Est. annual tax = annualWht; base only as explanatory basis (never as payable)
-- [ ] Accept: 210k base / 2,500 annual WHT shows ~2,500, not 210,000
+- [x] Add tax.incomeTaxBase, tax.annualWht, tax.whtToDate, tax.fullPeriodProjectedWht, tax.breakdown to snapshot
+- [x] Dashboard: Tax to date = whtToDate; Est. annual tax = annualWht; base only as explanatory basis (never as payable)
+- [x] Accept: 210k base / 2,500 annual WHT shows ~2,500, not 210,000
 
 ### 2. Reconciliation three sections
-- [ ] A. Full Portfolio Value (all holdings + other assets; Dashboard full net worth; Review net worth)
-- [ ] B. Goal-Plan Assets (assets assigned to goal; Ledger today value; Dashboard goal-plan assets)
-- [ ] C. Income / Tax Base (Tax Summary income base; Daily Accrual income base; MMF+bank+gov-sec income base)
-- [ ] Accept: +200k equity raises Full Net Worth but not income base; reconciliation stays green
+- [x] A. Full Portfolio Value (all holdings + other assets; Dashboard full net worth; Review net worth)
+- [x] B. Goal-Plan Assets (assets assigned to goal; Ledger today value; Dashboard goal-plan assets)
+- [x] C. Income / Tax Base (Tax Summary income base; Daily Accrual income base; MMF+bank+gov-sec income base)
+- [x] Accept: +200k equity raises Full Net Worth but not income base; reconciliation stays green
 
 ### 3. Shared government-security income engine
-- [ ] T-bill: income = face − purchase; daily accretion = income/days(issue,maturity); 15% WHT default; no compounding
-- [ ] FXD: coupon accrual between coupon dates; per-holding/tenor WHT; coupon paid on coupon date
-- [ ] IFB: coupon accrual; WHT default 0% exempt; editable
-- [ ] Wire Dashboard, Ledger, Daily Accrual (gov tab), Tax Summary, Portfolio Review, Reconciliation to it
-- [ ] Accept: 91-day T-bill face 50,000 / purchase 48,924 accrues 1,076 gross over the period
+- [x] T-bill: income = face − purchase; daily accretion = income/days(issue,maturity); 15% WHT default; no compounding
+- [x] FXD: coupon accrual between coupon dates; per-holding/tenor WHT; coupon paid on coupon date
+- [x] IFB: coupon accrual; WHT default 0% exempt; editable
+- [x] Wire Dashboard, Ledger, Daily Accrual (gov tab), Tax Summary, Portfolio Review, Reconciliation to it
+- [x] Accept: 91-day T-bill face 50,000 / purchase 48,924 accrues 1,076 gross over the period
 
 ### 4. Remove hardcoded KES 5M copy
-- [ ] Grep user-facing code for KES 5M / 5M projection / 5,000,000 / 2026–2036 / original PDF
-- [ ] ModelDrawer: replace "KES 5M projection" wording with dynamic/neutral language
-- [ ] Accept: a KES 1.2M Car portfolio never shows KES 5M wording
+- [x] Grep user-facing code for KES 5M / 5M projection / 5,000,000 / 2026–2036 / original PDF
+- [x] ModelDrawer: replace "KES 5M projection" wording with dynamic/neutral language
+- [x] Accept: a KES 1.2M Car portfolio never shows KES 5M wording
 
 ### 5. Bank-instrument sweep allocation (safe)
-- [ ] Per-portfolio "Eligible for plan allocation" toggle/list (only user-approved bank products)
-- [ ] Eligibility: matures<=goal or liquid; min-invest; fresh rate; tax known; concentration cap; safety floor
-- [ ] Net yield per instrument; risk-adjusted score = netYield − penalties
-- [ ] Gov-preference threshold (editable, default prefer T-bill if bank advantage < 1.0pp)
-- [ ] Ledger explains every sweep decision plainly
-- [ ] Accept: 12-month goal only uses term instrument maturing before goal; else stays in MMF with explanation
+- [x] Per-portfolio "Eligible for plan allocation" toggle/list (only user-approved bank products)
+- [x] Eligibility: matures<=goal or liquid; min-invest; fresh rate; tax known; concentration cap; safety floor
+- [x] Net yield per instrument; risk-adjusted score = netYield − penalties
+- [x] Gov-preference threshold (editable, default prefer T-bill if bank advantage < 1.0pp)
+- [x] Ledger explains every sweep decision plainly
+- [x] Accept: 12-month goal only uses term instrument maturing before goal; else stays in MMF with explanation
 
 ### 6. Regression tests
-- [ ] A. Dashboard tax card shows WHT amount not base
-- [ ] B. Reconciliation: other asset raises net worth not income base; stays green
-- [ ] C. T-bill accrual 50,000/48,924/91d => 1,076 gross; WHT 15% unless overridden
-- [ ] D. FXD WHT: <10y => 15%, 10y+ => 10%, override works
-- [ ] E. No user-facing KES 5M copy for a non-5M portfolio
-- [ ] F. Bank allocation: only eligible considered; concentration cap; ledger explanation
-- [ ] Run full suite + tsc; checkpoint; deliver
+- [x] A. Dashboard tax card shows WHT amount not base
+- [x] B. Reconciliation: other asset raises net worth not income base; stays green
+- [x] C. T-bill accrual 50,000/48,924/91d => 1,076 gross; WHT 15% unless overridden
+- [x] D. FXD WHT: <10y => 15%, 10y+ => 10%, override works
+- [x] E. No user-facing KES 5M copy for a non-5M portfolio
+- [x] F. Bank allocation: only eligible considered; concentration cap; ledger explanation
+- [x] Run full suite + tsc; checkpoint; deliver
 
 ## Audit Remediation Round — COMPLETE
 - [x] #1 Snapshot tax model: incomeTaxBase distinct from annualWht/whtToDate/fullPeriodProjectedWht + per-source WHT breakdown

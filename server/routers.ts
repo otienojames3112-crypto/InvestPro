@@ -6211,7 +6211,27 @@ export const appRouter = router({
             isActive: Boolean(r.isActive),
             isMatured: false,
           }));
-        return decideBankSweep(input.amount, govOptions, bankCandidates);
+        // Feed the goal horizon and current portfolio value so eligibility (a
+        // term deposit maturing after the goal is ruled out) and the per-issuer
+        // concentration penalty are computed against the real plan.
+        const holdings = await getActualsSummary(
+          input.portfolioId,
+          Number(p.targetAmount) || 0,
+          settings.withholdingTax,
+          settings.fxdCouponRate,
+          settings.mmfYield,
+          settings.tbill364Rate,
+        ).catch(() => null);
+        const portfolioValueKes = holdings
+          ? (holdings.depositsContributed || 0) +
+            (holdings.securitiesValue || 0) +
+            (holdings.secondaryMmfBalance || 0) +
+            (holdings.bankBalance || 0)
+          : null;
+        return decideBankSweep(input.amount, govOptions, bankCandidates, {
+          goalHorizonMonths: p.horizonMonths ?? null,
+          portfolioValueKes,
+        });
       }),
   }),
 

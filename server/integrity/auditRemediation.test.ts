@@ -226,3 +226,76 @@ describe("F. CSV headers match displayed labels", () => {
     }
   });
 });
+
+// ── G. Exact acceptance numbers — T-bill discount ────────────────────────────
+describe("G. 91-day T-bill accrual acceptance (50,000 / 48,924 / 91d)", () => {
+  it("accrues 1,076 gross over the period at 15% WHT", () => {
+    const r = computeSecurityIncome({
+      securityType: "tbill_91",
+      faceValue: 50_000,
+      couponRate: 0,
+      purchasePrice: 48_924,
+      issueDate: "2026-01-01",
+      maturityDate: "2026-04-02", // 91 days
+    });
+    expect(r.lifetimeGross).toBeCloseTo(1_076, 2);
+    expect(r.isDiscount).toBe(true);
+    expect(r.whtPct).toBe(15);
+    expect(r.lifetimeWht).toBeCloseTo(161.4, 1);
+    // Straight-line daily accretion = income / days(issue, maturity).
+    expect(r.grossPerDay).toBeCloseTo(1_076 / 91, 3);
+  });
+});
+
+// ── H. Exact acceptance numbers — FXD WHT tiers + override ────────────────────
+describe("H. FXD WHT tiers (<10y => 15%, 10y+ => 10%, override wins)", () => {
+  it("uses 15% below 10 years and 10% at/above 10 years", () => {
+    expect(whtRateFor({ securityType: "fxd", faceValue: 1, couponRate: 12, tenorYears: 9.9 })).toBe(15);
+    expect(whtRateFor({ securityType: "fxd", faceValue: 1, couponRate: 12, tenorYears: 10 })).toBe(10);
+    expect(whtRateFor({ securityType: "fxd", faceValue: 1, couponRate: 12, tenorYears: 15 })).toBe(10);
+  });
+  it("a per-holding override always wins", () => {
+    expect(whtRateFor({ securityType: "fxd", faceValue: 1, couponRate: 12, tenorYears: 15, whtRateOverride: 5 })).toBe(5);
+    expect(whtRateFor({ securityType: "ifb", faceValue: 1, couponRate: 12, whtRateOverride: 12 })).toBe(12);
+  });
+});
+
+// ── I. Other-asset net worth vs income base (via the shared fixture) ──────────
+describe("I. +200k equity raises full net worth but NOT the income/tax base", () => {
+  // Lazy import so the pure security tests above stay dependency-light.
+  it("net worth rises by 200k; income base is unchanged; sections stay green", async () => {
+    const { buildPortfolioState, round2 } = await import("./fixtures");
+    const rates = {
+      mmfYield: 12,
+      tbill364Rate: 13,
+      ifbCouponRate: 12,
+      fxdCouponRate: 11,
+      withholdingTax: 15,
+    };
+    const baseRows = {
+      deposits: [{ amount: 1_000_000, bucket: "mmf" }],
+      securities: [],
+      secondaryMmfs: [],
+      bankHoldings: [],
+      otherHoldings: [],
+      primaryFundId: 1,
+      rates,
+    };
+    const before = buildPortfolioState(baseRows as never);
+
+    const withEquity = buildPortfolioState({
+      ...baseRows,
+      otherHoldings: [
+        // Equity assigned to the goal (includeInGoal defaults true) — still not income.
+        { assetClass: "equity", currentValue: 200_000 },
+      ],
+    } as never);
+
+    // Full net worth climbs by exactly the equity value.
+    expect(round2(withEquity.fullNetWorth - before.fullNetWorth)).toBe(200_000);
+    // The income/tax base does NOT move — equity produces no fixed-income.
+    expect(withEquity.incomeTaxBase).toBe(before.incomeTaxBase);
+    // Full-net-worth reconciliation stays green (equity is a real holding).
+    expect(withEquity.recon.reconciled).toBe(true);
+  });
+});

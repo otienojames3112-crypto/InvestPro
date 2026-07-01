@@ -49,6 +49,12 @@ export const DEFAULT_BANK_RISK_PENALTY_PCT = 0.75;
 /** Extra penalty (percentage points) applied to the UNINSURED share of a deposit. */
 export const UNINSURED_RISK_PENALTY_PCT = 1.5;
 
+/** Default per-issuer concentration cap as a share of the portfolio (0..1). */
+export const DEFAULT_ISSUER_CONCENTRATION_CAP = 0.2;
+
+/** Penalty (percentage points) applied to the OVER-CAP concentration share. */
+export const CONCENTRATION_PENALTY_PCT = 2.0;
+
 /** A government option the sweep can choose (already net-of-tax scored upstream). */
 export interface GovSweepOption {
   bucket: "tbill" | "ifb" | "fxd";
@@ -77,6 +83,12 @@ export interface BankSweepCandidate {
   isMatured?: boolean;
   /** Per-issuer risk penalty override (percentage points). */
   riskPenaltyPct?: number | null;
+  /**
+   * Months until this term deposit matures. When the goal has a fixed horizon,
+   * a term instrument maturing AFTER the goal cannot be relied on for the plan,
+   * so it is ruled ineligible (the cash stays liquid in the MMF instead).
+   */
+  monthsToMaturity?: number | null;
 }
 
 export interface BankSweepConfig {
@@ -86,6 +98,12 @@ export interface BankSweepConfig {
   bankRiskPenaltyPct?: number;
   /** KDIC insured cap (override for tests / rule changes). */
   insuredCapKes?: number;
+  /** Goal horizon in months; term deposits maturing later are ineligible. */
+  goalHorizonMonths?: number | null;
+  /** Total portfolio value (KES), used to size the concentration penalty. */
+  portfolioValueKes?: number | null;
+  /** Per-issuer concentration cap as a share of the portfolio (0..1). */
+  issuerConcentrationCap?: number;
 }
 
 export interface BankEligibility {
@@ -108,6 +126,8 @@ export interface ScoredBankCandidate {
   riskAdjustedNetPct: number;
   /** Share of the target balance that would be uninsured (0..1). */
   uninsuredFraction: number;
+  /** Share of the portfolio this issuer would hold after the sweep (0..1). */
+  concentrationFraction: number;
 }
 
 export type SweepDestinationKind = "government" | "bank" | "none";
@@ -151,6 +171,7 @@ export function netOfTax(grossPct: number, whtPct: number): number {
 export function bankSweepEligibility(
   c: BankSweepCandidate,
   placementKes: number,
+  goalHorizonMonths?: number | null,
 ): BankEligibility {
   if (c.isActive === false) return { id: c.id, eligible: false, reason: "Instrument is inactive" };
   if (c.isMatured === true) return { id: c.id, eligible: false, reason: "Instrument has matured" };
@@ -160,6 +181,17 @@ export function bankSweepEligibility(
   const min = Math.max(0, c.minimumBalance ?? 0);
   if (placementKes + Math.max(0, c.principal) < min)
     return { id: c.id, eligible: false, reason: `Below instrument minimum (${min.toLocaleString()})` };
+  // A term deposit that matures AFTER the goal horizon cannot be relied on for
+  // the plan (call deposits are liquid, so they are exempt from this gate).
+  if (
+    typeof goalHorizonMonths === "number" &&
+    goalHorizonMonths > 0 &&
+    c.instrumentType === "fixed_deposit" &&
+    typeof c.monthsToMaturity === "number" &&
+    c.monthsToMaturity > goalHorizonMonths
+  ) {
+    return { id: c.id, eligible: false, reason: `Matures after the goal (${c.monthsToMaturity}mo > ${goalHorizonMonths}mo)` };
+  }
   return { id: c.id, eligible: true, reason: "" };
 }
 
@@ -171,15 +203,31 @@ export function bankSweepEligibility(
 export function scoreBankCandidate(
   c: BankSweepCandidate,
   placementKes: number,
-  cfg: Required<Pick<BankSweepConfig, "bankRiskPenaltyPct" | "insuredCapKes">>,
+  cfg: Required<Pick<BankSweepConfig, "bankRiskPenaltyPct" | "insuredCapKes">> & {
+    portfolioValueKes?: number | null;
+    issuerConcentrationCap?: number;
+  },
 ): ScoredBankCandidate {
   const netPct = netOfTax(c.interestRate, c.whtRate ?? 15);
   const resultingBalance = Math.max(0, c.principal) + Math.max(0, placementKes);
   const insured = Math.min(resultingBalance, cfg.insuredCapKes);
   const uninsured = Math.max(0, resultingBalance - insured);
   const uninsuredFraction = resultingBalance > 0 ? uninsured / resultingBalance : 0;
+
+  // Concentration: how big this issuer becomes as a share of the portfolio.
+  const pv = typeof cfg.portfolioValueKes === "number" && cfg.portfolioValueKes > 0
+    ? cfg.portfolioValueKes + Math.max(0, placementKes)
+    : 0;
+  const concentrationFraction = pv > 0 ? Math.min(1, resultingBalance / pv) : 0;
+  const cap = cfg.issuerConcentrationCap ?? DEFAULT_ISSUER_CONCENTRATION_CAP;
+  const overCap = Math.max(0, concentrationFraction - cap);
+
   const basePenalty = c.riskPenaltyPct ?? cfg.bankRiskPenaltyPct;
-  const riskPenaltyPct = round2(basePenalty + UNINSURED_RISK_PENALTY_PCT * uninsuredFraction);
+  const riskPenaltyPct = round2(
+    basePenalty +
+      UNINSURED_RISK_PENALTY_PCT * uninsuredFraction +
+      CONCENTRATION_PENALTY_PCT * (cap > 0 ? overCap / cap : overCap),
+  );
   return {
     id: c.id,
     bankName: c.bankName,
@@ -189,6 +237,7 @@ export function scoreBankCandidate(
     riskPenaltyPct,
     riskAdjustedNetPct: round2(netPct - riskPenaltyPct),
     uninsuredFraction: round2(uninsuredFraction),
+    concentrationFraction: round2(concentrationFraction),
   };
 }
 
@@ -207,6 +256,8 @@ export function decideBankSweep(
     govPreferenceMarginPct: config.govPreferenceMarginPct ?? DEFAULT_GOV_PREFERENCE_MARGIN_PCT,
     bankRiskPenaltyPct: config.bankRiskPenaltyPct ?? DEFAULT_BANK_RISK_PENALTY_PCT,
     insuredCapKes: config.insuredCapKes ?? KDIC_INSURED_CAP_KES,
+    portfolioValueKes: config.portfolioValueKes ?? null,
+    issuerConcentrationCap: config.issuerConcentrationCap ?? DEFAULT_ISSUER_CONCENTRATION_CAP,
   };
 
   const bestGov =
@@ -214,7 +265,9 @@ export function decideBankSweep(
       ? [...govOptions].sort((a, b) => b.netPct - a.netPct)[0]
       : null;
 
-  const eligibility = bankCandidates.map((c) => bankSweepEligibility(c, placementKes));
+  const eligibility = bankCandidates.map((c) =>
+    bankSweepEligibility(c, placementKes, config.goalHorizonMonths),
+  );
   const eligibleIds = new Set(eligibility.filter((e) => e.eligible).map((e) => e.id));
   const scored = bankCandidates
     .filter((c) => eligibleIds.has(c.id))

@@ -117,3 +117,54 @@ describe("bankSweep — government-preference threshold", () => {
     expect(uninsured.bestBank!.uninsuredFraction).toBeGreaterThanOrEqual(0.9);
   });
 });
+
+describe("bankSweep — goal-horizon eligibility", () => {
+  const gov: GovSweepOption[] = [{ bucket: "tbill", label: "T-bill", netPct: 11 }];
+  it("rules out a fixed deposit that matures after the goal horizon", () => {
+    const d = decideBankSweep(
+      50_000,
+      gov,
+      [bank({ interestRate: 30, instrumentType: "fixed_deposit", monthsToMaturity: 24 })],
+      { goalHorizonMonths: 12 },
+    );
+    expect(d.destination).toBe("government");
+    expect(d.eligibility[0].eligible).toBe(false);
+    expect(d.eligibility[0].reason).toContain("Matures after the goal");
+  });
+  it("admits a fixed deposit that matures before the goal", () => {
+    const d = decideBankSweep(
+      50_000,
+      gov,
+      [bank({ interestRate: 30, instrumentType: "fixed_deposit", monthsToMaturity: 6 })],
+      { goalHorizonMonths: 12 },
+    );
+    expect(d.destination).toBe("bank");
+  });
+});
+
+describe("bankSweep — concentration cap", () => {
+  const gov: GovSweepOption[] = [{ bucket: "ifb", label: "IFB", netPct: 15 }];
+  it("penalises an issuer that would breach the concentration cap", () => {
+    // 20% gross → 17% net. With a tiny portfolio the sweep makes this issuer a
+    // huge share, so the concentration penalty drags it below gov+margin.
+    const concentrated = decideBankSweep(
+      50_000,
+      gov,
+      [bank({ interestRate: 20, principal: 450_000 })],
+      { portfolioValueKes: 500_000, issuerConcentrationCap: 0.2 },
+    );
+    // Same instrument in a large portfolio (low concentration) still wins.
+    const diversified = decideBankSweep(
+      50_000,
+      gov,
+      [bank({ interestRate: 20, principal: 0 })],
+      { portfolioValueKes: 50_000_000, issuerConcentrationCap: 0.2 },
+    );
+    expect(concentrated.bestBank!.concentrationFraction).toBeGreaterThan(0.2);
+    expect(concentrated.bestBank!.riskAdjustedNetPct).toBeLessThan(
+      diversified.bestBank!.riskAdjustedNetPct,
+    );
+    expect(concentrated.destination).toBe("government");
+    expect(diversified.destination).toBe("bank");
+  });
+});

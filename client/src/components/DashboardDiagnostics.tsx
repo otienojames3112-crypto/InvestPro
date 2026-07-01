@@ -9,6 +9,14 @@ import {
 } from "lucide-react";
 import { formatKESCompact, formatPct } from "@/lib/format";
 import { rateStaleness } from "@/lib/rateStaleness";
+import {
+  scaleShareToPct,
+  pickTopIssuer,
+  topIssuerSharePct,
+  effectiveReconciled,
+  nextCashEvents,
+  effectiveMmfEar,
+} from "@/lib/diagnostics";
 import { ALLOCATION_TIER_SPECS } from "@shared/allocationModel";
 import type { AllocationTier } from "@shared/allocationModel";
 import type { PortfolioSnapshot } from "@shared/snapshot";
@@ -88,31 +96,25 @@ export function DashboardDiagnostics({
       : null;
   const warnings = snapshot.warnings ?? [];
   const warnCount = warnings.length;
-  const reconciled = reconVerdict?.reconciled ?? snapshot.reconciliation?.ok ?? true;
+  const reconciled = effectiveReconciled(reconVerdict, snapshot.reconciliation?.ok ?? null);
   const dataHealthy = !(stale?.isStale) && warnCount === 0 && reconciled;
 
   // ── Risk Snapshot ─────────────────────────────────────────────────────────
-  const topIssuer =
-    concentration?.breaches && concentration.breaches.length > 0
-      ? [...concentration.breaches].sort((a, b) => b.share - a.share)[0]
-      : null;
   // concentration shares / cap / type share / liquid-at-goal are 0–1 fractions;
-  // formatPct expects percent units, so scale by 100.
-  const topIssuerShare = (topIssuer?.share ?? concentration?.topShare ?? 0) * 100;
-  const capPct = (concentration?.cap ?? 0) * 100;
+  // formatPct expects percent units, so scale by 100 (see @/lib/diagnostics).
+  const topIssuer = pickTopIssuer(concentration);
+  const topIssuerShare = topIssuerSharePct(concentration);
+  const capPct = scaleShareToPct(concentration?.cap);
   const issuerBreached = concentration ? concentration.breaches.length > 0 : false;
-  const largestTypeShare = (typeBreach?.shareOfSecurities ?? 0) * 100;
+  const largestTypeShare = scaleShareToPct(typeBreach?.shareOfSecurities);
   const typeBreached = typeBreach?.breached ?? false;
-  const liquidAtGoalPct = (landsFullyLiquid ? 1 : liquidPctAtGoal) * 100;
+  const liquidAtGoalPct = scaleShareToPct(landsFullyLiquid ? 1 : liquidPctAtGoal);
 
   // ── Next 3 Cash Events ────────────────────────────────────────────────────
-  const events = (snapshot.liquidity ?? [])
-    .filter((e) => e.atMs >= snapshot.asOfMs)
-    .sort((a, b) => a.atMs - b.atMs)
-    .slice(0, 3);
+  const events = nextCashEvents(snapshot.liquidity, snapshot.asOfMs, 3);
 
   // ── Assumption Summary ────────────────────────────────────────────────────
-  const mmfEar = settings.selectedFundEar ?? settings.mmfYield;
+  const mmfEar = effectiveMmfEar(settings.selectedFundEar, settings.mmfYield);
   const activeTier = snapshot.identity.activePolicyTier as AllocationTier;
   const tierLabel = ALLOCATION_TIER_SPECS[activeTier]?.label ?? activeTier;
   const committed = snapshot.identity.planStatus === "committed";

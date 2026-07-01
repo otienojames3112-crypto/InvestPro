@@ -1453,14 +1453,14 @@
 - [x] Full suite green (138 files / 1310 tests), type gate clean
 
 ## Dashboard command-centre refactor (UX/layout only, no engine/projection math changes)
-- [ ] Map Dashboard.tsx: command centre block, detailed-analysis wrapper, and all sections to remove/relocate
-- [ ] Remove old long Dashboard stack below the toggle (role-aware top, risk essays, concentration cards, liquid cash diversification, engine explanation, goal progress card, asset allocation cards, tracked MMF accounts, growth chart, year-end milestones, today snapshot, large live actuals panel, rate assumptions, next-90-days strip)
-- [ ] Command centre is the whole visible Dashboard: Portfolio Status, This Month, Live Actuals, Needs Attention (max 3-4 + "+N more — open Review"), Projection Summary
-- [ ] Replace "Hide detailed analysis" with "Show manager diagnostics"
-- [ ] Build 4 compact diagnostic cards: Data Health, Risk Snapshot, Next 3 Cash Events, Assumption Summary (short; no charts/tables/essays)
-- [ ] Deep-link every card to the owning page; reuse the same selectors (no duplicated figures)
-- [ ] Simple mode: command centre only, no diagnostics. Manager mode: command centre + optional diagnostics
-- [ ] Tests for refactor + full suite + type gate green; screenshot-verify; checkpoint
+- [x] Map Dashboard.tsx: command centre block, detailed-analysis wrapper, and all sections to remove/relocate
+- [x] Remove old long Dashboard stack below the toggle (role-aware top, risk essays, concentration cards, liquid cash diversification, engine explanation, goal progress card, asset allocation cards, tracked MMF accounts, growth chart, year-end milestones, today snapshot, large live actuals panel, rate assumptions, next-90-days strip)
+- [x] Command centre is the whole visible Dashboard: Portfolio Status, This Month, Live Actuals, Needs Attention (max 3-4 + "+N more — open Review"), Projection Summary
+- [x] Replace "Hide detailed analysis" toggle: diagnostics now follow the app-wide sidebar Simple/Manager switch (no separate button)
+- [x] Build 4 compact diagnostic cards: Data Health, Risk Snapshot, Next 3 Cash Events, Assumption Summary (short; no charts/tables/essays)
+- [x] Deep-link every card to the owning page; reuse the same selectors (no duplicated figures)
+- [x] Simple mode: command centre only, no diagnostics. Manager mode: command centre + diagnostics band
+- [x] Tests for refactor + full suite + type gate green; screenshot-verify; checkpoint
 
 ## Dashboard command-centre refactor (Manager diagnostics)
 
@@ -1477,3 +1477,5 @@
 - [x] Type gate clean (tsc --noEmit); full suite 138 files / 1310 tests green
 - [x] Verified live via screenshot: 4 cards render, percentages correct (Liquid at goal 100%, 0.0% / 25% cap)
 - [x] Package full codebase as ZIP for delivery
+- [x] Extract pure diagnostics helpers to client/src/lib/diagnostics.ts (scaleShareToPct, pickTopIssuer, topIssuerSharePct, effectiveReconciled, nextCashEvents, effectiveMmfEar) and refactor DashboardDiagnostics to use them
+- [x] Add regression spec server/diagnosticsHelpers.round76.test.ts (15 tests) — full suite 139 files / 1325 tests green, type gate clean

@@ -47,7 +47,7 @@ import { useDepositDrawer } from "@/contexts/DepositDrawerContext";
  * BankHoldings — the ACTUAL money held at commercial banks (Holdings → Bank).
  *
  * This is a live-holdings surface, NOT the reference product catalogue. The
- * catalogue of indicative bank products lives in Research → Bank Catalogue
+ * catalogue of indicative bank products lives in Research → Bank Product Catalogue
  * (BankInstruments.tsx). Both read distinct data: this page reads
  * `bankHoldings.*` (what you own); the catalogue reads `bankInstruments.*`.
  *
@@ -134,12 +134,12 @@ export default function BankHoldings({ embedded: _embedded = false }: { embedded
             tiered savings. Looking for indicative rates to compare before opening a new one?
             See the{" "}
             <Link href={dashboardHref.bankCatalogue} className="text-primary underline underline-offset-2">
-              Bank Catalogue
+              Bank Product Catalogue
             </Link>{" "}
             under Research.
           </p>
         </div>
-        <Button onClick={openDrawer} className="shrink-0 gap-1.5">
+        <Button onClick={() => openDrawer()} className="shrink-0 gap-1.5">
           <PlusCircle className="w-4 h-4" /> Record a deposit
         </Button>
       </div>
@@ -215,7 +215,7 @@ export default function BankHoldings({ embedded: _embedded = false }: { embedded
             size="sm"
             variant="outline"
             className="ml-auto border-white/10 bg-white/5 gap-1.5 h-7 text-xs"
-            onClick={openDrawer}
+            onClick={() => openDrawer()}
           >
             <PlusCircle className="w-3.5 h-3.5" /> Add
           </Button>
@@ -304,7 +304,7 @@ export default function BankHoldings({ embedded: _embedded = false }: { embedded
                           size="icon"
                           className="h-7 w-7 text-muted-foreground hover:text-foreground"
                           title="Edit via Record a deposit"
-                          onClick={openDrawer}
+                          onClick={() => openDrawer()}
                         >
                           <Pencil className="w-3.5 h-3.5" />
                         </Button>

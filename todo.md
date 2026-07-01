@@ -1520,3 +1520,19 @@
 - [x] R79.10 Update route redirects: bank/mmf holdings vs catalogue/comparison; legacy /bank-instruments -> research catalogue
 - [x] R79.11 Acceptance tests: semantic links, page-role separation, sync propagation
 - [x] R79 Verify type gate + full suite green; screenshot-verify; checkpoint
+
+
+## Round 80 — Research area completion + Holdings/Research role enforcement
+- [x] Rename Research tabs: Explore, MMF Market, Bank Product Catalogue, CBK Securities Reference, Market Assets Reference, AI Import, AI Review, Source Conflicts (shared/navigation.ts AREA_TABS + dashboardHref)
+- [x] Update ResearchArea.tsx tab wiring + new tab IDs/labels
+- [x] Update route/redirect tests for new Research tab IDs
+- [x] Remove secondary-MMF account management from MmfFunds.tsx (Research → MMF Market); keep read-only market table + confirmation-gated Set-primary; account CRUD lives in Holdings → MMF
+- [x] Redesign BankInstruments.tsx (Bank Product Catalogue): grouped-by-type reference tables, min amount/tenor/negotiable notes, reference-only framing, record via shared DepositDrawer
+- [x] Create CbkSecuritiesReference.tsx (gov_discount/gov_coupon over shared catalogue) with filter bar + sortable table + source/freshness + not-advice disclaimer + Record purchase (deposit drawer); registered as cbk-securities tab
+- [x] Create MarketAssetsReference.tsx (equity/reit/offshore_fund/alt over shared catalogue) with filters + sortable table + past-performance labelling + not-advice disclaimer + Track holding deep-link to Holdings → Other; registered as market-assets tab
+- [x] Promotion path: AI-review confirm-to-publish already authors class-tagged structured catalogue rows (no AI auto-promote); reference pages surface only published rows
+- [x] Fix "Model in my plan" by asset class: shared holdingsRouteForAssetClass maps each class to its register; ModelDrawer commit deep-links by class + register-completion note (no more always-/other-assets)
+- [x] Reference→actual-holding flows explicit + confirmation-gated (deposit drawer prefill / Other-Holdings prefilled add dialog)
+- [x] Verified allocation/sweep engine sources bank candidates from live active catalogue (getBankInstruments) + gov options from settings; locked by test
+- [x] Tests: page-role separation, tab set, routing helper, reference-page scoping/disclaimer, engine source integrity (researchArea.round80.test.ts, 23 assertions)
+- [x] Type gate 0 errors + full suite 1400/1400 green; 4 reference-tab screenshots captured; checkpoint + ZIP delivery

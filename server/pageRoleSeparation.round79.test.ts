@@ -48,8 +48,18 @@ describe("Research area renders MARKET reference, not owned holdings", () => {
     expect(renderedFor(research, "bank-catalogue")).toBe("BankInstruments");
   });
 
-  it("Research → MMF Comparison renders the MMF market table (MmfFunds)", () => {
-    expect(renderedFor(research, "mmf-comparison")).toBe("MmfFunds");
+  it("Research → MMF Market renders the MMF market table (MmfFunds)", () => {
+    expect(renderedFor(research, "mmf-market")).toBe("MmfFunds");
+  });
+
+  it("Research MMF Market no longer manages secondary MMF accounts", () => {
+    const mmf = read("client/src/pages/MmfFunds.tsx");
+    expect(mmf).not.toMatch(/secondaryMmfs\./);
+    expect(mmf).not.toMatch(/Additional MMF Accounts/);
+    expect(mmf).not.toMatch(/Add Account/);
+    // But the confirmation-gated primary-fund selection stays.
+    expect(mmf).toMatch(/AlertDialog/);
+    expect(mmf).toMatch(/confirmFund/);
   });
 
   it("Research never imports the owned-holdings components", () => {

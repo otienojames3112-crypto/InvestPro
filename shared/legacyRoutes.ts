@@ -31,7 +31,7 @@ export const LEGACY_REDIRECTS: readonly LegacyRedirect[] = [
   { from: "/other-assets", area: "holdings", tab: "other" },
   // Research area
   { from: "/explore", area: "research", tab: "explore" },
-  { from: "/mmf-strategy", area: "research", tab: "mmf-comparison" },
+  { from: "/mmf-strategy", area: "research", tab: "mmf-market" },
   { from: "/ai-intake", area: "research", tab: "ai-import" },
   { from: "/ai-review", area: "research", tab: "ai-review" },
   { from: "/source-conflicts", area: "research", tab: "source-conflicts" },

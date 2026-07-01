@@ -69,7 +69,7 @@ describe("Phase 7 — legacy route redirects", () => {
       "/bank-instruments": { area: "holdings", tab: "bank" },
       "/other-assets": { area: "holdings", tab: "other" },
       "/explore": { area: "research", tab: "explore" },
-      "/mmf-strategy": { area: "research", tab: "mmf-comparison" },
+      "/mmf-strategy": { area: "research", tab: "mmf-market" },
       "/ai-intake": { area: "research", tab: "ai-import" },
       "/ai-review": { area: "research", tab: "ai-review" },
       "/source-conflicts": { area: "research", tab: "source-conflicts" },

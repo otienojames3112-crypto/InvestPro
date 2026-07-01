@@ -1,20 +1,18 @@
 import { useState, useMemo } from "react";
+import { Link } from "wouter";
+import { dashboardHref } from "@shared/navigation";
 import { AppShell } from "@/components/AppShell";
 import { trpc } from "@/lib/trpc";
 import { invalidatePortfolioMoney } from "@/lib/invalidatePortfolioMoney";
 import { usePortfolio } from "@/contexts/PortfolioContext";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
-import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
-import { ArrowUpDown, ArrowUp, ArrowDown, Search, Plus, Pencil, Trash2, CheckCircle2, Circle, Info, PlusCircle, X, Star, AlertTriangle } from "lucide-react";
-import { formatKES } from "@/lib/format";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Textarea } from "@/components/ui/textarea";
+import { ArrowUpDown, ArrowUp, ArrowDown, Search, Plus, Pencil, Trash2, CheckCircle2, Circle, Info, Star, AlertTriangle } from "lucide-react";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -184,52 +182,6 @@ export default function MmfFunds({ embedded = false }: { embedded?: boolean } = 
   const [addOpen, setAddOpen] = useState(false);
   const [editFund, setEditFund] = useState<Fund | null>(null);
   const [deleteId, setDeleteId] = useState<number | null>(null);
-
-  // ── Secondary MMF accounts ──
-  const { data: secondaryMmfs = [], isLoading: secondaryLoading } = trpc.secondaryMmfs.list.useQuery(
-    { portfolioId: portfolioId! },
-    { enabled: !!portfolioId }
-  );
-  const [addSecondaryOpen, setAddSecondaryOpen] = useState(false);
-  const [editSecondary, setEditSecondary] = useState<typeof secondaryMmfs[0] | null>(null);
-  const [secondaryForm, setSecondaryForm] = useState({ mmfFundId: "", label: "", currentBalance: "", monthlyContribution: "", notes: "" });
-
-  const addSecondaryMutation = trpc.secondaryMmfs.add.useMutation({
-    onSuccess: () => { invalidatePortfolioMoney(utils, portfolioId); setAddSecondaryOpen(false); setSecondaryForm({ mmfFundId: "", label: "", currentBalance: "", monthlyContribution: "", notes: "" }); toast.success("Additional MMF account added."); },
-    onError: (e) => toast.error(e.message),
-  });
-  const updateSecondaryMutation = trpc.secondaryMmfs.update.useMutation({
-    onSuccess: () => { invalidatePortfolioMoney(utils, portfolioId); setEditSecondary(null); toast.success("Account updated."); },
-    onError: (e) => toast.error(e.message),
-  });
-  const removeSecondaryMutation = trpc.secondaryMmfs.remove.useMutation({
-    onSuccess: () => { invalidatePortfolioMoney(utils, portfolioId); toast.success("Account removed."); },
-    onError: (e) => toast.error(e.message),
-  });
-
-  function openEditSecondary(item: typeof secondaryMmfs[0]) {
-    setEditSecondary(item);
-    setSecondaryForm({
-      mmfFundId: String(item.mmfFundId),
-      label: item.label ?? "",
-      currentBalance: String(item.currentBalance),
-      monthlyContribution: String(item.monthlyContribution),
-      notes: item.notes ?? "",
-    });
-  }
-
-  function handleSaveSecondary(isEdit: boolean) {
-    if (!portfolioId) return;
-    const mmfFundId = parseInt(secondaryForm.mmfFundId);
-    if (!mmfFundId) { toast.error("Please select a fund."); return; }
-    const currentBalance = parseFloat(secondaryForm.currentBalance) || 0;
-    const monthlyContribution = parseFloat(secondaryForm.monthlyContribution) || 0;
-    if (isEdit && editSecondary) {
-      updateSecondaryMutation.mutate({ id: editSecondary.id, portfolioId, mmfFundId, label: secondaryForm.label || undefined, currentBalance, monthlyContribution, notes: secondaryForm.notes || undefined });
-    } else {
-      addSecondaryMutation.mutate({ portfolioId, mmfFundId, label: secondaryForm.label || undefined, currentBalance, monthlyContribution, notes: secondaryForm.notes || undefined });
-    }
-  }
 
   const addMutation = trpc.mmfFunds.add.useMutation({
     onSuccess: () => { invalidatePortfolioMoney(utils, portfolioId); setAddOpen(false); toast.success("Fund added."); },
@@ -526,129 +478,23 @@ export default function MmfFunds({ embedded = false }: { embedded?: boolean } = 
         </CardContent>
       </Card>
 
-      {/* ── Secondary MMF Accounts Section ── */}
+      {/* Reference-vs-holdings separation — account management lives in Holdings. */}
       <Card className="border-primary/20 bg-primary/3">
-        <CardHeader className="pb-3">
-          <div className="flex items-center justify-between gap-4 flex-wrap">
-            <div>
-              <CardTitle className="text-base font-semibold flex items-center gap-2">
-                <PlusCircle className="w-4 h-4 text-primary" />
-                Additional MMF Accounts
-              </CardTitle>
-              <CardDescription className="mt-1 text-xs">
-                Track other MMF funds you invest in alongside your primary fund. Each is projected forward with its own EAR and contribution. Use <strong>Set as primary</strong> to make any account drive the headline projection.
-              </CardDescription>
-            </div>
-            <Button size="sm" onClick={() => { setSecondaryForm({ mmfFundId: "", label: "", currentBalance: "", monthlyContribution: "", notes: "" }); setAddSecondaryOpen(true); }} disabled={!portfolioId}>
-              <Plus className="w-4 h-4 mr-1" /> Add Account
-            </Button>
+        <CardContent className="py-4 px-4 flex items-start justify-between gap-4 flex-wrap">
+          <div className="flex items-start gap-2 min-w-0">
+            <Info className="w-4 h-4 text-primary shrink-0 mt-0.5" />
+            <p className="text-sm text-muted-foreground">
+              This is the <strong className="text-foreground">market reference</strong> — the CMA-regulated MMF
+              universe you compare and choose a primary fund from. The MMF <strong className="text-foreground">accounts you actually hold</strong>
+              {" "}(balances, monthly contributions, additional funds) are managed under{" "}
+              <Link href={dashboardHref.mmf} className="text-primary underline underline-offset-2">Holdings → MMF</Link>.
+            </p>
           </div>
-        </CardHeader>
-        <CardContent className="pt-0">
-          {secondaryLoading && <p className="text-xs text-muted-foreground">Loading…</p>}
-          {!secondaryLoading && secondaryMmfs.length === 0 && (
-            <div className="flex items-center gap-2 py-4 text-sm text-muted-foreground">
-              <Info className="w-4 h-4 shrink-0" />
-              No additional MMF accounts yet. Click <strong>Add Account</strong> to start tracking another fund.
-            </div>
-          )}
-          {secondaryMmfs.length > 0 && (
-            <div className="space-y-3">
-              {secondaryMmfs.map((item) => (
-                <div key={item.id} className="rounded-lg border border-border/60 bg-background/60 p-3 flex items-start justify-between gap-3">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="font-medium text-sm text-foreground">{item.label || item.fundName}</span>
-                      <Badge variant="secondary" className="text-[10px] px-1.5 py-0">{item.ear.toFixed(2)}% EAR</Badge>
-                      {item.mmfFundId != null && item.mmfFundId === selectedFundId && (
-                        <Badge className="text-[10px] px-1.5 py-0 bg-primary text-primary-foreground">
-                          <Star className="w-2.5 h-2.5 mr-0.5" /> Primary
-                        </Badge>
-                      )}
-                    </div>
-                    <p className="text-xs text-muted-foreground mt-0.5">{item.company}</p>
-                    <div className="flex items-center gap-4 mt-1.5 text-xs text-muted-foreground">
-                      <span>Balance: <strong className="text-foreground kes-amount">{formatKES(item.currentBalance)}</strong></span>
-                      <span>Monthly: <strong className="text-foreground kes-amount">{formatKES(item.monthlyContribution)}</strong></span>
-                    </div>
-                    {item.notes && <p className="text-xs text-muted-foreground mt-1 italic">{item.notes}</p>}
-                  </div>
-                  <div className="flex items-center gap-1 shrink-0">
-                    {item.mmfFundId != null && item.mmfFundId !== selectedFundId && (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="h-7 text-xs"
-                        onClick={() => item.mmfFundId != null && requestSetPrimary(item.mmfFundId, item.label || item.fundName)}
-                        disabled={selectFundMutation.isPending}
-                        title="Use this fund's EAR to drive the projection"
-                      >
-                        <Star className="w-3 h-3 mr-1" /> Set as primary
-                      </Button>
-                    )}
-                    <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => openEditSecondary(item)}>
-                      <Pencil className="w-3 h-3" />
-                    </Button>
-                    <Button size="icon" variant="ghost" className="h-7 w-7 text-destructive hover:text-destructive" onClick={() => portfolioId && removeSecondaryMutation.mutate({ id: item.id, portfolioId })} disabled={removeSecondaryMutation.isPending}>
-                      <X className="w-3 h-3" />
-                    </Button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
+          <Button asChild size="sm" variant="outline">
+            <Link href={dashboardHref.mmf}>Go to Holdings → MMF</Link>
+          </Button>
         </CardContent>
       </Card>
-
-      {/* Add / Edit Secondary MMF Dialog */}
-      <Dialog open={addSecondaryOpen || !!editSecondary} onOpenChange={(v) => { if (!v) { setAddSecondaryOpen(false); setEditSecondary(null); } }}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>{editSecondary ? "Edit MMF Account" : "Add MMF Account"}</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-3 py-2">
-            <div>
-              <Label className="text-xs">Fund *</Label>
-              <Select value={secondaryForm.mmfFundId} onValueChange={(v) => setSecondaryForm((f) => ({ ...f, mmfFundId: v }))}>
-                <SelectTrigger className="mt-1">
-                  <SelectValue placeholder="Select a fund…" />
-                </SelectTrigger>
-                <SelectContent>
-                  {funds.map((f) => (
-                    <SelectItem key={f.id} value={String(f.id)}>
-                      {f.fundName} ({f.ear.toFixed(2)}% EAR)
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div>
-              <Label className="text-xs">Custom Label (optional)</Label>
-              <Input className="mt-1" placeholder="e.g. Cytonn MMF (emergency fund)" value={secondaryForm.label} onChange={(e) => setSecondaryForm((f) => ({ ...f, label: e.target.value }))} />
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <Label className="text-xs">Current Balance (KES)</Label>
-                <Input className="mt-1" type="number" step="100" min="0" placeholder="0" value={secondaryForm.currentBalance} onChange={(e) => setSecondaryForm((f) => ({ ...f, currentBalance: e.target.value }))} />
-              </div>
-              <div>
-                <Label className="text-xs">Monthly Contribution (KES)</Label>
-                <Input className="mt-1" type="number" step="100" min="0" placeholder="0" value={secondaryForm.monthlyContribution} onChange={(e) => setSecondaryForm((f) => ({ ...f, monthlyContribution: e.target.value }))} />
-              </div>
-            </div>
-            <div>
-              <Label className="text-xs">Notes (optional)</Label>
-              <Textarea className="mt-1 text-xs" rows={2} placeholder="Any notes about this account…" value={secondaryForm.notes} onChange={(e) => setSecondaryForm((f) => ({ ...f, notes: e.target.value }))} />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => { setAddSecondaryOpen(false); setEditSecondary(null); }}>Cancel</Button>
-            <Button onClick={() => handleSaveSecondary(!!editSecondary)} disabled={addSecondaryMutation.isPending || updateSecondaryMutation.isPending}>
-              {addSecondaryMutation.isPending || updateSecondaryMutation.isPending ? "Saving…" : "Save"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
       <p className="text-xs text-muted-foreground">
         EAR = Effective Annual Rate net of management fee, before 15% WHT. WHT is applied by the projection engine.

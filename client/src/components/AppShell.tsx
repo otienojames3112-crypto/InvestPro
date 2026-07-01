@@ -630,7 +630,7 @@ export function AppShell({
           {/* Quick deposit button on mobile */}
           <button
             className="p-1.5 rounded-lg text-muted-foreground hover:text-primary hover:bg-accent transition-colors"
-            onClick={openDrawer}
+            onClick={() => openDrawer()}
             aria-label="Record deposit"
           >
             <ArrowDownCircle className="w-5 h-5" />

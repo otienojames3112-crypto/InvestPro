@@ -310,7 +310,7 @@ export default function Deposits({ embedded: _embedded = false }: { embedded?: b
           </p>
         </div>
         <Button
-          onClick={openDrawer}
+          onClick={() => openDrawer()}
           className="bg-[#c9a84c] hover:bg-[#b8943f] text-black font-semibold gap-2"
         >
           <PlusCircle className="w-4 h-4" />

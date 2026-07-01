@@ -39,7 +39,7 @@ const tabs: AreaTab[] = [
     id: "bank",
     label: "Bank",
     icon: Building2,
-    hint: "Money you actually hold at commercial banks — call, fixed, goal/target, ordinary and tiered savings deposits. Browse indicative products under Research → Bank Catalogue.",
+    hint: "Money you actually hold at commercial banks — call, fixed, goal/target, ordinary and tiered savings deposits. Browse indicative products under Research → Bank Product Catalogue.",
     render: () => <BankHoldings embedded />,
   },
   {

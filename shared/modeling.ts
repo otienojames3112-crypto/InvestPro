@@ -63,6 +63,51 @@ export function registerClassForAssetClass(ac: AssetClass): RegisterAssetClass {
 }
 
 /**
+ * Which Holdings register a given catalog asset class actually belongs to.
+ *
+ * The "Model in my plan" / reference → actual-holding flow must send each class
+ * to the register that models it correctly:
+ *   - Fixed-income with a maturity/coupon (`bank_deposit`, `gov_*`) is
+ *     `usesRegisterForm: true` — those classes MUST be completed on their own
+ *     register (bank / securities) so the maturity ladder, coupon schedule and
+ *     issuer-cap logic are populated; storing them as a flat "Other" row would
+ *     silently under-model them.
+ *   - `cash_mmf` belongs to the MMF register.
+ *   - Price-driven market assets (`equity`, `reit`, `offshore_fund`, `alt`) are
+ *     tracked as generic net-worth holdings under "Other", which is where the
+ *     modeling commit already writes them.
+ *
+ * `tab` is the canonical Holdings tab id used by `dashboardHref` so callers
+ * never hardcode a route. This is the single source of truth for the mapping;
+ * UI and tests both read it.
+ */
+export type HoldingsTab = "mmf" | "gov" | "bank" | "other";
+export interface HoldingsRoute {
+  tab: HoldingsTab;
+  /** True when the class must be completed on its dedicated register form. */
+  usesRegisterForm: boolean;
+  /** Plain label for the destination register (for UI copy). */
+  registerLabel: string;
+}
+export function holdingsRouteForAssetClass(ac: AssetClass): HoldingsRoute {
+  switch (ac) {
+    case "cash_mmf":
+      return { tab: "mmf", usesRegisterForm: true, registerLabel: "Holdings → MMF" };
+    case "bank_deposit":
+      return { tab: "bank", usesRegisterForm: true, registerLabel: "Holdings → Bank" };
+    case "gov_discount":
+    case "gov_coupon":
+      return { tab: "gov", usesRegisterForm: true, registerLabel: "Holdings → Government" };
+    case "equity":
+    case "reit":
+    case "offshore_fund":
+    case "alt":
+    default:
+      return { tab: "other", usesRegisterForm: false, registerLabel: "Holdings → Other" };
+  }
+}
+
+/**
  * The user's own modeling inputs. Catalog values may pre-fill these, but the
  * user owns and can edit every one. `amount` and `units` are linked through
  * `unitPrice`; callers supply whichever pair they have and we derive the rest.

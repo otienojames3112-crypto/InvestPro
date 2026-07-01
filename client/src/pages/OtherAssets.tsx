@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { trpc } from "@/lib/trpc";
 import { invalidatePortfolioMoney } from "@/lib/invalidatePortfolioMoney";
@@ -693,6 +693,35 @@ export default function OtherAssets({ embedded = false }: { embedded?: boolean }
   const [deleteId, setDeleteId] = useState<number | null>(null);
   const [exitHolding, setExitHolding] = useState<Holding | null>(null);
 
+  // Reference-page prefill: the Market Assets Reference links here with
+  // ?track=1&name=…&class=…&value=… to open the Add dialog pre-seeded to the
+  // chosen instrument. Nothing is written until the user confirms in the dialog;
+  // the params only save typing. We clean the URL after applying so a refresh
+  // doesn't re-open it.
+  const [prefillInitial, setPrefillInitial] = useState<
+    { assetClass: string; name: string; currentValue: number; notes?: string } | undefined
+  >(undefined);
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("track") !== "1") return;
+    const name = params.get("name") ?? "";
+    const cls = params.get("class") ?? "equity";
+    const value = Number(params.get("value") ?? "");
+    const notes = params.get("notes") ?? undefined;
+    const validClasses = ["real_estate", "equity", "etf", "pension", "sacco", "business", "crypto", "insurance", "other"];
+    setPrefillInitial({
+      assetClass: validClasses.includes(cls) ? cls : "equity",
+      name,
+      currentValue: Number.isFinite(value) && value > 0 ? value : 0,
+      notes,
+    });
+    setAddOpen(true);
+    for (const k of ["track", "name", "class", "value", "notes"]) params.delete(k);
+    const qs = params.toString();
+    window.history.replaceState({}, "", `${window.location.pathname}${qs ? `?${qs}` : ""}`);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const addMutation = trpc.otherHoldings.add.useMutation({
     onSuccess: () => { invalidatePortfolioMoney(utils, portfolioId); setAddOpen(false); toast.success("Asset added."); },
     onError: (e) => toast.error(e.message),
@@ -843,8 +872,10 @@ export default function OtherAssets({ embedded = false }: { embedded?: boolean }
       {/* Add dialog */}
       {addOpen && portfolioId && (
         <HoldingFormDialog
+          key={prefillInitial ? `prefill-${prefillInitial.name}` : "blank"}
           open={addOpen}
-          onClose={() => setAddOpen(false)}
+          onClose={() => { setAddOpen(false); setPrefillInitial(undefined); }}
+          initial={prefillInitial as never}
           onSave={(data) => addMutation.mutate({ portfolioId, ...data, assetClass: data.assetClass as "real_estate" | "equity" | "etf" | "pension" | "sacco" | "business" | "crypto" | "insurance" | "other" })}
           saving={addMutation.isPending}
         />

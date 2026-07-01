@@ -33,6 +33,8 @@ import {
   Bot,
 } from "lucide-react";
 import { profileFor, type AssetClass } from "@shared/assetModel";
+import { holdingsRouteForAssetClass } from "@shared/modeling";
+import { dashboardHref } from "@shared/navigation";
 import { defaultRiskFor } from "@shared/riskModel";
 import {
   modelFreshnessPrompt,
@@ -188,13 +190,18 @@ export function ModelDrawer({
   );
 
   const utils = trpc.useUtils();
+  // Route the confirmation deep-link to the register the class actually belongs
+  // to (Other for market assets, but MMF/Bank/Government are shown their own
+  // register). Never hardcode the route — read the shared mapping + dashboardHref.
+  const route = holdingsRouteForAssetClass(opportunity.assetClass as AssetClass);
+  const viewHref = dashboardHref[route.tab];
   const commit = trpc.modeling.commit.useMutation({
-    onSuccess: (res) => {
+    onSuccess: () => {
       toast.success("Modeled holding recorded", {
         description: `${opportunity.name} is now tracked in your ${mode === "sandbox" ? "Test" : "Live"} plan.`,
         action: {
-          label: "View",
-          onClick: () => navigate("/other-assets"),
+          label: `View in ${route.registerLabel}`,
+          onClick: () => navigate(viewHref),
         },
       });
       invalidatePortfolioMoney(utils, portfolioId);
@@ -682,6 +689,22 @@ export function ModelDrawer({
             Tracking records a holding you can edit, exit, or delete anytime. It never
             executes a real purchase{mode === "sandbox" ? " and stays in your sandbox" : ""}.
           </p>
+
+          {route.usesRegisterForm && (
+            <p className="text-[10px] text-muted-foreground flex items-start gap-1.5">
+              <ArrowRight className="w-3 h-3 shrink-0 mt-0.5" />
+              This is a {profile.label.toLowerCase()} — after tracking, open{" "}
+              <button
+                type="button"
+                className="underline underline-offset-2 hover:text-foreground"
+                onClick={() => navigate(viewHref)}
+              >
+                {route.registerLabel}
+              </button>{" "}
+              to set the maturity, coupon and issue-date fields so it models with its
+              full ladder and issuer-cap behaviour.
+            </p>
+          )}
         </div>
       </SheetContent>
     </Sheet>

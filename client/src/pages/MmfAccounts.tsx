@@ -54,7 +54,7 @@ import { toast } from "sonner";
  * balance comes straight from `deposits.summary.byBucket.mmf`) plus any
  * secondary MMF accounts you also keep. It is deliberately NOT the market
  * comparison table — that reference table (all funds, yields, fees, "set as
- * primary") lives in Research → MMF Comparison. A prominent CTA links there.
+ * primary") lives in Research → MMF Market. A prominent CTA links there.
  *
  * No money math is duplicated: balances/interest come from the shared
  * `deposits.summary` selector; per-account EAR comes from the fund catalogue.
@@ -156,14 +156,14 @@ export default function MmfAccounts({ embedded: _embedded = false }: { embedded?
             The MMF accounts your money actually sits in — the primary fund this plan runs on plus
             any secondary funds you keep. Want to see how your fund ranks against the market, or
             switch the primary fund? Open the{" "}
-            <Link href={dashboardHref.mmfComparison} className="text-primary underline underline-offset-2">
-              MMF Comparison
+            <Link href={dashboardHref.mmfMarket} className="text-primary underline underline-offset-2">
+              MMF Market
             </Link>{" "}
             under Research.
           </p>
         </div>
         <Button asChild variant="outline" className="shrink-0 gap-1.5 border-white/10 bg-white/5">
-          <Link href={dashboardHref.mmfComparison}>
+          <Link href={dashboardHref.mmfMarket}>
             <Scale className="w-4 h-4" /> Compare the market
           </Link>
         </Button>
@@ -222,13 +222,13 @@ export default function MmfAccounts({ embedded: _embedded = false }: { embedded?
               </>
             ) : (
               <p className="text-sm text-muted-foreground">
-                No primary fund selected yet. Pick one in the MMF Comparison so projections use a
+                No primary fund selected yet. Pick one in the MMF Market so projections use a
                 real fund's yield.
               </p>
             )}
           </div>
           <Button asChild size="sm" variant="outline" className="border-white/10 bg-white/5 gap-1.5 h-8 text-xs shrink-0">
-            <Link href={dashboardHref.mmfComparison}>
+            <Link href={dashboardHref.mmfMarket}>
               <Scale className="w-3.5 h-3.5" /> {hasFund ? "Change" : "Choose"} fund
             </Link>
           </Button>

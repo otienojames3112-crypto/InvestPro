@@ -22,8 +22,10 @@ export const AREA_TABS: Record<AreaName, readonly string[]> = {
   holdings: ["overview", "mmf", "gov", "bank", "other"],
   research: [
     "explore",
-    "mmf-comparison",
+    "mmf-market",
     "bank-catalogue",
+    "cbk-securities",
+    "market-assets",
     "ai-import",
     "ai-review",
     "source-conflicts",
@@ -85,7 +87,9 @@ export const dashboardHref = {
   risk: areaTab("review", "manager"),
   // Research (market reference) — where to compare products before buying.
   bankCatalogue: areaTab("research", "bank-catalogue"),
-  mmfComparison: areaTab("research", "mmf-comparison"),
+  mmfMarket: areaTab("research", "mmf-market"),
+  cbkSecurities: areaTab("research", "cbk-securities"),
+  marketAssets: areaTab("research", "market-assets"),
   /** Rate settings live on Plan → Goal & Plan; `/settings` redirects there. */
   rates: "/settings",
 } as const;

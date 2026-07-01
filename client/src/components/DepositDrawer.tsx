@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import type { DepositPrefill } from "@/contexts/DepositDrawerContext";
 import { usePortfolio } from "@/contexts/PortfolioContext";
 import { useSelectedFund } from "@/hooks/useSelectedFund";
 import { trpc } from "@/lib/trpc";
@@ -103,9 +104,11 @@ const GOV_META = {
 interface DepositDrawerProps {
   open: boolean;
   onClose: () => void;
+  /** Optional reference-product seed from a catalogue page. */
+  prefill?: DepositPrefill | null;
 }
 
-export function DepositDrawer({ open, onClose }: DepositDrawerProps) {
+export function DepositDrawer({ open, onClose, prefill }: DepositDrawerProps) {
   const { portfolioId, portfolio } = usePortfolio();
   const { fundName, fundLabel, fundEar } = useSelectedFund();
   const utils = trpc.useUtils();
@@ -274,6 +277,35 @@ export function DepositDrawer({ open, onClose }: DepositDrawerProps) {
     floatingResetMonths: 6 as number,
     zeroMaturityOverride: "",
   });
+
+  // Reference-page prefill: when the drawer is opened from the Bank Product
+  // Catalogue or CBK Securities Reference, seed the record form so the user
+  // lands directly on the right instrument. Every figure remains editable and
+  // nothing is written until the user confirms — the prefill only saves typing.
+  useEffect(() => {
+    if (!open || !prefill) return;
+    setFormOpen(true);
+    if (prefill.kind === "bank") {
+      setForm((f) => ({ ...f, destination: "bank:new" }));
+      const isTerm = isTermBankInstrument(prefill.instrumentType);
+      const tenorMatch = prefill.typicalTenor ? prefill.typicalTenor.match(/\d+/) : null;
+      setNewBank((b) => ({
+        ...b,
+        bankName: prefill.bankName,
+        instrumentType: prefill.instrumentType,
+        interestRate:
+          prefill.indicativeRate != null ? String(prefill.indicativeRate) : b.interestRate,
+        tenorMonths: isTerm && tenorMatch ? tenorMatch[0] : b.tenorMonths,
+      }));
+    } else if (prefill.kind === "gov") {
+      setForm((f) => ({ ...f, destination: `gov:${prefill.bucket}` }));
+      if (prefill.bucket === "tbill" && prefill.tbillTenorDays) {
+        setGovDetail((g) => ({ ...g, tbillTenorDays: prefill.tbillTenorDays! }));
+      }
+    }
+    // Only react to a NEW open/prefill pair, not to every form keystroke.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, prefill]);
 
   const selectedDest = destinations.find((d) => d.value === form.destination);
   const isNewBank = form.destination === "bank:new";

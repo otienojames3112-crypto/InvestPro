@@ -46,6 +46,7 @@ import {
 } from "../drizzle/schema";
 import { ENV } from "./_core/env";
 import { computeActualsTotals, estInterestToDate, govAccruedInterestTotal } from "../shared/actuals";
+import { normaliseAssetClass } from "../shared/assetModel";
 import {
   applyVerification,
   summariseState,
@@ -1450,11 +1451,15 @@ export async function deleteDepositEntriesByIds(
 export async function listOpportunities(): Promise<Opportunity[]> {
   const db = await getDb();
   if (!db) return [];
-  return db
+  const rows = await db
     .select()
     .from(opportunities)
     .where(eq(opportunities.active, true))
     .orderBy(asc(opportunities.assetClass), asc(opportunities.name));
+  // Defensive: recover the canonical class for any legacy/AI row whose stored
+  // `assetClass` is a human label or snake_case variant, so it never renders as
+  // a misleading "Alternative asset". Valid codes pass through untouched.
+  return rows.map((r) => ({ ...r, assetClass: normaliseAssetClass(r.assetClass) }));
 }
 
 /** Fetch a single opportunity by its stable reference key (for the detail view). */
@@ -1466,7 +1471,9 @@ export async function getOpportunityByRef(ref: string): Promise<Opportunity | nu
     .from(opportunities)
     .where(eq(opportunities.ref, ref))
     .limit(1);
-  return rows[0] ?? null;
+  const row = rows[0];
+  if (!row) return null;
+  return { ...row, assetClass: normaliseAssetClass(row.assetClass) };
 }
 
 /** Count rows (used by the seed/ingestion guard). */

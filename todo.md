@@ -1557,4 +1557,4 @@
 - [x] Tests A-F: researchPipeline.round81.test.ts (20 assertions) — governance, promotion routing, ModelDrawer safety, Desk structure, source cadence
 - [x] Type gate 0 errors + full suite 1420/1420 green; 4 screenshots captured; checkpoint next
 - [x] Constraint honoured: NO new top-level page — rebuilt inside existing Research area
-- [ ] Follow-up (pre-existing data): 'CIC Money Market Fund' catalogue row is mis-tagged assetClass=alt (should be cash_mmf)
+- [x] Follow-up (pre-existing data): 'CIC Money Market Fund' catalogue row was mis-tagged assetClass=alt — corrected to cash_mmf in DB (ai-cic-money-market-fund now cash_mmf/active; stale ai-cic-umbrella-fund alt row deactivated) + normaliseAssetClass added at read boundary + 6 regression tests (assetClassNormalise.round81.test.ts). Verified live: no active opportunity has a non-canonical assetClass.

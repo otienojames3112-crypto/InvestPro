@@ -49,6 +49,62 @@ export const ASSET_CLASSES: readonly AssetClass[] = [
   "alt",
 ] as const;
 
+/** True only for a value that is exactly one of the canonical taxonomy codes. */
+export function isValidAssetClass(value: unknown): value is AssetClass {
+  return typeof value === "string" && (ASSET_CLASSES as readonly string[]).includes(value);
+}
+
+/**
+ * Map a raw/legacy/human-entered class string onto the canonical taxonomy.
+ *
+ * Historically some rows (older seeds, AI-extracted instruments written before
+ * the governance layer existed) carried a human label like "Money Market Fund"
+ * or a snake_case variant like "money_market_fund" in the `assetClass` column.
+ * `profileFor` treats any unrecognised class as `alt`, which is behaviourally
+ * safe but mislabels such a row as "Alternative asset" in the UI. This helper
+ * gives every caller a single, deterministic way to recover the intended class
+ * from these legacy strings before display or promotion.
+ *
+ * Anything genuinely unknown falls back to `alt` (never throws, never undefined).
+ */
+export function normaliseAssetClass(value: unknown): AssetClass {
+  if (isValidAssetClass(value)) return value;
+  if (typeof value !== "string") return "alt";
+  const key = value.trim().toLowerCase().replace(/[\s\-]+/g, "_");
+  const ALIASES: Record<string, AssetClass> = {
+    money_market_fund: "cash_mmf",
+    mmf: "cash_mmf",
+    cash: "cash_mmf",
+    money_market: "cash_mmf",
+    fixed_deposit: "bank_deposit",
+    call_deposit: "bank_deposit",
+    savings: "bank_deposit",
+    deposit: "bank_deposit",
+    bank: "bank_deposit",
+    treasury_bill: "gov_discount",
+    t_bill: "gov_discount",
+    tbill: "gov_discount",
+    treasury_bond: "gov_coupon",
+    t_bond: "gov_coupon",
+    bond: "gov_coupon",
+    fxd: "gov_coupon",
+    ifb: "gov_coupon",
+    shares: "equity",
+    stock: "equity",
+    equities: "equity",
+    equity_fund: "equity",
+    property_fund: "reit",
+    reits: "reit",
+    offshore: "offshore_fund",
+    global_fund: "offshore_fund",
+    balanced_fund: "alt",
+    balanced: "alt",
+    alternative: "alt",
+    alternative_asset: "alt",
+  };
+  return ALIASES[key] ?? "alt";
+}
+
 /** How an asset's value is established at a point in time. */
 export type ValuationModel =
   | "accretion_to_face" // discount paper pulled toward face

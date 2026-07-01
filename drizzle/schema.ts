@@ -1342,7 +1342,15 @@ export const researchUpdates = mysqlTable("research_updates", {
    * Lifecycle: pending = awaiting review; approved = promoted into the catalogue;
    * rejected = a maintainer declined it (no catalogue change).
    */
-  status: mysqlEnum("status", ["pending", "approved", "rejected"]).notNull().default("pending"),
+  status: mysqlEnum("status", ["pending", "approved", "rejected", "superseded", "conflict"]).notNull().default("pending"),
+  /** Round 82 — if this update was drafted from a research finding, its id. */
+  findingId: int("finding_id"),
+  /** Round 82 — for a single-field EDIT, which figure key this update changes. */
+  field: varchar("field", { length: 48 }),
+  /** Round 82 — the live value BEFORE this update (captured for the audit trail). */
+  oldValue: text("old_value"),
+  /** Round 82 — a manager-vouched override value applied at approval time. */
+  managerValue: text("manager_value"),
   /** Optional maintainer note captured at review time (why approved / rejected). */
   reviewNote: text("reviewNote"),
   /** Who reviewed + when (null while pending). */
@@ -1382,8 +1390,128 @@ export const sourceRegistry = mysqlTable("source_registry", {
   notes: text("notes"),
   /** Soft-disable a source without deleting its history. */
   active: boolean("active").notNull().default(true),
+  /** Round 82 — finer category the scheduled agent uses to frame its check. */
+  category: mysqlEnum("category", ["mmf", "bank", "cbk", "market_asset", "macro", "mixed"]).notNull().default("mixed"),
+  /** Round 82 — agent clock: when the scheduled agent last attempted a check. */
+  lastCheckedAt: bigint("last_checked_at", { mode: "number" }),
+  /** Round 82 — agent clock: when the agent last produced a successful check. */
+  lastSuccessfulCheckAt: bigint("last_successful_check_at", { mode: "number" }),
+  /** Round 82 — agent-maintained freshness: ok | stale | error. */
+  status: mysqlEnum("status", ["ok", "stale", "error"]).notNull().default("ok"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
 export type SourceRegistryRow = typeof sourceRegistry.$inferSelect;
 export type InsertSourceRegistry = typeof sourceRegistry.$inferInsert;
+
+/**
+ * Round 82 — RESEARCH TASKS. One row per natural-language "Ask AI" question a
+ * manager runs on the Research Desk (or the scheduled source-check agent runs
+ * per due source). It records the prompt, the scope it was constrained to, the
+ * AI's answer summary, the model used, and how many findings it produced. A task
+ * is metadata about an enquiry — it NEVER holds a catalogue figure and NEVER
+ * writes a catalogue. It exists so every finding is traceable to a question.
+ */
+export const researchTasks = mysqlTable("research_tasks", {
+  id: int("id").autoincrement().primaryKey(),
+  /** Optional portfolio the enquiry was framed for. */
+  portfolioId: int("portfolioId"),
+  /** Who asked (manager) or "agent" for the scheduled source-check. */
+  createdByOpenId: varchar("createdByOpenId", { length: 200 }).notNull(),
+  createdByName: varchar("createdByName", { length: 200 }),
+  /** The manager's plain-English question. */
+  prompt: text("prompt").notNull(),
+  /** Which catalogue family the question was scoped to (any = unconstrained). */
+  scope: mysqlEnum("scope", ["mmf", "bank", "cbk", "market_asset", "macro", "any"]).notNull().default("any"),
+  /** Lifecycle of the enquiry itself. */
+  status: mysqlEnum("status", ["running", "done", "error"]).notNull().default("running"),
+  /** The AI's prose answer to the manager's question (context, not a fact). */
+  answerSummary: text("answerSummary"),
+  /** The model that answered (audit only; never a quality signal). */
+  aiModel: varchar("aiModel", { length: 64 }),
+  /** How many structured findings this task produced. */
+  findingCount: int("findingCount").notNull().default(0),
+  /** Error message if the enquiry failed. */
+  error: varchar("error", { length: 400 }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  /** Completion timestamp (epoch ms UTC). */
+  completedAt: bigint("completedAt", { mode: "number" }),
+});
+export type ResearchTask = typeof researchTasks.$inferSelect;
+export type InsertResearchTask = typeof researchTasks.$inferInsert;
+
+/**
+ * Round 82 — RESEARCH FINDINGS. The structured, VERDICT-FREE draft facts an
+ * Ask-AI task produced. Each finding is a candidate catalogue change the AI has
+ * proposed but a manager has NOT yet approved: it carries the extracted figures,
+ * the source it came from, an as-of date, a self-reported confidence bucket
+ * (governance metadata only — never a ranking of one instrument against another),
+ * the fields it could NOT find, and any warnings. A finding never touches a
+ * catalogue; a manager converts it into a pending research_update ("draft"), and
+ * only THAT, once approved, changes a catalogue.
+ */
+export const researchFindings = mysqlTable("research_findings", {
+  id: int("id").autoincrement().primaryKey(),
+  taskId: int("taskId").notNull(),
+  instrumentName: varchar("instrumentName", { length: 200 }).notNull(),
+  issuer: varchar("issuer", { length: 200 }),
+  /** Canonical asset class the AI assigned (validated at draft time). */
+  assetClass: varchar("assetClass", { length: 32 }),
+  /** Which catalogue this finding would target if drafted + approved. */
+  targetCatalogue: mysqlEnum("targetCatalogue", ["mmf", "bank", "cbk", "market_asset", "macro"]),
+  currency: varchar("currency", { length: 8 }),
+  /** Extracted neutral figures (yields, prices, tenors…) — no ranking. */
+  extractedFields: json("extractedFields").$type<Record<string, unknown>>(),
+  sourceLabel: varchar("sourceLabel", { length: 300 }),
+  sourceUrl: varchar("sourceUrl", { length: 500 }),
+  /** As-of date the source reported (epoch ms UTC). */
+  sourceAsOf: bigint("sourceAsOf", { mode: "number" }),
+  /** When the AI actually checked the source (epoch ms UTC). */
+  checkedAt: bigint("checkedAt", { mode: "number" }),
+  /** Self-reported extraction confidence — metadata, never a recommendation. */
+  confidence: mysqlEnum("confidence", ["low", "medium", "high"]).notNull().default("low"),
+  /** Fields the AI could NOT find (so the approval gate can flag incompleteness). */
+  missingFields: json("missingFields").$type<string[]>(),
+  warnings: json("warnings").$type<string[]>(),
+  /** A short verbatim excerpt from the source supporting the figures. */
+  rawExcerpt: text("rawExcerpt"),
+  /** Triage lifecycle: new = untouched; drafted = turned into a pending update; dismissed. */
+  status: mysqlEnum("status", ["new", "drafted", "dismissed"]).notNull().default("new"),
+  /** If drafted, the research_updates row it produced. */
+  draftedUpdateId: int("draftedUpdateId"),
+  reviewedBy: varchar("reviewedBy", { length: 200 }),
+  reviewedAt: bigint("reviewedAt", { mode: "number" }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+export type ResearchFinding = typeof researchFindings.$inferSelect;
+export type InsertResearchFinding = typeof researchFindings.$inferInsert;
+
+/**
+ * Round 82 — CATALOGUE AUDIT LOG. An IMMUTABLE record written on every approval
+ * of a pending research_update. It captures exactly what changed in a reference
+ * catalogue (old → new value on a field), the source that justified it, who
+ * approved it and when, and links back to the update + originating research task.
+ * This is the "Recently Approved" trail: it makes every catalogue figure change
+ * defensible and reversible-on-paper. It never stores a live figure itself.
+ */
+export const catalogueAuditLog = mysqlTable("catalogue_audit_log", {
+  id: int("id").autoincrement().primaryKey(),
+  catalogue: mysqlEnum("catalogue", ["mmf", "bank", "cbk", "market_asset"]).notNull(),
+  targetRef: varchar("targetRef", { length: 200 }),
+  instrumentName: varchar("instrumentName", { length: 200 }),
+  changeKind: mysqlEnum("changeKind", ["create", "edit"]).notNull(),
+  /** The figure key that changed (for a single-field edit); null for a full create. */
+  field: varchar("field", { length: 48 }),
+  oldValue: varchar("oldValue", { length: 300 }),
+  newValue: varchar("newValue", { length: 300 }),
+  source: varchar("source", { length: 300 }),
+  sourceUrl: varchar("sourceUrl", { length: 500 }),
+  researchUpdateId: int("researchUpdateId"),
+  researchTaskId: int("researchTaskId"),
+  approvedBy: varchar("approvedBy", { length: 200 }).notNull(),
+  approvedAt: bigint("approvedAt", { mode: "number" }).notNull(),
+  note: text("note"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+export type CatalogueAuditLog = typeof catalogueAuditLog.$inferSelect;
+export type InsertCatalogueAuditLog = typeof catalogueAuditLog.$inferInsert;

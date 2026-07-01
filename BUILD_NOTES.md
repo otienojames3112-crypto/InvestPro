@@ -63,3 +63,55 @@ npx tsc --noEmit  # type gate
   clobber, and source+age+state always present.
 
 Fixed-income plans and numbers are unchanged. Full suite: 949 tests green; `tsc` clean.
+
+---
+
+## Round 82 — Research as an AI-assisted manager workbench
+
+**Thesis (enforced end to end):** AI finds and structures market facts, the manager verifies
+and approves them, approved facts update the reference catalogues, and **only confirmed
+holdings affect the portfolio math.** There is now exactly one write path into a catalogue —
+an *approved* pending update — and it is gated + audited.
+
+### Data model (migration `0014_round82_research_workbench.sql`)
+- `research_tasks` — one row per Ask-AI question (prompt, scope, answer summary, model, finding count, timing).
+- `research_findings` — structured, verdict-free draft facts a task produced (instrument, target catalogue, extracted fields, source url/label/as-of, checked-at, confidence bucket, missing fields, warnings, raw excerpt, status, drafted-update link).
+- `catalogue_audit_log` — immutable record of every approval (catalogue, target ref, change kind, field, old→new value, source, approver, task/update links, note).
+- `research_updates` extended: `findingId`, `field`, `oldValue`, `managerValue` + new `conflict` status.
+- `source_registry` extended: `category`, agent clock (`lastCheckedAt`, `lastSuccessfulCheckAt`, `status`).
+- Applied by hand via `webdev_execute_sql` (project convention — drizzle journal is intentionally behind; later migrations are hand-authored + applied directly).
+
+### Governance (server)
+- **Three live-write bypasses closed.** `opportunities.aiExtract`, `opportunities.reviewCandidate` (approve), and `opportunities.addOpportunity` no longer touch the live catalogue — they all enqueue a **pending** `create`/`update` that a manager must approve. `addOpportunity` also normalises the incoming asset class to canonical before queueing.
+- **Ask-AI engine** (`server/aiResearchService.ts`): natural-language question → answer summary + structured draft findings. Reads sources server-side, self-reports a `confidence` (governance metadata only, never a ranking/recommendation), lists `missingFields`, and is run through the verdict scrub — with `confidence` captured *before* the scrub so the global anti-verdict guard stays intact.
+- **Approval gate + manager override + audit** live in `reviewResearchUpdate`: catalogue-specific required-field validation blocks incomplete `create`s (surfaced as a typed `BAD_REQUEST`), a `managerValue` lets the manager vouch for a figure over the AI's, and every approval writes a `catalogue_audit_log` row (old→new, source, approver, task link).
+- **Explore federation** (`listFederatedUniverse`): the approved universe across MMF + Bank + CBK + Market catalogues; unapproved findings are excluded.
+- **Portfolio-impact descriptor**: MMF yield changes affect projection *only if that fund is the portfolio's primary MMF*; bank/CBK/market catalogue edits are reference-only and never restate existing balances — surfaced per-card in Pending Updates.
+
+### UX (client)
+- Research is manager-only (non-admins see a lock card).
+- Six-tab area in the navigation contract order: **Explore Screener · MMF Market · Bank Products · CBK Securities · Market Assets · Research Desk** (grouped visually as Desk / Explore / Reference Catalogues; legacy `?tab=` deep links still resolve).
+- Research Desk: 4-tile digest (changes awaiting review · sources due · findings to triage · open source conflicts) + tabs **Ask AI · Findings · Pending Updates · Conflicts · Sources · Recently Approved · Document import**.
+- Explore adds a **This catalogue / All catalogues** federation toggle.
+
+### Scheduled source-check agent (`/api/scheduled/researchSourceCheck`)
+- Project-level Heartbeat (periodic-updates §4a). On each run it finds registered sources whose agent-check cadence is due, runs the **same governed Ask-AI persistence path** per source, and writes **only `new` findings** — it never enqueues, approves, or publishes. It stamps the per-source agent clock, flags long-overdue sources `stale`, and notifies the owner only when there is something to act on.
+- Handler is mounted in `server/_core/index.ts`. **The cron itself must be created after deploy** (dev sandboxes are unreachable). Once published, run from a sandbox terminal:
+
+```bash
+manus-heartbeat create \
+  --name kes5m-research-source-check \
+  --cron "0 0 6 * * *" \
+  --path /api/scheduled/researchSourceCheck \
+  --description "Daily 06:00 UTC: check due sources, draft new findings for manager review (never publishes)"
+```
+
+Persist the returned `task_uid` if you'll want to pause/update it later (`manus-heartbeat list` can also recover it).
+
+### Tests
+- `server/researchWorkbench.round82.test.ts` (24 tests): AI never emits verdicts / always drafts, approval gate per catalogue, portfolio-impact reference-vs-holding invariant, federation catalogue mapping, source agent-clock due logic, and source-string invariants that the three bypasses are closed + the scheduled handler only proposes.
+- Two `opportunityMaintainer.test.ts` cases rewritten to the new governed contract (hand entry queues a pending update; nothing lands live until approved).
+- Full suite: **147 files / 1450 tests green; `tsc` clean.**
+
+### Bug fixed en route
+- Research-finding `confidence` was being deleted by the shared anti-verdict scrub (`FORBIDDEN_VERDICT_KEYS`), collapsing every finding to 0. Fixed at the root by capturing self-reported confidence before the scrub, keeping the global guard intact for the catalogue shapes.

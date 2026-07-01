@@ -1437,12 +1437,12 @@
 
 ## Dashboard "Needs attention" not clearing (bug fix)
 
-- [ ] Root cause: missed-contribution alert uses actualThis = primary-MMF-only contribution; contributing to secondary MMF / bank / gov security does not clear it
-- [ ] Compute per-month ALL-destination contributed amount in snapshot builder
-- [ ] Expose actualAllDestinations on ContributionPlanPoint
-- [ ] Dashboard missed-contribution alert + "recorded so far" strip use all-destination figure
-- [ ] Regression test: recording a deposit into any destination this month clears the alert
-- [ ] Full suite + type gate green; checkpoint
+- [x] Root cause: missed-contribution alert uses actualThis = primary-MMF-only contribution; contributing to secondary MMF / bank / gov security does not clear it
+- [x] Compute per-month ALL-destination contributed amount in snapshot builder
+- [x] Expose actualAllDestinations on ContributionPlanPoint
+- [x] Dashboard missed-contribution alert + "recorded so far" strip use all-destination figure
+- [x] Regression test: recording a deposit into any destination this month clears the alert
+- [x] Full suite + type gate green; checkpoint
 
 ## Dashboard "Needs attention" clears (all-destination contribution) — COMPLETE
 - [x] Root cause: per-month actual counted PRIMARY-MMF deposits only, so contributing to secondary MMF / bank / gov security never cleared the missed-contribution alert
@@ -1451,3 +1451,29 @@
 - [x] Dashboard alert + next-action + "Recorded so far" strip now read the all-destination figure
 - [x] Regression suite server/integrity/needsAttentionClears.test.ts (8 tests)
 - [x] Full suite green (138 files / 1310 tests), type gate clean
+
+## Dashboard command-centre refactor (UX/layout only, no engine/projection math changes)
+- [ ] Map Dashboard.tsx: command centre block, detailed-analysis wrapper, and all sections to remove/relocate
+- [ ] Remove old long Dashboard stack below the toggle (role-aware top, risk essays, concentration cards, liquid cash diversification, engine explanation, goal progress card, asset allocation cards, tracked MMF accounts, growth chart, year-end milestones, today snapshot, large live actuals panel, rate assumptions, next-90-days strip)
+- [ ] Command centre is the whole visible Dashboard: Portfolio Status, This Month, Live Actuals, Needs Attention (max 3-4 + "+N more — open Review"), Projection Summary
+- [ ] Replace "Hide detailed analysis" with "Show manager diagnostics"
+- [ ] Build 4 compact diagnostic cards: Data Health, Risk Snapshot, Next 3 Cash Events, Assumption Summary (short; no charts/tables/essays)
+- [ ] Deep-link every card to the owning page; reuse the same selectors (no duplicated figures)
+- [ ] Simple mode: command centre only, no diagnostics. Manager mode: command centre + optional diagnostics
+- [ ] Tests for refactor + full suite + type gate green; screenshot-verify; checkpoint
+
+## Dashboard command-centre refactor (Manager diagnostics)
+
+- [x] Replace the ~2,800-line collapsible "Detailed analysis" stack (old lines 1187–3982 of Dashboard.tsx) with 4 compact manager diagnostic cards
+- [x] Card 1 — Data Health (rate staleness, freshness-warning count, reconciliation verdict); deep-links to Rates / Reconciliation
+- [x] Card 2 — Risk Snapshot (top issuer share vs cap, largest type share, liquid-at-goal); deep-links to Holdings
+- [x] Card 3 — Next 3 Cash Events (next maturities/contributions from snapshot.liquidity); deep-links to Holdings
+- [x] Card 4 — Assumption Summary (MMF EAR, 91-day T-bill, WHT, committed tier via ALLOCATION_TIER_SPECS); deep-links to Rate Settings
+- [x] Diagnostics rendered only in Manager mode — driven by the app-wide sidebar Simple/Manager toggle (userMode); removed stale Dashboard-local managerMode/showDetails state
+- [x] All cards use wouter <Link href> navigation (no setLocation/useLocation)
+- [x] Correct data shapes: concentration.breaches (top issuer), concentration.topShare/cap, typeBreach.shareOfSecurities; 0–1 fractions scaled to percent for formatPct
+- [x] No projection math changes — every figure reuses existing snapshot / concentration / typeBreach / settings selectors
+- [x] New reusable component: client/src/components/DashboardDiagnostics.tsx
+- [x] Type gate clean (tsc --noEmit); full suite 138 files / 1310 tests green
+- [x] Verified live via screenshot: 4 cards render, percentages correct (Liquid at goal 100%, 0.0% / 25% cap)
+- [x] Package full codebase as ZIP for delivery

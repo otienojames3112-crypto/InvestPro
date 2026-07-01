@@ -193,8 +193,8 @@ export function DashboardDiagnostics({
       </Link>
 
       {/* 3 — Next 3 Cash Events (each row deep-links to its own event.href) */}
-      <Link href={events[0]?.href ?? dashboardHref.risk} className="block">
-        <Card className={CARD}>
+      <Card className={CARD}>
+        <Link href={events[0]?.href ?? dashboardHref.gov} className="block group">
           <div className={HEAD}>
             <span className="flex items-center gap-1.5">
               <CalendarClock className="w-4 h-4 text-violet-500" />
@@ -202,28 +202,32 @@ export function DashboardDiagnostics({
             </span>
             <LinkArrow />
           </div>
-          {events.length === 0 ? (
-            <p className="text-xs text-muted-foreground py-1">
-              No maturities or scheduled contributions ahead.
-            </p>
-          ) : (
-            events.map((e, i) => (
-              <div key={`${e.atMs}-${i}`} className={ROW}>
-                <span className={LABEL + " truncate pr-2"}>
-                  {new Date(e.atMs).toLocaleDateString(undefined, {
-                    month: "short",
-                    day: "numeric",
-                  })}{" "}
-                  · {e.label}
-                </span>
-                <span className={VALUE}>
-                  {e.amount != null ? formatKESCompact(e.amount) : "—"}
-                </span>
-              </div>
-            ))
-          )}
-        </Card>
-      </Link>
+        </Link>
+        {events.length === 0 ? (
+          <p className="text-xs text-muted-foreground py-1">
+            No maturities or scheduled contributions ahead.
+          </p>
+        ) : (
+          events.map((e, i) => (
+            <Link
+              key={`${e.atMs}-${i}`}
+              href={e.href}
+              className={ROW + " group -mx-1 rounded px-1 hover:bg-white/5 transition-colors"}
+            >
+              <span className={LABEL + " truncate pr-2 group-hover:text-foreground transition-colors"}>
+                {new Date(e.atMs).toLocaleDateString(undefined, {
+                  month: "short",
+                  day: "numeric",
+                })}{" "}
+                · {e.label}
+              </span>
+              <span className={VALUE}>
+                {e.amount != null ? formatKESCompact(e.amount) : "—"}
+              </span>
+            </Link>
+          ))
+        )}
+      </Card>
 
       {/* 4 — Assumption Summary */}
       <Link href={dashboardHref.rates} className="block">

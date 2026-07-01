@@ -15,6 +15,16 @@ import { ArrowUpDown, ArrowUp, ArrowDown, Search, Plus, Pencil, Trash2, CheckCir
 import { formatKES } from "@/lib/format";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 type Fund = {
   id: number;
@@ -242,6 +252,13 @@ export default function MmfFunds({ embedded = false }: { embedded?: boolean } = 
   });
 
   const selectedFundId = portfolio?.mmfFundId ?? null;
+
+  // Changing the primary fund re-drives the headline projection (its EAR feeds
+  // every future MMF month), so it goes through an explicit confirmation rather
+  // than firing on a single click.
+  const [confirmFund, setConfirmFund] = useState<{ id: number; name: string } | null>(null);
+  const currentPrimaryName = funds.find((f) => f.id === selectedFundId)?.fundName ?? null;
+  const requestSetPrimary = (id: number, name: string) => setConfirmFund({ id, name });
 
   const handleSort = (key: SortKey) => {
     if (sortKey === key) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
@@ -477,7 +494,7 @@ export default function MmfFunds({ embedded = false }: { embedded?: boolean } = 
                             size="sm"
                             variant="outline"
                             className="h-7 px-2 text-xs"
-                            onClick={() => portfolioId && selectFundMutation.mutate({ portfolioId, mmfFundId: fund.id })}
+                            onClick={() => requestSetPrimary(fund.id, fund.fundName)}
                             disabled={selectFundMutation.isPending}
                           >
                             <Circle className="w-3 h-3 mr-1" /> Select
@@ -562,7 +579,7 @@ export default function MmfFunds({ embedded = false }: { embedded?: boolean } = 
                         size="sm"
                         variant="outline"
                         className="h-7 text-xs"
-                        onClick={() => portfolioId && item.mmfFundId != null && selectFundMutation.mutate({ portfolioId, mmfFundId: item.mmfFundId })}
+                        onClick={() => item.mmfFundId != null && requestSetPrimary(item.mmfFundId, item.label || item.fundName)}
                         disabled={selectFundMutation.isPending}
                         title="Use this fund's EAR to drive the projection"
                       >
@@ -687,6 +704,39 @@ export default function MmfFunds({ embedded = false }: { embedded?: boolean } = 
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Set-primary confirmation — switching the primary fund re-drives the projection */}
+      <AlertDialog open={confirmFund !== null} onOpenChange={(v) => !v && setConfirmFund(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <Star className="w-4 h-4 text-amber-400" /> Make this your primary fund?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              <span className="font-medium text-foreground">{confirmFund?.name}</span> will become the
+              fund this plan runs on. Its effective annual rate will drive every future money-market
+              month in the headline projection
+              {currentPrimaryName ? (
+                <>, replacing <span className="font-medium text-foreground">{currentPrimaryName}</span></>
+              ) : null}
+              . Your recorded balances and history don't change.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (portfolioId && confirmFund) {
+                  selectFundMutation.mutate({ portfolioId, mmfFundId: confirmFund.id });
+                }
+                setConfirmFund(null);
+              }}
+            >
+              Set as primary
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
     </AppShell>
   );

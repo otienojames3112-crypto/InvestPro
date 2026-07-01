@@ -1,7 +1,7 @@
 import { Compass, Scale, Landmark, Sparkles, ClipboardCheck, GitCompareArrows } from "lucide-react";
 import { TabbedArea, type AreaTab } from "@/components/TabbedArea";
 import Explore from "./Explore";
-import MmfStrategy from "./MmfStrategy";
+import MmfFunds from "./MmfFunds";
 import BankInstruments from "./BankInstruments";
 import AiIntake from "./AiIntake";
 import AiReview from "./AiReview";
@@ -27,8 +27,8 @@ const tabs: AreaTab[] = [
     id: "mmf-comparison",
     label: "MMF Comparison",
     icon: Scale,
-    hint: "Compare money-market funds side by side — yields, fees and effective annual rate — so you can see how your fund ranks.",
-    render: () => <MmfStrategy embedded />,
+    hint: "The money-market fund market: compare yields, fees and effective annual rate side by side, and choose which fund your plan runs on. Your held balances live under Holdings → MMF.",
+    render: () => <MmfFunds embedded />,
   },
   {
     id: "bank-catalogue",

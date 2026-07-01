@@ -66,6 +66,7 @@ import { useMemo, useState, useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { rateStaleness } from "@/lib/rateStaleness";
 import { dashboardHref } from "@shared/navigation";
+import { buildNextAction, buildCommandAlerts } from "@shared/dashboardActions";
 import { currentSecurityValue, securityYieldContribution, isDiscountSecurityType, classifyDurationRisk, largestConcentration, classifyConcentration, analyzePerTypeBreach, isConcentrationSnoozed, formatConcentrationPct, splitEndStateBuckets, DEFAULT_LIQUIDITY_HORIZON_DAYS, type CurrentValueSecurity } from "@shared/discount";
 import { whtRateForSecurity } from "@shared/securityTenor";
 import { Layers, TrendingDown, BellOff, Bell, Scale, ArrowRightLeft, Copy, Check, ChevronUp, ChevronDown, ShieldAlert, Activity } from "lucide-react";
@@ -1095,18 +1096,28 @@ export default function Dashboard() {
             ? rateStaleness((settings as any).ratesLastUpdatedAt)
             : null;
           const ccBehind = decision?.pace.status === "behind";
-          const nextActionText = ccBehind && decision?.stepUp?.feasible
-            ? `Raise step-up by ${formatKES(decision.stepUp.recommendedStepUp)}/mo to stay on pace`
-            : rateStaleCc?.isStale
-              ? "Refresh your CBK rate snapshot"
-              : plannedThis > 0 && actualThis <= 0
-                ? "Record this month's contribution"
-                : "Nothing today — you're on track";
-          const nextActionHref = ccBehind
-            ? dashboardHref.changeContribution
-            : rateStaleCc?.isStale
-              ? dashboardHref.rates
-              : dashboardHref.recordDeposit;
+          // Round 79: all action/alert routing comes from the pure builder in
+          // shared/dashboardActions.ts — single source of truth, unit-tested.
+          const actionInputs = {
+            behind: ccBehind,
+            stepUpFeasible: !!decision?.stepUp?.feasible,
+            recommendedStepUp: decision?.stepUp?.recommendedStepUp ?? 0,
+            ratesVeryStale: !!rateStaleCc?.isVeryStale,
+            ratesStale: !!rateStaleCc?.isStale,
+            contributionDue: plannedThis > 0 && actualThis <= 0,
+            maturitiesNext90: maturitiesNext90.count,
+            maturitiesFaceTotal: maturitiesNext90.faceTotal,
+            concentrationBreached: !!typeBreach?.breached,
+            reconciliationMismatch: !!(snapshot.reconciliation && !snapshot.reconciliation.ok),
+            paceShortfall: decision?.pace.shortfall ?? 0,
+            plannedThis,
+            fmt: { kes: formatKES, kesCompact: formatKESCompact },
+            rateStaleLabel: rateStaleCc?.label,
+          };
+          const nextAction = buildNextAction(actionInputs);
+          const nextActionText = nextAction.text;
+          const nextActionHref = nextAction.href;
+          const nextActionActionable = nextAction.actionable;
           // Live actuals pockets.
           const mmfTotal = (actualsSummary?.byBucket?.mmf ?? 0) + (actualsSummary?.secondaryMmfBalance ?? 0);
           const govSecurities =
@@ -1122,21 +1133,7 @@ export default function Dashboard() {
           const taxToDate = snapshot.tax.whtToDate > 0 ? Math.round(snapshot.tax.whtToDate) : 0;
           const annualisedTax = snapshot.tax.annualWht > 0 ? Math.round(snapshot.tax.annualWht) : 0;
           // Priority alerts (red first), each deep-linked to where it's resolved.
-          const ccAlerts: CommandAlert[] = [];
-          if (plannedThis > 0 && actualThis <= 0)
-            ccAlerts.push({ id: "missed", label: "This month's contribution not recorded", detail: `${formatKES(plannedThis)} planned`, tone: "amber", href: dashboardHref.recordDeposit });
-          if (maturitiesNext90.count > 0)
-            ccAlerts.push({ id: "mat", label: `${maturitiesNext90.count} maturit${maturitiesNext90.count === 1 ? "y" : "ies"} in next 90 days`, detail: formatKESCompact(maturitiesNext90.faceTotal), tone: "amber", href: dashboardHref.gov });
-          if (rateStaleCc?.isVeryStale)
-            ccAlerts.push({ id: "rates", label: `Rates outdated — ${rateStaleCc.label}`, tone: "red", href: dashboardHref.rates });
-          if (typeBreach?.breached)
-            ccAlerts.push({ id: "conc", label: "Concentration cap breach", tone: "amber", href: dashboardHref.risk });
-          if (snapshot.reconciliation && !snapshot.reconciliation.ok)
-            ccAlerts.push({ id: "recon", label: "Reconciliation mismatch", detail: "Sources disagree on today's value", tone: "red", href: dashboardHref.reconciliation });
-          if (ccBehind)
-            ccAlerts.push({ id: "pace", label: `Behind pace by ${formatKESCompact(decision!.pace.shortfall)}`, tone: "red", href: dashboardHref.changeContribution });
-          // Sort red before amber.
-          ccAlerts.sort((a, b) => (a.tone === b.tone ? 0 : a.tone === "red" ? -1 : 1));
+          const ccAlerts: CommandAlert[] = buildCommandAlerts(actionInputs);
           // Mirror the Reconciliation page's verdict EXACTLY (same procedure, same
           // checks) so the Dashboard badge can never disagree with that page.
           const reconVerdict = recon
@@ -1167,7 +1164,7 @@ export default function Dashboard() {
               reconciliation={reconVerdict}
               alerts={ccAlerts}
               actuals={{ mmfTotal, govSecurities, bankInstruments, otherAssets, interestToDate, taxToDate, annualisedTax }}
-              thisMonth={{ planned: plannedThis, actual: actualThis, expectedInterest, nextAction: nextActionText, nextActionHref, nextMaturity: nextMat ? { label: nextMat.label, atMs: nextMat.atMs, amount: nextMat.amount, href: nextMat.href } : null }}
+              thisMonth={{ planned: plannedThis, actual: actualThis, expectedInterest, nextAction: nextActionText, nextActionHref, nextActionActionable, nextMaturity: nextMat ? { label: nextMat.label, atMs: nextMat.atMs, amount: nextMat.amount, href: nextMat.href } : null }}
               projection={{
                 projectedAtGoal: decision?.range.base ?? snapshot.goal.projectedFinalValue,
                 target: targetAmount,

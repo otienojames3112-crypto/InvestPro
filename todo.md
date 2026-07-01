@@ -1501,3 +1501,22 @@
 - [x] R78.11 Fix DepositDrawer copy: "edit…on the Other Assets page" → "You can edit this bank instrument later under Holdings → Bank."
 - [x] R78.12 Add Dashboard card-link acceptance test asserting every listed card/alert → correct route (no fallback/unrelated pages)
 - [x] R78.13 Verify: type gate clean, full suite green, screenshots; checkpoint; deliver
+
+## Round 79 — Holdings vs Research page-role separation + Dashboard action routing
+
+- [x] R79.1 Split Bank: extract BankHoldings.tsx (actual holdings) from Deposits.tsx; use in Holdings → Bank
+- [x] R79.1 Keep BankInstruments.tsx (reference catalogue) only in Research → Bank Catalogue
+- [x] R79.1 Holdings → Bank shows: total principal, accrued interest, WHT, next maturity, per-holding rows, record-new CTA
+- [x] R79.2 Split MMF: create MmfAccounts.tsx (actual accounts) for Holdings → MMF
+- [x] R79.2 Research → MMF Comparison holds full market table + composition; set-primary uses confirmation flow
+- [x] R79.2 Holdings → MMF shows primary/secondary accounts, balance, EAR, accrued net interest, WHT, contribution; "Compare MMFs" CTA
+- [x] R79.3 Keep Government/Other as actual holdings; Add actions create holdings or route to Research/Cashflows
+- [x] R79.4 Fix "Nothing today" link (non-clickable or -> Plan/Ledger, never Record Deposit)
+- [x] R79.5 Fix maturity alert link: canonical event.href (single) / Review-manager (multiple); never hardcode Government
+- [x] R79.6 Diagnostics Next-3-Cash-Events: each row its own Link via event.href; wrapper -> Review manager
+- [x] R79.7 Improve Assumption Summary: rates actually used (primary/secondary MMF, bank, T-bill, FXD/IFB), top 3 + "+N more -> Settings"
+- [x] R79.8 Centralize Dashboard actions/alerts into shared/dashboardActions.ts; Dashboard renders computed objects
+- [x] R79.9 Fix DepositDrawer stale copy: bank instrument editable under Holdings -> Bank (not Other Assets)
+- [x] R79.10 Update route redirects: bank/mmf holdings vs catalogue/comparison; legacy /bank-instruments -> research catalogue
+- [x] R79.11 Acceptance tests: semantic links, page-role separation, sync propagation
+- [x] R79 Verify type gate + full suite green; screenshot-verify; checkpoint

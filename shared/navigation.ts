@@ -83,6 +83,9 @@ export const dashboardHref = {
   scheduledContributions: areaTab("cashflows", "scheduled"),
   changeContribution: areaTab("plan", "goal"),
   risk: areaTab("review", "manager"),
+  // Research (market reference) — where to compare products before buying.
+  bankCatalogue: areaTab("research", "bank-catalogue"),
+  mmfComparison: areaTab("research", "mmf-comparison"),
   /** Rate settings live on Plan → Goal & Plan; `/settings` redirects there. */
   rates: "/settings",
 } as const;

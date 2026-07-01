@@ -88,6 +88,8 @@ export interface CommandCentreProps {
     /** Next single action text (the most important thing to do). */
     nextAction: string;
     nextActionHref: string;
+    /** False when the plan is all-clear — render a calm, non-clickable state. */
+    nextActionActionable?: boolean;
     /** Next maturity, if any, within the visible horizon. */
     nextMaturity: { label: string; atMs: number; amount: number | null; href: string } | null;
   };
@@ -350,14 +352,23 @@ export function DashboardCommandCentre(props: CommandCentreProps) {
                 )}
               </div>
             </div>
-            {/* Next action — the single most important thing to do. */}
-            <Link
-              href={thisMonth.nextActionHref}
-              className="mt-4 flex items-center gap-2 rounded-lg border border-primary/25 bg-primary/5 p-3 text-sm transition-colors hover:bg-primary/10"
-            >
-              <ArrowRight className="w-4 h-4 text-primary shrink-0" />
-              <span className="text-foreground"><span className="font-medium">Next:</span> {thisMonth.nextAction}</span>
-            </Link>
+            {/* Next action — the single most important thing to do. When the plan
+                is all-clear we render a calm, non-clickable confirmation instead
+                of a link that would dead-end on a form with nothing to do. */}
+            {thisMonth.nextActionActionable === false ? (
+              <div className="mt-4 flex items-center gap-2 rounded-lg border border-emerald-500/25 bg-emerald-500/5 p-3 text-sm">
+                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                <span className="text-muted-foreground">{thisMonth.nextAction}</span>
+              </div>
+            ) : (
+              <Link
+                href={thisMonth.nextActionHref}
+                className="mt-4 flex items-center gap-2 rounded-lg border border-primary/25 bg-primary/5 p-3 text-sm transition-colors hover:bg-primary/10"
+              >
+                <ArrowRight className="w-4 h-4 text-primary shrink-0" />
+                <span className="text-foreground"><span className="font-medium">Next:</span> {thisMonth.nextAction}</span>
+              </Link>
+            )}
           </CardContent>
         </Card>
       </div>

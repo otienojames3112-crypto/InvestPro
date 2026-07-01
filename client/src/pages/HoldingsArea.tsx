@@ -1,9 +1,9 @@
 import { PiggyBank, Landmark, Building2, Boxes, Wallet } from "lucide-react";
 import { TabbedArea, type AreaTab } from "@/components/TabbedArea";
 import HoldingsOverview from "./HoldingsOverview";
-import MmfFunds from "./MmfFunds";
+import MmfAccounts from "./MmfAccounts";
 import Securities from "./Securities";
-import BankInstruments from "./BankInstruments";
+import BankHoldings from "./BankHoldings";
 import OtherAssets from "./OtherAssets";
 
 /**
@@ -25,8 +25,8 @@ const tabs: AreaTab[] = [
     id: "mmf",
     label: "MMF",
     icon: PiggyBank,
-    hint: "Money market funds — your liquid, interest-earning base. Compare funds and pick the one this plan uses.",
-    render: () => <MmfFunds embedded />,
+    hint: "Your money-market fund accounts — the primary fund this plan uses plus any secondary MMFs you hold. Compare the wider market under Research.",
+    render: () => <MmfAccounts embedded />,
   },
   {
     id: "gov",
@@ -39,8 +39,8 @@ const tabs: AreaTab[] = [
     id: "bank",
     label: "Bank",
     icon: Building2,
-    hint: "Money held at commercial banks — call, fixed, goal/target, ordinary and tiered savings deposits.",
-    render: () => <BankInstruments embedded />,
+    hint: "Money you actually hold at commercial banks — call, fixed, goal/target, ordinary and tiered savings deposits. Browse indicative products under Research → Bank Catalogue.",
+    render: () => <BankHoldings embedded />,
   },
   {
     id: "other",

@@ -20,6 +20,7 @@ import {
 import { ALLOCATION_TIER_SPECS } from "@shared/allocationModel";
 import type { AllocationTier } from "@shared/allocationModel";
 import type { PortfolioSnapshot } from "@shared/snapshot";
+import { dashboardHref } from "@shared/navigation";
 
 /**
  * Manager-mode diagnostics: four compact cards that summarise the portfolio's
@@ -64,6 +65,8 @@ export interface DashboardDiagnosticsProps {
   liquidPctAtGoal: number;
   /** Whether the projection lands fully liquid at goal. */
   landsFullyLiquid: boolean;
+  /** Count of secondary MMF accounts held (for the assumptions summary). */
+  secondaryMmfCount?: number;
 }
 
 const CARD =
@@ -88,6 +91,7 @@ export function DashboardDiagnostics({
   settings,
   liquidPctAtGoal,
   landsFullyLiquid,
+  secondaryMmfCount = 0,
 }: DashboardDiagnosticsProps) {
   // ── Data Health ──────────────────────────────────────────────────────────
   const stale =
@@ -122,7 +126,7 @@ export function DashboardDiagnostics({
   return (
     <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
       {/* 1 — Data Health */}
-      <Link href={stale?.isStale ? "/settings" : "/review?tab=reconciliation"} className="block">
+      <Link href={stale?.isStale ? dashboardHref.rates : dashboardHref.reconciliation} className="block">
         <Card className={CARD}>
           <div className={HEAD}>
             <span className="flex items-center gap-1.5">
@@ -157,7 +161,7 @@ export function DashboardDiagnostics({
       </Link>
 
       {/* 2 — Risk Snapshot */}
-      <Link href="/holdings?tab=gov" className="block">
+      <Link href={dashboardHref.risk} className="block">
         <Card className={CARD}>
           <div className={HEAD}>
             <span className="flex items-center gap-1.5">
@@ -188,8 +192,8 @@ export function DashboardDiagnostics({
         </Card>
       </Link>
 
-      {/* 3 — Next 3 Cash Events */}
-      <Link href="/holdings?tab=gov" className="block">
+      {/* 3 — Next 3 Cash Events (each row deep-links to its own event.href) */}
+      <Link href={events[0]?.href ?? dashboardHref.risk} className="block">
         <Card className={CARD}>
           <div className={HEAD}>
             <span className="flex items-center gap-1.5">
@@ -222,7 +226,7 @@ export function DashboardDiagnostics({
       </Link>
 
       {/* 4 — Assumption Summary */}
-      <Link href="/settings" className="block">
+      <Link href={dashboardHref.rates} className="block">
         <Card className={CARD}>
           <div className={HEAD}>
             <span className="flex items-center gap-1.5">
@@ -232,9 +236,15 @@ export function DashboardDiagnostics({
             <LinkArrow />
           </div>
           <div className={ROW}>
-            <span className={LABEL}>MMF EAR</span>
+            <span className={LABEL}>MMF EAR (primary)</span>
             <span className={VALUE}>{formatPct(mmfEar)}</span>
           </div>
+          {secondaryMmfCount > 0 && (
+            <div className={ROW}>
+              <span className={LABEL}>Secondary MMFs held</span>
+              <span className={VALUE}>{secondaryMmfCount}</span>
+            </div>
+          )}
           <div className={ROW}>
             <span className={LABEL}>91-day T-Bill</span>
             <span className={VALUE}>{formatPct(settings.tbill91Rate)}</span>

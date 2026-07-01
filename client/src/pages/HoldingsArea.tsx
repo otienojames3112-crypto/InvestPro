@@ -1,5 +1,6 @@
-import { PiggyBank, Landmark, Building2, Boxes } from "lucide-react";
+import { PiggyBank, Landmark, Building2, Boxes, Wallet } from "lucide-react";
 import { TabbedArea, type AreaTab } from "@/components/TabbedArea";
+import HoldingsOverview from "./HoldingsOverview";
 import MmfFunds from "./MmfFunds";
 import Securities from "./Securities";
 import BankInstruments from "./BankInstruments";
@@ -13,6 +14,13 @@ import OtherAssets from "./OtherAssets";
  * is duplicated; valuation still comes from the shared current-value helpers.
  */
 const tabs: AreaTab[] = [
+  {
+    id: "overview",
+    label: "Overview",
+    icon: Wallet,
+    hint: "Your full net worth at a glance — goal-plan assets, excluded assets, and every pocket with a quick link to its detail.",
+    render: () => <HoldingsOverview />,
+  },
   {
     id: "mmf",
     label: "MMF",
@@ -49,7 +57,7 @@ export default function HoldingsArea() {
       title="Holdings"
       subtitle="Everything you own, grouped by where it sits — money market, government, bank, and other assets."
       tabs={tabs}
-      defaultTab="mmf"
+      defaultTab="overview"
     />
   );
 }

@@ -158,3 +158,23 @@ export function isReconcileStale(epochMs: number | null | undefined): boolean {
   if (epochMs == null || !isFinite(epochMs)) return false;
   return Date.now() - epochMs > RECONCILE_STALE_DAYS * 24 * 60 * 60 * 1000;
 }
+
+/**
+ * Format an epoch-ms timestamp (or ISO/Date) as a stable LOCAL `YYYY-MM-DD`.
+ *
+ * Why not `toISOString().slice(0,10)`? That renders in UTC, so for users behind
+ * UTC a maturity at (say) local midnight prints as the *previous* day — the same
+ * event then shows two different calendar dates across the app. The rest of the
+ * UI displays dates in the user's local zone (`toLocaleDateString`), so this
+ * helper keeps date-only labels (Time Machine anchor / next-event) consistent
+ * with those and free of the off-by-one drift. R78.
+ */
+export function formatLocalYmd(input: number | string | Date | null | undefined): string {
+  if (input == null) return "—";
+  const d = input instanceof Date ? input : new Date(input);
+  if (isNaN(d.getTime())) return "—";
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}

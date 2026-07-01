@@ -67,6 +67,7 @@ import type {
   NextAction,
 } from "../shared/snapshot";
 import { computeNetWorthBases } from "../shared/snapshot";
+import { areaTab, dashboardHref } from "../shared/navigation";
 
 type Portfolio = NonNullable<Awaited<ReturnType<typeof getPortfolio>>>;
 
@@ -629,8 +630,31 @@ export async function buildPortfolioSnapshot(
     points.reduce((a, b) => a + (b.actual ?? 0), 0),
   );
 
-  // ── Liquidity calendar (maturities + upcoming contributions) ────────────────
+  // ── Liquidity calendar — the CANONICAL cash-event feed ──────────────────────
+  // One typed, deep-linked event per upcoming cash movement so every surface
+  // (Dashboard next-maturity, manager diagnostics, Portfolio Review calendar,
+  // Time Machine) reads the SAME list and can never disagree on "what's next".
+  // Covers: government-security maturities, bank fixed/term-deposit maturities,
+  // and upcoming scheduled contributions. No new money math — amounts are the
+  // same face/principal/planned figures used elsewhere.
+  const startDateMs = (() => {
+    const d = new Date((startIso ?? new Date().toISOString().split("T")[0]) + "T12:00:00Z");
+    return d.getTime();
+  })();
+  /** Approx ms for the first day of projection month `n` (1-based). */
+  const monthToMs = (n: number): number => {
+    const base = new Date(startDateMs);
+    base.setUTCMonth(base.getUTCMonth() + Math.max(0, n - 1));
+    return base.getTime();
+  };
+  /** Which projection month a timestamp falls in (1-based), for Ledger links. */
+  const msToMonth = (ms: number): number => {
+    const monthsFromStart = Math.floor((ms - startDateMs) / (30.4375 * 86_400_000));
+    return Math.max(1, Math.min(horizon, monthsFromStart + 1));
+  };
   const liquidity: LiquidityEvent[] = [];
+
+  // Government securities (T-bill / IFB / FXD) maturities.
   for (const s of securityRows) {
     if ((s as { isMatured?: boolean }).isMatured) continue;
     const md = (s as { maturityDate?: Date | string | null }).maturityDate;
@@ -638,13 +662,63 @@ export async function buildPortfolioSnapshot(
     const ms = new Date(md as string | Date).getTime();
     if (!Number.isFinite(ms)) continue;
     const face = parseFloat(String((s as { faceValue?: unknown }).faceValue ?? "0")) || 0;
+    const id = (s as { id?: number }).id;
+    const lm = msToMonth(ms);
     liquidity.push({
       atMs: ms,
       kind: "maturity",
+      sourceType: "government_security",
+      sourceId: typeof id === "number" ? id : undefined,
+      ledgerMonth: lm,
       label: `${String((s as { securityType?: string }).securityType ?? "security").toUpperCase()} matures`,
       amount: round2(face),
+      href: `${dashboardHref.projectionLedger}&focus=${lm}`,
     });
   }
+
+  // Bank fixed / term-deposit maturities (was previously missing entirely).
+  for (const b of bankRows) {
+    if (!(b as { isActive?: boolean }).isActive) continue;
+    const md = (b as { maturityDate?: Date | string | null }).maturityDate;
+    if (!md) continue;
+    const ms = new Date(md as string | Date).getTime();
+    if (!Number.isFinite(ms)) continue;
+    const principal = parseFloat(String((b as { principal?: unknown }).principal ?? "0")) || 0;
+    const id = (b as { id?: number }).id;
+    const name =
+      (b as { label?: string | null }).label ||
+      (b as { bankName?: string | null }).bankName ||
+      "Bank deposit";
+    const lm = msToMonth(ms);
+    liquidity.push({
+      atMs: ms,
+      kind: "maturity",
+      sourceType: "bank_instrument",
+      sourceId: typeof id === "number" ? id : undefined,
+      ledgerMonth: lm,
+      label: `${name} matures`,
+      amount: round2(principal),
+      href: `${dashboardHref.projectionLedger}&focus=${lm}`,
+    });
+  }
+
+  // Upcoming scheduled contributions (future planned months only).
+  for (const pt of points) {
+    if (pt.monthNumber <= elapsedMonths) continue; // past / current handled elsewhere
+    if (!(pt.planned > 0)) continue;
+    const ms = monthToMs(pt.monthNumber);
+    if (ms < asOfMs) continue;
+    liquidity.push({
+      atMs: ms,
+      kind: "contribution",
+      sourceType: "contribution",
+      ledgerMonth: pt.monthNumber,
+      label: `Scheduled contribution`,
+      amount: round2(pt.planned),
+      href: dashboardHref.scheduledContributions,
+    });
+  }
+
   liquidity.sort((a, b) => a.atMs - b.atMs);
 
   // ── Reconciliation (same inputs the dedicated procedure feeds) ──────────────

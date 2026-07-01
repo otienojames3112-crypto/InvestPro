@@ -65,6 +65,7 @@ import { Plus, Compass, ArrowUpRight } from "lucide-react";
 import { useMemo, useState, useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { rateStaleness } from "@/lib/rateStaleness";
+import { dashboardHref } from "@shared/navigation";
 import { currentSecurityValue, securityYieldContribution, isDiscountSecurityType, classifyDurationRisk, largestConcentration, classifyConcentration, analyzePerTypeBreach, isConcentrationSnoozed, formatConcentrationPct, splitEndStateBuckets, DEFAULT_LIQUIDITY_HORIZON_DAYS, type CurrentValueSecurity } from "@shared/discount";
 import { whtRateForSecurity } from "@shared/securityTenor";
 import { Layers, TrendingDown, BellOff, Bell, Scale, ArrowRightLeft, Copy, Check, ChevronUp, ChevronDown, ShieldAlert, Activity } from "lucide-react";
@@ -649,22 +650,25 @@ export default function Dashboard() {
   }, [portfolio?.startDate, horizonMonths]);
 
   // Part 5: maturities falling within the next 90 days (manager exceptions band).
+  // Derived from the SAME canonical liquidity feed the command centre and the
+  // diagnostics "Next 3 Cash Events" card read (snapshot.liquidity), so the
+  // "N maturities in next 90 days" alert can never disagree with them. This
+  // counts gov + bank redemptions (kind "maturity") within the window; it does
+  // NOT count scheduled contributions (money in) or coupons.
   const maturitiesNext90 = useMemo(() => {
-    const now = effectiveNowMs;
+    const events = snapshot?.liquidity ?? [];
+    const now = snapshot?.asOfMs ?? effectiveNowMs;
     const horizon = now + 90 * 86_400_000;
     let count = 0;
     let faceTotal = 0;
-    for (const s of securities as Array<{ maturityDate?: unknown; isMatured?: unknown; faceValue?: unknown }>) {
-      if (s?.isMatured) continue;
-      if (!s?.maturityDate) continue;
-      const mt = new Date(String(s.maturityDate)).getTime();
-      if (mt >= now && mt <= horizon) {
-        count += 1;
-        faceTotal += parseFloat(String(s.faceValue ?? "0")) || 0;
-      }
+    for (const e of events) {
+      if (e.kind !== "maturity") continue;
+      if (e.atMs < now || e.atMs > horizon) continue;
+      count += 1;
+      faceTotal += e.amount ?? 0;
     }
     return { count, faceTotal };
-  }, [securities, effectiveNowMs]);
+  }, [snapshot?.liquidity, snapshot?.asOfMs, effectiveNowMs]);
 
   // Phase legend derived from the actual projection so band ranges match this
   // portfolio's horizon and phase fractions (not a hardcoded 120-month layout).
@@ -1041,7 +1045,7 @@ export default function Dashboard() {
               <ArrowDownCircle className="w-4 h-4 mr-2" />
               Record a Deposit
               <span className={`ml-2 inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide ${mode === "sandbox" ? "bg-amber-500/25 text-amber-100" : "bg-primary-foreground/20"}`}>
-                {mode === "sandbox" ? "Live → from Test" : "Live"}
+                {mode === "sandbox" ? "Writes to Live" : "Live"}
               </span>
             </Button>
             {/* Part C2 — always-on chrome speaks plain language; the precise
@@ -1099,10 +1103,10 @@ export default function Dashboard() {
                 ? "Record this month's contribution"
                 : "Nothing today — you're on track";
           const nextActionHref = ccBehind
-            ? "/plan?tab=contributions"
+            ? dashboardHref.changeContribution
             : rateStaleCc?.isStale
-              ? "/review?tab=rates"
-              : "/cashflows?tab=record";
+              ? dashboardHref.rates
+              : dashboardHref.recordDeposit;
           // Live actuals pockets.
           const mmfTotal = (actualsSummary?.byBucket?.mmf ?? 0) + (actualsSummary?.secondaryMmfBalance ?? 0);
           const govSecurities =
@@ -1120,17 +1124,17 @@ export default function Dashboard() {
           // Priority alerts (red first), each deep-linked to where it's resolved.
           const ccAlerts: CommandAlert[] = [];
           if (plannedThis > 0 && actualThis <= 0)
-            ccAlerts.push({ id: "missed", label: "This month's contribution not recorded", detail: `${formatKES(plannedThis)} planned`, tone: "amber", href: "/cashflows?tab=record" });
+            ccAlerts.push({ id: "missed", label: "This month's contribution not recorded", detail: `${formatKES(plannedThis)} planned`, tone: "amber", href: dashboardHref.recordDeposit });
           if (maturitiesNext90.count > 0)
-            ccAlerts.push({ id: "mat", label: `${maturitiesNext90.count} maturit${maturitiesNext90.count === 1 ? "y" : "ies"} in next 90 days`, detail: formatKESCompact(maturitiesNext90.faceTotal), tone: "amber", href: "/holdings?tab=gov" });
+            ccAlerts.push({ id: "mat", label: `${maturitiesNext90.count} maturit${maturitiesNext90.count === 1 ? "y" : "ies"} in next 90 days`, detail: formatKESCompact(maturitiesNext90.faceTotal), tone: "amber", href: dashboardHref.gov });
           if (rateStaleCc?.isVeryStale)
-            ccAlerts.push({ id: "rates", label: `Rates outdated — ${rateStaleCc.label}`, tone: "red", href: "/review?tab=rates" });
+            ccAlerts.push({ id: "rates", label: `Rates outdated — ${rateStaleCc.label}`, tone: "red", href: dashboardHref.rates });
           if (typeBreach?.breached)
-            ccAlerts.push({ id: "conc", label: "Concentration cap breach", tone: "amber", href: "/review?tab=concentration" });
+            ccAlerts.push({ id: "conc", label: "Concentration cap breach", tone: "amber", href: dashboardHref.risk });
           if (snapshot.reconciliation && !snapshot.reconciliation.ok)
-            ccAlerts.push({ id: "recon", label: "Reconciliation mismatch", detail: "Sources disagree on today's value", tone: "red", href: "/review?tab=reconciliation" });
+            ccAlerts.push({ id: "recon", label: "Reconciliation mismatch", detail: "Sources disagree on today's value", tone: "red", href: dashboardHref.reconciliation });
           if (ccBehind)
-            ccAlerts.push({ id: "pace", label: `Behind pace by ${formatKESCompact(decision!.pace.shortfall)}`, tone: "red", href: "/plan?tab=contributions" });
+            ccAlerts.push({ id: "pace", label: `Behind pace by ${formatKESCompact(decision!.pace.shortfall)}`, tone: "red", href: dashboardHref.changeContribution });
           // Sort red before amber.
           ccAlerts.sort((a, b) => (a.tone === b.tone ? 0 : a.tone === "red" ? -1 : 1));
           // Mirror the Reconciliation page's verdict EXACTLY (same procedure, same
@@ -1163,7 +1167,7 @@ export default function Dashboard() {
               reconciliation={reconVerdict}
               alerts={ccAlerts}
               actuals={{ mmfTotal, govSecurities, bankInstruments, otherAssets, interestToDate, taxToDate, annualisedTax }}
-              thisMonth={{ planned: plannedThis, actual: actualThis, expectedInterest, nextAction: nextActionText, nextActionHref, nextMaturity: nextMat ? { label: nextMat.label, atMs: nextMat.atMs, amount: nextMat.amount } : null }}
+              thisMonth={{ planned: plannedThis, actual: actualThis, expectedInterest, nextAction: nextActionText, nextActionHref, nextMaturity: nextMat ? { label: nextMat.label, atMs: nextMat.atMs, amount: nextMat.amount, href: nextMat.href } : null }}
               projection={{
                 projectedAtGoal: decision?.range.base ?? snapshot.goal.projectedFinalValue,
                 target: targetAmount,
@@ -1215,6 +1219,7 @@ export default function Dashboard() {
               }}
               liquidPctAtGoal={liquidPctAtGoal}
               landsFullyLiquid={landsFullyLiquid}
+              secondaryMmfCount={secondaryMmfs.length}
             />
           </div>
           );

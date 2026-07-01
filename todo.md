@@ -1484,4 +1484,20 @@
 - [x] Fix 404: DashboardDiagnostics Assumption Summary + Data Health(stale) cards link to non-existent /setup?tab=rates → point to /settings (canonical rates entry, matches sidebar pill)
 - [x] Add a "Growth from investing" stat to the Dashboard Projection Summary: projectedAtGoal − contributions.totalPlanned, with contributed vs earned split (no new engine math)
 - [x] Verify: type gate clean, full suite green, screenshot shows corrected links + growth stat
-- [ ] Package the entire codebase as a downloadable ZIP for the user
+- [x] Package the entire codebase as a downloadable ZIP for the user (kes5m-tracker-source.zip, 448 files, node_modules/build/logs excluded)
+
+
+## Round 78 — Dashboard route/link integrity audit + canonical LiquidityEvent + TM date drift
+- [x] R78.1 Fix invalid Dashboard tab links: /cashflows?tab=record→record-in; /plan?tab=contributions→goal (step-up) or /cashflows?tab=scheduled (review schedule); /review?tab=rates→/settings; /review?tab=concentration→/review?tab=manager
+- [x] R78.2 Add link-integrity scanner test: scan client for /{area}?tab=… and fail if tab id not in that area's real tab defs (must fail before fix, pass after)
+- [x] R78.3 Add Holdings Overview tab (id: overview, label: Overview) showing Full Net Worth, goal-plan assets, excluded assets, MMF/gov/bank/other totals + quick links; repoint Dashboard Full Net Worth → /holdings?tab=overview
+- [x] R78.4 Make LiquidityEvent canonical/richer: add kind coupon+contribution, sourceType, sourceId, ledgerMonth, href; include T-bill/IFB/FXD maturities, coupons if modelled, bank FD maturities, target-savings maturities, upcoming scheduled contributions; set href per rules
+- [x] R78.5 Remove Dashboard local maturitiesNext90 (securities-only loop); use snapshot.liquidity.filter(kind==maturity, asOfMs..+90d) covering gov + bank
+- [x] R78.6 Dashboard next maturity link event-specific: thisMonth.nextMaturity carries href from LiquidityEvent; render Link href + amount·label
+- [x] R78.7 Fix manager diagnostics links: Risk Snapshot → /review?tab=manager; Next 3 Cash Events rows use event.href (card fallback /review?tab=manager)
+- [x] R78.8 Make Assumption Summary dynamic: primary MMF rate, secondary MMFs held, T-bill rates used by ledger, bank rates for active holdings, WHT, committed tier; top 3 + "+N more → Settings"
+- [x] R78.9 Stop recomputing Dashboard actions locally: add typed dashboardHref helpers (recordDeposit/reconciliation/risk/rates); render actions/alerts from helper/snapshot, no raw invalid tab strings
+- [x] R78.10 Fix TM/actuals-date drift: getActualsSummary accepts nowMs/todayOverride; pass snapshot.asOfMs/getNow(portfolio)/TM simulated date; no new Date() in valuation/accrual except boundary fallback
+- [x] R78.11 Fix DepositDrawer copy: "edit…on the Other Assets page" → "You can edit this bank instrument later under Holdings → Bank."
+- [x] R78.12 Add Dashboard card-link acceptance test asserting every listed card/alert → correct route (no fallback/unrelated pages)
+- [x] R78.13 Verify: type gate clean, full suite green, screenshots; checkpoint; deliver

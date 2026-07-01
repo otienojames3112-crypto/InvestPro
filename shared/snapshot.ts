@@ -198,9 +198,22 @@ export interface SnapshotTax {
 
 export interface LiquidityEvent {
   atMs: number;
-  kind: "maturity" | "contribution";
+  /** Event nature. `coupon` is an interim income event; `maturity` returns principal. */
+  kind: "maturity" | "coupon" | "contribution";
+  /** What produced this event, so the UI can route/label it correctly. */
+  sourceType: "government_security" | "bank_instrument" | "contribution";
+  /** DB id of the source row (security / bank holding) when applicable. */
+  sourceId?: number;
+  /** Projection month this event lands in, when known (enables Ledger deep-link). */
+  ledgerMonth?: number;
   label: string;
   amount: number | null;
+  /**
+   * Canonical deep-link for this event. Every consumer (Dashboard next-maturity,
+   * manager diagnostics, Portfolio Review calendar, Time Machine) MUST use this
+   * href so they can never disagree on where an event resolves.
+   */
+  href: string;
 }
 
 export interface ReconSourceStatus {

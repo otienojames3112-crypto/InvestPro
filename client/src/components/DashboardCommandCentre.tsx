@@ -43,6 +43,7 @@ import {
   selectIncomeTaxBase,
 } from "@shared/snapshot";
 import { cn } from "@/lib/utils";
+import { dashboardHref } from "@shared/navigation";
 
 /** A priority alert the command centre surfaces (computed by the Dashboard). */
 export interface CommandAlert {
@@ -88,7 +89,7 @@ export interface CommandCentreProps {
     nextAction: string;
     nextActionHref: string;
     /** Next maturity, if any, within the visible horizon. */
-    nextMaturity: { label: string; atMs: number; amount: number | null } | null;
+    nextMaturity: { label: string; atMs: number; amount: number | null; href: string } | null;
   };
   /** Projection summary. */
   projection: {
@@ -201,7 +202,7 @@ export function DashboardCommandCentre(props: CommandCentreProps) {
       <div>
         <SectionHeading
           action={
-            <Link href="/plan?tab=allocation" className="text-[11px] text-primary hover:underline flex items-center gap-0.5">
+            <Link href={dashboardHref.onTrack} className="text-[11px] text-primary hover:underline flex items-center gap-0.5">
               Open Plan <ArrowRight className="w-3 h-3" />
             </Link>
           }
@@ -210,7 +211,7 @@ export function DashboardCommandCentre(props: CommandCentreProps) {
         </SectionHeading>
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <Link
-            href="/holdings"
+            href={dashboardHref.fullNetWorth}
             className="group rounded-xl border border-primary/25 bg-gradient-to-br from-primary/10 via-card to-card p-4 transition-colors hover:border-primary/50"
           >
             <div className="flex items-center gap-2 text-muted-foreground">
@@ -227,12 +228,12 @@ export function DashboardCommandCentre(props: CommandCentreProps) {
             value={formatKESCompact(target)}
             sub={remaining > 0 ? `${formatKESCompact(remaining)} to go (projected)` : "Projected to reach target"}
             icon={Target}
-            href="/plan?tab=goal"
+            href={dashboardHref.goalRemaining}
             accent="violet"
           />
 
           <Link
-            href="/plan?tab=allocation"
+            href={dashboardHref.onTrack}
             className={cn(
               "group rounded-xl border p-4 transition-colors",
               onTrack
@@ -254,7 +255,7 @@ export function DashboardCommandCentre(props: CommandCentreProps) {
           </Link>
 
           <Link
-            href="/review?tab=reconciliation"
+            href={dashboardHref.reconciliation}
             className={cn(
               "group rounded-xl border p-4 transition-colors",
               reconHealthy === false
@@ -287,7 +288,7 @@ export function DashboardCommandCentre(props: CommandCentreProps) {
       <div>
         <SectionHeading
           action={
-            <Link href="/cashflows?tab=scheduled" className="text-[11px] text-primary hover:underline flex items-center gap-0.5">
+            <Link href={dashboardHref.scheduledContributions} className="text-[11px] text-primary hover:underline flex items-center gap-0.5">
               Cashflows <ArrowRight className="w-3 h-3" />
             </Link>
           }
@@ -335,11 +336,14 @@ export function DashboardCommandCentre(props: CommandCentreProps) {
                   <CalendarClock className="w-3 h-3" /> Next maturity
                 </p>
                 {thisMonth.nextMaturity ? (
-                  <Link href="/holdings?tab=gov" className="block group">
+                  <Link href={thisMonth.nextMaturity.href} className="block group">
                     <p className="text-base font-semibold mt-0.5 group-hover:text-primary transition-colors">
                       {new Date(thisMonth.nextMaturity.atMs).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
                     </p>
-                    <p className="text-[11px] text-muted-foreground mt-0.5 truncate">{thisMonth.nextMaturity.label}</p>
+                    <p className="text-[11px] text-muted-foreground mt-0.5 truncate">
+                      {thisMonth.nextMaturity.label}
+                      {thisMonth.nextMaturity.amount != null ? ` · ${formatKESCompact(thisMonth.nextMaturity.amount)}` : ""}
+                    </p>
                   </Link>
                 ) : (
                   <p className="text-base font-semibold mt-0.5 text-muted-foreground">None scheduled</p>
@@ -362,7 +366,7 @@ export function DashboardCommandCentre(props: CommandCentreProps) {
       <div>
         <SectionHeading
           action={
-            <Link href="/holdings?tab=mmf" className="text-[11px] text-primary hover:underline flex items-center gap-0.5">
+            <Link href={dashboardHref.mmf} className="text-[11px] text-primary hover:underline flex items-center gap-0.5">
               Holdings <ArrowRight className="w-3 h-3" />
             </Link>
           }
@@ -370,16 +374,16 @@ export function DashboardCommandCentre(props: CommandCentreProps) {
           Live actuals
         </SectionHeading>
         <div className="grid gap-3 grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
-          <MetricTile label="MMF total" value={formatKESCompact(actuals.mmfTotal)} icon={PiggyBank} href="/holdings?tab=mmf" accent="sky" />
-          <MetricTile label="Gov. securities" value={formatKESCompact(actuals.govSecurities)} icon={Landmark} href="/holdings?tab=gov" accent="emerald" />
-          <MetricTile label="Bank instruments" value={formatKESCompact(actuals.bankInstruments)} icon={Building2} href="/holdings?tab=bank" accent="violet" />
-          <MetricTile label="Other assets" value={formatKESCompact(actuals.otherAssets)} icon={Boxes} href="/holdings?tab=other" />
+          <MetricTile label="MMF total" value={formatKESCompact(actuals.mmfTotal)} icon={PiggyBank} href={dashboardHref.mmf} accent="sky" />
+          <MetricTile label="Gov. securities" value={formatKESCompact(actuals.govSecurities)} icon={Landmark} href={dashboardHref.gov} accent="emerald" />
+          <MetricTile label="Bank instruments" value={formatKESCompact(actuals.bankInstruments)} icon={Building2} href={dashboardHref.bank} accent="violet" />
+          <MetricTile label="Other assets" value={formatKESCompact(actuals.otherAssets)} icon={Boxes} href={dashboardHref.other} />
           <MetricTile
             label="Interest to date"
             value={formatKESCompact(actuals.interestToDate)}
             sub={`Income base ${formatKESCompact(incomeTaxBase)}`}
             icon={TrendingUp}
-            href="/review?tab=income"
+            href={dashboardHref.interestToDate}
             accent="emerald"
           />
           <MetricTile
@@ -387,7 +391,7 @@ export function DashboardCommandCentre(props: CommandCentreProps) {
             value={formatKESCompact(actuals.taxToDate)}
             sub={`≈ ${formatKESCompact(actuals.annualisedTax)}/yr payable`}
             icon={Receipt}
-            href="/review?tab=tax"
+            href={dashboardHref.whtToDate}
             accent="amber"
           />
         </div>
@@ -430,7 +434,7 @@ export function DashboardCommandCentre(props: CommandCentreProps) {
       <div>
         <SectionHeading
           action={
-            <Link href="/plan?tab=ledger" className="text-[11px] text-primary hover:underline flex items-center gap-0.5">
+            <Link href={dashboardHref.projectionLedger} className="text-[11px] text-primary hover:underline flex items-center gap-0.5">
               Plan → Ledger <ArrowRight className="w-3 h-3" />
             </Link>
           }
@@ -493,7 +497,7 @@ export function DashboardCommandCentre(props: CommandCentreProps) {
                 <span className="font-medium">{snapshot.identity.activePolicyTier}</span> policy
                 {snapshot.identity.planStatus === "draft" ? " (uncommitted preview — Ledger follows balanced)" : " (committed)"}.
                 {" "}                Full scenario explanations and the downside model are on the{" "}
-                <Link href="/plan?tab=scenarios" className="text-primary hover:underline">Scenarios</Link> page.
+                <Link href={dashboardHref.scenarios} className="text-primary hover:underline">Scenarios</Link> page.
               </div>
             )}
           </CardContent>

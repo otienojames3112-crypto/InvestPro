@@ -3,7 +3,7 @@ import { AppShell } from "@/components/AppShell";
 import { usePortfolio } from "@/contexts/PortfolioContext";
 import { trpc } from "@/lib/trpc";
 import { invalidatePortfolioMoney } from "@/lib/invalidatePortfolioMoney";
-import { formatKES } from "@/lib/format";
+import { formatKES, formatLocalYmd } from "@/lib/format";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -234,7 +234,7 @@ export function TimeMachine() {
 
   const active = status?.active ?? false;
   const dateLabel = status?.simulatedDateLabel ?? "—";
-  const anchorLabel = status?.anchorDate ? new Date(status.anchorDate).toISOString().split("T")[0] : "—";
+  const anchorLabel = status?.anchorDate ? formatLocalYmd(status.anchorDate) : "—";
   const mat = status?.materialised ?? { securities: 0, deposits: 0, withdrawals: 0 };
 
   return (
@@ -361,7 +361,7 @@ export function TimeMachine() {
               <div className="text-left max-w-[14rem]">
                 <div className="text-xs text-muted-foreground">Next event</div>
                 <div className="text-xs font-medium truncate">
-                  {new Date(status.nextEvent.at).toISOString().split("T")[0]} · {status.nextEvent.label}
+                  {formatLocalYmd(status.nextEvent.at)} · {status.nextEvent.label}
                 </div>
               </div>
             )}

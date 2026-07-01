@@ -439,7 +439,7 @@ export function DashboardCommandCentre(props: CommandCentreProps) {
         </SectionHeading>
         <Card>
           <CardContent className="p-4">
-            <div className="grid gap-4 sm:grid-cols-3">
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
               <div>
                 <p className="text-xs text-muted-foreground">Projected at goal{goalDateLabel ? ` (${goalDateLabel})` : ""}</p>
                 <p className="text-lg font-semibold tabular-nums mt-0.5 kes-amount">{formatKES(projection.projectedAtGoal)}</p>
@@ -448,6 +448,28 @@ export function DashboardCommandCentre(props: CommandCentreProps) {
                   {projection.projectedAtGoal >= target ? " — on/above" : " — below"}
                 </p>
               </div>
+              {(() => {
+                // What the investment ADDS on top of your own contributions:
+                // projected finish value minus every shilling you plan to put in.
+                // Net of WHT because the engine projection is already net. No new
+                // math — both figures come straight from the snapshot.
+                const contributed = Math.max(0, snapshot.contributions.totalPlanned);
+                const growth = Math.max(0, projection.projectedAtGoal - contributed);
+                const growthPctOfContrib =
+                  contributed > 0 ? (growth / contributed) * 100 : null;
+                return (
+                  <div>
+                    <p className="text-xs text-muted-foreground">Growth from investing</p>
+                    <p className="text-lg font-semibold tabular-nums mt-0.5 kes-amount text-emerald-500">
+                      +{formatKES(growth)}
+                    </p>
+                    <p className="text-[11px] text-muted-foreground mt-0.5">
+                      {formatKESCompact(contributed)} contributed + interest earned
+                      {growthPctOfContrib != null ? ` (+${growthPctOfContrib.toFixed(0)}%)` : ""}
+                    </p>
+                  </div>
+                );
+              })()}
               <div>
                 <p className="text-xs text-muted-foreground">Liquid at goal</p>
                 <p className="text-lg font-semibold tabular-nums mt-0.5">

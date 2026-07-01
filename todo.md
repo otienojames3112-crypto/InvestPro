@@ -1479,3 +1479,9 @@
 - [x] Package full codebase as ZIP for delivery
 - [x] Extract pure diagnostics helpers to client/src/lib/diagnostics.ts (scaleShareToPct, pickTopIssuer, topIssuerSharePct, effectiveReconciled, nextCashEvents, effectiveMmfEar) and refactor DashboardDiagnostics to use them
 - [x] Add regression spec server/diagnosticsHelpers.round76.test.ts (15 tests) — full suite 139 files / 1325 tests green, type gate clean
+
+## Round 77 — Diagnostics link fix + Investment growth stat + full codebase export
+- [x] Fix 404: DashboardDiagnostics Assumption Summary + Data Health(stale) cards link to non-existent /setup?tab=rates → point to /settings (canonical rates entry, matches sidebar pill)
+- [x] Add a "Growth from investing" stat to the Dashboard Projection Summary: projectedAtGoal − contributions.totalPlanned, with contributed vs earned split (no new engine math)
+- [x] Verify: type gate clean, full suite green, screenshot shows corrected links + growth stat
+- [ ] Package the entire codebase as a downloadable ZIP for the user

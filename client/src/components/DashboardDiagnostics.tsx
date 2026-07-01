@@ -122,7 +122,7 @@ export function DashboardDiagnostics({
   return (
     <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
       {/* 1 — Data Health */}
-      <Link href={stale?.isStale ? "/setup?tab=rates" : "/review?tab=reconciliation"} className="block">
+      <Link href={stale?.isStale ? "/settings" : "/review?tab=reconciliation"} className="block">
         <Card className={CARD}>
           <div className={HEAD}>
             <span className="flex items-center gap-1.5">
@@ -222,7 +222,7 @@ export function DashboardDiagnostics({
       </Link>
 
       {/* 4 — Assumption Summary */}
-      <Link href="/setup?tab=rates" className="block">
+      <Link href="/settings" className="block">
         <Card className={CARD}>
           <div className={HEAD}>
             <span className="flex items-center gap-1.5">

@@ -2273,3 +2273,338 @@ export async function saveProbabilityThresholds(args: {
   }
   return { ok: true, errors: [] };
 }
+
+
+/* ── Round 81: Research pipeline governance — pending updates + source registry ──
+ *
+ * These helpers implement the pending-change queue and the typed promotion. The
+ * ONLY way an AI/scrape/manual proposal becomes a live catalogue figure is:
+ *   enqueueResearchUpdate(...)  → status "pending"
+ *   reviewResearchUpdate({ approve })  → buildPromotionPlan → write to the matching
+ *                                        catalogue table → status "approved"
+ * Rejection changes nothing in the catalogues. This keeps every catalogue change
+ * human-approved, sourced, and reversible on paper (the pending row is retained).
+ */
+
+import {
+  researchUpdates,
+  sourceRegistry,
+  type ResearchUpdate,
+  type InsertResearchUpdate,
+  type SourceRegistryRow,
+  type InsertSourceRegistry,
+} from "../drizzle/schema";
+import {
+  validatePendingUpdate,
+  buildPromotionPlan,
+  sourceDueStatus,
+  type PendingUpdateInput,
+  type SourceDueStatus,
+} from "../shared/researchPipeline";
+import { humanField } from "../shared/provenance";
+// NOTE: summariseState, FieldProvenanceMap, and FieldKey are already imported at
+// the top of this file (used by the opportunity ingestion helpers).
+
+/**
+ * Enqueue a proposed pending update. Validates through the shared governance rules
+ * and ALWAYS lands as status "pending" — no origin (ai/scrape/manual) may be born
+ * approved. Returns the created row id, or throws with the validation errors.
+ */
+export async function enqueueResearchUpdate(input: PendingUpdateInput): Promise<number | null> {
+  const v = validatePendingUpdate(input);
+  if (!v.ok || !v.target || !v.assetClass) {
+    throw new Error(`Invalid research update: ${v.errors.join(" ")}`);
+  }
+  const db = await getDb();
+  if (!db) return null;
+  const row: InsertResearchUpdate = {
+    target: v.target,
+    targetRef: input.targetRef ?? null,
+    changeKind: input.changeKind,
+    name: input.name.trim(),
+    assetClass: v.assetClass,
+    issuer: input.issuer ?? null,
+    currency: (input.currency ?? "KES").trim() || "KES",
+    figures: input.figures ?? {},
+    source: input.source.trim(),
+    sourceUrl: input.sourceUrl ?? null,
+    asOf: input.asOf ?? null,
+    origin: input.origin,
+    aiModel: input.aiModel ?? null,
+    sourceKey: input.sourceKey ?? null,
+    status: "pending", // invariant: always pending on creation
+  };
+  const res = await db.insert(researchUpdates).values(row);
+  // mysql2 returns insertId on the result header
+  const insertId = (res as unknown as { insertId?: number })?.insertId ?? null;
+  return insertId ?? null;
+}
+
+/** List research updates (newest first), optionally filtered by status/target. */
+export async function listResearchUpdates(filter?: {
+  status?: "pending" | "approved" | "rejected";
+  target?: "mmf" | "bank" | "opportunity";
+}): Promise<ResearchUpdate[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const clauses = [] as ReturnType<typeof eq>[];
+  if (filter?.status) clauses.push(eq(researchUpdates.status, filter.status));
+  if (filter?.target) clauses.push(eq(researchUpdates.target, filter.target));
+  const base = db.select().from(researchUpdates);
+  const q = clauses.length ? base.where(and(...clauses)) : base;
+  return q.orderBy(desc(researchUpdates.createdAt));
+}
+
+/** Count pending updates (for the Research Desk badge/digest). */
+export async function countPendingResearchUpdates(): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  const rows = await db
+    .select({ n: sql<number>`count(*)` })
+    .from(researchUpdates)
+    .where(eq(researchUpdates.status, "pending"));
+  return Number(rows[0]?.n ?? 0);
+}
+
+/** Fetch a single research update by id. */
+export async function getResearchUpdate(id: number): Promise<ResearchUpdate | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db.select().from(researchUpdates).where(eq(researchUpdates.id, id)).limit(1);
+  return rows[0] ?? null;
+}
+
+/** Build a human-entered per-figure provenance map for a promoted opportunity row. */
+function promotionProvenance(args: {
+  fields: Partial<Record<FieldKey, number | string | null>>;
+  source: string;
+  sourceUrl?: string | null;
+  asOf?: number | null;
+  by: string;
+  at: number;
+}): FieldProvenanceMap {
+  const map: FieldProvenanceMap = {};
+  for (const [k, v] of Object.entries(args.fields)) {
+    if (v === null || v === undefined || v === "") continue;
+    map[k as FieldKey] = humanField({
+      value: String(v),
+      source: args.source,
+      sourceUrl: args.sourceUrl ?? null,
+      asOf: args.asOf ?? null,
+      by: args.by,
+      at: args.at,
+    });
+  }
+  return map;
+}
+
+/**
+ * Review a pending research update. When `approve` is true, performs the typed
+ * promotion into the matching catalogue table (mmf_funds | bank_instruments |
+ * opportunities) using the shared `buildPromotionPlan`, then marks the update
+ * "approved". When false, marks it "rejected" and changes NOTHING in the
+ * catalogues. The promoted opportunity carries human_entered provenance (the
+ * approver vouches for the figures), satisfying the human-attention invariant.
+ *
+ * Returns the updated row + the ref/identity that was written (for invalidation).
+ */
+export async function reviewResearchUpdate(args: {
+  id: number;
+  approve: boolean;
+  reviewedBy: string;
+  reviewNote?: string | null;
+}): Promise<{ update: ResearchUpdate | null; promotedRef: string | null; target: string | null }> {
+  const db = await getDb();
+  if (!db) return { update: null, promotedRef: null, target: null };
+  const current = await getResearchUpdate(args.id);
+  if (!current) return { update: null, promotedRef: null, target: null };
+  if (current.status !== "pending") {
+    // Idempotent: a non-pending update is returned unchanged.
+    return { update: current, promotedRef: current.targetRef ?? null, target: current.target };
+  }
+
+  const now = Date.now();
+
+  if (!args.approve) {
+    await db
+      .update(researchUpdates)
+      .set({ status: "rejected", reviewedBy: args.reviewedBy, reviewedAt: now, reviewNote: args.reviewNote ?? null })
+      .where(eq(researchUpdates.id, args.id));
+    return { update: await getResearchUpdate(args.id), promotedRef: null, target: current.target };
+  }
+
+  // ── APPROVE → typed promotion ──
+  const plan = buildPromotionPlan({
+    target: current.target,
+    targetRef: current.targetRef,
+    name: current.name,
+    assetClass: current.assetClass,
+    issuer: current.issuer,
+    currency: current.currency,
+    figures: (current.figures as Record<string, unknown> | null) ?? {},
+    source: current.source,
+  });
+
+  let promotedRef: string | null = current.targetRef ?? null;
+
+  if (plan.target === "mmf") {
+    const p = plan.payload;
+    // Find an existing fund by name to edit, else insert.
+    const existing = await db
+      .select({ id: mmfFunds.id })
+      .from(mmfFunds)
+      .where(eq(mmfFunds.fundName, p.fundName))
+      .limit(1);
+    const values = {
+      fundName: p.fundName,
+      company: p.company,
+      grossYield: String(p.grossYield ?? p.ear ?? 0),
+      ear: String(p.ear ?? p.grossYield ?? 0),
+      ...(p.managementFee != null ? { managementFee: String(p.managementFee) } : {}),
+      ...(p.minInvestment != null ? { minInvestment: String(p.minInvestment) } : {}),
+      source: p.source,
+      isActive: true as const,
+    };
+    if (existing[0]) {
+      await db.update(mmfFunds).set(values).where(eq(mmfFunds.id, existing[0].id));
+    } else {
+      await db.insert(mmfFunds).values(values);
+    }
+    promotedRef = p.fundName;
+  } else if (plan.target === "bank") {
+    const p = plan.payload;
+    const existing = current.targetRef
+      ? await db.select({ id: bankInstruments.id }).from(bankInstruments).where(eq(bankInstruments.bankName, current.targetRef)).limit(1)
+      : [];
+    const values = {
+      bankName: p.bankName,
+      instrumentType: (p.instrumentType ?? "fixed_deposit") as
+        | "call_deposit" | "fixed_deposit" | "ordinary_savings" | "target_savings" | "tiered_savings",
+      ...(p.minAmount != null ? { minAmount: String(p.minAmount) } : {}),
+      typicalTenor: p.typicalTenor,
+      ...(p.indicativeRate != null ? { indicativeRate: String(p.indicativeRate) } : {}),
+      isNegotiable: p.isNegotiable,
+      notes: p.notes,
+      source: p.source,
+      isActive: true as const,
+    };
+    if (existing[0]) {
+      await db.update(bankInstruments).set(values).where(eq(bankInstruments.id, existing[0].id));
+    } else {
+      await db.insert(bankInstruments).values(values);
+    }
+    promotedRef = p.bankName;
+  } else {
+    // opportunity — write through the same upsert-by-ref path, with human_entered provenance.
+    const p = plan.payload;
+    const prov = promotionProvenance({
+      fields: {
+        yield: p.yieldPct,
+        price: p.lastPrice,
+        trailingReturn: p.trailingReturnPct,
+        tenor: p.tenorYears,
+        maturity: p.maturityDate,
+        expense: p.expenseRatioPct,
+      },
+      source: p.source,
+      sourceUrl: current.sourceUrl,
+      asOf: current.asOf,
+      by: args.reviewedBy,
+      at: now,
+    });
+    const insert = {
+      ref: p.ref,
+      name: p.name,
+      assetClass: p.assetClass,
+      issuer: p.issuer,
+      currency: p.currency,
+      market: p.market,
+      yieldPct: p.yieldPct != null ? String(p.yieldPct) : null,
+      yieldKind: p.yieldKind,
+      lastPrice: p.lastPrice != null ? String(p.lastPrice) : null,
+      trailingReturnPct: p.trailingReturnPct != null ? String(p.trailingReturnPct) : null,
+      tenorYears: p.tenorYears != null ? String(p.tenorYears) : null,
+      maturityDate: p.maturityDate,
+      expenseRatioPct: p.expenseRatioPct != null ? String(p.expenseRatioPct) : null,
+      liquidity: p.liquidity,
+      factNote: p.factNote,
+      dataSource: p.source,
+      dataAsOf: current.asOf ? new Date(current.asOf) : null,
+      unverified: false, // a human approved these figures
+      fieldProvenance: prov,
+      verificationState: summariseState(prov),
+      active: true as const,
+    } as unknown as InsertOpportunity;
+    await upsertOpportunity(insert);
+    promotedRef = p.ref;
+  }
+
+  await db
+    .update(researchUpdates)
+    .set({
+      status: "approved",
+      reviewedBy: args.reviewedBy,
+      reviewedAt: now,
+      reviewNote: args.reviewNote ?? null,
+      targetRef: promotedRef,
+    })
+    .where(eq(researchUpdates.id, args.id));
+
+  return { update: await getResearchUpdate(args.id), promotedRef, target: current.target };
+}
+
+/* ── Source registry ────────────────────────────────────────────────────────── */
+
+/** List registered sources (active first, then by label). */
+export async function listSources(includeInactive = false): Promise<SourceRegistryRow[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const base = db.select().from(sourceRegistry);
+  const rows = includeInactive
+    ? await base.orderBy(desc(sourceRegistry.active), sourceRegistry.label)
+    : await base.where(eq(sourceRegistry.active, true)).orderBy(sourceRegistry.label);
+  return rows;
+}
+
+/** Create or update a source by key (maintainer authoring). */
+export async function upsertSource(input: InsertSourceRegistry): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  const existing = await db
+    .select({ id: sourceRegistry.id })
+    .from(sourceRegistry)
+    .where(eq(sourceRegistry.key, input.key))
+    .limit(1);
+  if (existing[0]) {
+    await db.update(sourceRegistry).set(input).where(eq(sourceRegistry.key, input.key));
+  } else {
+    await db.insert(sourceRegistry).values(input);
+  }
+}
+
+/** Mark a source reviewed now (resets its cadence clock). */
+export async function markSourceReviewed(key: string, by: string): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db
+    .update(sourceRegistry)
+    .set({ lastReviewedAt: Date.now(), lastReviewedBy: by })
+    .where(eq(sourceRegistry.key, key));
+}
+
+/** Compute cadence/due status for every active source (for the daily digest). */
+export async function sourceDueList(now = Date.now()): Promise<SourceDueStatus[]> {
+  const rows = await listSources(false);
+  return rows.map((r) =>
+    sourceDueStatus(
+      {
+        key: r.key,
+        label: r.label,
+        cadenceDays: r.cadenceDays,
+        lastReviewedAt: r.lastReviewedAt ?? null,
+        active: r.active,
+      },
+      now,
+    ),
+  );
+}

@@ -1272,3 +1272,118 @@ export const aiIntakeAudit = mysqlTable("ai_intake_audit", {
 });
 export type AiIntakeAuditRow = typeof aiIntakeAudit.$inferSelect;
 export type InsertAiIntakeAudit = typeof aiIntakeAudit.$inferInsert;
+
+/**
+ * Round 81 — Research pipeline GOVERNANCE layer.
+ *
+ * `research_updates` is the single PENDING-CHANGE QUEUE that sits between raw
+ * research intake (AI extraction, manual authoring, source scrapes) and the
+ * live reference catalogues (mmf_funds / bank_instruments / opportunities). No
+ * intake path may write a live reference figure directly anymore: it proposes a
+ * pending update here, and a human maintainer APPROVES it, at which point the
+ * server performs the typed promotion into the correct catalogue table and marks
+ * the update `applied`. This makes every catalogue change reviewable, reversible
+ * on paper (the pending row records the before/after), and traceable to a source.
+ *
+ * There is deliberately NO score/rank/priority column — a pending update is a
+ * proposed FACT change, never a recommendation. Ordering is by recency only.
+ */
+export const researchUpdates = mysqlTable("research_updates", {
+  id: int("id").autoincrement().primaryKey(),
+  /**
+   * Which live reference catalogue this update targets once approved:
+   *   - "mmf"          → mmf_funds row (by fundRef/name)
+   *   - "bank"         → bank_instruments row
+   *   - "opportunity"  → opportunities row (securities + market assets)
+   */
+  target: mysqlEnum("target", ["mmf", "bank", "opportunity"]).notNull(),
+  /**
+   * Stable key of the catalogue row this update creates or edits. For a NEW row
+   * this is the proposed ref/identity; for an EDIT it points at the existing row.
+   * Null only while a brand-new identity is still being authored.
+   */
+  targetRef: varchar("targetRef", { length: 64 }),
+  /** create = author a new catalogue row; edit = change figures on an existing row. */
+  changeKind: mysqlEnum("changeKind", ["create", "edit"]).notNull().default("create"),
+  /** Human-readable instrument name (for the review list, before promotion). */
+  name: varchar("name", { length: 200 }).notNull(),
+  /** Precise asset class (cash_mmf | bank_deposit | gov_discount | gov_coupon | equity | reit | offshore_fund | alt). */
+  assetClass: varchar("assetClass", { length: 32 }).notNull(),
+  /** Issuer / manager / bank, if known. */
+  issuer: varchar("issuer", { length: 200 }),
+  /** ISO currency (default KES). */
+  currency: varchar("currency", { length: 8 }).notNull().default("KES"),
+  /**
+   * Proposed figures as a JSON payload. Shape is validated per-target by the
+   * promotion code (shared/researchPipeline.ts). Neutral facts only — no ranking.
+   */
+  figures: json("figures").$type<Record<string, unknown>>(),
+  /**
+   * Where the proposed figures came from. Every pending update MUST cite a source
+   * (a document label, URL, "manual entry", or a source_registry key) so an
+   * approval is always defensible.
+   */
+  source: varchar("source", { length: 300 }).notNull(),
+  sourceUrl: varchar("sourceUrl", { length: 500 }),
+  /** As-of timestamp for the proposed figures (epoch ms UTC). */
+  asOf: bigint("asOf", { mode: "number" }),
+  /**
+   * How the update ORIGINATED:
+   *   - "ai"     → an AI extraction proposed it (never trusted until approved)
+   *   - "manual" → a maintainer authored it by hand
+   *   - "scrape" → an automated source adapter proposed it
+   */
+  origin: mysqlEnum("origin", ["ai", "manual", "scrape"]).notNull().default("manual"),
+  /** The model that produced an AI proposal (audit only; never a quality signal). */
+  aiModel: varchar("aiModel", { length: 64 }),
+  /** If this update was linked to a registered source, the source_registry key. */
+  sourceKey: varchar("sourceKey", { length: 64 }),
+  /**
+   * Lifecycle: pending = awaiting review; approved = promoted into the catalogue;
+   * rejected = a maintainer declined it (no catalogue change).
+   */
+  status: mysqlEnum("status", ["pending", "approved", "rejected"]).notNull().default("pending"),
+  /** Optional maintainer note captured at review time (why approved / rejected). */
+  reviewNote: text("reviewNote"),
+  /** Who reviewed + when (null while pending). */
+  reviewedBy: varchar("reviewedBy", { length: 200 }),
+  reviewedAt: bigint("reviewedAt", { mode: "number" }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+export type ResearchUpdate = typeof researchUpdates.$inferSelect;
+export type InsertResearchUpdate = typeof researchUpdates.$inferInsert;
+
+/**
+ * Round 81 — SOURCE REGISTRY. A maintainer-curated list of the data sources the
+ * Research area draws from (CBK auction page, NSE price board, a fund fact-sheet,
+ * etc.), each with a review CADENCE so the daily Research Desk digest can flag
+ * which sources are DUE for a refresh. This is operational metadata only: it
+ * never stores figures and never ranks a source by quality — it just tracks when
+ * each source was last reviewed and how often it should be.
+ */
+export const sourceRegistry = mysqlTable("source_registry", {
+  id: int("id").autoincrement().primaryKey(),
+  /** Stable key, e.g. "cbk-auctions", "nse-prices", "sanlam-factsheet". */
+  key: varchar("key", { length: 64 }).notNull().unique(),
+  /** Human label, e.g. "CBK Treasury Auction Results". */
+  label: varchar("label", { length: 200 }).notNull(),
+  /** Which catalogue this source feeds (mmf | bank | opportunity | mixed). */
+  feeds: mysqlEnum("feeds", ["mmf", "bank", "opportunity", "mixed"]).notNull().default("mixed"),
+  /** Link to the source. */
+  url: varchar("url", { length: 500 }),
+  /** Review cadence in DAYS — how often a maintainer should re-check this source. */
+  cadenceDays: int("cadenceDays").notNull().default(30),
+  /** When the source was last reviewed/refreshed (epoch ms UTC); null = never. */
+  lastReviewedAt: bigint("lastReviewedAt", { mode: "number" }),
+  /** Who last reviewed it. */
+  lastReviewedBy: varchar("lastReviewedBy", { length: 200 }),
+  /** Optional operational note (what to check, gotchas). */
+  notes: text("notes"),
+  /** Soft-disable a source without deleting its history. */
+  active: boolean("active").notNull().default(true),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+export type SourceRegistryRow = typeof sourceRegistry.$inferSelect;
+export type InsertSourceRegistry = typeof sourceRegistry.$inferInsert;

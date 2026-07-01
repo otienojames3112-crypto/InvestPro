@@ -47,16 +47,14 @@ function tabIds(areaSrc: string): string[] {
 describe("Research area exposes the full renamed tab set", () => {
   const ids = tabIds(research);
 
-  it("contains every Round-80 Research tab in order", () => {
+  it("contains the consolidated Research tab set in order (Round 81 collapsed intake into the Research Desk)", () => {
     expect(ids).toEqual([
       "explore",
       "mmf-market",
       "bank-catalogue",
       "cbk-securities",
       "market-assets",
-      "ai-import",
-      "ai-review",
-      "source-conflicts",
+      "research-desk",
     ]);
   });
 

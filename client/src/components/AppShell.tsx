@@ -259,7 +259,7 @@ const navGroups = [
   {
     title: "Analyse",
     items: [
-      { href: "/research", label: "Research", icon: Compass, simpleHidden: true, match: ["/research", "/explore", "/mmf-strategy", "/ai-intake", "/ai-review", "/source-conflicts"] },
+      { href: "/research", label: "Research", icon: Compass, simpleHidden: true, match: ["/research", "/explore", "/mmf-strategy", "/ai-intake", "/ai-review", "/source-conflicts", "/research-desk"] },
       { href: "/review", label: "Review", icon: ClipboardCheck, simpleHidden: true, match: ["/review", "/portfolio-review", "/mmf-accrual", "/tax-summary"] },
       { href: "/time-machine", label: "Time Machine", icon: Clock, sandboxOnly: true },
     ],

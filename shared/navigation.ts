@@ -26,9 +26,7 @@ export const AREA_TABS: Record<AreaName, readonly string[]> = {
     "bank-catalogue",
     "cbk-securities",
     "market-assets",
-    "ai-import",
-    "ai-review",
-    "source-conflicts",
+    "research-desk",
   ],
   review: ["manager", "reconciliation", "income", "tax"],
 } as const;

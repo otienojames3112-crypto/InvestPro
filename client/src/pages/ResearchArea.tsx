@@ -1,21 +1,20 @@
-import { Compass, Scale, Landmark, Sparkles, ClipboardCheck, GitCompareArrows, Building2, LineChart } from "lucide-react";
+import { Compass, Scale, Landmark, Building2, LineChart, Inbox } from "lucide-react";
 import { TabbedArea, type AreaTab } from "@/components/TabbedArea";
 import Explore from "./Explore";
 import MmfFunds from "./MmfFunds";
 import BankInstruments from "./BankInstruments";
 import CbkSecuritiesReference from "./CbkSecuritiesReference";
 import MarketAssetsReference from "./MarketAssetsReference";
-import AiIntake from "./AiIntake";
-import AiReview from "./AiReview";
-import SourceConflicts from "./SourceConflicts";
+import ResearchDesk from "./ResearchDesk";
 
 /**
- * Research — the consolidated "find and import opportunities" area.
+ * Research — the consolidated "find, reference and govern" area.
  *
- * Groups the surfaces a user uses to discover instruments (explore, compare
- * MMFs, browse bank products) and to bring outside data in (AI import, AI
- * review, and the source-conflict resolver). Each tab reuses its existing page
- * verbatim (rendered embedded), so there is no duplicated logic.
+ * The first five tabs are read-only reference surfaces (a screener + four
+ * catalogues). The final tab, the Research Desk, is the single governed
+ * workbench where raw intake (AI import, AI figure review, source-conflict
+ * resolution) and the pending-update review queue live: nothing an AI or a
+ * source proposes reaches a live catalogue until a maintainer approves it here.
  */
 const tabs: AreaTab[] = [
   {
@@ -54,25 +53,11 @@ const tabs: AreaTab[] = [
     render: () => <MarketAssetsReference embedded />,
   },
   {
-    id: "ai-import",
-    label: "AI Import",
-    icon: Sparkles,
-    hint: "Paste a statement or document and let the assistant extract holdings and figures for you to review before anything is saved.",
-    render: () => <AiIntake embedded />,
-  },
-  {
-    id: "ai-review",
-    label: "AI Review",
-    icon: ClipboardCheck,
-    hint: "Check, edit and approve what the assistant extracted before it becomes part of your portfolio.",
-    render: () => <AiReview embedded />,
-  },
-  {
-    id: "source-conflicts",
-    label: "Source Conflicts",
-    icon: GitCompareArrows,
-    hint: "When two sources disagree on a figure (a rate or balance), resolve which one your plan should trust.",
-    render: () => <SourceConflicts embedded />,
+    id: "research-desk",
+    label: "Research Desk",
+    icon: Inbox,
+    hint: "The governed workbench between raw data and the live catalogues: import documents, review what an AI or a source proposed, resolve conflicts, and approve changes. Every promotion is an explicit, auditable decision.",
+    render: () => <ResearchDesk embedded />,
   },
 ];
 
@@ -80,7 +65,7 @@ export default function ResearchArea() {
   return (
     <TabbedArea
       title="Research"
-      subtitle="Discover instruments, compare options, and import outside data — then decide for yourself."
+      subtitle="Reference the market, import outside data, and govern what reaches your catalogues — then decide for yourself."
       tabs={tabs}
       defaultTab="explore"
     />

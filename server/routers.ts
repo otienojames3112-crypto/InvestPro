@@ -105,6 +105,15 @@ import {
   listAllocationTemplates,
   getGlideParams,
   getProbabilityThresholds,
+  enqueueResearchUpdate,
+  listResearchUpdates,
+  countPendingResearchUpdates,
+  getResearchUpdate,
+  reviewResearchUpdate,
+  listSources,
+  upsertSource,
+  markSourceReviewed,
+  sourceDueList,
 } from "./db";
 import { OPPORTUNITY_SEED } from "./opportunitySeed";
 import {
@@ -157,6 +166,11 @@ import {
   type ScoreInput,
 } from "../shared/instrumentScore";
 import type { InsertOpportunity, InsertAiIntakeAudit } from "../drizzle/schema";
+import {
+  validatePendingUpdate,
+  promotionTargetForAssetClass,
+  type UpdateOrigin,
+} from "../shared/researchPipeline";
 import { runAdapter } from "./ingestion/runner";
 import { ADAPTERS } from "./ingestion/adapters";
 import { SOURCE_IDS, AI_INTAKE_SOURCE_ID } from "../shared/ingestion";
@@ -236,6 +250,7 @@ import {
   previewModelImpact,
   computeExit,
   registerClassForAssetClass,
+  holdingsRouteForAssetClass,
 } from "../shared/modeling";
 import { buildAllocation, blendedYield } from "../shared/actuals";
 import {
@@ -1524,6 +1539,47 @@ export const appRouter = router({
           // For image sources, record the screenshot's storage key on the row so a reviewer
           // can see the original picture next to the figures (confirm-against-source).
           if (imageSourceKey) await attachAiSourceImageKey(ref, imageSourceKey);
+
+          // Round 81 GOVERNANCE: an AI extraction is UNTRUSTED. In addition to the
+          // provisional per-figure row above (which powers the confirm-against-source
+          // detail view), enqueue a PENDING research_update so the change surfaces in the
+          // Research Desk review queue and only affects the live catalogue once a human
+          // approves it. The pending update carries the neutral extracted figures + the
+          // cited source; it can never be born approved (enforced in the pipeline).
+          try {
+            const numeric = (k: FieldKey): number | undefined => {
+              const raw = aiMap[k]?.value;
+              if (raw == null || raw === "") return undefined;
+              const n = Number(String(raw).replace(/,/g, ""));
+              return Number.isFinite(n) ? n : undefined;
+            };
+            const figures: Record<string, unknown> = {
+              yieldPct: numeric("yield"),
+              lastPrice: numeric("price"),
+              trailingReturnPct: numeric("trailingReturn"),
+              tenorYears: numeric("tenor"),
+              maturityDate: aiMap.maturity?.value ?? undefined,
+              expenseRatioPct: numeric("expense"),
+            };
+            await enqueueResearchUpdate({
+              targetRef: ref,
+              changeKind: result.created ? "create" : "edit",
+              name: inst.name,
+              assetClass: inst.assetClass,
+              issuer: inst.issuer ?? null,
+              currency: inst.currency ?? "KES",
+              figures,
+              source: effectiveSourceLabel,
+              sourceUrl: sourceUrl,
+              asOf: at,
+              origin: "ai",
+              aiModel: model,
+            });
+          } catch (enqueueErr) {
+            // A malformed asset class shouldn't fail the whole extraction; the provisional
+            // row still exists for review. Record it on the audit and continue.
+            audit.error = `pending-enqueue skipped: ${(enqueueErr instanceof Error ? enqueueErr.message : String(enqueueErr)).slice(0, 120)}`;
+          }
           const saved = await getOpportunityByRef(ref);
           // Record what entered the catalog for traceability.
           audit.resultName = inst.name;
@@ -5369,6 +5425,22 @@ export const appRouter = router({
       }))
       .mutation(async ({ ctx, input }) => {
         const p = await requirePortfolio(input.portfolioId, ctx.user.id);
+
+        // Fixed-income safety: MMF / bank deposits / government securities carry a
+        // maturity, coupon schedule and issuer-cap that a flat "Other" net-worth row
+        // cannot represent. Storing them here would silently under-model them, so
+        // the commit refuses and directs the user to the dedicated register. This is
+        // enforced server-side (not just hidden in the UI) so a direct API call
+        // cannot bypass it. The single source of truth for the mapping is
+        // holdingsRouteForAssetClass.
+        const route = holdingsRouteForAssetClass(input.assetClass as AssetClass);
+        if (route.usesRegisterForm) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `A ${profileFor(input.assetClass as AssetClass).label.toLowerCase()} must be recorded on its own register (${route.registerLabel}), where its maturity, coupon and issue-date fields are set, so it models with the full ladder and issuer-cap behaviour. Use “Model in my plan” to explore the what-if, then complete it on ${route.registerLabel}.`,
+          });
+        }
+
         const now = getNow(p);
         const entryIso = input.entryDate ?? formatUtcDate(now);
         const modelingInput: ModelingInputs = {
@@ -6977,6 +7049,157 @@ export const appRouter = router({
           readout,
         };
       }),
+  }),
+
+  // ─── Round 81: Research pipeline governance ─────────────────────────────────
+  // The single governed queue that sits between RAW INTAKE (AI / scrape / manual)
+  // and the LIVE REFERENCE CATALOGUES. Every proposed change lands here as a
+  // PENDING research_update; a maintainer's approval performs the typed promotion
+  // into exactly one catalogue (mmf_funds | bank_instruments | opportunities).
+  // Nothing here ranks or scores — a pending update is a proposed FACT, not advice.
+  researchPipeline: router({
+    // The pending queue (newest first), optionally filtered. Admin-only: the queue
+    // exposes un-vetted AI/scrape proposals that must never reach a normal user.
+    listUpdates: adminProcedure
+      .input(
+        z
+          .object({
+            status: z.enum(["pending", "approved", "rejected"]).optional(),
+            target: z.enum(["mmf", "bank", "opportunity"]).optional(),
+          })
+          .optional(),
+      )
+      .query(async ({ input }) => {
+        const updates = await listResearchUpdates(input ?? undefined);
+        return { updates };
+      }),
+
+    // Cheap pending count for the Research Desk badge (public: it's just a number,
+    // and other pending counts in this app are public too).
+    pendingCount: publicProcedure.query(async () => {
+      return { count: await countPendingResearchUpdates() };
+    }),
+
+    // A single update (for the review detail panel).
+    getUpdate: adminProcedure
+      .input(z.object({ id: z.number().int().positive() }))
+      .query(async ({ input }) => {
+        const update = await getResearchUpdate(input.id);
+        if (!update) throw new TRPCError({ code: "NOT_FOUND", message: "Update not found." });
+        return { update };
+      }),
+
+    // Manually enqueue a pending update (a maintainer authoring a change by hand).
+    // Still lands as PENDING — even a maintainer's own manual entry goes through the
+    // same approval gate, so the catalogue only ever changes via an explicit review.
+    enqueue: adminProcedure
+      .input(
+        z.object({
+          targetRef: z.string().max(64).optional(),
+          changeKind: z.enum(["create", "edit"]).default("create"),
+          name: z.string().min(1).max(200),
+          assetClass: z.string().min(1).max(32),
+          issuer: z.string().max(200).optional(),
+          currency: z.string().min(1).max(8).default("KES"),
+          figures: z.record(z.string(), z.unknown()).optional(),
+          source: z.string().min(1).max(300),
+          sourceUrl: z.string().url().max(500).optional().or(z.literal("")),
+          asOf: z.number().int().positive().optional(),
+          sourceKey: z.string().max(64).optional(),
+        }),
+      )
+      .mutation(async ({ input }) => {
+        const v = validatePendingUpdate({ ...input, origin: "manual" });
+        if (!v.ok) throw new TRPCError({ code: "BAD_REQUEST", message: v.errors.join(" ") });
+        const id = await enqueueResearchUpdate({
+          ...input,
+          sourceUrl: input.sourceUrl === "" ? null : input.sourceUrl,
+          origin: "manual",
+        });
+        return { id };
+      }),
+
+    // Approve → typed promotion into the matching catalogue; Reject → no catalogue
+    // change. This is the ONLY path that turns a proposal into a live figure.
+    review: adminProcedure
+      .input(
+        z.object({
+          id: z.number().int().positive(),
+          approve: z.boolean(),
+          reviewNote: z.string().max(1000).optional(),
+        }),
+      )
+      .mutation(async ({ ctx, input }) => {
+        const by = ctx.user.name ?? ctx.user.email ?? "You";
+        const res = await reviewResearchUpdate({
+          id: input.id,
+          approve: input.approve,
+          reviewedBy: by,
+          reviewNote: input.reviewNote ?? null,
+        });
+        if (!res.update) throw new TRPCError({ code: "NOT_FOUND", message: "Update not found." });
+        return res;
+      }),
+
+    // ── Source registry + cadence ──
+    listSources: adminProcedure
+      .input(z.object({ includeInactive: z.boolean().default(false) }).optional())
+      .query(async ({ input }) => {
+        const sources = await listSources(input?.includeInactive ?? false);
+        return { sources };
+      }),
+
+    upsertSource: adminProcedure
+      .input(
+        z.object({
+          key: z.string().min(1).max(64),
+          label: z.string().min(1).max(200),
+          feeds: z.enum(["mmf", "bank", "opportunity", "mixed"]).default("mixed"),
+          url: z.string().url().max(500).optional().or(z.literal("")),
+          cadenceDays: z.number().int().min(1).max(365).default(30),
+          notes: z.string().max(2000).optional(),
+          active: z.boolean().default(true),
+        }),
+      )
+      .mutation(async ({ input }) => {
+        await upsertSource({
+          key: input.key,
+          label: input.label,
+          feeds: input.feeds,
+          url: input.url === "" ? null : (input.url ?? null),
+          cadenceDays: input.cadenceDays,
+          notes: input.notes ?? null,
+          active: input.active,
+        });
+        return { ok: true };
+      }),
+
+    markSourceReviewed: adminProcedure
+      .input(z.object({ key: z.string().min(1).max(64) }))
+      .mutation(async ({ ctx, input }) => {
+        const by = ctx.user.name ?? ctx.user.email ?? "You";
+        await markSourceReviewed(input.key, by);
+        return { ok: true };
+      }),
+
+    // The daily Research Desk digest: how many changes await review, which sources
+    // are due for a refresh, and how many ingestion conflicts are open. Read-only
+    // aggregation the desk header + a scheduled owner-notification can both use.
+    digest: adminProcedure.query(async () => {
+      const [pending, due, openConflicts] = await Promise.all([
+        countPendingResearchUpdates(),
+        sourceDueList(Date.now()),
+        countOpenConflicts(),
+      ]);
+      const dueSources = due.filter((s) => s.isDue);
+      return {
+        pendingUpdates: pending,
+        openConflicts,
+        sourcesDue: dueSources.length,
+        sources: due,
+        generatedAt: Date.now(),
+      };
+    }),
   }),
 });
 export type AppRouter = typeof appRouter;

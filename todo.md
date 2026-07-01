@@ -1536,3 +1536,25 @@
 - [x] Verified allocation/sweep engine sources bank candidates from live active catalogue (getBankInstruments) + gov options from settings; locked by test
 - [x] Tests: page-role separation, tab set, routing helper, reference-page scoping/disclaimer, engine source integrity (researchArea.round80.test.ts, 23 assertions)
 - [x] Type gate 0 errors + full suite 1400/1400 green; 4 reference-tab screenshots captured; checkpoint + ZIP delivery
+
+
+## Round 81 — Research pipeline unification (Research Desk → pending updates → typed catalogues → actual holdings)
+
+- [x] Schema: add research_updates table (target, targetRef, name, assetClass, changeKind, figures, source/url/asOf, origin/aiModel, status, reviewer, reviewedAt, note)
+- [x] Schema: add source_registry table (key, label, category, url, cadenceDays, lastReviewedAt/By, lastStatus, active, notes)
+- [x] Hand-authored additive migration 0013 applied via webdev_execute_sql (both tables verified live)
+- [x] db.ts helpers for research_updates (enqueue/list/count/get/review-with-typed-promotion) + source_registry (list/upsert/mark-reviewed/due)
+- [x] Backend: aiExtract now ALSO enqueues a pending research_update (origin=ai) — approval, not extraction, promotes to catalogue
+- [x] Backend: reviewResearchUpdate approve → typed promotion into mmf_funds / bank_instruments / opportunities + invalidation; reject → no change; idempotent
+- [x] Backend: typed promotion routing (cash_mmf→mmf, bank_deposit→bank, gov_*/equity/reit/offshore/alt→opportunity) via shared researchPipeline + locked by test
+- [x] Backend: source registry CRUD + cadence/due + digest (pending count, sources due, open conflicts)
+- [x] Verified allocation/sweep engine sources only live active catalogues (getBankInstruments) + settings gov options — never raw pending rows (locked by round80/81 tests)
+- [x] Frontend: Research Desk tab = digest + pending review queue + Sources panel + AI Import / AI figure review / Conflicts sub-tabs; top tab bar collapsed 8→6
+- [x] Frontend: daily digest surface on Research Desk (3 live counters)
+- [x] Frontend: typed promotion shown per target in review card; server typed promotion enforces required fields
+- [x] Frontend: reference rows prefill actual-holding flows (DepositDrawer / Other-Holdings prefilled add) — from Round 80, verified intact
+- [x] Fix ModelDrawer commit: server BAD_REQUEST guard for mmf/bank/gov + client 'Continue on {register}' routing; equity/reit/offshore/alt still write Other after confirm
+- [x] Tests A-F: researchPipeline.round81.test.ts (20 assertions) — governance, promotion routing, ModelDrawer safety, Desk structure, source cadence
+- [x] Type gate 0 errors + full suite 1420/1420 green; 4 screenshots captured; checkpoint next
+- [x] Constraint honoured: NO new top-level page — rebuilt inside existing Research area
+- [ ] Follow-up (pre-existing data): 'CIC Money Market Fund' catalogue row is mis-tagged assetClass=alt (should be cash_mmf)

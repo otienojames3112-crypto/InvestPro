@@ -32,9 +32,9 @@ export const LEGACY_REDIRECTS: readonly LegacyRedirect[] = [
   // Research area
   { from: "/explore", area: "research", tab: "explore" },
   { from: "/mmf-strategy", area: "research", tab: "mmf-market" },
-  { from: "/ai-intake", area: "research", tab: "ai-import" },
-  { from: "/ai-review", area: "research", tab: "ai-review" },
-  { from: "/source-conflicts", area: "research", tab: "source-conflicts" },
+  { from: "/ai-intake", area: "research", tab: "research-desk" },
+  { from: "/ai-review", area: "research", tab: "research-desk" },
+  { from: "/source-conflicts", area: "research", tab: "research-desk" },
   // Review area
   { from: "/portfolio-review", area: "review", tab: "manager" },
   { from: "/reconciliation", area: "review", tab: "reconciliation" },

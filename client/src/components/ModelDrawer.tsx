@@ -671,17 +671,36 @@ export function ModelDrawer({
           </div>
 
           {/* ── Actions ────────────────────────────────────────────────── */}
+          {/* Fixed-income safety: MMF / bank / gov classes cannot be tracked as a
+              flat net-worth row (they'd lose their maturity/coupon/issuer-cap
+              behaviour and the engine would under-model them). For those the primary
+              action routes to the dedicated register instead of committing an Other
+              holding — the what-if preview above stays fully usable. */}
           <div className="flex items-center gap-2 pt-1">
             <Button variant="outline" className="flex-1" onClick={() => onOpenChange(false)}>
               Close
             </Button>
-            <Button
-              className="flex-1 active:scale-[0.97] transition-transform"
-              disabled={!valid || commit.isPending || !portfolioId}
-              onClick={handleCommit}
-            >
-              {commit.isPending ? "Recording…" : `Track in my ${mode === "sandbox" ? "Test" : "Live"} plan`}
-            </Button>
+            {route.usesRegisterForm ? (
+              <Button
+                className="flex-1 active:scale-[0.97] transition-transform"
+                disabled={!portfolioId}
+                onClick={() => {
+                  onOpenChange(false);
+                  navigate(viewHref);
+                }}
+              >
+                Continue on {route.registerLabel.replace(/^Holdings → /, "")}
+                <ArrowRight className="w-3.5 h-3.5 ml-1.5" />
+              </Button>
+            ) : (
+              <Button
+                className="flex-1 active:scale-[0.97] transition-transform"
+                disabled={!valid || commit.isPending || !portfolioId}
+                onClick={handleCommit}
+              >
+                {commit.isPending ? "Recording…" : `Track in my ${mode === "sandbox" ? "Test" : "Live"} plan`}
+              </Button>
+            )}
           </div>
 
           <p className="text-[10px] text-muted-foreground flex items-center gap-1.5">

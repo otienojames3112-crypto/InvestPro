@@ -1370,3 +1370,57 @@
 - [x] Suite 7 — Rate effective date: mid-month MMF rate change splits accrual by date (rateEffectiveDate.test.ts, 6 tests)
 - [x] Suite 8 — Ledger CSV headers match displayed labels incl. "MMF Interest" / "Swept to Securities" (csvHeaders.test.ts, 6 tests)
 - [x] All 8 suites green (42 tests); full suite 1255 green (133 files); tsc clean
+
+
+## Audit Remediation Round (cross-page math/sync)
+
+### 1. Snapshot tax model + Dashboard tax display
+- [ ] Add tax.incomeTaxBase, tax.annualWht, tax.whtToDate, tax.fullPeriodProjectedWht, tax.breakdown to snapshot
+- [ ] Dashboard: Tax to date = whtToDate; Est. annual tax = annualWht; base only as explanatory basis (never as payable)
+- [ ] Accept: 210k base / 2,500 annual WHT shows ~2,500, not 210,000
+
+### 2. Reconciliation three sections
+- [ ] A. Full Portfolio Value (all holdings + other assets; Dashboard full net worth; Review net worth)
+- [ ] B. Goal-Plan Assets (assets assigned to goal; Ledger today value; Dashboard goal-plan assets)
+- [ ] C. Income / Tax Base (Tax Summary income base; Daily Accrual income base; MMF+bank+gov-sec income base)
+- [ ] Accept: +200k equity raises Full Net Worth but not income base; reconciliation stays green
+
+### 3. Shared government-security income engine
+- [ ] T-bill: income = face − purchase; daily accretion = income/days(issue,maturity); 15% WHT default; no compounding
+- [ ] FXD: coupon accrual between coupon dates; per-holding/tenor WHT; coupon paid on coupon date
+- [ ] IFB: coupon accrual; WHT default 0% exempt; editable
+- [ ] Wire Dashboard, Ledger, Daily Accrual (gov tab), Tax Summary, Portfolio Review, Reconciliation to it
+- [ ] Accept: 91-day T-bill face 50,000 / purchase 48,924 accrues 1,076 gross over the period
+
+### 4. Remove hardcoded KES 5M copy
+- [ ] Grep user-facing code for KES 5M / 5M projection / 5,000,000 / 2026–2036 / original PDF
+- [ ] ModelDrawer: replace "KES 5M projection" wording with dynamic/neutral language
+- [ ] Accept: a KES 1.2M Car portfolio never shows KES 5M wording
+
+### 5. Bank-instrument sweep allocation (safe)
+- [ ] Per-portfolio "Eligible for plan allocation" toggle/list (only user-approved bank products)
+- [ ] Eligibility: matures<=goal or liquid; min-invest; fresh rate; tax known; concentration cap; safety floor
+- [ ] Net yield per instrument; risk-adjusted score = netYield − penalties
+- [ ] Gov-preference threshold (editable, default prefer T-bill if bank advantage < 1.0pp)
+- [ ] Ledger explains every sweep decision plainly
+- [ ] Accept: 12-month goal only uses term instrument maturing before goal; else stays in MMF with explanation
+
+### 6. Regression tests
+- [ ] A. Dashboard tax card shows WHT amount not base
+- [ ] B. Reconciliation: other asset raises net worth not income base; stays green
+- [ ] C. T-bill accrual 50,000/48,924/91d => 1,076 gross; WHT 15% unless overridden
+- [ ] D. FXD WHT: <10y => 15%, 10y+ => 10%, override works
+- [ ] E. No user-facing KES 5M copy for a non-5M portfolio
+- [ ] F. Bank allocation: only eligible considered; concentration cap; ledger explanation
+- [ ] Run full suite + tsc; checkpoint; deliver
+
+## Audit Remediation Round — COMPLETE
+- [x] #1 Snapshot tax model: incomeTaxBase distinct from annualWht/whtToDate/fullPeriodProjectedWht + per-source WHT breakdown
+- [x] #1 Dashboard tax card shows payable WHT (not the income base); income base shown separately
+- [x] #3 Single shared government-security income engine (shared/securityIncome.ts): T-bill discount accretion, FXD/IFB coupon accrual, per-holding WHT (FXD tenor tier + override, IFB exempt)
+- [x] #3 Daily Accrual gov schedule + income breakdown routed through the shared engine (T-bill no longer taxed as a coupon on face)
+- [x] #4 Reconciliation split into three sections (Full Portfolio Value / Goal-Plan Assets / Income & Tax Base) via reconcileSections; income/tax base never compared to full net worth
+- [x] #5 Removed hardcoded "KES 5M" copy in ModelDrawer; goal label now follows portfolio.targetAmount
+- [x] #6 Safe bank-instrument sweep allocator (shared/bankSweep.ts): eligibility, risk-adjusted scoring (KDIC uninsured penalty), government-preference margin, plain-English ledger explanation; read-only sweepSuggestion tRPC procedure
+- [x] Regression tests: securityIncome.test.ts (11), bankSweep.test.ts (9), auditRemediation.test.ts (16 — A snapshot tax, B recon sections + honest red, C shared engine, D dynamic copy, E sweep safety, F CSV headers)
+- [x] Full suite green: 136 files / 1291 tests; type gate clean

@@ -31,6 +31,10 @@ import {
   type AllocationInput,
 } from "../shared/actuals";
 import { valueHolding } from "../shared/holdingValue";
+import {
+  securityIncomeOverWindow,
+  type SecurityIncomeSpec,
+} from "../shared/securityIncome";
 import { reconcile } from "../shared/reconciliation";
 import {
   suggestTier,
@@ -469,6 +473,63 @@ export async function buildPortfolioSnapshot(
     whtRate: settings.withholdingTax,
   });
   const taxBase = blendedNet.base;
+
+  // ── WHT PAYABLE (Audit item #1) ─────────────────────────────────────────────
+  // The Dashboard tax card must show WHT PAYABLE, never the income BASE. We derive
+  // three payable figures, all from data already fetched:
+  //   - annualWht: forward 12-month WHT on the current mix (MMF+bank 15%, taxable
+  //     gov via the shared engine, IFB exempt).
+  //   - whtToDate: realised WHT on interest earned so far (getActualsSummary).
+  //   - fullPeriodProjectedWht: annualWht scaled across the remaining horizon.
+  const nowMs = asOfMs;
+  const govSpecs = securityRows
+    .filter((s) => !s.isMatured)
+    .map((s) => ({
+      securityType: String(s.securityType) as SecurityIncomeSpec["securityType"],
+      faceValue: parseFloat(String(s.faceValue ?? "0")) || 0,
+      couponRate: parseFloat(String(s.couponRate ?? "0")) || 0,
+      issueDate: (s as { issueDate?: string | Date | null }).issueDate ?? null,
+      maturityDate: (s as { maturityDate?: string | Date | null }).maturityDate ?? null,
+      isMatured: !!s.isMatured,
+      isTaxExempt: !!s.isTaxExempt,
+      purchasePrice: (s as { purchasePrice?: string | null }).purchasePrice != null
+        ? parseFloat(String((s as { purchasePrice?: string | null }).purchasePrice))
+        : null,
+      tenorYears: (s as { tenorYears?: string | null }).tenorYears != null
+        ? parseFloat(String((s as { tenorYears?: string | null }).tenorYears))
+        : null,
+      whtRateOverride: null,
+    })) satisfies SecurityIncomeSpec[];
+  const govWindow = securityIncomeOverWindow(govSpecs, 365, nowMs);
+  const mmfBankBase =
+    alloc.primaryMmf +
+    alloc.secondaryMmf +
+    bankRows.filter((b) => b.isActive).reduce((s, b) => s + (parseFloat(String(b.principal ?? "0")) || 0), 0);
+  // MMF + bank interest is taxed at 15% WHT; use the blended MMF/bank rate.
+  const mmfBankGrossAnnual =
+    alloc.primaryMmf * (settings.mmfYield / 100) +
+    secondaryRows.reduce(
+      (s, r) => s + (parseFloat(String(r.currentBalance ?? "0")) || 0) * ((parseFloat(String(r.ear ?? "0")) || 0) / 100),
+      0,
+    ) +
+    bankRows
+      .filter((b) => b.isActive)
+      .reduce(
+        (s, b) => s + (parseFloat(String(b.principal ?? "0")) || 0) * ((parseFloat(String(b.interestRate ?? "0")) || 0) / 100),
+        0,
+      );
+  const mmfBankWhtAnnual = mmfBankGrossAnnual * (settings.withholdingTax / 100);
+  const annualWht = round2(mmfBankWhtAnnual + govWindow.wht);
+  const whtToDate = round2(summary?.taxLiability ?? 0);
+  const horizonRemainingYears = Math.max(0, (p.horizonMonths ?? 120) - 0) / 12;
+  const fullPeriodProjectedWht = round2(annualWht * Math.max(1, horizonRemainingYears));
+  // Payable-WHT breakdown (KES), keyed by source.
+  const whtBreakdown: Record<string, number> = {
+    mmf_bank: round2(mmfBankWhtAnnual),
+    government_securities: round2(govWindow.wht),
+  };
+  void mmfBankBase;
+
   // Canonical bases (pasted Part 3/4) — derived once via the shared pure helper
   // so the persisted figures match what unit tests verify.
   const bases = computeNetWorthBases({
@@ -686,7 +747,10 @@ export async function buildPortfolioSnapshot(
     },
     tax: {
       base: round2(taxBase),
-      breakdown: summary?.taxBreakdown ?? {},
+      annualWht,
+      whtToDate,
+      fullPeriodProjectedWht,
+      breakdown: whtBreakdown,
     },
     liquidity,
     reconciliation: {

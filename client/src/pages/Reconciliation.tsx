@@ -45,6 +45,8 @@ export default function Reconciliation({ embedded = false }: { embedded?: boolea
   const bankAccrual = data?.bankAccrual;
   const planPolicy = data?.planPolicy;
   const basis = data?.basis;
+  const sections = data?.sections ?? [];
+  const sectionsOk = data?.sectionsOk ?? true;
   const reconciled =
     !!full?.reconciled &&
     !!mmf?.ok &&
@@ -53,7 +55,8 @@ export default function Reconciliation({ embedded = false }: { embedded?: boolea
     (govAccrual?.ok ?? true) &&
     (bankAccrual?.ok ?? true) &&
     (planPolicy?.ok ?? true) &&
-    (basis?.fullOk ?? true);
+    (basis?.fullOk ?? true) &&
+    sectionsOk;
 
   // Round 43 (Fix #3): the banner's "largest gap" must span EVERY check, not just
   // the six whole-portfolio sources. Previously it read only full.maxDiff, so a
@@ -205,6 +208,61 @@ export default function Reconciliation({ embedded = false }: { embedded?: boolea
                   </div>
                 </CardContent>
               </Card>
+            )}
+
+            {/* Audit item #4 — three self-contained reconciliation SECTIONS. Each
+                section reconciles peers on the SAME basis, so the income/tax base
+                is never measured against full net worth, and goal-plan exclusions
+                are verified as an expected basis difference, not a false red. */}
+            {sections.length > 0 && (
+              <div className="grid gap-4 lg:grid-cols-3">
+                {sections.map((sec) => (
+                  <Card
+                    key={sec.key}
+                    className={sec.ok ? undefined : "border-red-500/40 bg-red-500/5"}
+                  >
+                    <CardHeader>
+                      <CardTitle className="text-base flex items-center gap-2">
+                        {sec.label}
+                        {sec.ok ? (
+                          <Badge className="bg-emerald-500/15 text-emerald-600 hover:bg-emerald-500/15 border-0">
+                            Consistent
+                          </Badge>
+                        ) : (
+                          <Badge variant="destructive">Mismatch</Badge>
+                        )}
+                      </CardTitle>
+                      <CardDescription>
+                        Reference {formatKES(sec.reference, 2)} · largest gap{" "}
+                        {formatKES(sec.maxDiff, 2)}
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="space-y-2">
+                        {sec.sources.map((src) => (
+                          <div
+                            key={src.key}
+                            className="flex items-center justify-between gap-2 text-sm"
+                          >
+                            <span className="text-muted-foreground">{src.label}</span>
+                            <span className="tabular-nums flex items-center gap-2">
+                              {formatKES(src.value, 2)}
+                              {src.ok ? (
+                                <span className="text-emerald-600">✓</span>
+                              ) : (
+                                <span className="text-red-500">
+                                  {src.diff > 0 ? "+" : ""}
+                                  {formatKES(src.diff, 2)}
+                                </span>
+                              )}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
             )}
 
             {/* Net-worth basis (pasted Part 3/4) — the three canonical bases every

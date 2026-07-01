@@ -432,6 +432,128 @@ export interface LedgerBasisResult {
   dashboardMatchesReview: boolean;
 }
 
+/**
+ * Audit item #4 — THREE-SECTION reconciliation.
+ *
+ * The old single verdict compared the income/tax base against sum-of-parts net
+ * worth, which is a category error: the tax base is only the income-producing
+ * capital, not the whole portfolio, so it would flip the badge red for a benign
+ * reason (or, worse, hide a real full-net-worth drift behind a tax-base match).
+ *
+ * This helper cleanly separates the checks into three self-contained sections,
+ * each with its OWN reference so a source is only ever compared to peers on the
+ * SAME basis:
+ *
+ *   1. FULL PORTFOLIO VALUE — sum-of-parts vs engine projection vs dashboard
+ *      actuals vs the headline net-worth card vs Portfolio Review. Every source
+ *      here is a full-net-worth figure.
+ *   2. GOAL-PLAN ASSETS — the goal-plan basis (full minus goal-excluded other
+ *      assets) vs the Ledger "today" comparable. Other-asset exclusions are an
+ *      expected basis difference, verified here, not a discrepancy.
+ *   3. INCOME / TAX BASE — the income-producing base the Tax Summary blends
+ *      yield across, compared ONLY to the snapshot's income/tax base. Never
+ *      compared to full net worth.
+ *
+ * A section is green only when all its sources agree within tolerance; the
+ * overall verdict is green only when all three sections are green.
+ */
+export interface ReconSectionSource {
+  key: string;
+  label: string;
+  value: number;
+  diff: number;
+  ok: boolean;
+}
+
+export interface ReconSection {
+  key: "fullPortfolio" | "goalPlan" | "incomeTax";
+  label: string;
+  reference: number;
+  sources: ReconSectionSource[];
+  maxDiff: number;
+  ok: boolean;
+}
+
+export interface ReconSectionsInputs {
+  // Section 1 — full portfolio value (all full-net-worth basis)
+  sumOfParts: number;
+  projectionTodayValue: number;
+  dashboardActualsTotal: number;
+  dashboardNetWorth: number;
+  portfolioReviewNetWorth: number;
+  // Section 2 — goal-plan assets
+  goalPlanAssets: number;
+  ledgerTodayComparable: number | null;
+  // Section 3 — income / tax base
+  incomeTaxBase: number;
+  taxSummaryBase: number;
+}
+
+export interface ReconSectionsResult {
+  sections: ReconSection[];
+  ok: boolean;
+}
+
+function buildSection(
+  key: ReconSection["key"],
+  label: string,
+  reference: number,
+  rawSources: Array<{ key: string; label: string; value: number | null }>,
+): ReconSection {
+  const ref = round2(reference);
+  const sources: ReconSectionSource[] = rawSources
+    .filter((s) => typeof s.value === "number")
+    .map((s) => {
+      const value = round2(s.value as number);
+      const diff = round2(value - ref);
+      return { key: s.key, label: s.label, value, diff, ok: Math.abs(diff) <= RECON_TOLERANCE_KES };
+    });
+  const maxDiff = sources.length ? Math.max(...sources.map((s) => Math.abs(s.diff))) : 0;
+  return {
+    key,
+    label,
+    reference: ref,
+    sources,
+    maxDiff: round2(maxDiff),
+    ok: sources.every((s) => s.ok),
+  };
+}
+
+export function reconcileSections(input: ReconSectionsInputs): ReconSectionsResult {
+  const fullPortfolio = buildSection(
+    "fullPortfolio",
+    "Full portfolio value",
+    input.sumOfParts,
+    [
+      { key: "sumParts", label: "Sum of all holdings", value: input.sumOfParts },
+      { key: "projection", label: "Engine projection (today)", value: input.projectionTodayValue },
+      { key: "dashboardActuals", label: "Dashboard total held today", value: input.dashboardActualsTotal },
+      { key: "netWorth", label: "Dashboard net-worth card", value: input.dashboardNetWorth },
+      { key: "portfolioReview", label: "Portfolio Review net worth", value: input.portfolioReviewNetWorth },
+    ],
+  );
+  const goalPlan = buildSection(
+    "goalPlan",
+    "Goal-plan assets",
+    input.goalPlanAssets,
+    [
+      { key: "goalPlanAssets", label: "Goal-plan assets (full − excluded)", value: input.goalPlanAssets },
+      { key: "ledgerToday", label: "Ledger 'today' comparable", value: input.ledgerTodayComparable },
+    ],
+  );
+  const incomeTax = buildSection(
+    "incomeTax",
+    "Income / tax base",
+    input.incomeTaxBase,
+    [
+      { key: "incomeTaxBase", label: "Income/tax base (snapshot)", value: input.incomeTaxBase },
+      { key: "taxSummaryBase", label: "Tax Summary blended-yield base", value: input.taxSummaryBase },
+    ],
+  );
+  const sections = [fullPortfolio, goalPlan, incomeTax];
+  return { sections, ok: sections.every((s) => s.ok) };
+}
+
 export function compareLedgerBases(input: LedgerBasisInputs): LedgerBasisResult {
   const fullVsGoalGap = round2(input.dashboardNetWorth - input.goalPlanAssets);
   const expectedGap = round2(input.otherAssetsExcludedFromGoal);

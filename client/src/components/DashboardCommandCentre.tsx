@@ -383,9 +383,9 @@ export function DashboardCommandCentre(props: CommandCentreProps) {
             accent="emerald"
           />
           <MetricTile
-            label="Tax to date"
+            label="WHT to date"
             value={formatKESCompact(actuals.taxToDate)}
-            sub={`≈ ${formatKESCompact(actuals.annualisedTax)}/yr`}
+            sub={`≈ ${formatKESCompact(actuals.annualisedTax)}/yr payable`}
             icon={Receipt}
             href="/review?tab=tax"
             accent="amber"

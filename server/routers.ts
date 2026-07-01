@@ -198,6 +198,7 @@ import {
   reconcileHoldings,
   reconcilePlanPolicy,
   compareLedgerBases,
+  reconcileSections,
   type AccrualReconItem,
 } from "../shared/reconciliation";
 import { valueHolding } from "../shared/holdingValue";
@@ -237,6 +238,11 @@ import {
   registerClassForAssetClass,
 } from "../shared/modeling";
 import { buildAllocation, blendedYield } from "../shared/actuals";
+import {
+  decideBankSweep,
+  type GovSweepOption,
+  type BankSweepCandidate,
+} from "../shared/bankSweep";
 import { buildPortfolioSnapshot } from "./snapshot";
 import {
   selectDashboardHeadlineNetWorth,
@@ -3563,8 +3569,26 @@ export const appRouter = router({
         fullOk: Math.abs(basisSnapshot.holdings.fullNetWorth - fullRecon.reference) <= 5,
       };
 
+      // Audit item #4: the three-section verdict. Each section reconciles peers
+      // on the SAME basis, so the income/tax base is NEVER measured against full
+      // net worth (its own section) and other-asset exclusions are verified as an
+      // expected basis difference (goal-plan section), not a false discrepancy.
+      const sectionsResult = reconcileSections({
+        sumOfParts: fullRecon.reference,
+        projectionTodayValue: inputs.projectionTodayValue,
+        dashboardActualsTotal: inputs.dashboardActualsTotal,
+        dashboardNetWorth: inputs.dashboardNetWorth,
+        portfolioReviewNetWorth: inputs.portfolioReviewNetWorth,
+        goalPlanAssets: basisSnapshot.holdings.goalPlanAssets,
+        ledgerTodayComparable: selectLedgerTodayComparableValue(basisSnapshot),
+        incomeTaxBase: basisSnapshot.holdings.incomeTaxBase,
+        taxSummaryBase: inputs.taxSummaryBase,
+      });
+
       return {
         full: fullRecon,
+        sections: sectionsResult.sections,
+        sectionsOk: sectionsResult.ok,
         mmf: reconcileMmf(inputs.accrualLedgerMmfTotal, inputs.primaryMmfBalance, inputs.secondaryMmfBalances),
         gov: reconcileGov(securityFaceValues, netLinkedGov),
         bank: reconcileBank(bankHoldingPrincipals, bankDepositAmounts, bankWithdrawalAmounts),
@@ -6132,6 +6156,62 @@ export const appRouter = router({
       .mutation(async ({ input }) => {
         await deleteBankInstrument(input.id);
         return { success: true };
+      }),
+
+    /**
+     * Audit item #6 — safe bank-vs-government sweep suggestion. Runs the pure
+     * `decideBankSweep` allocator against the portfolio's live security rates and
+     * the bank catalogue, returning the destination, the risk-adjusted scoring,
+     * and the plain-English ledger explanation. Read-only: it advises where a
+     * lump of investable cash SHOULD go without mutating the engine path, so the
+     * default projection stays byte-for-byte stable.
+     */
+    sweepSuggestion: protectedProcedure
+      .input(z.object({
+        portfolioId: z.number().int().positive(),
+        amount: z.number().min(0).default(50_000),
+      }))
+      .query(async ({ ctx, input }) => {
+        const p = await requirePortfolio(input.portfolioId, ctx.user.id);
+        const [rates, fundEar] = await Promise.all([
+          getRateSettings(input.portfolioId),
+          getSelectedFundEar(p),
+        ]);
+        const settings = dbToEngine(rates, p, fundEar);
+        const wht = settings.withholdingTax;
+        const govOptions: GovSweepOption[] = [
+          {
+            bucket: "tbill",
+            label: "364-day T-bill",
+            netPct: settings.tbill364Rate * (1 - wht / 100),
+          },
+          {
+            bucket: "ifb",
+            label: "IFB (tax-exempt)",
+            netPct: settings.ifbCouponRate,
+          },
+          {
+            bucket: "fxd",
+            label: "FXD",
+            netPct: settings.fxdCouponRate * (1 - wht / 100),
+          },
+        ];
+        const catalog = await getBankInstruments();
+        const bankCandidates: BankSweepCandidate[] = catalog
+          .filter((r) => Boolean(r.isActive))
+          .map((r) => ({
+            id: r.id,
+            bankName: r.bankName,
+            label: r.typicalTenor ?? null,
+            instrumentType: r.instrumentType as BankSweepCandidate["instrumentType"],
+            principal: 0,
+            interestRate: r.indicativeRate === null ? 0 : Number(r.indicativeRate),
+            whtRate: 15,
+            minimumBalance: Number(r.minAmount) || 0,
+            isActive: Boolean(r.isActive),
+            isMatured: false,
+          }));
+        return decideBankSweep(input.amount, govOptions, bankCandidates);
       }),
   }),
 

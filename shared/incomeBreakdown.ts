@@ -12,7 +12,31 @@
  * do NOT compound intra-period like a daily-credited MMF.
  */
 
+import {
+  computeSecurityIncome,
+  whtRateFor,
+  type SecurityIncomeSpec,
+} from "./securityIncome";
+
 export type SecurityType = "tbill_91" | "tbill_182" | "tbill_364" | "ifb" | "fxd";
+
+/** Map a Daily-Accrual security row into the shared engine's spec. */
+function toIncomeSpec(s: SecurityIncomeInput): SecurityIncomeSpec {
+  return {
+    id: s.id,
+    securityType: s.securityType,
+    faceValue: s.faceValue,
+    couponRate: s.couponRate,
+    issueDate: s.issueDate ?? null,
+    maturityDate: s.maturityDate ?? null,
+    isMatured: s.isMatured,
+    isTaxExempt: s.isTaxExempt,
+    purchasePrice: s.purchasePrice ?? null,
+    tenorYears: s.tenorYears ?? null,
+    whtRateOverride: s.whtRateOverride ?? null,
+  };
+}
+
 export type BankInstrumentType =
   | "call_deposit"
   | "fixed_deposit"
@@ -28,6 +52,14 @@ export interface SecurityIncomeInput {
   isTaxExempt: boolean;
   maturityDate?: string | Date | null;
   isMatured?: boolean;
+  /** Issue date — needed for T-bill straight-line discount accretion. */
+  issueDate?: string | Date | null;
+  /** Cash paid up front for a discount instrument (T-bill / zero-coupon). */
+  purchasePrice?: number | null;
+  /** Bond tenor in years, used to derive the FXD WHT tier. */
+  tenorYears?: number | null;
+  /** Per-holding WHT override (%). */
+  whtRateOverride?: number | null;
 }
 
 export interface BankIncomeInput {
@@ -161,9 +193,12 @@ export function buildSecurityIncome(
     const base = Math.max(0, s.faceValue);
     const ratePct = Math.max(0, s.couponRate);
     const grossAnnual = base * (ratePct / 100);
-    // IFBs are tax-exempt in Kenya; T-bills and FXD coupons attract 15% WHT.
-    const taxExempt = s.isTaxExempt || s.securityType === "ifb";
-    const whtAnnual = taxExempt ? 0 : grossAnnual * (GOV_WHT_PCT / 100);
+    // Per-holding WHT via the shared engine (IFB exempt; T-bills 15%; FXD
+    // tenor-tiered; per-holding override wins). Keeps this breakdown's tax in
+    // lock-step with the Daily Accrual schedule and the Tax Summary.
+    const whtPct = whtRateFor(toIncomeSpec(s));
+    const taxExempt = whtPct === 0;
+    const whtAnnual = grossAnnual * (whtPct / 100);
     const netAnnual = grossAnnual - whtAnnual;
     const { status, label: statusLabel } = securityRowStatus(s, now);
     rows.push({
@@ -428,13 +463,13 @@ export function buildSecurityDailySchedule(
   let base = 0;
   for (const s of securities) {
     if (!isLiveSecurity(s, now)) continue;
-    const faceValue = Math.max(0, s.faceValue);
-    const ratePct = Math.max(0, s.couponRate);
-    const grossAnnual = faceValue * (ratePct / 100);
-    const taxExempt = s.isTaxExempt || s.securityType === "ifb";
-    base += faceValue;
-    grossPerDay += grossAnnual / 365;
-    whtPerDay += taxExempt ? 0 : (grossAnnual * (GOV_WHT_PCT / 100)) / 365;
+    // Single source of truth: T-bills accrete their DISCOUNT (face − price)
+    // straight-line to par; coupon bonds accrue one coupon period's coupon.
+    // WHT is per-holding (override → tier → IFB-exempt).
+    const income = computeSecurityIncome(toIncomeSpec(s));
+    base += Math.max(0, s.faceValue);
+    grossPerDay += income.grossPerDay;
+    whtPerDay += income.whtPerDay;
   }
   return buildStraightLineSchedule(grossPerDay, whtPerDay, base, n);
 }

@@ -205,6 +205,10 @@ export default function MmfAccrual({ embedded = false }: { embedded?: boolean } 
             isTaxExempt: !!r.isTaxExempt,
             maturityDate: (r.maturityDate as string | null) ?? null,
             isMatured: !!r.isMatured,
+            issueDate: (r.issueDate as string | null) ?? null,
+            purchasePrice: r.purchasePrice != null ? Number(r.purchasePrice) : null,
+            tenorYears: r.tenorYears != null ? Number(r.tenorYears) : null,
+            whtRateOverride: r.whtRate != null ? Number(r.whtRate) : null,
           } satisfies SecurityIncomeInput;
         }),
         days,
@@ -250,6 +254,10 @@ export default function MmfAccrual({ embedded = false }: { embedded?: boolean } 
             isTaxExempt: !!r.isTaxExempt,
             maturityDate: (r.maturityDate as string | null) ?? null,
             isMatured: !!r.isMatured,
+            issueDate: (r.issueDate as string | null) ?? null,
+            purchasePrice: r.purchasePrice != null ? Number(r.purchasePrice) : null,
+            tenorYears: r.tenorYears != null ? Number(r.tenorYears) : null,
+            whtRateOverride: r.whtRate != null ? Number(r.whtRate) : null,
           } satisfies SecurityIncomeInput;
         }),
         days,

@@ -242,7 +242,13 @@ export function snapshotFromState(d: DerivedPortfolio): PortfolioSnapshot {
     },
     ledger: [],
     income: { accruedNetInterest: 0, blendedNetYieldPct: 0 },
-    tax: { base: d.incomeTaxBase, breakdown: {} },
+    tax: {
+      base: d.incomeTaxBase,
+      annualWht: 0,
+      whtToDate: 0,
+      fullPeriodProjectedWht: 0,
+      breakdown: {},
+    },
     liquidity: [],
     reconciliation: {
       ok: d.recon.reconciled,

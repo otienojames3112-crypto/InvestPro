@@ -90,7 +90,18 @@ export function ModelDrawer({
   open: boolean;
   onOpenChange: (o: boolean) => void;
 }) {
-  const { mode, portfolioId } = usePortfolio();
+  const { mode, portfolioId, portfolio } = usePortfolio();
+  // Audit item #5: never hardcode the goal. Describe the projection with the
+  // portfolio's ACTUAL target so switching goals updates the copy everywhere.
+  const goalLabel = (() => {
+    const t = portfolio?.targetAmount ?? 0;
+    if (t <= 0) return "your goal";
+    if (t >= 1_000_000) {
+      const m = t / 1_000_000;
+      return `KES ${Number.isInteger(m) ? m : m.toFixed(1)}M`;
+    }
+    return `KES ${Math.round(t).toLocaleString()}`;
+  })();
   const [, navigate] = useLocation();
   const profile = profileFor(opportunity.assetClass as AssetClass);
 
@@ -435,7 +446,7 @@ export function ModelDrawer({
                   <TooltipContent className="max-w-[240px] text-xs">
                     These are <strong>your</strong> assumptions, used only to show this
                     holding's own scenario. The tool never forecasts a return for you,
-                    and they do not change the engine's KES 5M projection.
+                    and they do not change the engine's {goalLabel} projection.
                   </TooltipContent>
                 </Tooltip>
               </Label>
@@ -642,7 +653,7 @@ export function ModelDrawer({
 
                 {/* Engine-projection honesty note */}
                 <p className="text-[10px] text-muted-foreground leading-relaxed">
-                  Your KES 5M projection band is unchanged — this holding is tracked as a
+                  Your {goalLabel} projection band is unchanged — this holding is tracked as a
                   net-worth asset, not a deterministic engine input. Its future value depends
                   on prices and your assumptions, which the tool does not predict.
                 </p>

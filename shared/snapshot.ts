@@ -160,8 +160,29 @@ export interface SnapshotIncome {
 }
 
 export interface SnapshotTax {
-  /** Tax base (taxable income figure the Tax tab renders). */
+  /**
+   * Income/tax BASE — the income-producing capital the tax model runs across
+   * (MMF + bank + taxable gov). This is a CAPITAL figure, NOT tax payable, and
+   * must never be shown as "tax" on the Dashboard.
+   */
   base: number;
+  /**
+   * Annual WHT PAYABLE on the current mix (KES) — the forward-looking 12-month
+   * withholding at each instrument's own rate (IFB exempt, T-bills 15%, FXD
+   * tiered, MMF/bank 15%). This is the figure a "tax" card should headline.
+   */
+  annualWht: number;
+  /**
+   * WHT already incurred on income earned to date (KES) — the realised tax on
+   * accrued interest since tracking began.
+   */
+  whtToDate: number;
+  /**
+   * Projected total WHT over the whole remaining plan horizon (KES) — the
+   * full-period withholding the plan implies, for the Tax Summary projection.
+   */
+  fullPeriodProjectedWht: number;
+  /** Per-source WHT breakdown (KES payable), keyed by instrument class. */
   breakdown: Record<string, number>;
 }
 
@@ -304,6 +325,21 @@ export function selectGoalProgress(s: PortfolioSnapshot): GoalProgress {
 
 export function selectTaxSummary(s: PortfolioSnapshot): SnapshotTax {
   return s.tax;
+}
+
+/** Annual WHT PAYABLE (KES) — the figure a Dashboard "tax" card should headline. */
+export function selectAnnualWht(s: PortfolioSnapshot): number {
+  return s.tax.annualWht;
+}
+
+/** WHT incurred on income earned to date (KES). */
+export function selectWhtToDate(s: PortfolioSnapshot): number {
+  return s.tax.whtToDate;
+}
+
+/** Projected total WHT across the remaining plan horizon (KES). */
+export function selectFullPeriodProjectedWht(s: PortfolioSnapshot): number {
+  return s.tax.fullPeriodProjectedWht;
 }
 
 export function selectAccruedInterest(s: PortfolioSnapshot): number {

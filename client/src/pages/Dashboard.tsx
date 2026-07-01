@@ -1114,8 +1114,11 @@ export default function Dashboard() {
           const bankInstruments = actualsSummary?.bankBalance ?? 0;
           const otherAssets = snapshot.holdings.otherAssetsTotal;
           const interestToDate = inc.accruedNetInterest;
-          const taxToDate = snapshot.tax.base > 0 ? Math.round(snapshot.tax.base) : 0;
-          const annualisedTax = taxToDate; // tax.base is the annual taxable figure
+          // Audit item #1: the Dashboard tax card shows WHT PAYABLE, never the
+          // income BASE. `whtToDate` is realised withholding on interest earned so
+          // far; `annualWht` is the forward 12-month withholding on the mix.
+          const taxToDate = snapshot.tax.whtToDate > 0 ? Math.round(snapshot.tax.whtToDate) : 0;
+          const annualisedTax = snapshot.tax.annualWht > 0 ? Math.round(snapshot.tax.annualWht) : 0;
           // Priority alerts (red first), each deep-linked to where it's resolved.
           const ccAlerts: CommandAlert[] = [];
           if (plannedThis > 0 && actualThis <= 0)

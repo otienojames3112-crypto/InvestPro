@@ -1424,3 +1424,12 @@
 - [x] #6 Safe bank-instrument sweep allocator (shared/bankSweep.ts): eligibility, risk-adjusted scoring (KDIC uninsured penalty), government-preference margin, plain-English ledger explanation; read-only sweepSuggestion tRPC procedure
 - [x] Regression tests: securityIncome.test.ts (11), bankSweep.test.ts (9), auditRemediation.test.ts (16 — A snapshot tax, B recon sections + honest red, C shared engine, D dynamic copy, E sweep safety, F CSV headers)
 - [x] Full suite green: 136 files / 1291 tests; type gate clean
+
+
+## Reconciliation Full-Portfolio Mismatch (T-bill discount)
+- [x] BUG: Engine "today" value (KES 208,924.11) undercounts vs sum-of-holdings (KES 210,000) by the T-bill discount (-1,075.89) -> Full portfolio value section shows Mismatch (red)
+- [x] Decide the single valuation convention for a live (unmatured) T-bill in the "today" whole-portfolio value and make engine + all sources agree
+- [x] Verify Reconciliation "Full portfolio value" turns green in both LIVE and TEST environments
+- [x] Regression test: engine-today == sum-of-holdings when a discounted T-bill is held (no -discount gap)
+- [x] Full suite + tsc green; checkpoint
+- [ ] Package and deliver the entire codebase as a ZIP

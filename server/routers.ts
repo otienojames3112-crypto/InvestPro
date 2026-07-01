@@ -258,7 +258,7 @@ import {
   computeInflationAdjustedGoal,
   computeSavingsLedSplit,
 } from "../shared/decisionSurface";
-import { discountPriceForSecurity, tbillPrice, parseBreachAckRow } from "../shared/discount";
+import { discountPriceForSecurity, tbillPrice, parseBreachAckRow, accretedValue } from "../shared/discount";
 import {
   advance as advanceClock,
   toUtcMidnight,
@@ -3313,8 +3313,53 @@ export const appRouter = router({
       //   principalBasisToday = totalEnd - (mmfEnd_today - recordedMmfPrincipal)
       // Secondary MMFs and bank holdings are already held flat in actual months.
       const lastActual = [...projection].reverse().find((r) => r.isActual);
+      // The engine values a live (unmatured) discount T-bill at its ACCRETED cost
+      // (purchasePrice pulled straight-line toward face), so a freshly bought lot
+      // sits near its purchase price — below face. Every other reconciliation
+      // source (sum-of-parts reference, Dashboard, Portfolio Review) values the
+      // same lot at FACE. To reconcile all sources on ONE (face) footing, add the
+      // un-accreted discount (face - accretedValue) back for each live discount
+      // T-bill lot — the exact analogue of stripping the primary-MMF accrual.
+      // Mirror the engine's OWN accretion basis EXACTLY (integer-month ages, not
+      // day-precise) so the add-back cancels its accretion to the cent. The engine
+      // uses month offsets from the portfolio start date: age = currentMonth -
+      // issueMonth, tenor = whole months issue->maturity, fraction = age/tenor in
+      // [0,1] (see engine.ts). We recompute the identical figure here.
+      const reconStartDate = new Date(normaliseDate(p.startDate) + "T12:00:00Z");
+      const reconToday = new Date(reconNow);
+      const reconCurrentMonth = Math.max(
+        0,
+        Math.floor(
+          (reconToday.getFullYear() - reconStartDate.getFullYear()) * 12 +
+            (reconToday.getMonth() - reconStartDate.getMonth()),
+        ),
+      );
+      const unaccretedTbillDiscount = securities
+        .filter((s) => !s.isMatured)
+        .reduce((sum, s) => {
+          const face = parseFloat(String(s.faceValue ?? "0")) || 0;
+          const price = parseFloat(String(s.purchasePrice ?? "0")) || 0;
+          // Only true discount lots (bought below face) diverge from face. Coupon
+          // bonds (IFB/FXD) are already held at face by the engine.
+          if (!(price > 0 && price < face)) return sum;
+          const issueDate = new Date(normaliseDate(s.issueDate) + "T12:00:00Z");
+          const matDate = new Date(normaliseDate(s.maturityDate) + "T12:00:00Z");
+          const issueMonth =
+            Math.floor(
+              (issueDate.getFullYear() - reconStartDate.getFullYear()) * 12 +
+                (issueDate.getMonth() - reconStartDate.getMonth()),
+            ) + 1;
+          const tenorMonths = Math.round(
+            (matDate.getFullYear() - issueDate.getFullYear()) * 12 +
+              (matDate.getMonth() - issueDate.getMonth()),
+          );
+          const age = reconCurrentMonth - issueMonth;
+          const fraction = tenorMonths > 0 ? age / tenorMonths : 1;
+          const value = accretedValue(face, price, fraction);
+          return sum + (face - value);
+        }, 0);
       const projectionTodayValue = lastActual
-        ? lastActual.totalEnd - (lastActual.mmfEnd - primaryMmfBalance)
+        ? lastActual.totalEnd - (lastActual.mmfEnd - primaryMmfBalance) + unaccretedTbillDiscount
         : sumParts;
 
       // Round 32: Portfolio Review and Tax Summary sources are now computed by

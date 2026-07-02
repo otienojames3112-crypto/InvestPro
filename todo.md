@@ -1632,3 +1632,11 @@
 - [x] 9. Ask AI principle banner: allow factual extract/compare/sort/summarize; ban buy/sell/recommend/best
 - [x] 10. Ask AI system prompt: allow factual sorting/comparison by disclosed column; keep recommendation ban
 - [x] 11. Tests A–D (approved-universe purity, ref clearing, archive controls, Ask-AI copy/prompt)
+
+## Round 87 — Published-site OAuth hardening
+- [x] oauth.ts: on callback failure (expired/replayed code, missing openId, exchange error) redirect to /?authError=<reason> instead of raw 500/JSON
+- [x] oauth.ts: recover stray /?code= landing on root by redirecting into the proper login/callback flow
+- [x] client: show a friendly "sign-in link expired" banner when ?authError present, with a re-login button
+- [x] tests: cover the failure-path redirect + authError banner
+- [x] full suite + tsc green; checkpoint for redeploy
+- [ ] plain-English guide: continuing the tool outside Manus

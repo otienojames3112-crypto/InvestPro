@@ -57,6 +57,18 @@ export default function DashboardLayout({
   }
 
   if (!user) {
+    // Read a machine-readable auth failure flag (set by the server callback when
+    // a sign-in link is expired/replayed/misrouted) and, if a stray ?code= landed
+    // here, treat it as an expired link rather than a silent dead-end.
+    const params =
+      typeof window !== "undefined"
+        ? new URLSearchParams(window.location.search)
+        : new URLSearchParams();
+    const authError = params.get("authError") ?? (params.get("code") ? "stale_link" : null);
+    const authErrorMessage = authError
+      ? "Your sign-in link has expired or was already used. Please sign in again to continue."
+      : null;
+
     return (
       <div className="flex items-center justify-center min-h-screen">
         <div className="flex flex-col items-center gap-8 p-8 max-w-md w-full">
@@ -64,9 +76,15 @@ export default function DashboardLayout({
             <h1 className="text-2xl font-semibold tracking-tight text-center">
               Sign in to continue
             </h1>
-            <p className="text-sm text-muted-foreground text-center max-w-sm">
-              Access to this dashboard requires authentication. Continue to launch the login flow.
-            </p>
+            {authErrorMessage ? (
+              <p className="text-sm text-center max-w-sm rounded-md border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-amber-700 dark:text-amber-300">
+                {authErrorMessage}
+              </p>
+            ) : (
+              <p className="text-sm text-muted-foreground text-center max-w-sm">
+                Access to this dashboard requires authentication. Continue to launch the login flow.
+              </p>
+            )}
           </div>
           <Button
             onClick={() => {

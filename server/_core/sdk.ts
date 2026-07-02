@@ -38,20 +38,43 @@ class OAuthService {
     }
   }
 
-  private decodeState(state: string): string {
-    const redirectUri = atob(state);
-    return redirectUri;
+  private decodeState(state: string, fallbackRedirectUri = ""): string {
+    // `state` is the base64 (btoa) of the SPA's `${origin}/api/oauth/callback`.
+    // A malformed or missing state (stale link, stray ?code=) must NOT throw an
+    // InvalidCharacterError deep inside the token exchange — that surfaces as a
+    // raw 500/502 and looks like the whole site is down. Decode defensively and
+    // fall back to the caller-provided callback URL (derived from the request).
+    const fallback = fallbackRedirectUri;
+    if (!state) return fallback;
+    try {
+      // Normalise base64url and padding before decoding.
+      const normalised = state.replace(/-/g, "+").replace(/_/g, "/");
+      const padded = normalised.padEnd(
+        Math.ceil(normalised.length / 4) * 4,
+        "=",
+      );
+      const decoded =
+        typeof Buffer !== "undefined"
+          ? Buffer.from(padded, "base64").toString("utf-8")
+          : atob(padded);
+      // Only trust it if it looks like an absolute http(s) URL.
+      if (/^https?:\/\//i.test(decoded)) return decoded;
+      return fallback || decoded;
+    } catch {
+      return fallback;
+    }
   }
 
   async getTokenByCode(
     code: string,
-    state: string
+    state: string,
+    fallbackRedirectUri = ""
   ): Promise<ExchangeTokenResponse> {
     const payload: ExchangeTokenRequest = {
       clientId: ENV.appId,
       grantType: "authorization_code",
       code,
-      redirectUri: this.decodeState(state),
+      redirectUri: this.decodeState(state, fallbackRedirectUri),
     };
 
     const { data } = await this.client.post<ExchangeTokenResponse>(
@@ -120,9 +143,10 @@ class SDKServer {
    */
   async exchangeCodeForToken(
     code: string,
-    state: string
+    state: string,
+    fallbackRedirectUri = ""
   ): Promise<ExchangeTokenResponse> {
-    return this.oauthService.getTokenByCode(code, state);
+    return this.oauthService.getTokenByCode(code, state, fallbackRedirectUri);
   }
 
   /**

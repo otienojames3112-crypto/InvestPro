@@ -9,22 +9,43 @@ function getQueryParam(req: Request, key: string): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
+/**
+ * Redirect the browser back to the SPA with a machine-readable auth error flag
+ * instead of dead-ending on a raw 4xx/5xx JSON body. The client reads
+ * `?authError=` and shows a friendly "sign-in link expired" prompt.
+ */
+function redirectWithAuthError(res: Response, reason: string) {
+  const target = `/?authError=${encodeURIComponent(reason)}`;
+  res.redirect(302, target);
+}
+
 export function registerOAuthRoutes(app: Express) {
   app.get("/api/oauth/callback", async (req: Request, res: Response) => {
     const code = getQueryParam(req, "code");
     const state = getQueryParam(req, "state");
 
     if (!code || !state) {
-      res.status(400).json({ error: "code and state are required" });
+      // A callback with no code/state is almost always a stale or misrouted
+      // link. Send the user back into a clean login flow rather than showing
+      // a raw 400 JSON error.
+      redirectWithAuthError(res, "missing_code");
       return;
     }
 
     try {
-      const tokenResponse = await sdk.exchangeCodeForToken(code, state);
+      // Derive a safe fallback callback URL from the incoming request, used only
+      // if `state` is missing/garbled so the token exchange never crashes on decode.
+      const proto =
+        (req.headers["x-forwarded-proto"] as string | undefined)?.split(",")[0] ||
+        req.protocol ||
+        "https";
+      const host = req.get("host") ?? "";
+      const fallbackRedirectUri = host ? `${proto}://${host}/api/oauth/callback` : "";
+      const tokenResponse = await sdk.exchangeCodeForToken(code, state, fallbackRedirectUri);
       const userInfo = await sdk.getUserInfo(tokenResponse.accessToken);
 
       if (!userInfo.openId) {
-        res.status(400).json({ error: "openId missing from user info" });
+        redirectWithAuthError(res, "missing_openid");
         return;
       }
 
@@ -46,8 +67,11 @@ export function registerOAuthRoutes(app: Express) {
 
       res.redirect(302, "/");
     } catch (error) {
+      // Most common cause here is a used/expired authorization code being
+      // replayed (e.g. an old bookmark). Surface it as a graceful re-login
+      // prompt instead of a raw 500 that looks like the site is broken.
       console.error("[OAuth] Callback failed", error);
-      res.status(500).json({ error: "OAuth callback failed" });
+      redirectWithAuthError(res, "exchange_failed");
     }
   });
 }

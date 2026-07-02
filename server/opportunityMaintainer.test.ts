@@ -1,8 +1,7 @@
 import { afterAll, describe, expect, it } from "vitest";
 import { appRouter } from "./routers";
 import { NOT_ADMIN_ERR_MSG } from "../shared/const";
-import { getOpportunityByRef, upsertOpportunity } from "./db";
-import { isHumanChecked } from "../shared/provenance";
+import { getOpportunityByRef, getResearchUpdate } from "./db";
 import type { TrpcContext } from "./_core/context";
 
 type AuthedUser = NonNullable<TrpcContext["user"]>;
@@ -26,24 +25,15 @@ function ctxFor(role: "admin" | "user"): TrpcContext {
   };
 }
 
-// Unique ref so the test never collides with seeded rows; cleaned up after.
+// Unique ref so the test never collides with seeded rows.
 const TEST_REF = `TEST:MAINTAINER-${Date.now()}`;
+let queuedUpdateId: number | null = null;
 
 afterAll(async () => {
-  // Best-effort teardown: deactivate the hand-added row so it doesn't linger in
-  // the live catalog. (There is no hard-delete helper by design.)
-  const row = await getOpportunityByRef(TEST_REF);
-  if (row) {
-    await upsertOpportunity({
-      ref: TEST_REF,
-      name: row.name,
-      assetClass: row.assetClass,
-      currency: row.currency,
-      dataSource: row.dataSource,
-      dataAsOf: row.dataAsOf,
-      active: false,
-    });
-  }
+  // Round 82: addOpportunity no longer writes a live row, so there is nothing to
+  // deactivate. The only artefact is a PENDING research_update; leave it pending
+  // (it never reached a catalogue) — there is no hard-delete helper by design.
+  void queuedUpdateId;
 });
 
 describe("Part 7.3 maintainer gating", () => {
@@ -53,13 +43,13 @@ describe("Part 7.3 maintainer gating", () => {
       caller.opportunities.addOpportunity({
         ref: `${TEST_REF}-denied`,
         name: "Should not be created",
-        assetClass: "money_market_fund",
+        assetClass: "cash_mmf",
         currency: "KES",
         source: "Manual test",
         figures: {},
       }),
     ).rejects.toMatchObject({ message: NOT_ADMIN_ERR_MSG });
-    // And nothing was written.
+    // And nothing was written to the live catalogue.
     expect(await getOpportunityByRef(`${TEST_REF}-denied`)).toBeNull();
   });
 
@@ -81,14 +71,14 @@ describe("Part 7.3 maintainer gating", () => {
   });
 });
 
-describe("Part 7.3 addOpportunity (admin)", () => {
-  it("creates a hand-authored instrument whose figures are human_entered with citation", async () => {
+describe("Part 7.3 addOpportunity (admin) — Round 82 governed contract", () => {
+  it("ENQUEUES a pending research_update instead of writing a live catalogue row", async () => {
     const caller = appRouter.createCaller(ctxFor("admin"));
     const asOf = Date.UTC(2026, 2, 31);
     const res = await caller.opportunities.addOpportunity({
       ref: TEST_REF,
       name: "Hand-Entered Test Fund",
-      assetClass: "money_market_fund",
+      assetClass: "cash_mmf",
       issuer: "Test Manager",
       currency: "KES",
       source: "ILAM fact sheet Q1-2026",
@@ -97,36 +87,57 @@ describe("Part 7.3 addOpportunity (admin)", () => {
       figures: { yieldPct: 9.25, yieldKind: "effective annual yield" },
     });
 
+    // The governed shape: queued, with a pending-update id — NOT a live opportunity.
     expect(res.ref).toBe(TEST_REF);
-    const saved = res.opportunity;
-    expect(saved).toBeTruthy();
-    expect(saved?.name).toBe("Hand-Entered Test Fund");
-    // The decimal column normalises scale ("9.2500"); compare numerically.
-    expect(Number(saved?.yieldPct)).toBe(9.25);
+    expect(res.queued).toBe(true);
+    expect(typeof res.pendingUpdateId).toBe("number");
+    queuedUpdateId = res.pendingUpdateId;
 
-    const fp = (saved?.fieldProvenance ?? {}) as Record<string, { value: string | null; verificationState: string; source: string | null; verifiedBy?: string | null }>;
-    const y = fp.yield;
-    expect(y).toBeTruthy();
-    expect(y?.value).toBe("9.25");
-    expect(isHumanChecked(y!.verificationState as never)).toBe(true);
-    expect(y?.verificationState).toBe("human_entered");
-    expect(y?.source).toBe("ILAM fact sheet Q1-2026");
-    expect(y?.verifiedBy).toBe("Admin Person");
-    // Row-level summary reflects the human attention.
-    expect(saved?.verificationState).toBe("human_entered");
+    // The live catalogue is untouched until a manager approves on the Research Desk.
+    expect(await getOpportunityByRef(TEST_REF)).toBeNull();
+
+    // The pending update carries the maintainer's figures + citation + manual origin.
+    const pending = await getResearchUpdate(res.pendingUpdateId);
+    expect(pending).toBeTruthy();
+    expect(pending?.status).toBe("pending");
+    expect(pending?.origin).toBe("manual");
+    expect(pending?.source).toBe("ILAM fact sheet Q1-2026");
   });
 
-  it("refuses a duplicate ref (edit it instead of re-adding)", async () => {
+  it("refuses a create for a ref that already exists live (edit it instead)", async () => {
+    // Seed a real live row via the low-level helper, then confirm addOpportunity
+    // rejects a create against that ref with a CONFLICT.
+    const { upsertOpportunity } = await import("./db");
+    const liveRef = `${TEST_REF}-LIVE`;
+    await upsertOpportunity({
+      ref: liveRef,
+      name: "Already Live Fund",
+      assetClass: "cash_mmf",
+      currency: "KES",
+      dataSource: "seed",
+      dataAsOf: new Date(),
+      active: true,
+    });
     const caller = appRouter.createCaller(ctxFor("admin"));
     await expect(
       caller.opportunities.addOpportunity({
-        ref: TEST_REF,
+        ref: liveRef,
         name: "Duplicate",
-        assetClass: "money_market_fund",
+        assetClass: "cash_mmf",
         currency: "KES",
         source: "Manual test",
         figures: {},
       }),
     ).rejects.toMatchObject({ message: expect.stringContaining("already exists") });
+    // Teardown: deactivate the seeded live row.
+    await upsertOpportunity({
+      ref: liveRef,
+      name: "Already Live Fund",
+      assetClass: "cash_mmf",
+      currency: "KES",
+      dataSource: "seed",
+      dataAsOf: new Date(),
+      active: false,
+    });
   });
 });

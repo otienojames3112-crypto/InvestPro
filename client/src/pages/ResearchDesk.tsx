@@ -42,6 +42,11 @@ import { formatRelativeTime } from "@/lib/format";
 import AiIntake from "./AiIntake";
 import AiReview from "./AiReview";
 import SourceConflicts from "./SourceConflicts";
+import AskAI from "./AskAI";
+import RecentlyApproved from "./RecentlyApproved";
+import { usePortfolio } from "@/contexts/PortfolioContext";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 
 /** Human label for an asset class, falling back to the raw class. */
 function classLabel(ac: string): string {
@@ -143,17 +148,151 @@ function DigestHeader() {
   );
 }
 
+/* ── Pending-count badge for the queue tab ─────────────────────────────────── */
+
+function PendingBadge() {
+  const { data } = trpc.researchPipeline.pendingCount.useQuery(undefined, {
+    refetchOnWindowFocus: false,
+  });
+  const n = data?.count ?? 0;
+  if (n <= 0) return null;
+  return (
+    <Badge className="ml-1.5 h-4 min-w-4 px-1 text-[10px] bg-amber-500/15 text-amber-700 border-amber-500/30" variant="outline">
+      {n}
+    </Badge>
+  );
+}
+
+/* ── Approve confirmation dialog (impact + gate + manager override) ─────────── */
+
+function ApproveDialog({
+  updateId,
+  portfolioId,
+  managerValue,
+  setManagerValue,
+  onClose,
+  onApprove,
+  busy,
+}: {
+  updateId: number | null;
+  portfolioId: number | null;
+  managerValue: string;
+  setManagerValue: (v: string) => void;
+  onClose: () => void;
+  onApprove: (overrideGate: boolean) => void;
+  busy: boolean;
+}) {
+  const { data, isLoading } = trpc.researchPipeline.impactOf.useQuery(
+    updateId != null ? { id: updateId, portfolioId: portfolioId ?? undefined } : (undefined as never),
+    { enabled: updateId != null, refetchOnWindowFocus: false },
+  );
+
+  const gate = data?.gate;
+  const impact = data?.impact;
+  const blocked = gate && !gate.ok;
+  const missing = gate?.missing ?? [];
+  const overrideSatisfied = managerValue.trim() !== "";
+
+  return (
+    <Dialog open={updateId != null} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <ShieldCheck className="w-5 h-5 text-primary" /> Approve this change?
+          </DialogTitle>
+          <DialogDescription>
+            Approving promotes this fact into the live catalogue and records it in the audit trail. Reference facts never
+            restate your existing balances.
+          </DialogDescription>
+        </DialogHeader>
+
+        {isLoading ? (
+          <Skeleton className="h-24 w-full rounded-lg" />
+        ) : (
+          <div className="space-y-3">
+            {impact && (
+              <div
+                className={`rounded-lg border p-3 text-sm flex items-start gap-2 ${
+                  impact.affectsProjection
+                    ? "border-amber-500/30 bg-amber-500/[0.06] text-amber-800"
+                    : "border-emerald-500/20 bg-emerald-500/[0.05] text-emerald-800"
+                }`}
+              >
+                {impact.affectsProjection ? (
+                  <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+                ) : (
+                  <ShieldCheck className="w-4 h-4 mt-0.5 shrink-0" />
+                )}
+                <span>{impact.summary}</span>
+              </div>
+            )}
+
+            {blocked && (
+              <div className="rounded-lg border border-amber-500/30 bg-amber-500/[0.06] p-3 text-sm space-y-2">
+                <p className="flex items-start gap-2 text-amber-800">
+                  <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+                  <span>{gate?.reason}</span>
+                </p>
+                <div className="space-y-1">
+                  <Label className="text-xs text-muted-foreground">
+                    Vouch a value for {missing.join(", ")} (you take responsibility for the figure)
+                  </Label>
+                  <Input
+                    placeholder="e.g. 15.98"
+                    value={managerValue}
+                    onChange={(e) => setManagerValue(e.target.value)}
+                    className="bg-background"
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        <DialogFooter>
+          <Button variant="outline" className="bg-background" onClick={onClose} disabled={busy}>
+            Cancel
+          </Button>
+          {blocked && !overrideSatisfied ? (
+            <Button variant="secondary" onClick={() => onApprove(true)} disabled={busy}>
+              {busy ? <RefreshCw className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <AlertTriangle className="w-3.5 h-3.5 mr-1.5" />}
+              Approve anyway (override)
+            </Button>
+          ) : (
+            <Button onClick={() => onApprove(false)} disabled={busy}>
+              {busy ? <RefreshCw className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5 mr-1.5" />}
+              Approve &amp; promote
+            </Button>
+          )}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 /* ── Pending update review queue ───────────────────────────────────────────── */
 
 function PendingQueue() {
   const utils = trpc.useUtils();
+  const { portfolioId } = usePortfolio();
   const { data, isLoading } = trpc.researchPipeline.listUpdates.useQuery({ status: "pending" });
   const [rejectId, setRejectId] = useState<number | null>(null);
   const [rejectNote, setRejectNote] = useState("");
+  // The update currently being approved through the confirmation dialog.
+  const [approveId, setApproveId] = useState<number | null>(null);
+  const [managerValue, setManagerValue] = useState("");
 
   const review = trpc.researchPipeline.review.useMutation({
     onSuccess: (res, vars) => {
       if (vars.approve) {
+        if (res.blocked) {
+          // A blocked approval is informative, not a failure: the row stays pending.
+          toast.warning(
+            res.blocked.reason ??
+              "This entry is missing a required figure. Add it, or approve again with a manager-vouched value.",
+          );
+          return;
+        }
         toast.success(
           res.promotedRef
             ? `Approved — promoted into the live catalogue as "${res.promotedRef}".`
@@ -166,12 +305,15 @@ function PendingQueue() {
       utils.researchPipeline.listUpdates.invalidate();
       utils.researchPipeline.pendingCount.invalidate();
       utils.researchPipeline.digest.invalidate();
+      utils.researchPipeline.recentlyApproved.invalidate();
       utils.opportunities.list.invalidate();
       utils.opportunities.byRef.invalidate();
       utils.mmfFunds.invalidate();
       utils.bankInstruments.invalidate();
       setRejectId(null);
       setRejectNote("");
+      setApproveId(null);
+      setManagerValue("");
     },
     onError: (err) => toast.error(err.message),
   });
@@ -277,7 +419,10 @@ function PendingQueue() {
               <div className="flex items-center gap-2 pt-1">
                 <Button
                   size="sm"
-                  onClick={() => review.mutate({ id: u.id, approve: true })}
+                  onClick={() => {
+                    setApproveId(u.id);
+                    setManagerValue("");
+                  }}
                   disabled={review.isPending}
                 >
                   {busy && review.variables?.approve ? (
@@ -285,7 +430,7 @@ function PendingQueue() {
                   ) : (
                     <CheckCircle2 className="w-3.5 h-3.5 mr-1.5" />
                   )}
-                  Approve &amp; promote
+                  Review &amp; approve
                 </Button>
                 <Button
                   size="sm"
@@ -304,6 +449,27 @@ function PendingQueue() {
           </Card>
         );
       })}
+
+      <ApproveDialog
+        updateId={approveId}
+        portfolioId={portfolioId}
+        managerValue={managerValue}
+        setManagerValue={setManagerValue}
+        onClose={() => {
+          setApproveId(null);
+          setManagerValue("");
+        }}
+        onApprove={(overrideGate) =>
+          approveId != null &&
+          review.mutate({
+            id: approveId,
+            approve: true,
+            managerValue: managerValue.trim() === "" ? undefined : managerValue.trim(),
+            overrideGate,
+          })
+        }
+        busy={review.isPending}
+      />
 
       <Dialog open={rejectId != null} onOpenChange={(o) => !o && setRejectId(null)}>
         <DialogContent>
@@ -480,19 +646,20 @@ export default function ResearchDesk({ embedded = false }: { embedded?: boolean 
 
       <DigestHeader />
 
-      <Tabs defaultValue="queue" className="w-full">
+      <Tabs defaultValue="ask" className="w-full">
         <TabsList className="flex-wrap h-auto">
+          <TabsTrigger value="ask">
+            <Sparkles className="w-3.5 h-3.5 mr-1.5" /> Ask AI
+          </TabsTrigger>
           <TabsTrigger value="queue">
             <Inbox className="w-3.5 h-3.5 mr-1.5" /> Review queue
+            <PendingBadge />
           </TabsTrigger>
           <TabsTrigger value="import">
-            <Sparkles className="w-3.5 h-3.5 mr-1.5" /> AI Import
+            <ClipboardCheck className="w-3.5 h-3.5 mr-1.5" /> Import &amp; conflicts
           </TabsTrigger>
-          <TabsTrigger value="ai-review">
-            <ClipboardCheck className="w-3.5 h-3.5 mr-1.5" /> AI figure review
-          </TabsTrigger>
-          <TabsTrigger value="conflicts">
-            <GitCompareArrows className="w-3.5 h-3.5 mr-1.5" /> Conflicts
+          <TabsTrigger value="approved">
+            <ShieldCheck className="w-3.5 h-3.5 mr-1.5" /> Recently approved
           </TabsTrigger>
           <TabsTrigger value="sources">
             <Clock className="w-3.5 h-3.5 mr-1.5" /> Sources
@@ -503,17 +670,38 @@ export default function ResearchDesk({ embedded = false }: { embedded?: boolean 
           </TabsTrigger>
         </TabsList>
 
+        <TabsContent value="ask" className="mt-5">
+          <AskAI embedded />
+        </TabsContent>
         <TabsContent value="queue" className="mt-5">
           <PendingQueue />
         </TabsContent>
         <TabsContent value="import" className="mt-5">
-          <AiIntake embedded />
+          <Tabs defaultValue="doc" className="w-full">
+            <TabsList>
+              <TabsTrigger value="doc">
+                <Sparkles className="w-3.5 h-3.5 mr-1.5" /> Import a document
+              </TabsTrigger>
+              <TabsTrigger value="ai-review">
+                <ClipboardCheck className="w-3.5 h-3.5 mr-1.5" /> AI figure review
+              </TabsTrigger>
+              <TabsTrigger value="conflicts">
+                <GitCompareArrows className="w-3.5 h-3.5 mr-1.5" /> Conflicts
+              </TabsTrigger>
+            </TabsList>
+            <TabsContent value="doc" className="mt-5">
+              <AiIntake embedded />
+            </TabsContent>
+            <TabsContent value="ai-review" className="mt-5">
+              <AiReview embedded />
+            </TabsContent>
+            <TabsContent value="conflicts" className="mt-5">
+              <SourceConflicts embedded />
+            </TabsContent>
+          </Tabs>
         </TabsContent>
-        <TabsContent value="ai-review" className="mt-5">
-          <AiReview embedded />
-        </TabsContent>
-        <TabsContent value="conflicts" className="mt-5">
-          <SourceConflicts embedded />
+        <TabsContent value="approved" className="mt-5">
+          <RecentlyApproved embedded />
         </TabsContent>
         <TabsContent value="sources" className="mt-5">
           <SourceRegistryPanel />

@@ -93,8 +93,6 @@ import {
   listIngestionConflicts,
   countOpenConflicts,
   resolveIngestionConflict,
-  ingestAiExtractedInstrument,
-  attachAiSourceImageKey,
   insertAiCandidates,
   listAiCandidates,
   countPendingCandidates,
@@ -114,6 +112,18 @@ import {
   upsertSource,
   markSourceReviewed,
   sourceDueList,
+  createResearchTask,
+  completeResearchTask,
+  getResearchTask,
+  listResearchTasks,
+  insertResearchFindings,
+  getResearchFinding,
+  listResearchFindings,
+  countNewFindings,
+  updateFindingStatus,
+  listCatalogueAudit,
+  listFederatedUniverse,
+  primaryMmfFundNames,
 } from "./db";
 import { OPPORTUNITY_SEED } from "./opportunitySeed";
 import {
@@ -146,14 +156,11 @@ import { stripVerdictFields } from "../shared/aiIntake";
 import {
   FIELD_KEYS,
   isFieldKey,
-  humanField,
   type VerifyAction,
   type FieldKey,
-  type FieldProvenance,
   type FieldProvenanceMap,
 } from "../shared/provenance";
 import {
-  summariseState,
   isAiProvisionalRow,
   countAiFigures,
   effectiveState,
@@ -169,8 +176,18 @@ import type { InsertOpportunity, InsertAiIntakeAudit } from "../drizzle/schema";
 import {
   validatePendingUpdate,
   promotionTargetForAssetClass,
+  catalogueForAssetClass,
+  describePortfolioImpact,
+  checkApprovalGate,
   type UpdateOrigin,
+  type ReferenceCatalogue,
 } from "../shared/researchPipeline";
+import {
+  runResearchQuestion,
+  findingsToRows,
+  type ResearchScope,
+} from "./aiResearchService";
+import { normaliseAssetClass } from "../shared/assetModel";
 import { runAdapter } from "./ingestion/runner";
 import { ADAPTERS } from "./ingestion/adapters";
 import { SOURCE_IDS, AI_INTAKE_SOURCE_ID } from "../shared/ingestion";
@@ -1520,50 +1537,35 @@ export const appRouter = router({
             });
           }
           const ref = inst.ref;
-          const base: InsertOpportunity = {
-            ref,
-            name: inst.name,
-            assetClass: inst.assetClass,
-            issuer: inst.issuer ?? null,
-            currency: inst.currency ?? "KES",
-            market: inst.market ?? null,
-            factNote: inst.factNote ?? null,
-            dataSource: effectiveSourceLabel,
-            dataAsOf: new Date(at),
-            unverified: true,
-            active: true,
-          };
-          // Same reconcile/upsert/conflicts machinery as a scrape — AI only fills blanks,
-          // never clobbers a human or scraped value (disagreements become conflicts).
-          const result = await ingestAiExtractedInstrument({ base, ai: aiMap, sourceId: AI_INTAKE_SOURCE_ID });
-          // For image sources, record the screenshot's storage key on the row so a reviewer
-          // can see the original picture next to the figures (confirm-against-source).
-          if (imageSourceKey) await attachAiSourceImageKey(ref, imageSourceKey);
 
-          // Round 81 GOVERNANCE: an AI extraction is UNTRUSTED. In addition to the
-          // provisional per-figure row above (which powers the confirm-against-source
-          // detail view), enqueue a PENDING research_update so the change surfaces in the
-          // Research Desk review queue and only affects the live catalogue once a human
-          // approves it. The pending update carries the neutral extracted figures + the
-          // cited source; it can never be born approved (enforced in the pipeline).
+          // Round 82 GOVERNANCE — BYPASS CLOSED. AI extraction is UNTRUSTED and NO
+          // LONGER writes a provisional live `opportunities` row. Instead the
+          // extraction becomes (a) a research_finding draft the manager triages, and
+          // (b) a PENDING research_update. NOTHING touches a catalogue until a manager
+          // approves that pending update (reviewResearchUpdate), which is the single
+          // governed promotion path. The existing per-figure `aiMap`/`flagged`
+          // machinery is preserved only to surface the extracted figures + source
+          // quotes back to the UI for confirm-against-source; it is not persisted live.
+          const numeric = (k: FieldKey): number | undefined => {
+            const raw = aiMap[k]?.value;
+            if (raw == null || raw === "") return undefined;
+            const n = Number(String(raw).replace(/,/g, ""));
+            return Number.isFinite(n) ? n : undefined;
+          };
+          const figures: Record<string, unknown> = {};
+          const y = numeric("yield"); if (y !== undefined) figures.yieldPct = y;
+          const pr = numeric("price"); if (pr !== undefined) figures.lastPrice = pr;
+          const tr = numeric("trailingReturn"); if (tr !== undefined) figures.trailingReturnPct = tr;
+          const tn = numeric("tenor"); if (tn !== undefined) figures.tenorYears = tn;
+          if (aiMap.maturity?.value) figures.maturityDate = aiMap.maturity.value;
+          const ex = numeric("expense"); if (ex !== undefined) figures.expenseRatioPct = ex;
+
+          const existingLive = await getOpportunityByRef(ref);
+          let pendingId: number | null = null;
           try {
-            const numeric = (k: FieldKey): number | undefined => {
-              const raw = aiMap[k]?.value;
-              if (raw == null || raw === "") return undefined;
-              const n = Number(String(raw).replace(/,/g, ""));
-              return Number.isFinite(n) ? n : undefined;
-            };
-            const figures: Record<string, unknown> = {
-              yieldPct: numeric("yield"),
-              lastPrice: numeric("price"),
-              trailingReturnPct: numeric("trailingReturn"),
-              tenorYears: numeric("tenor"),
-              maturityDate: aiMap.maturity?.value ?? undefined,
-              expenseRatioPct: numeric("expense"),
-            };
-            await enqueueResearchUpdate({
+            pendingId = await enqueueResearchUpdate({
               targetRef: ref,
-              changeKind: result.created ? "create" : "edit",
+              changeKind: existingLive ? "edit" : "create",
               name: inst.name,
               assetClass: inst.assetClass,
               issuer: inst.issuer ?? null,
@@ -1576,24 +1578,72 @@ export const appRouter = router({
               aiModel: model,
             });
           } catch (enqueueErr) {
-            // A malformed asset class shouldn't fail the whole extraction; the provisional
-            // row still exists for review. Record it on the audit and continue.
-            audit.error = `pending-enqueue skipped: ${(enqueueErr instanceof Error ? enqueueErr.message : String(enqueueErr)).slice(0, 120)}`;
+            audit.ok = false;
+            audit.error = `pending-enqueue failed: ${(enqueueErr instanceof Error ? enqueueErr.message : String(enqueueErr)).slice(0, 200)}`;
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: `Could not queue this extraction for review: ${enqueueErr instanceof Error ? enqueueErr.message : String(enqueueErr)}`,
+            });
           }
-          const saved = await getOpportunityByRef(ref);
-          // Record what entered the catalog for traceability.
+
+          // Also record it as a research finding so it appears in the Findings inbox,
+          // wrapped in a lightweight ad-hoc task for traceability. Never a catalogue write.
+          try {
+            const taskId = await createResearchTask({
+              createdByOpenId: ctx.user.openId ?? String(ctx.user.id),
+              createdByName: ctx.user.name ?? null,
+              prompt: `AI document extraction: ${input.sourceLabel}`,
+              scope: "any",
+              status: "done",
+              aiModel: model,
+              findingCount: 1,
+              answerSummary: `Extracted ${inst.name} from ${input.sourceLabel}.`,
+            });
+            if (taskId) {
+              const strFigures: Record<string, string> = {};
+              for (const [k, v] of Object.entries(figures)) strFigures[k] = String(v);
+              await insertResearchFindings([
+                {
+                  taskId,
+                  instrumentName: inst.name,
+                  issuer: inst.issuer ?? null,
+                  assetClass: normaliseAssetClass(inst.assetClass),
+                  targetCatalogue: catalogueForAssetClass(normaliseAssetClass(inst.assetClass)),
+                  currency: inst.currency ?? "KES",
+                  extractedFields: strFigures,
+                  sourceLabel: effectiveSourceLabel,
+                  sourceUrl: sourceUrl,
+                  sourceAsOf: null,
+                  checkedAt: at,
+                  confidence: "medium",
+                  missingFields: [],
+                  warnings: flagged.length
+                    ? [`${flagged.length} figure(s) tripped a numeric sanity check — confirm against the source.`]
+                    : [],
+                  rawExcerpt: null,
+                  status: pendingId ? "drafted" : "new",
+                  draftedUpdateId: pendingId,
+                },
+              ]);
+            }
+            void imageSourceKey; // screenshot key retained on the finding path via source label
+          } catch (findingErr) {
+            // A finding-log failure must not fail the extraction; the pending update stands.
+            console.error("[aiExtract] finding-log failed", findingErr);
+          }
+
+          // Record what was proposed (for traceability) — no live catalogue change.
           audit.resultName = inst.name;
           audit.extractedFields = Object.keys(aiMap);
           audit.figureCount = Object.keys(aiMap).length;
           audit.flaggedCount = flagged.length;
           return {
             ref,
-            created: result.created,
-            filled: result.filled,
-            conflicts: result.conflicts,
+            queued: true as const,
+            pendingUpdateId: pendingId,
+            created: !existingLive,
             flagged, // figures that tripped a numeric sanity gate (shown loudly for review)
             extraction, // returned so the UI can show what to confirm against the source
-            opportunity: saved,
           };
         } catch (err) {
           if (audit.ok) {
@@ -1733,38 +1783,48 @@ export const appRouter = router({
           return { reviewed };
         }
 
-        // APPROVE: the human authors a real instrument. No figures are copied from the
-        // AI suggestion (it carried none) — the human enters facts via the normal
-        // add/verify path afterwards. The created row has an empty provenance map.
+        // Round 82 GOVERNANCE — BYPASS CLOSED. Approving a candidate no longer writes
+        // a live `opportunities` row. It ENQUEUES a PENDING research_update (origin
+        // manual — the manager is authoring it) that carries the confirmed identity;
+        // the catalogue only changes when that pending update is approved on the
+        // Research Desk. This keeps candidate approval on the same governed path.
         const existing = await getOpportunityByRef(input.ref);
         if (existing) {
           throw new TRPCError({ code: "CONFLICT", message: `An instrument with ref "${input.ref}" already exists.` });
         }
         const sourceUrl = input.sourceUrl === "" ? null : (input.sourceUrl ?? null);
         const at = Date.now();
-        const row: InsertOpportunity = {
-          ref: input.ref,
+        const v = validatePendingUpdate({
+          targetRef: input.ref,
+          changeKind: "create",
           name: input.name,
           assetClass: input.assetClass,
           issuer: input.issuer ?? null,
           currency: input.currency,
-          dataSource: input.source,
-          dataAsOf: new Date(at),
-          unverified: false, // a human authored the instrument
-          fieldProvenance: {},
-          verificationState: "human_entered",
-          active: true,
-        };
-        void sourceUrl; // recorded on figures when the human adds them later
-        await upsertOpportunity(row);
+          source: input.source,
+          origin: "manual",
+        });
+        if (!v.ok) throw new TRPCError({ code: "BAD_REQUEST", message: v.errors.join(" ") });
+        const pendingId = await enqueueResearchUpdate({
+          targetRef: input.ref,
+          changeKind: "create",
+          name: input.name,
+          assetClass: input.assetClass,
+          issuer: input.issuer ?? null,
+          currency: input.currency,
+          figures: {},
+          source: input.source,
+          sourceUrl,
+          asOf: at,
+          origin: "manual",
+        });
         const reviewed = await reviewAiCandidate({
           id: input.id,
           status: "approved",
           reviewedBy: by,
           approvedRef: input.ref,
         });
-        const saved = await getOpportunityByRef(input.ref);
-        return { reviewed, opportunity: saved };
+        return { reviewed, queued: true as const, pendingUpdateId: pendingId };
       }),
 
     // ── Part 7.3: add an instrument by hand ──────────────────────────────────
@@ -1802,7 +1862,13 @@ export const appRouter = router({
             .default({}),
         }),
       )
-      .mutation(async ({ ctx, input }) => {
+      .mutation(async ({ input }) => {
+        // Round 82 GOVERNANCE — BYPASS CLOSED. A hand-authored instrument no longer
+        // writes a live `opportunities` row directly. It ENQUEUES a PENDING
+        // research_update (origin manual) carrying the maintainer's figures + citation;
+        // the catalogue changes only when the manager approves it on the Research Desk,
+        // where the same catalogue completeness gate + audit-log apply. This closes the
+        // last live-write path so EVERY catalogue change flows through one review.
         const existing = await getOpportunityByRef(input.ref);
         if (existing) {
           throw new TRPCError({
@@ -1810,49 +1876,49 @@ export const appRouter = router({
             message: `An instrument with ref "${input.ref}" already exists. Edit it instead.`,
           });
         }
-        const by = ctx.user.name ?? ctx.user.email ?? "You";
         const at = Date.now();
         const asOf = input.asOf ?? at;
         const sourceUrl = input.sourceUrl === "" ? null : (input.sourceUrl ?? null);
-        const mk = (value: string | null): FieldProvenance =>
-          humanField({ value, source: input.source, sourceUrl, asOf, by, at });
 
-        // Build the per-figure provenance map from whichever figures were supplied.
         const f = input.figures;
-        const map: FieldProvenanceMap = {};
-        if (f.yieldPct !== undefined) map.yield = mk(String(f.yieldPct));
-        if (f.lastPrice !== undefined) map.price = mk(String(f.lastPrice));
-        if (f.trailingReturnPct !== undefined) map.trailingReturn = mk(String(f.trailingReturnPct));
-        if (f.tenorYears !== undefined) map.tenor = mk(String(f.tenorYears));
-        if (f.maturityDate !== undefined) map.maturity = mk(f.maturityDate);
-        if (f.expenseRatioPct !== undefined) map.expense = mk(String(f.expenseRatioPct));
+        const figures: Record<string, unknown> = {};
+        if (f.yieldPct !== undefined) figures.yieldPct = f.yieldPct;
+        if (f.yieldKind !== undefined) figures.yieldKind = f.yieldKind;
+        if (f.lastPrice !== undefined) figures.lastPrice = f.lastPrice;
+        if (f.trailingReturnPct !== undefined) figures.trailingReturnPct = f.trailingReturnPct;
+        if (f.tenorYears !== undefined) figures.tenorYears = f.tenorYears;
+        if (f.maturityDate !== undefined) figures.maturityDate = f.maturityDate;
+        if (f.expenseRatioPct !== undefined) figures.expenseRatioPct = f.expenseRatioPct;
+        if (input.market !== undefined) figures.market = input.market;
+        if (input.liquidity !== undefined) figures.liquidity = input.liquidity;
+        if (input.factNote !== undefined) figures.factNote = input.factNote;
 
-        const row: InsertOpportunity = {
-          ref: input.ref,
+        const v = validatePendingUpdate({
+          targetRef: input.ref,
+          changeKind: "create",
           name: input.name,
           assetClass: input.assetClass,
           issuer: input.issuer ?? null,
           currency: input.currency,
-          market: input.market ?? null,
-          liquidity: input.liquidity ?? null,
-          factNote: input.factNote ?? null,
-          yieldPct: f.yieldPct !== undefined ? String(f.yieldPct) : null,
-          yieldKind: f.yieldKind ?? null,
-          lastPrice: f.lastPrice !== undefined ? String(f.lastPrice) : null,
-          trailingReturnPct: f.trailingReturnPct !== undefined ? String(f.trailingReturnPct) : null,
-          tenorYears: f.tenorYears !== undefined ? String(f.tenorYears) : null,
-          maturityDate: f.maturityDate ? new Date(f.maturityDate) : null,
-          expenseRatioPct: f.expenseRatioPct !== undefined ? String(f.expenseRatioPct) : null,
-          dataSource: input.source,
-          dataAsOf: new Date(asOf),
-          unverified: false, // a person authored it
-          fieldProvenance: map,
-          verificationState: summariseState(map),
-          active: true,
-        };
-        await upsertOpportunity(row);
-        const saved = await getOpportunityByRef(input.ref);
-        return { ref: input.ref, opportunity: saved };
+          source: input.source,
+          origin: "manual",
+        });
+        if (!v.ok) throw new TRPCError({ code: "BAD_REQUEST", message: v.errors.join(" ") });
+
+        const pendingId = await enqueueResearchUpdate({
+          targetRef: input.ref,
+          changeKind: "create",
+          name: input.name,
+          assetClass: input.assetClass,
+          issuer: input.issuer ?? null,
+          currency: input.currency,
+          figures,
+          source: input.source,
+          sourceUrl,
+          asOf,
+          origin: "manual",
+        });
+        return { ref: input.ref, queued: true as const, pendingUpdateId: pendingId };
       }),
   }),
 
@@ -7127,6 +7193,11 @@ export const appRouter = router({
           id: z.number().int().positive(),
           approve: z.boolean(),
           reviewNote: z.string().max(1000).optional(),
+          // Round 82: a manager-vouched value that satisfies the catalogue gate for
+          // the primary figure (the manager takes responsibility for the number).
+          managerValue: z.union([z.string().max(64), z.number()]).optional(),
+          // Round 82: explicitly accept an incomplete row (auditable via the note).
+          overrideGate: z.boolean().optional(),
         }),
       )
       .mutation(async ({ ctx, input }) => {
@@ -7136,9 +7207,38 @@ export const appRouter = router({
           approve: input.approve,
           reviewedBy: by,
           reviewNote: input.reviewNote ?? null,
+          managerValue: input.managerValue ?? null,
+          overrideGate: input.overrideGate ?? false,
         });
         if (!res.update) throw new TRPCError({ code: "NOT_FOUND", message: "Update not found." });
-        return res;
+        // A blocked approval is NOT an error — it's an informative outcome the UI
+        // surfaces so the manager can add the missing figure or vouch a value.
+        if (res.blocked) {
+          return { ...res, ok: false as const };
+        }
+        return { ...res, ok: true as const };
+      }),
+
+    // Portfolio-impact descriptor for the approve dialog: does approving THIS
+    // pending update move the projection, or is it reference-only? Read-only.
+    impactOf: adminProcedure
+      .input(z.object({ id: z.number().int().positive(), portfolioId: z.number().int().positive().optional() }))
+      .query(async ({ input }) => {
+        const update = await getResearchUpdate(input.id);
+        if (!update) throw new TRPCError({ code: "NOT_FOUND", message: "Update not found." });
+        const ac = normaliseAssetClass(update.assetClass);
+        let isPrimaryMmf = false;
+        if (catalogueForAssetClass(ac) === "mmf" && input.portfolioId) {
+          const names = await primaryMmfFundNames(input.portfolioId);
+          isPrimaryMmf = names.some((n) => n.toLowerCase() === update.name.trim().toLowerCase());
+        }
+        const impact = describePortfolioImpact({ assetClass: ac, isPrimaryMmf, instrumentName: update.name });
+        const gate = checkApprovalGate({
+          assetClass: ac,
+          changeKind: update.changeKind,
+          figures: (update.figures as Record<string, unknown> | null) ?? {},
+        });
+        return { impact, gate, catalogue: catalogueForAssetClass(ac) };
       }),
 
     // ── Source registry + cadence ──
@@ -7197,8 +7297,200 @@ export const appRouter = router({
         openConflicts,
         sourcesDue: dueSources.length,
         sources: due,
+        newFindings: await countNewFindings(),
         generatedAt: Date.now(),
       };
+    }),
+
+    // Immutable "Recently Approved" audit trail (what changed, by whom, from where).
+    // Public read: it exposes only already-published facts + provenance, no proposals.
+    recentlyApproved: publicProcedure
+      .input(
+        z
+          .object({
+            catalogue: z.enum(["mmf", "bank", "cbk", "market_asset"]).optional(),
+            limit: z.number().int().min(1).max(200).optional(),
+          })
+          .optional(),
+      )
+      .query(async ({ input }) => {
+        const entries = await listCatalogueAudit({
+          catalogue: input?.catalogue as ReferenceCatalogue | undefined,
+          limit: input?.limit ?? 50,
+        });
+        return { entries };
+      }),
+  }),
+
+  // ─── Round 82: Ask-AI research engine + findings inbox ─────────────────────
+  // A manager asks a plain-English question; the engine answers as a BRIEFING and
+  // proposes structured DRAFT FINDINGS. A finding is never a catalogue write — the
+  // manager triages each one into the pending queue (draftFromFinding) or dismisses
+  // it. Everything here is admin-only: it exposes un-vetted AI output.
+  research: router({
+    // Recent enquiries (newest first) for the enquiry history panel.
+    listTasks: adminProcedure
+      .input(z.object({ limit: z.number().int().min(1).max(100).optional() }).optional())
+      .query(async ({ input }) => {
+        const tasks = await listResearchTasks(input?.limit ?? 30);
+        return { tasks };
+      }),
+
+    // A single enquiry + its findings (the result panel).
+    getTask: adminProcedure
+      .input(z.object({ id: z.number().int().positive() }))
+      .query(async ({ input }) => {
+        const task = await getResearchTask(input.id);
+        if (!task) throw new TRPCError({ code: "NOT_FOUND", message: "Enquiry not found." });
+        const findings = await listResearchFindings({ taskId: input.id });
+        return { task, findings };
+      }),
+
+    // The findings inbox, optionally filtered by triage status.
+    listFindings: adminProcedure
+      .input(
+        z
+          .object({
+            taskId: z.number().int().positive().optional(),
+            status: z.enum(["new", "drafted", "dismissed"]).optional(),
+          })
+          .optional(),
+      )
+      .query(async ({ input }) => {
+        const findings = await listResearchFindings(input ?? undefined);
+        return { findings };
+      }),
+
+    // Cheap untriaged-findings count for the inbox badge.
+    newFindingsCount: publicProcedure.query(async () => {
+      return { count: await countNewFindings() };
+    }),
+
+    // Ask a plain-English research question. Runs the engine, persists the enquiry
+    // + its findings, and returns the briefing. Writes NOTHING to any catalogue.
+    ask: adminProcedure
+      .input(
+        z.object({
+          question: z.string().min(4).max(2000),
+          scope: z.enum(["mmf", "bank", "cbk", "market_asset", "macro", "any"]).default("any"),
+          sourceUrl: z.string().url().max(500).optional().or(z.literal("")),
+          sourceText: z.string().max(40000).optional(),
+        }),
+      )
+      .mutation(async ({ ctx, input }) => {
+        const taskId = await createResearchTask({
+          createdByOpenId: ctx.user.openId ?? String(ctx.user.id),
+          createdByName: ctx.user.name ?? null,
+          prompt: input.question,
+          scope: input.scope,
+          status: "running",
+        });
+        if (!taskId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Could not create the enquiry." });
+        try {
+          const res = await runResearchQuestion({
+            question: input.question,
+            scope: input.scope as ResearchScope,
+            sourceUrl: input.sourceUrl && input.sourceUrl !== "" ? input.sourceUrl : null,
+            sourceText: input.sourceText ?? null,
+          });
+          const rows = findingsToRows(taskId, res.findings);
+          await insertResearchFindings(rows);
+          await completeResearchTask(taskId, {
+            answerSummary: res.answer.slice(0, 4000),
+            aiModel: res.model,
+            findingCount: rows.length,
+          });
+          const findings = await listResearchFindings({ taskId });
+          return { taskId, answer: res.answer, model: res.model, findings };
+        } catch (err) {
+          await completeResearchTask(taskId, {
+            error: (err instanceof Error ? err.message : String(err)).slice(0, 500),
+          });
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `The research engine could not complete this enquiry: ${err instanceof Error ? err.message : String(err)}`,
+          });
+        }
+      }),
+
+    // Triage a finding INTO the pending queue: enqueue a research_update (origin ai)
+    // carrying the finding's figures + source, and mark the finding "drafted". The
+    // manager may edit the figures/identity before drafting. Still NOT a catalogue
+    // write — it lands as PENDING and only publishes when approved on the desk.
+    draftFromFinding: adminProcedure
+      .input(
+        z.object({
+          findingId: z.number().int().positive(),
+          // Optional manager edits to the drafted proposal before it is queued.
+          targetRef: z.string().max(64).optional(),
+          changeKind: z.enum(["create", "edit"]).default("create"),
+          name: z.string().min(1).max(200).optional(),
+          assetClass: z.string().min(1).max(32).optional(),
+          issuer: z.string().max(200).optional(),
+          currency: z.string().min(1).max(8).optional(),
+          figures: z.record(z.string(), z.unknown()).optional(),
+          field: z.string().max(48).optional(),
+        }),
+      )
+      .mutation(async ({ input }) => {
+        const finding = await getResearchFinding(input.findingId);
+        if (!finding) throw new TRPCError({ code: "NOT_FOUND", message: "Finding not found." });
+        if (finding.status === "drafted") {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "This finding was already drafted into the queue." });
+        }
+        const name = input.name ?? finding.instrumentName;
+        const assetClass = input.assetClass ?? finding.assetClass ?? "alt";
+        const currency = input.currency ?? finding.currency ?? "KES";
+        const figures = input.figures ?? (finding.extractedFields as Record<string, unknown> | null) ?? {};
+        const source = finding.sourceLabel ?? "Ask-AI research";
+        const v = validatePendingUpdate({
+          targetRef: input.targetRef ?? null,
+          changeKind: input.changeKind,
+          name,
+          assetClass,
+          issuer: input.issuer ?? finding.issuer ?? null,
+          currency,
+          figures,
+          source,
+          origin: "ai",
+        });
+        if (!v.ok) throw new TRPCError({ code: "BAD_REQUEST", message: v.errors.join(" ") });
+        const pendingId = await enqueueResearchUpdate({
+          targetRef: input.targetRef ?? null,
+          changeKind: input.changeKind,
+          name,
+          assetClass,
+          issuer: input.issuer ?? finding.issuer ?? null,
+          currency,
+          figures,
+          source,
+          sourceUrl: finding.sourceUrl ?? null,
+          asOf: finding.sourceAsOf ?? null,
+          origin: "ai",
+          findingId: finding.id,
+          field: input.field ?? null,
+        });
+        await updateFindingStatus(finding.id, "drafted", { draftedUpdateId: pendingId });
+        return { pendingUpdateId: pendingId };
+      }),
+
+    // File a finding away without drafting it (a noisy or duplicate hit).
+    dismissFinding: adminProcedure
+      .input(z.object({ findingId: z.number().int().positive() }))
+      .mutation(async ({ ctx, input }) => {
+        const by = ctx.user.name ?? ctx.user.email ?? "You";
+        await updateFindingStatus(input.findingId, "dismissed", { reviewedBy: by });
+        return { ok: true };
+      }),
+  }),
+
+  // ─── Round 82: Explore federation (read-only screener across catalogues) ────
+  // The neutral universe of PUBLISHED facts across all four catalogues. No ranking,
+  // no score — just the headline figure per instrument. Public: published data only.
+  explore: router({
+    federatedUniverse: publicProcedure.query(async () => {
+      const instruments = await listFederatedUniverse();
+      return { instruments };
     }),
   }),
 });

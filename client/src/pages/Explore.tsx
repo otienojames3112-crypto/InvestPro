@@ -41,6 +41,8 @@ import {
   PlusCircle,
   Bot,
   Calculator,
+  Layers,
+  Table2,
 } from "lucide-react";
 import { ASSET_CLASSES, profileFor, type AssetClass } from "@shared/assetModel";
 import {
@@ -51,6 +53,7 @@ import {
   type FieldProvenanceMap,
 } from "@shared/provenance";
 import { rateStaleness } from "@/lib/rateStaleness";
+import { catalogueLabel, type ReferenceCatalogue } from "@shared/researchPipeline";
 import { usePortfolio } from "@/contexts/PortfolioContext";
 import type { inferRouterOutputs } from "@trpc/server";
 import type { AppRouter } from "../../../server/routers";
@@ -132,6 +135,16 @@ export default function Explore({ embedded = false }: { embedded?: boolean } = {
     return m;
   }, [scored]);
   const [showScore, setShowScore] = useState(false);
+
+  // ── Federation scope: "this" = the rich securities/market screener (opportunities);
+  //    "all" = a neutral union across ALL FOUR reference catalogues (MMF, bank, CBK,
+  //    market asset), headline figure only. Both are read-only, neither ranks. ──
+  const [scopeView, setScopeView] = useState<"this" | "all">("this");
+  const { data: fedData, isLoading: fedLoading } = trpc.explore.federatedUniverse.useQuery(undefined, {
+    enabled: scopeView === "all",
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
+  });
 
   // ── User-controlled filters (the user narrows; the tool never pre-filters) ──
   const [search, setSearch] = useState("");
@@ -251,6 +264,30 @@ export default function Explore({ embedded = false }: { embedded?: boolean } = {
     setSortKey(null); setSortDir("asc");
   };
 
+  // Federated rows honour the shared search + currency + yield filters (asset-class
+  // and liquidity facets don't apply cleanly across four catalogues, so they're
+  // ignored in "all" view). Neutral order: catalogue, then name — never by figure.
+  const CAT_ORDER: Record<string, number> = { mmf: 0, bank: 1, cbk: 2, market_asset: 3 };
+  const fedFiltered = useMemo(() => {
+    const rowsF = fedData?.instruments ?? [];
+    const minY = minYield.trim() === "" ? null : Number(minYield);
+    const maxY = maxYield.trim() === "" ? null : Number(maxYield);
+    const q = search.trim().toLowerCase();
+    const out = rowsF.filter((r) => {
+      if (currencyFilter !== "all" && (r.currency ?? "") !== currencyFilter) return false;
+      if (q && !`${r.name} ${r.issuer ?? ""} ${r.ref}`.toLowerCase().includes(q)) return false;
+      const y = r.headlineFigure;
+      if (minY !== null && !isNaN(minY) && (y === null || y < minY)) return false;
+      if (maxY !== null && !isNaN(maxY) && (y === null || y > maxY)) return false;
+      return true;
+    });
+    return [...out].sort((a, b) => {
+      const c = (CAT_ORDER[a.catalogue] ?? 9) - (CAT_ORDER[b.catalogue] ?? 9);
+      return c !== 0 ? c : a.name.localeCompare(b.name);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fedData, search, currencyFilter, minYield, maxYield]);
+
   return (
     <AppShell embedded={embedded}>
       <div className="p-6 lg:p-8 space-y-6 max-w-6xl">
@@ -268,24 +305,44 @@ export default function Explore({ embedded = false }: { embedded?: boolean } = {
             </p>
           </div>
           <div className="flex items-center gap-2">
-            <Button
-              size="sm"
-              variant={showScore ? "default" : "outline"}
-              onClick={() => {
-                const next = !showScore;
-                setShowScore(next);
-                // Turning the score off also drops a score-sort so the catalog returns
-                // to its neutral order; turning it on never auto-sorts.
-                if (!next && sortKey === "score") {
-                  setSortKey(null);
-                  setSortDir("asc");
-                }
-              }}
-              className="active:scale-[0.97] transition-transform"
-              aria-pressed={showScore}
-            >
-              <Calculator className="w-4 h-4 mr-1.5" /> {showScore ? "Hide score" : "Show score"}
-            </Button>
+            {/* Federation toggle: this catalogue (rich securities/market screener) vs the
+                neutral union across all four reference catalogues. */}
+            <div className="inline-flex rounded-lg border p-0.5 bg-muted/40" role="group" aria-label="Catalogue scope">
+              <button
+                onClick={() => setScopeView("this")}
+                aria-pressed={scopeView === "this"}
+                className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${scopeView === "this" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+              >
+                <Table2 className="w-3.5 h-3.5" /> This catalogue
+              </button>
+              <button
+                onClick={() => setScopeView("all")}
+                aria-pressed={scopeView === "all"}
+                className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${scopeView === "all" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+              >
+                <Layers className="w-3.5 h-3.5" /> All catalogues
+              </button>
+            </div>
+            {scopeView === "this" && (
+              <Button
+                size="sm"
+                variant={showScore ? "default" : "outline"}
+                onClick={() => {
+                  const next = !showScore;
+                  setShowScore(next);
+                  // Turning the score off also drops a score-sort so the catalog returns
+                  // to its neutral order; turning it on never auto-sorts.
+                  if (!next && sortKey === "score") {
+                    setSortKey(null);
+                    setSortDir("asc");
+                  }
+                }}
+                className="active:scale-[0.97] transition-transform"
+                aria-pressed={showScore}
+              >
+                <Calculator className="w-4 h-4 mr-1.5" /> {showScore ? "Hide score" : "Show score"}
+              </Button>
+            )}
             {isMaintainer && (
               <Button
                 size="sm"
@@ -337,18 +394,20 @@ export default function Explore({ embedded = false }: { embedded?: boolean } = {
                   className="h-9"
                 />
               </div>
-              <div className="space-y-1">
-                <Label className="text-xs">Asset class</Label>
-                <Select value={classFilter} onValueChange={setClassFilter}>
-                  <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All classes</SelectItem>
-                    {ASSET_CLASSES.map((c) => (
-                      <SelectItem key={c} value={c}>{profileFor(c).label}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
+              {scopeView === "this" && (
+                <div className="space-y-1">
+                  <Label className="text-xs">Asset class</Label>
+                  <Select value={classFilter} onValueChange={setClassFilter}>
+                    <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All classes</SelectItem>
+                      {ASSET_CLASSES.map((c) => (
+                        <SelectItem key={c} value={c}>{profileFor(c).label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
               <div className="space-y-1">
                 <Label className="text-xs">Currency</Label>
                 <Select value={currencyFilter} onValueChange={setCurrencyFilter}>
@@ -361,18 +420,20 @@ export default function Explore({ embedded = false }: { embedded?: boolean } = {
                   </SelectContent>
                 </Select>
               </div>
-              <div className="space-y-1">
-                <Label className="text-xs">Liquidity</Label>
-                <Select value={liquidityFilter} onValueChange={setLiquidityFilter}>
-                  <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">Any liquidity</SelectItem>
-                    {Object.entries(LIQUIDITY_LABELS).map(([v, l]) => (
-                      <SelectItem key={v} value={v}>{l}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
+              {scopeView === "this" && (
+                <div className="space-y-1">
+                  <Label className="text-xs">Liquidity</Label>
+                  <Select value={liquidityFilter} onValueChange={setLiquidityFilter}>
+                    <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">Any liquidity</SelectItem>
+                      {Object.entries(LIQUIDITY_LABELS).map(([v, l]) => (
+                        <SelectItem key={v} value={v}>{l}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
               <div className="space-y-1">
                 <Label className="text-xs">Min yield (%)</Label>
                 <Input type="number" inputMode="decimal" value={minYield}
@@ -386,7 +447,11 @@ export default function Explore({ embedded = false }: { embedded?: boolean } = {
             </div>
             <div className="flex items-center justify-between">
               <p className="text-xs text-muted-foreground">
-                Showing <span className="font-semibold text-foreground">{filtered.length}</span> of {rows.length}
+                {scopeView === "this" ? (
+                  <>Showing <span className="font-semibold text-foreground">{filtered.length}</span> of {rows.length}</>
+                ) : (
+                  <>Showing <span className="font-semibold text-foreground">{fedFiltered.length}</span> across all four catalogues</>
+                )}
               </p>
               <Button variant="outline" size="sm" onClick={resetFilters} className="h-8 text-xs">
                 Reset filters &amp; sort
@@ -395,7 +460,8 @@ export default function Explore({ embedded = false }: { embedded?: boolean } = {
           </CardContent>
         </Card>
 
-        {/* Catalog table */}
+        {/* Catalog table — This catalogue (rich securities/market screener) */}
+        {scopeView === "this" ? (
         <Card>
           <CardContent className="p-0">
             {isLoading ? (
@@ -468,6 +534,49 @@ export default function Explore({ embedded = false }: { embedded?: boolean } = {
             )}
           </CardContent>
         </Card>
+        ) : (
+        /* Federated table — a neutral union across ALL FOUR reference catalogues */
+        <Card>
+          <CardContent className="p-0">
+            {fedLoading ? (
+              <div className="p-8 text-center text-sm text-muted-foreground">Loading all catalogues…</div>
+            ) : fedFiltered.length === 0 ? (
+              <div className="p-8 text-center text-sm text-muted-foreground">
+                No published entries match your filters across the four catalogues.
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Instrument</TableHead>
+                      <TableHead>
+                        <span className="inline-flex items-center gap-1">
+                          Catalogue
+                          <InfoHint>Which of the four reference catalogues this published entry lives in — Money-market funds, Bank products, CBK securities, or Market assets.</InfoHint>
+                        </span>
+                      </TableHead>
+                      <TableHead>Ccy</TableHead>
+                      <TableHead className="text-right">
+                        <span className="inline-flex items-center justify-end gap-1 w-full">
+                          Headline figure
+                          <InfoHint side="left">Each catalogue's own headline number: effective annual rate for funds, indicative rate for bank products, and yield or last price for securities. They are not directly comparable — this view lists, it never ranks.</InfoHint>
+                        </span>
+                      </TableHead>
+                      <TableHead>Source</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {fedFiltered.map((r) => (
+                      <FederatedRow key={r.ref} r={r} />
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+        )}
 
         {/* Mode note — same Live/Test framing as the rest of the app */}
         <p className="text-xs text-muted-foreground flex items-center gap-1.5">
@@ -562,6 +671,61 @@ function ScoreCell({
         </div>
       </PopoverContent>
     </Popover>
+  );
+}
+
+/** Catalogue badge palette — neutral hues, no good/bad colouring. */
+const CAT_BADGE: Record<ReferenceCatalogue, string> = {
+  mmf: "border-sky-500/30 text-sky-600 dark:text-sky-400",
+  bank: "border-violet-500/30 text-violet-600 dark:text-violet-400",
+  cbk: "border-teal-500/30 text-teal-600 dark:text-teal-400",
+  market_asset: "border-amber-500/30 text-amber-600 dark:text-amber-400",
+};
+
+type FederatedInstrument = inferRouterOutputs<AppRouter>["explore"]["federatedUniverse"]["instruments"][number];
+
+/**
+ * A single federated row — the neutral union view. It shows only the catalogue's own
+ * headline figure with its label, never a cross-catalogue ranking. Clicking through
+ * routes to the entry in whichever catalogue owns it (MMF/bank open their catalogue
+ * tab; opportunities open the instrument detail).
+ */
+function FederatedRow({ r }: { r: FederatedInstrument }) {
+  const cat = r.catalogue as ReferenceCatalogue;
+  const href =
+    cat === "mmf"
+      ? "/research?tab=mmf-market"
+      : cat === "bank"
+        ? "/research?tab=bank-catalogue"
+        : `/explore/${encodeURIComponent(r.ref)}`;
+  const figure =
+    r.headlineFigure === null
+      ? "—"
+      : r.headlineLabel.toLowerCase().includes("price")
+        ? `${r.currency ?? ""} ${r.headlineFigure.toLocaleString("en-KE", { maximumFractionDigits: 2 })}`.trim()
+        : `${r.headlineFigure.toFixed(2)}%`;
+  return (
+    <TableRow className="align-top">
+      <TableCell>
+        <Link href={href} className="font-medium text-foreground hover:text-primary hover:underline">
+          {r.name}
+        </Link>
+        {r.issuer && <div className="text-xs text-muted-foreground mt-0.5">{r.issuer}</div>}
+      </TableCell>
+      <TableCell className="whitespace-nowrap">
+        <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${CAT_BADGE[cat] ?? ""}`}>
+          {catalogueLabel(cat)}
+        </Badge>
+      </TableCell>
+      <TableCell className="text-sm whitespace-nowrap">{r.currency ?? "—"}</TableCell>
+      <TableCell className="text-right tabular-nums">
+        <div>{figure}</div>
+        <div className="text-[10px] text-muted-foreground">{r.headlineLabel}</div>
+      </TableCell>
+      <TableCell>
+        <div className="text-xs text-muted-foreground max-w-[220px]">{r.source ?? "Source not recorded"}</div>
+      </TableCell>
+    </TableRow>
   );
 }
 

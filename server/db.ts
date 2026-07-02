@@ -1,4 +1,4 @@
-import { and, eq, desc, asc, sql } from "drizzle-orm";
+import { and, eq, desc, asc, sql, inArray } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import {
   InsertUser,
@@ -2296,18 +2296,33 @@ export async function saveProbabilityThresholds(args: {
 import {
   researchUpdates,
   sourceRegistry,
+  researchTasks,
+  researchFindings,
+  catalogueAuditLog,
   type ResearchUpdate,
   type InsertResearchUpdate,
   type SourceRegistryRow,
   type InsertSourceRegistry,
+  type ResearchTask,
+  type InsertResearchTask,
+  type ResearchFinding,
+  type InsertResearchFinding,
+  type CatalogueAuditLog,
+  type InsertCatalogueAuditLog,
 } from "../drizzle/schema";
 import {
   validatePendingUpdate,
   buildPromotionPlan,
   sourceDueStatus,
+  checkApprovalGate,
+  catalogueForAssetClass,
+  describePortfolioImpact,
+  agentCheckDue,
   type PendingUpdateInput,
   type SourceDueStatus,
+  type ReferenceCatalogue,
 } from "../shared/researchPipeline";
+import { type AssetClass } from "../shared/assetModel";
 import { humanField } from "../shared/provenance";
 // NOTE: summariseState, FieldProvenanceMap, and FieldKey are already imported at
 // the top of this file (used by the opportunity ingestion helpers).
@@ -2342,9 +2357,20 @@ export async function enqueueResearchUpdate(input: PendingUpdateInput): Promise<
     status: "pending", // invariant: always pending on creation
   };
   const res = await db.insert(researchUpdates).values(row);
-  // mysql2 returns insertId on the result header
-  const insertId = (res as unknown as { insertId?: number })?.insertId ?? null;
-  return insertId ?? null;
+  return extractInsertId(res);
+}
+
+/**
+ * Pull the auto-increment id out of a mysql2/drizzle insert result. Depending on
+ * driver version the OkPacket is either the result itself or its first element
+ * (`res[0]`), so we check both. Returns null when neither carries an insertId.
+ */
+export function extractInsertId(res: unknown): number | null {
+  const header =
+    (Array.isArray(res) ? (res[0] as { insertId?: number } | undefined) : (res as { insertId?: number } | undefined)) ??
+    undefined;
+  const id = header?.insertId;
+  return typeof id === "number" && id > 0 ? id : null;
 }
 
 /** List research updates (newest first), optionally filtered by status/target. */
@@ -2420,13 +2446,31 @@ export async function reviewResearchUpdate(args: {
   approve: boolean;
   reviewedBy: string;
   reviewNote?: string | null;
-}): Promise<{ update: ResearchUpdate | null; promotedRef: string | null; target: string | null }> {
+  /**
+   * Round 82 — an explicit manager-vouched value supplied at approval time. When
+   * present it satisfies the catalogue approval gate for the catalogue's primary
+   * figure and is injected into the promoted figures (the manager takes
+   * responsibility for the number). Ignored on reject.
+   */
+  managerValue?: string | number | null;
+  /**
+   * Round 82 — override the gate entirely (manager explicitly accepts an
+   * incomplete row). Auditable via the review note.
+   */
+  overrideGate?: boolean;
+}): Promise<{
+  update: ResearchUpdate | null;
+  promotedRef: string | null;
+  target: string | null;
+  /** Round 82 — present when approval was blocked by the gate (no catalogue change). */
+  blocked?: { missing: string[]; reason: string };
+}> {
   const db = await getDb();
   if (!db) return { update: null, promotedRef: null, target: null };
   const current = await getResearchUpdate(args.id);
   if (!current) return { update: null, promotedRef: null, target: null };
-  if (current.status !== "pending") {
-    // Idempotent: a non-pending update is returned unchanged.
+  if (current.status !== "pending" && current.status !== "conflict") {
+    // Idempotent: an already-resolved update is returned unchanged.
     return { update: current, promotedRef: current.targetRef ?? null, target: current.target };
   }
 
@@ -2440,6 +2484,39 @@ export async function reviewResearchUpdate(args: {
     return { update: await getResearchUpdate(args.id), promotedRef: null, target: current.target };
   }
 
+  // ── Round 82: catalogue approval gate ──
+  // A `create` must carry every required figure for its catalogue unless the
+  // manager supplies an override value (or explicitly overrides the gate). A
+  // blocked approval changes NOTHING and stays pending, surfacing the gap.
+  const figuresIn: Record<string, unknown> = {
+    ...((current.figures as Record<string, unknown> | null) ?? {}),
+  };
+  const gate = checkApprovalGate({
+    assetClass: current.assetClass as AssetClass,
+    changeKind: current.changeKind,
+    figures: figuresIn,
+    managerValue: args.managerValue ?? null,
+  });
+  if (!gate.ok && !args.overrideGate) {
+    return {
+      update: current,
+      promotedRef: current.targetRef ?? null,
+      target: current.target,
+      blocked: { missing: gate.missing, reason: gate.reason ?? "Incomplete for its catalogue." },
+    };
+  }
+
+  // If a manager override value was supplied, inject it into the promoted figures
+  // for the catalogue's primary figure key (and the update's declared `field`).
+  const cat: ReferenceCatalogue = catalogueForAssetClass(current.assetClass as AssetClass);
+  const primaryKey = { mmf: "ear", bank: "indicativeRate", cbk: "yieldPct", market_asset: "lastPrice" }[cat];
+  const hasOverride =
+    args.managerValue !== undefined && args.managerValue !== null && String(args.managerValue).trim() !== "";
+  if (hasOverride) {
+    figuresIn[primaryKey] = String(args.managerValue);
+    if (current.field && current.field !== primaryKey) figuresIn[current.field] = String(args.managerValue);
+  }
+
   // ── APPROVE → typed promotion ──
   const plan = buildPromotionPlan({
     target: current.target,
@@ -2448,7 +2525,7 @@ export async function reviewResearchUpdate(args: {
     assetClass: current.assetClass,
     issuer: current.issuer,
     currency: current.currency,
-    figures: (current.figures as Record<string, unknown> | null) ?? {},
+    figures: figuresIn,
     source: current.source,
   });
 
@@ -2554,10 +2631,59 @@ export async function reviewResearchUpdate(args: {
       reviewedAt: now,
       reviewNote: args.reviewNote ?? null,
       targetRef: promotedRef,
+      ...(hasOverride ? { managerValue: String(args.managerValue) } : {}),
     })
     .where(eq(researchUpdates.id, args.id));
 
+  // ── Round 82: immutable catalogue audit-log entry ("Recently Approved") ──
+  // The audit catalogue speaks the four manager-facing catalogues (cbk/market_asset
+  // split), NOT the db promotion vocabulary (opportunity), so map via asset class.
+  const auditCatalogue = catalogueForAssetClass(current.assetClass as AssetClass);
+  // Resolve the originating research task via the linked finding, if any.
+  let researchTaskId: number | null = null;
+  if (current.findingId != null) {
+    const f = await getResearchFinding(current.findingId);
+    researchTaskId = f?.taskId ?? null;
+  }
+  const newValue =
+    hasOverride
+      ? String(args.managerValue)
+      : current.field
+        ? cleanAuditValue(figuresIn[current.field])
+        : null;
+  await insertCatalogueAuditLog({
+    catalogue: auditCatalogue,
+    targetRef: promotedRef,
+    instrumentName: current.name,
+    changeKind: current.changeKind,
+    field: current.field ?? null,
+    oldValue: current.oldValue ?? null,
+    newValue,
+    source: current.source,
+    sourceUrl: current.sourceUrl ?? null,
+    researchUpdateId: current.id,
+    researchTaskId,
+    approvedBy: args.reviewedBy,
+    approvedAt: now,
+    note: args.reviewNote ?? null,
+  });
+
+  // If this update was drafted from a finding, close the loop on that finding.
+  if (current.findingId != null) {
+    await updateFindingStatus(current.findingId, "drafted", {
+      reviewedBy: args.reviewedBy,
+      draftedUpdateId: current.id,
+    });
+  }
+
   return { update: await getResearchUpdate(args.id), promotedRef, target: current.target };
+}
+
+/** Coerce a figures-bag value into a short audit string (<=300 chars), or null. */
+function cleanAuditValue(v: unknown): string | null {
+  if (v === null || v === undefined) return null;
+  const s = String(v).trim();
+  return s === "" ? null : s.slice(0, 300);
 }
 
 /* ── Source registry ────────────────────────────────────────────────────────── */
@@ -2614,4 +2740,302 @@ export async function sourceDueList(now = Date.now()): Promise<SourceDueStatus[]
       now,
     ),
   );
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * Round 82 — AI-assisted manager workbench DB helpers.
+ *
+ * These helpers persist the enquiry → finding → draft → approve trail, the
+ * immutable catalogue audit log, the read-only federated universe (approved
+ * facts across all four catalogues), and the scheduled agent's source clock.
+ *
+ * INVARIANTS (enforced here + in shared/researchPipeline):
+ *   - A research_task/finding NEVER writes a catalogue; findings are drafts only.
+ *   - A finding becomes a catalogue change ONLY via a pending research_update that
+ *     a manager approves (reviewResearchUpdate), which writes the audit row.
+ *   - The scheduled agent NEVER publishes; it only enqueues pending updates and
+ *     updates the source clock/freshness.
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Research tasks (Ask-AI enquiries) ──────────────────────────────────────── */
+
+/** Create a research task (an enquiry). Returns the new id, or null when DB-less. */
+export async function createResearchTask(input: InsertResearchTask): Promise<number | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const res = await db.insert(researchTasks).values(input);
+  return extractInsertId(res);
+}
+
+/** Mark a task done/error and record the AI answer + finding count. */
+export async function completeResearchTask(
+  id: number,
+  patch: { answerSummary?: string | null; aiModel?: string | null; findingCount?: number; error?: string | null },
+): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db
+    .update(researchTasks)
+    .set({
+      status: patch.error ? "error" : "done",
+      answerSummary: patch.answerSummary ?? null,
+      aiModel: patch.aiModel ?? null,
+      findingCount: patch.findingCount ?? 0,
+      error: patch.error ?? null,
+      completedAt: Date.now(),
+    })
+    .where(eq(researchTasks.id, id));
+}
+
+/** Fetch a single task by id. */
+export async function getResearchTask(id: number): Promise<ResearchTask | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db.select().from(researchTasks).where(eq(researchTasks.id, id)).limit(1);
+  return rows[0] ?? null;
+}
+
+/** List recent tasks (newest first), capped. */
+export async function listResearchTasks(limit = 50): Promise<ResearchTask[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(researchTasks).orderBy(desc(researchTasks.createdAt)).limit(limit);
+}
+
+/* ── Research findings (AI draft facts awaiting manager triage) ─────────────── */
+
+/** Insert a batch of findings (from findingsToRows). No-op on empty. */
+export async function insertResearchFindings(rows: InsertResearchFinding[]): Promise<void> {
+  const db = await getDb();
+  if (!db || rows.length === 0) return;
+  await db.insert(researchFindings).values(rows);
+}
+
+/** Fetch a single finding by id. */
+export async function getResearchFinding(id: number): Promise<ResearchFinding | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db.select().from(researchFindings).where(eq(researchFindings.id, id)).limit(1);
+  return rows[0] ?? null;
+}
+
+/** List findings (newest first), optionally filtered by task and/or triage status. */
+export async function listResearchFindings(filter?: {
+  taskId?: number;
+  status?: "new" | "drafted" | "dismissed";
+}): Promise<ResearchFinding[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const clauses = [] as ReturnType<typeof eq>[];
+  if (filter?.taskId != null) clauses.push(eq(researchFindings.taskId, filter.taskId));
+  if (filter?.status) clauses.push(eq(researchFindings.status, filter.status));
+  const base = db.select().from(researchFindings);
+  const q = clauses.length ? base.where(and(...clauses)) : base;
+  return q.orderBy(desc(researchFindings.createdAt));
+}
+
+/** Count findings still in the "new" (untriaged) state — for the inbox badge. */
+export async function countNewFindings(): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  const rows = await db
+    .select({ n: sql<number>`count(*)` })
+    .from(researchFindings)
+    .where(eq(researchFindings.status, "new"));
+  return Number(rows[0]?.n ?? 0);
+}
+
+/** Update a finding's triage status (drafted → links its pending update; dismissed). */
+export async function updateFindingStatus(
+  id: number,
+  status: "new" | "drafted" | "dismissed",
+  patch?: { reviewedBy?: string | null; draftedUpdateId?: number | null },
+): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db
+    .update(researchFindings)
+    .set({
+      status,
+      reviewedBy: patch?.reviewedBy ?? null,
+      reviewedAt: Date.now(),
+      ...(patch?.draftedUpdateId != null ? { draftedUpdateId: patch.draftedUpdateId } : {}),
+    })
+    .where(eq(researchFindings.id, id));
+}
+
+/* ── Catalogue audit log (immutable "Recently Approved" trail) ──────────────── */
+
+/** Append one immutable audit entry. Never fails the approval it records. */
+export async function insertCatalogueAuditLog(row: InsertCatalogueAuditLog): Promise<void> {
+  try {
+    const db = await getDb();
+    if (!db) return;
+    await db.insert(catalogueAuditLog).values(row);
+  } catch (err) {
+    console.error("[catalogue-audit] failed to write audit entry", err);
+  }
+}
+
+/** List audit entries (newest first), optionally by catalogue, capped. */
+export async function listCatalogueAudit(filter?: {
+  catalogue?: ReferenceCatalogue;
+  limit?: number;
+}): Promise<CatalogueAuditLog[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const base = db.select().from(catalogueAuditLog);
+  const q = filter?.catalogue
+    ? base.where(eq(catalogueAuditLog.catalogue, filter.catalogue))
+    : base;
+  return q.orderBy(desc(catalogueAuditLog.approvedAt)).limit(filter?.limit ?? 100);
+}
+
+/* ── Federated universe (read-only, approved/active facts only) ─────────────── */
+
+/**
+ * A single row in the federated screener view. Neutral facts only — no ranking.
+ * `catalogue` tells the UI which of the four reference catalogues it came from.
+ */
+export interface FederatedInstrument {
+  catalogue: ReferenceCatalogue;
+  ref: string;
+  name: string;
+  issuer: string | null;
+  assetClass: string | null;
+  currency: string | null;
+  /** The catalogue's headline figure (EAR / indicative rate / yield), when present. */
+  headlineFigure: number | null;
+  headlineLabel: string;
+  source: string | null;
+}
+
+/**
+ * Read the approved universe across ALL four catalogues (mmf_funds active,
+ * bank_instruments active, opportunities active split into cbk vs market_asset by
+ * asset class). This is the source for the Explore "All catalogues" federation
+ * toggle. It reads ONLY published/active rows — pending research never appears.
+ */
+export async function listFederatedUniverse(): Promise<FederatedInstrument[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const out: FederatedInstrument[] = [];
+
+  const mmfs = await db.select().from(mmfFunds).where(eq(mmfFunds.isActive, true));
+  for (const m of mmfs) {
+    out.push({
+      catalogue: "mmf",
+      ref: `mmf:${m.id}`,
+      name: m.fundName,
+      issuer: m.company,
+      assetClass: "cash_mmf",
+      currency: "KES",
+      headlineFigure: m.ear != null ? Number(m.ear) : null,
+      headlineLabel: "EAR %",
+      source: m.source ?? null,
+    });
+  }
+
+  const banks = await db.select().from(bankInstruments).where(eq(bankInstruments.isActive, true));
+  for (const b of banks) {
+    out.push({
+      catalogue: "bank",
+      ref: `bank:${b.id}`,
+      name: b.bankName,
+      issuer: b.bankName,
+      assetClass: "bank_deposit",
+      currency: "KES",
+      headlineFigure: b.indicativeRate != null ? Number(b.indicativeRate) : null,
+      headlineLabel: "Indicative rate %",
+      source: b.source ?? null,
+    });
+  }
+
+  const opps = await db.select().from(opportunities).where(eq(opportunities.active, true));
+  for (const o of opps) {
+    const ac = normaliseAssetClass(o.assetClass);
+    const cat = catalogueForAssetClass(ac);
+    // opportunities only feeds the cbk + market_asset catalogues.
+    if (cat !== "cbk" && cat !== "market_asset") continue;
+    const headline = o.yieldPct != null ? Number(o.yieldPct) : o.lastPrice != null ? Number(o.lastPrice) : null;
+    out.push({
+      catalogue: cat,
+      ref: o.ref,
+      name: o.name,
+      issuer: o.issuer ?? null,
+      assetClass: ac,
+      currency: o.currency,
+      headlineFigure: headline,
+      headlineLabel: o.yieldPct != null ? "Yield %" : "Last price",
+      source: o.dataSource ?? null,
+    });
+  }
+
+  return out;
+}
+
+/**
+ * The fund name(s) a portfolio treats as PRIMARY (the fund the projection uses).
+ * Used by the portfolio-impact descriptor to know whether an MMF yield change
+ * actually moves the projection. Returns [] when no primary fund is set.
+ */
+export async function primaryMmfFundNames(portfolioId: number): Promise<string[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const p = await db
+    .select({ mmfFundId: portfolios.mmfFundId })
+    .from(portfolios)
+    .where(eq(portfolios.id, portfolioId))
+    .limit(1);
+  const fundId = p[0]?.mmfFundId ?? null;
+  if (fundId == null) return [];
+  const f = await db.select({ fundName: mmfFunds.fundName }).from(mmfFunds).where(eq(mmfFunds.id, fundId)).limit(1);
+  return f[0]?.fundName ? [f[0].fundName] : [];
+}
+
+/* ── Scheduled agent clock (source-check cadence) ───────────────────────────── */
+
+/** Active sources whose agent cadence is due (or never checked) as of `now`. */
+export async function sourcesDueForAgentCheck(now = Date.now()): Promise<SourceRegistryRow[]> {
+  const rows = await listSources(false);
+  return rows.filter((r) => agentCheckDue({ cadenceDays: r.cadenceDays, lastCheckedAt: r.lastCheckedAt ?? null, active: r.active }, now).due);
+}
+
+/** Record the outcome of an agent check on a source (clock + freshness). */
+export async function markSourceChecked(
+  key: string,
+  patch: { status: "ok" | "stale" | "error"; lastCheckedAt: number; lastSuccessfulCheckAt?: number | null },
+): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db
+    .update(sourceRegistry)
+    .set({
+      status: patch.status,
+      lastCheckedAt: patch.lastCheckedAt,
+      ...(patch.lastSuccessfulCheckAt != null ? { lastSuccessfulCheckAt: patch.lastSuccessfulCheckAt } : {}),
+    })
+    .where(eq(sourceRegistry.key, key));
+}
+
+/**
+ * Flag long-overdue active sources as stale (agent housekeeping). A source is
+ * stale when it is ≥ 3× its cadence past its last agent check. Never publishes.
+ */
+export async function flagStaleSources(now = Date.now()): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  const rows = await listSources(false);
+  let flagged = 0;
+  for (const r of rows) {
+    const { stale } = agentCheckDue(
+      { cadenceDays: r.cadenceDays, lastCheckedAt: r.lastCheckedAt ?? null, active: r.active },
+      now,
+    );
+    if (stale && r.status !== "stale") {
+      await db.update(sourceRegistry).set({ status: "stale" }).where(eq(sourceRegistry.key, r.key));
+      flagged += 1;
+    }
+  }
+  return flagged;
 }

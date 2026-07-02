@@ -161,14 +161,17 @@ function ExtractPanel() {
         toast.warning("That page returned almost no readable text — see the nudge below.");
         return;
       }
+      const figCount = Object.keys(res.extraction.figures ?? {}).length;
       toast.success(
         res.created
-          ? `Drafted “${res.extraction.name}” with ${res.filled} AI-extracted figure${res.filled === 1 ? "" : "s"} — now in the review queue.`
-          : `Filled ${res.filled} blank figure${res.filled === 1 ? "" : "s"} on “${res.extraction.name}”${res.conflicts ? `, ${res.conflicts} sent to conflicts` : ""}.`,
+          ? `Drafted “${res.extraction.name}” (${figCount} figure${figCount === 1 ? "" : "s"}) — queued for review. Nothing changes until you approve it.`
+          : `Proposed an edit to “${res.extraction.name}” — queued for review. Nothing changes until you approve it.`,
       );
       utils.opportunities.list.invalidate();
       utils.opportunities.byRef.invalidate();
       utils.opportunities.aiReviewQueue.invalidate();
+      utils.researchPipeline.listUpdates.invalidate();
+      utils.researchPipeline.pendingCount.invalidate();
     },
     onError: (err) => toast.error(err.message),
   });
@@ -433,23 +436,18 @@ function ExtractPanel() {
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Badge variant="outline" className="text-orange-500 border-orange-500/40 cursor-help">
-                      AI-extracted · unverified
+                      AI-extracted · queued for review
                     </Badge>
                   </TooltipTrigger>
                   <TooltipContent side="bottom" className="max-w-xs text-xs leading-relaxed">
-                    The lowest trust level in the app. These numbers were read off a document by AI and have <strong>not</strong> been checked by a person or a parser. They never overwrite real data and must be confirmed against the source before anyone relies on them.
+                    The lowest trust level in the app. These numbers were read off a document by AI and have <strong>not</strong> been checked by a person or a parser. Nothing is written to any catalogue — this proposal waits in the Research Desk review queue until you approve it against the source.
                   </TooltipContent>
                 </Tooltip>
               </div>
               <div className="flex items-center gap-2">
-                <Link href="/ai-review">
-                  <Button size="sm" variant="outline">
-                    Open review queue <ArrowRight className="w-3.5 h-3.5 ml-1" />
-                  </Button>
-                </Link>
-                <Link href={`/explore/${encodeURIComponent(result.ref)}`}>
-                  <Button size="sm" variant="outline" title="Open the instrument page to check each figure against the document and mark it confirmed or corrected.">
-                    Confirm against source <ArrowRight className="w-3.5 h-3.5 ml-1" />
+                <Link href="/research">
+                  <Button size="sm" variant="outline" title="Open the Research Desk review queue to approve or reject this proposal against the source.">
+                    Review in Research Desk <ArrowRight className="w-3.5 h-3.5 ml-1" />
                   </Button>
                 </Link>
               </div>
@@ -508,8 +506,9 @@ function ExtractPanel() {
               </ul>
             )}
             <p className="text-[11px] text-muted-foreground">
-              These figures are provisional until a human confirms (or corrects) each one against the cited
-              source. The instrument stays hidden from the public catalog until at least one figure is confirmed.
+              This is a <strong>proposal only</strong> — nothing has been written to any catalogue. It waits in the
+              Research Desk review queue until you approve it (confirming or correcting each figure against the cited
+              source). Only an approval promotes it into the live catalogue.
             </p>
           </div>
         )}

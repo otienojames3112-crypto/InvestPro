@@ -72,6 +72,10 @@ export interface PendingUpdateInput {
   origin: UpdateOrigin;
   aiModel?: string | null;
   sourceKey?: string | null;
+  /** Round 82 — if drafted from a research finding, its id (traceability). */
+  findingId?: number | null;
+  /** Round 82 — for a single-field EDIT, the figure key this update changes. */
+  field?: string | null;
 }
 
 export interface ValidationResult {
@@ -326,4 +330,218 @@ export function sourceDueStatus(row: SourceCadenceRow, now: number): SourceDueSt
   const nextDue = row.lastReviewedAt + row.cadenceDays * dayMs;
   const dueInDays = Math.round((nextDue - now) / dayMs);
   return { ...row, dueInDays, isDue: now >= nextDue, neverReviewed: false };
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * Round 82 — AI-assisted manager workbench (PURE additions).
+ *
+ * These helpers encode the extra governance the workbench needs, all framework-
+ * free so server + client + tests share one implementation:
+ *   - the four REFERENCE CATALOGUES an approved fact can land in;
+ *   - the catalogue-specific REQUIRED-FIELD gate that keeps an incomplete fact
+ *     pending (a manager can still approve with an explicit override, but the
+ *     gate makes the incompleteness visible);
+ *   - the PORTFOLIO-IMPACT descriptor that states, in plain words, whether
+ *     approving a given catalogue fact moves the portfolio math — the invariant
+ *     being that reference facts NEVER move money; only confirmed holdings do.
+ * ════════════════════════════════════════════════════════════════════════ */
+
+/** The four reference catalogues (macro is context, not an approvable catalogue). */
+export type ReferenceCatalogue = "mmf" | "bank" | "cbk" | "market_asset";
+
+/**
+ * Map a canonical asset class to the reference catalogue a manager reviews it in.
+ * This is the UI/gate-facing sibling of {@link promotionTargetForAssetClass}
+ * (which speaks the db's promotion vocabulary: mmf | bank | opportunity). Here the
+ * "opportunity" table is split into the two catalogues a manager actually sees:
+ * CBK government securities vs. everything else (market assets).
+ */
+export function catalogueForAssetClass(ac: AssetClass): ReferenceCatalogue {
+  switch (ac) {
+    case "cash_mmf":
+      return "mmf";
+    case "bank_deposit":
+      return "bank";
+    case "gov_discount":
+    case "gov_coupon":
+      return "cbk";
+    default:
+      return "market_asset";
+  }
+}
+
+/** Human label for a catalogue (plain, for chrome + audit copy). */
+export function catalogueLabel(c: ReferenceCatalogue): string {
+  switch (c) {
+    case "mmf":
+      return "MMF market";
+    case "bank":
+      return "Bank products";
+    case "cbk":
+      return "CBK securities";
+    case "market_asset":
+      return "Market assets";
+  }
+}
+
+/**
+ * The figure keys a NEW entry in each catalogue must carry before it is complete
+ * enough to publish. A single-field EDIT is exempt (it only changes one figure on
+ * an already-complete row). These are intentionally minimal — the smallest set
+ * that makes the catalogue row meaningful and the portfolio math well-defined.
+ */
+export const CATALOGUE_REQUIRED_FIELDS: Record<ReferenceCatalogue, string[]> = {
+  // An MMF is only useful in projection if we know a yield.
+  mmf: ["ear"],
+  // A bank product needs an indicative rate to be a reference at all.
+  bank: ["indicativeRate"],
+  // A government security's defining figure is its yield.
+  cbk: ["yieldPct"],
+  // A market asset is price-driven — a last price is the minimum.
+  market_asset: ["lastPrice"],
+};
+
+/**
+ * The single figure key that is the "primary" driver for a catalogue — the one
+ * whose change is worth calling out in the portfolio-impact summary.
+ */
+export function primaryFigureKeyForCatalogue(c: ReferenceCatalogue): string {
+  return CATALOGUE_REQUIRED_FIELDS[c][0];
+}
+
+/** Read a figure value from a neutral figures bag, tolerating common aliases. */
+function figurePresent(figures: Record<string, unknown> | null | undefined, key: string): boolean {
+  if (!figures) return false;
+  const aliases: Record<string, string[]> = {
+    ear: ["ear", "netYield", "yieldPct", "yield", "grossYield"],
+    indicativeRate: ["indicativeRate", "rate", "yieldPct"],
+    yieldPct: ["yieldPct", "yield", "coupon", "rate"],
+    lastPrice: ["lastPrice", "price", "nav"],
+  };
+  const keys = aliases[key] ?? [key];
+  return keys.some((k) => {
+    const v = figures[k];
+    return v !== undefined && v !== null && String(v).trim() !== "";
+  });
+}
+
+export interface ApprovalGateResult {
+  ok: boolean;
+  catalogue: ReferenceCatalogue;
+  /** Required figure keys that are missing (empty when ok, or when it's an edit). */
+  missing: string[];
+  /** Plain-language reason when blocked. */
+  reason?: string;
+}
+
+/**
+ * The catalogue-specific approval gate. A `create` must carry every required
+ * figure for its catalogue; an `edit` (single-field change to an existing row) is
+ * always allowed through. A blocked create is NOT rejected — it stays pending and
+ * the manager sees exactly which figures are missing, and may still approve with
+ * an explicit manager-vouched override value (handled server-side).
+ */
+export function checkApprovalGate(args: {
+  assetClass: AssetClass;
+  changeKind: UpdateChangeKind;
+  figures?: Record<string, unknown> | null;
+  /** A manager override value supplied at approval — satisfies the gate. */
+  managerValue?: string | number | null;
+}): ApprovalGateResult {
+  const catalogue = catalogueForAssetClass(args.assetClass);
+  if (args.changeKind === "edit") {
+    return { ok: true, catalogue, missing: [] };
+  }
+  const hasOverride =
+    args.managerValue !== undefined && args.managerValue !== null && String(args.managerValue).trim() !== "";
+  const missing = CATALOGUE_REQUIRED_FIELDS[catalogue].filter(
+    (k) => !figurePresent(args.figures, k) && !(hasOverride && k === primaryFigureKeyForCatalogue(catalogue)),
+  );
+  if (missing.length === 0) return { ok: true, catalogue, missing: [] };
+  return {
+    ok: false,
+    catalogue,
+    missing,
+    reason: `${catalogueLabel(catalogue)} entries need ${missing.join(", ")} before they can be published. Add the figure(s), or approve with a manager-vouched value.`,
+  };
+}
+
+/**
+ * Portfolio-impact descriptor: what approving THIS catalogue fact does — and does
+ * NOT do — to the portfolio math. The invariant this makes explicit:
+ *   - A reference-catalogue fact NEVER restates an existing balance or holding.
+ *   - An MMF yield change affects FUTURE projected accrual ONLY IF that fund is
+ *     the portfolio's primary MMF (the fund the projection actually uses).
+ *   - Bank / CBK / market-asset facts are pure reference: they inform FUTURE
+ *     decisions (a next deposit, a next auction bid, a watch price) but touch no
+ *     existing holding until the manager records an actual holding.
+ */
+export interface PortfolioImpact {
+  /** True only when approving this changes any figure the projection consumes. */
+  affectsProjection: boolean;
+  /** True when it never touches existing money (the common, safe case). */
+  referenceOnly: boolean;
+  /** One-sentence plain-language explanation for the approve dialog. */
+  summary: string;
+}
+
+export function describePortfolioImpact(args: {
+  assetClass: AssetClass;
+  /** For MMF: is the instrument the portfolio's primary (projection) fund? */
+  isPrimaryMmf?: boolean;
+  instrumentName?: string | null;
+}): PortfolioImpact {
+  const catalogue = catalogueForAssetClass(args.assetClass);
+  const name = (args.instrumentName ?? "this instrument").toString();
+  if (catalogue === "mmf") {
+    if (args.isPrimaryMmf) {
+      return {
+        affectsProjection: true,
+        referenceOnly: false,
+        summary: `${name} is your primary MMF, so a new yield changes FUTURE projected accrual. It does not restate your current balance.`,
+      };
+    }
+    return {
+      affectsProjection: false,
+      referenceOnly: true,
+      summary: `${name} is a reference rate. It changes projection only if you set it as your primary MMF.`,
+    };
+  }
+  if (catalogue === "bank") {
+    return {
+      affectsProjection: false,
+      referenceOnly: true,
+      summary: `This is an indicative bank rate. It informs your NEXT deposit; it does not change any existing fixed deposit or holding.`,
+    };
+  }
+  if (catalogue === "cbk") {
+    return {
+      affectsProjection: false,
+      referenceOnly: true,
+      summary: `This is a government-securities reference yield. It informs FUTURE purchases; it does not revalue any bill or bond you already hold.`,
+    };
+  }
+  return {
+    affectsProjection: false,
+    referenceOnly: true,
+    summary: `This is a market-asset reference price. It updates the catalogue only; your net worth changes only when you record an actual holding.`,
+  };
+}
+
+/**
+ * Cadence helper for the SCHEDULED AGENT clock (distinct from the manual review
+ * cadence in {@link sourceDueStatus}). A source is due for an automated check
+ * when it has never been checked, or when `cadenceDays` have elapsed since the
+ * last agent check. Long overdue (≥ 3× cadence) marks it stale.
+ */
+export function agentCheckDue(
+  row: { cadenceDays: number; lastCheckedAt: number | null; active: boolean },
+  now: number,
+): { due: boolean; stale: boolean } {
+  if (!row.active) return { due: false, stale: false };
+  const dayMs = 24 * 60 * 60 * 1000;
+  if (row.lastCheckedAt == null) return { due: true, stale: false };
+  const elapsed = now - row.lastCheckedAt;
+  const cadenceMs = Math.max(1, row.cadenceDays) * dayMs;
+  return { due: elapsed >= cadenceMs, stale: elapsed >= cadenceMs * 3 };
 }

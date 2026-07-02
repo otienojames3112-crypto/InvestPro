@@ -10,6 +10,7 @@ import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
 import { driftDigestHandler } from "../scheduled/driftDigest";
 import { opportunityIngestHandler } from "../scheduled/opportunityIngest";
+import { sourceCheckHandler } from "../scheduled/sourceCheck";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -50,6 +51,7 @@ async function startServer() {
   // Vite / static fallthrough; /api/scheduled/* is not auto-registered.
   app.post("/api/scheduled/driftDigest", driftDigestHandler);
   app.post("/api/scheduled/opportunityIngest", opportunityIngestHandler);
+  app.post("/api/scheduled/sourceCheck", sourceCheckHandler);
   // development mode uses Vite, production mode uses static files
   if (process.env.NODE_ENV === "development") {
     await setupVite(app, server);

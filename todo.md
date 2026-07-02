@@ -1558,3 +1558,22 @@
 - [x] Type gate 0 errors + full suite 1420/1420 green; 4 screenshots captured; checkpoint next
 - [x] Constraint honoured: NO new top-level page — rebuilt inside existing Research area
 - [x] Follow-up (pre-existing data): 'CIC Money Market Fund' catalogue row was mis-tagged assetClass=alt — corrected to cash_mmf in DB (ai-cic-money-market-fund now cash_mmf/active; stale ai-cic-umbrella-fund alt row deactivated) + normaliseAssetClass added at read boundary + 6 regression tests (assetClassNormalise.round81.test.ts). Verified live: no active opportunity has a non-canonical assetClass.
+
+
+## Round 82 — Research workbench governance, Ask-AI findings, Explore federation, scheduled source-agent
+
+- [x] Schema migration 0014 applied: research_tasks (Ask-AI enquiries), research_findings (AI drafts, never live), catalogue_audit_log (immutable promotion trail), + agent-clock columns on source_registry (lastAgentCheckAt, agentCheckCadenceDays, lastAgentStatus)
+- [x] db.ts: reviewResearchUpdate upgraded — catalogue completeness gate enforced on approve, manager-override value injection, before-value capture, immutable catalogue_audit_log row written on every promotion; blocked-return shape when gate fails
+- [x] db.ts: Round-82 helpers appended — research tasks CRUD, findings insert/list/status, catalogue audit list, listFederatedUniverse (all 4 catalogues), primary-MMF name lookup, agent-clock due/mark
+- [x] db.ts: fixed latent insert-id bug — extractInsertId() handles both mysql2 OkPacket shapes (res vs res[0]); enqueueResearchUpdate + createResearchTask now return real ids
+- [x] Backend: closed 3 live-write bypasses — aiExtract (findings + pending only, no provisional live row), reviewCandidate-approve (enqueue pending), addOpportunity (enqueue pending). Every catalogue change now flows through one governed review. Only surviving upsertOpportunity calls are idempotent seed-on-empty guards (locked by test)
+- [x] Backend: review procedure extended with managerValue/overrideGate + blocked handling; new procedures — Ask-AI (ask + task/finding lists + draftFromFinding + dismissFinding), explore.federatedUniverse, catalogueAudit (recentlyApproved), impactOf (portfolio impact)
+- [x] Frontend: AskAI page — plain-English enquiry (question + scope + optional source), AI briefing via Streamdown, structured findings inbox with draft-to-queue / dismiss
+- [x] Frontend: RecentlyApproved audit-trail component (who/what/when/before→after per promotion)
+- [x] Frontend: Research Desk sub-tabs rewired — Ask AI (default) + Review queue (with pending badge) + Import & conflicts + Recently approved + Sources; approve flow now opens impact + gate/override confirmation dialog
+- [x] Frontend: Explore "This catalogue / All catalogues" segmented toggle — All view renders neutral federated table across all 4 catalogues (catalogue badge + headline figure), Score hidden in All view, filters respected
+- [x] Scheduled agent: /api/scheduled/sourceCheck handler + mounted in index.ts — flags stale/due sources, notifies owner, read-only (never auto-approves). Cron to be created post-deploy.
+- [x] Tests: researchWorkbench.round82.test.ts (29 assertions) — approval gate + manager override, portfolio-impact invariants, catalogue routing/label totality, agent cadence, Ask-AI parse/normalise/findingsToRows, bypass-closure source assertions, handler mount
+- [x] opportunityMaintainer.test.ts rewritten to the governed contract (addOpportunity enqueues pending, no live write; CONFLICT on existing live ref)
+- [x] Type gate 0 errors + full suite 1455/1455 green; screenshots captured (Research Desk with new tabs + pending badge, Explore federation toggle); checkpoint next
+- [x] Constraint honoured: NO new top-level page — all UX rebuilt inside the existing Research area / Research Desk

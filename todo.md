@@ -1598,4 +1598,7 @@
 - [x] Bank Product Catalogue: compact table + filters (search, product type, negotiable-only) + columns + row drawer + safe actions (no "Invest now"/"Recommended")
 - [x] Tests A–F: strengthened gate per catalogue + escape hatches + manager override; edits exempt; catalogue routing/labels; source-code governance (admin-gated, source-required, audited; bypasses closed); rate-history point shape/cadence
 - [x] Type gate clean + full suite green (1477 tests, 148 files) + checkpoint
-- [ ] Package entire codebase into ZIP and deliver
+- [x] Package entire codebase into ZIP and deliver
+
+## Round 84 — Bug fix: nested-button DOM error
+- [x] Fix nested-button DOM error on /research?tab=reference-catalogues&cat=mmf-market. InfoHint tooltip trigger changed from a native button to a focusable span role="button" tabIndex={0}, eliminating nested-button HTML violations app-wide (InfoHint is placed inside sortable headers and row action buttons). Added regression test server/infoHintNesting.test.ts (3 tests). Full suite 149 files / 1480 tests green; tsc clean.

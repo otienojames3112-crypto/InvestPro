@@ -42,8 +42,17 @@ export function InfoHint({
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <button
-          type="button"
+        {/*
+          Rendered as a focusable <span role="button"> rather than a real
+          <button>. InfoHint is frequently placed inside other interactive
+          elements (sortable table headers, action buttons), and a nested
+          <button> is invalid HTML that React flags. A span with role/tabIndex
+          keeps full keyboard + hover/focus tooltip behaviour without the
+          nesting violation.
+        */}
+        <span
+          role="button"
+          tabIndex={0}
           aria-label={typeof label === "string" ? `What does "${label}" mean?` : "More information"}
           className={cn(
             "inline-flex items-center gap-1 text-left align-middle cursor-help rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1",
@@ -60,7 +69,7 @@ export function InfoHint({
               iconClassName,
             )}
           />
-        </button>
+        </span>
       </TooltipTrigger>
       <TooltipContent side={side} className={cn("max-w-xs text-xs leading-relaxed", contentClassName)}>
         {children}

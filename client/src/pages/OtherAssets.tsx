@@ -12,7 +12,9 @@ import { Separator } from "@/components/ui/separator";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
-import { Plus, Pencil, Trash2, TrendingUp, BookOpen, AlertTriangle, Info, ChevronDown, ChevronUp, LogOut, Sparkles, Target } from "lucide-react";
+import { Plus, Pencil, Trash2, TrendingUp, BookOpen, AlertTriangle, Info, ChevronDown, ChevronUp, LogOut, Sparkles, Target, Scale } from "lucide-react";
+import { Link } from "wouter";
+import { dashboardHref } from "@shared/navigation";
 import { formatKES } from "@/lib/format";
 
 const ASSET_CLASSES = [
@@ -769,6 +771,12 @@ export default function OtherAssets({ embedded = false }: { embedded?: boolean }
           <p className="text-muted-foreground text-sm mt-1">
             Track holdings outside {portfolioLabel} — real estate, equities, pension, SACCO, and more.
           </p>
+          <Link
+            href={dashboardHref.marketAssets}
+            className="mt-2 inline-flex items-center gap-1.5 text-sm text-primary hover:underline"
+          >
+            <Scale className="w-4 h-4" /> Browse the Market Assets catalogue
+          </Link>
         </div>
         <Button onClick={() => setAddOpen(true)} size="sm" disabled={!portfolioId}>
           <Plus className="w-4 h-4 mr-1" /> Add Asset

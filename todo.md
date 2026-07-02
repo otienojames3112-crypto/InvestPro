@@ -1698,3 +1698,22 @@
 - [x] Tool-aware Ask AI system prompt: reference catalogues != holdings; holdings = actual money; AI findings do not affect math until approved; approved catalogue changes affect FUTURE projections only; historical actuals not rewritten; MMF / bank products / CBK securities / market assets have different fields + risks
 - [x] Tests: (a) follow-up includes prior findings; (b) follow-up can attach new source; (c) follow-up can use previous source; (d) correction creates versioned finding; (e) follow-up does not create duplicate findings unless values changed
 - [x] Full suite + tsc green (1610 passed, 3 consecutive runs); UI wired; checkpoint and deliver
+
+# Round 93 — Reference Catalogue → Holdings action flow
+
+- [ ] Bank Product Catalogue actions use DepositDrawer with a bank prefill (kind:bank, bankInstrumentId + bankName/instrumentType/indicativeRate/typicalTenor/minAmount/source/asOfDate); REMOVE the invalid /holdings/bank navigation; user confirms amount/rate/start/tenor/payout/WHT/notes before a holding+deposit is created
+- [ ] Add nullable bankInstrumentId on bankInstrumentHoldings (+ migration); thread it through create so an actual bank holding links back to its catalogue row; catalogue rate change never mutates existing deposit
+- [ ] MMF Market row actions: Set as primary (exists), Add as secondary MMF account, Record deposit (DepositDrawer institutionType=mmf_fund, mmfFundId), View composition; user still confirms amount/date/notes
+- [ ] Verify CBK Securities Reference "Record purchase" opens DepositDrawer prefilled (security type/tenor/rate/WHT/maturity), no holding until confirm
+- [ ] Verify Market Assets Reference "Track holding" opens Holdings → Other prefilled (name/class/price/source), no holding until confirm value/units/date/include-in-goal
+- [ ] Holdings tabs remain actual-holdings only (do NOT move reference tables in); add catalogue back-links (MMF/Government/Bank/Other → their reference pages)
+- [ ] Tests: bank catalogue create opens DepositDrawer not /holdings/bank; created bank holding stores bankInstrumentId; MMF add-secondary creates a secondary account after confirm; MMF record-deposit records a deposit to that fund; reference rows alone do not change net worth; confirmed holdings update Dashboard/Holdings/Ledger/Accrual/Tax/Review/Reconciliation
+- [ ] Full suite + tsc green; verify UI; checkpoint and deliver
+
+## Round 93 — working notes
+- [x] Schema: nullable `bankInstrumentId` added to `bank_instrument_holdings` + migration 0017 (applied to live DB)
+- [x] Backend: thread bankInstrumentId through bankHoldings.add + list (deposits.add unchanged — holding created first, links via bankHoldingId)
+- [x] Frontend: DepositDrawer bank prefill w/ bankInstrumentId; BankInstruments actions use drawer (removed /holdings/bank nav + unused useLocation)
+- [x] MMF Market row actions: add-secondary (deep-link Holdings→MMF w/ addSecondary+fundId, consumed in MmfAccounts), record-deposit (drawer mmf kind → held fund or not-held hint), view composition (/mmf-strategy mounted as real route)
+- [x] Holdings back-links: Government (Securities)→CBK ref + Other→Market Assets ref added; MMF/Bank already linked
+- [x] Tests: added server/round93CatalogueToHolding.test.ts (17); updated routeRedirects.test.ts for the graduated /mmf-strategy route; full suite 1628 passing; tsc clean

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "wouter";
 import { usePortfolio } from "@/contexts/PortfolioContext";
 import { useSelectedFund } from "@/hooks/useSelectedFund";
@@ -115,6 +115,25 @@ export default function MmfAccounts({ embedded: _embedded = false }: { embedded?
     setForm({ ...EMPTY, mmfFundId: funds[0]?.id ?? 0 });
     setDialogOpen(true);
   };
+
+  // Round 93: MMF Market → "Add as MMF account" deep-links here with
+  // ?addSecondary=1&fundId=<id> to open the Add dialog pre-seeded to that fund.
+  // Nothing is written until the user confirms balances in the dialog; the params
+  // only save typing. We wait until funds have loaded (so the fund id is valid),
+  // then clean the URL so a refresh doesn't re-open it.
+  useEffect(() => {
+    if (funds.length === 0) return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("addSecondary") !== "1") return;
+    const fundId = Number(params.get("fundId") ?? "");
+    const valid = funds.some((f) => f.id === fundId);
+    setForm({ ...EMPTY, mmfFundId: valid ? fundId : (funds[0]?.id ?? 0) });
+    setDialogOpen(true);
+    for (const k of ["addSecondary", "fundId"]) params.delete(k);
+    const qs = params.toString();
+    window.history.replaceState({}, "", `${window.location.pathname}${qs ? `?${qs}` : ""}`);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [funds]);
   const openEdit = (s: (typeof secondaries)[number]) => {
     setForm({
       id: s.id,

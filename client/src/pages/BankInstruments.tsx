@@ -2,7 +2,6 @@ import { useMemo, useState, useEffect } from "react";
 import { AppShell } from "@/components/AppShell";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
-import { useLocation } from "wouter";
 import { useRefFocus } from "@/hooks/useRefFocus";
 import {
   Card,
@@ -59,6 +58,7 @@ import {
   AlertTriangle,
   ShieldCheck,
 } from "lucide-react";
+import { useDepositDrawer } from "@/contexts/DepositDrawerContext";
 import { CatalogueRowControls } from "@/components/CatalogueRowControls";
 import { CatalogueSourceReviewButton } from "@/components/CatalogueSourceReview";
 import { ArchivedRowsPanel, CatalogueScopeFilter, type CatalogueRowScope } from "@/components/ArchivedRowsPanel";
@@ -132,7 +132,7 @@ const EMPTY = {
 export default function BankInstruments({ embedded = false }: { embedded?: boolean } = {}) {
   const utils = trpc.useUtils();
   const { user } = useAuth();
-  const [, navigate] = useLocation();
+  const { openDrawer } = useDepositDrawer();
   const isManager = user?.role === "admin";
 
   const { data: rows, isLoading } = trpc.bankInstruments.list.useQuery();
@@ -499,36 +499,39 @@ export default function BankInstruments({ embedded = false }: { embedded?: boole
                   <DrawerFact label="As of" value={asOfLabel(drawerRow.asOfDate)} />
                 </div>
 
-                {/* Safe actions — never "invest now" / "recommended" */}
+                {/* Safe actions — never "invest now" / "recommended".
+                    Round 93: opening a deposit now goes through the confirm-first
+                    DepositDrawer (seeded from this catalogue row) instead of the
+                    old invalid /holdings/bank deep-link. Nothing is written until
+                    the user confirms amount / rate / start / tenor in the drawer,
+                    and the created holding links back to this row via
+                    bankInstrumentId. */}
                 <div className="border-t pt-4 space-y-2">
                   <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Next steps</p>
                   <Button
                     className="w-full justify-start"
                     variant="outline"
                     onClick={() => {
+                      const r = drawerRow;
                       setDrawerRow(null);
-                      navigate(
-                        `/holdings/bank?bank=${encodeURIComponent(drawerRow.bankName)}&type=${drawerRow.instrumentType}&rate=${drawerRow.indicativeRate ?? ""}`,
-                      );
+                      openDrawer({
+                        kind: "bank",
+                        bankInstrumentId: r.id,
+                        bankName: r.bankName,
+                        instrumentType: r.instrumentType,
+                        indicativeRate: r.indicativeRate,
+                        typicalTenor: r.typicalTenor,
+                        minAmount: r.minAmount,
+                        source: r.source,
+                        asOfDate: typeof r.asOfDate === "string" ? r.asOfDate : r.asOfDate ? r.asOfDate.toISOString().slice(0, 10) : null,
+                      });
                     }}
                   >
-                    Record if already placed
-                  </Button>
-                  <Button
-                    className="w-full justify-start"
-                    variant="outline"
-                    onClick={() => {
-                      setDrawerRow(null);
-                      navigate(
-                        `/holdings/bank?new=1&bank=${encodeURIComponent(drawerRow.bankName)}&type=${drawerRow.instrumentType}&rate=${drawerRow.indicativeRate ?? ""}`,
-                      );
-                    }}
-                  >
-                    Create bank holding
+                    Record a deposit into this product
                   </Button>
                   <p className="text-[11px] text-muted-foreground pt-1">
-                    Indicative reference only. Confirm the current rate and terms directly with the bank before placing
-                    funds.
+                    Indicative reference only. This opens the deposit drawer pre-filled from this row — you still confirm
+                    the current rate, amount and terms (negotiate directly with the bank) before any holding is created.
                   </p>
                 </div>
 

@@ -39,7 +39,9 @@ describe("Phase 7 — legacy route redirects", () => {
   const app = read("App.tsx");
 
   it("the canonical map carries a non-trivial set of redirects", () => {
-    expect(LEGACY_REDIRECTS.length).toBeGreaterThanOrEqual(18);
+    // Round 93: /mmf-strategy graduated from a redirect to a real mounted route
+    // (the MMF composition surface), so the map lost one entry.
+    expect(LEGACY_REDIRECTS.length).toBeGreaterThanOrEqual(17);
   });
 
   it("every redirect target is a real tab id in its area", () => {
@@ -76,7 +78,8 @@ describe("Phase 7 — legacy route redirects", () => {
       "/bank-instruments": { area: "holdings", tab: "bank" },
       "/other-assets": { area: "holdings", tab: "other" },
       "/explore": { area: "research", tab: "all-approved" },
-      "/mmf-strategy": { area: "research", tab: "mmf-market" },
+      // Round 93: /mmf-strategy is intentionally NOT a redirect anymore (see the
+      // dedicated "is now a real route" assertion below).
       "/ai-intake": { area: "research", tab: "research-desk" },
       "/ai-review": { area: "research", tab: "research-desk" },
       "/source-conflicts": { area: "research", tab: "research-desk" },
@@ -100,6 +103,14 @@ describe("Phase 7 — legacy route redirects", () => {
 
   it("keeps the standalone /settings → plan?tab=goal redirect", () => {
     expect(app).toMatch(/path="\/settings"[\s\S]*?TabRedirect\s+area="plan"\s+tab="goal"/);
+  });
+
+  it("mounts /mmf-strategy as a real route (MMF composition), not a redirect", () => {
+    // Round 93: MMF Market → "View composition" needs a real destination. The
+    // page is mounted directly and removed from LEGACY_REDIRECTS so the redirect
+    // no longer shadows it.
+    expect(app).toMatch(/path="\/mmf-strategy">\{\(\)\s*=>\s*<MmfStrategy/);
+    expect(LEGACY_REDIRECTS.some((r) => r.from === "/mmf-strategy")).toBe(false);
   });
 
   it("does not leave the consolidated standalone pages mounted as their own routes", () => {

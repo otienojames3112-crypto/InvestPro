@@ -15,6 +15,7 @@ import AddInstrument from "./pages/AddInstrument";
 import PlanArea from "./pages/PlanArea";
 import CashflowsArea from "./pages/CashflowsArea";
 import HoldingsArea from "./pages/HoldingsArea";
+import MmfStrategy from "./pages/MmfStrategy";
 import ResearchArea from "./pages/ResearchArea";
 import ReviewArea from "./pages/ReviewArea";
 import { LEGACY_REDIRECTS } from "@shared/legacyRoutes";
@@ -76,6 +77,9 @@ function Router() {
       {/* ---- Full-screen deep pages (kept standalone; opened from Research→Explore) ---- */}
       <Route path="/explore/new" component={AddInstrument} />
       <Route path="/explore/:ref" component={OpportunityDetail} />
+
+      {/* ---- MMF composition surface (opened from MMF Market → View composition) ---- */}
+      <Route path="/mmf-strategy">{() => <MmfStrategy />}</Route>
 
       {/* ---- Legacy route redirects → new area + tab (driven by the canonical
            LEGACY_REDIRECTS map in shared/legacyRoutes.ts so routes and their

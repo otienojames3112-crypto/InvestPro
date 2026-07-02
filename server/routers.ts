@@ -6091,6 +6091,7 @@ export const appRouter = router({
         return rows.map((r) => ({
           id: r.id,
           portfolioId: r.portfolioId,
+          bankInstrumentId: (r as { bankInstrumentId?: number | null }).bankInstrumentId ?? null,
           bankName: r.bankName,
           label: r.label ?? null,
           instrumentType: r.instrumentType,
@@ -6461,6 +6462,9 @@ export const appRouter = router({
     add: protectedProcedure
       .input(z.object({
         portfolioId: z.number().int().positive(),
+        // Round 93: optional provenance link to the reference-catalog row this
+        // holding was opened from (Bank Product Catalogue → Record deposit).
+        bankInstrumentId: z.number().int().positive().optional(),
         bankName: z.string().min(1).max(200),
         label: z.string().max(200).optional(),
         instrumentType: z.enum(["call_deposit", "fixed_deposit", "ordinary_savings", "target_savings", "tiered_savings"]),
@@ -6482,6 +6486,7 @@ export const appRouter = router({
         await requirePortfolio(input.portfolioId, ctx.user.id);
         const created = await addBankInstrumentHolding({
           portfolioId: input.portfolioId,
+          bankInstrumentId: input.bankInstrumentId ?? null,
           bankName: input.bankName,
           label: input.label,
           instrumentType: input.instrumentType,

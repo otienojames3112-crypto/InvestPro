@@ -13,7 +13,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Landmark, Plus, Trash2, CheckCircle2, Clock, Pencil, Link2, Info, RefreshCw, Wallet, RotateCcw, AlertTriangle, SplitSquareHorizontal, ArrowRightLeft, ArrowUp, ArrowDown, ArrowUpDown, ChevronDown, ChevronRight } from "lucide-react";
+import { Landmark, Plus, Trash2, CheckCircle2, Clock, Pencil, Link2, Info, RefreshCw, Wallet, RotateCcw, AlertTriangle, SplitSquareHorizontal, ArrowRightLeft, ArrowUp, ArrowDown, ArrowUpDown, ChevronDown, ChevronRight, Scale } from "lucide-react";
+import { Link } from "wouter";
+import { dashboardHref } from "@shared/navigation";
 import { useState, useMemo, useEffect } from "react";
 import { useMaturingWindow, MATURING_WINDOW_OPTIONS, MATURING_WINDOW_ALL, maturingWindowLabel } from "@/hooks/useMaturingWindow";
 import { toast } from "sonner";
@@ -569,8 +571,19 @@ export default function Securities({ embedded = false }: { embedded?: boolean } 
               CBK Securities Register
             </h1>
             <p className="text-sm text-muted-foreground mt-0.5">
-              Track individual T-bill and bond purchases with coupon and maturity schedules
+              Track individual T-bill and bond purchases with coupon and maturity schedules.{" "}
+              Compare current auction rates and tenors in the{" "}
+              <Link href={dashboardHref.cbkSecurities} className="text-primary underline underline-offset-2">
+                CBK Securities catalogue
+              </Link>{" "}
+              under Research.
             </p>
+            <Link
+              href={dashboardHref.cbkSecurities}
+              className="mt-2 inline-flex items-center gap-1.5 text-sm text-primary hover:underline"
+            >
+              <Scale className="w-4 h-4" /> Compare the market
+            </Link>
           </div>
           <Dialog open={open} onOpenChange={setOpen}>
             <DialogTrigger asChild>

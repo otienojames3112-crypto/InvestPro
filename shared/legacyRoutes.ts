@@ -33,7 +33,9 @@ export const LEGACY_REDIRECTS: readonly LegacyRedirect[] = [
   // Round 85: the Explore screener is now the nested "all-approved" catalogue
   // tab, reached via ?tab=reference-catalogues&cat=all-approved.
   { from: "/explore", area: "research", tab: "all-approved" },
-  { from: "/mmf-strategy", area: "research", tab: "mmf-market" },
+  // Round 93: /mmf-strategy is no longer a legacy redirect — it is now a real
+  // mounted route (the MMF composition surface, opened from MMF Market → View
+  // composition), so it must not forward to the MMF Market tab.
   { from: "/ai-intake", area: "research", tab: "research-desk" },
   { from: "/ai-review", area: "research", tab: "research-desk" },
   { from: "/source-conflicts", area: "research", tab: "research-desk" },

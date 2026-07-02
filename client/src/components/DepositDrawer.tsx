@@ -259,6 +259,14 @@ export function DepositDrawer({ open, onClose, prefill }: DepositDrawerProps) {
   });
   // Round 40: which reference-rate row (if any) was used to quick-fill the new bank deposit.
   const [selectedBankRef, setSelectedBankRef] = useState("");
+  // Round 93: when the drawer is opened from the Bank Product Catalogue, remember
+  // which reference-catalog row seeded the form so the created holding links back
+  // to it (provenance). Cleared on reset / manual bank-new selection.
+  const [prefillBankInstrumentId, setPrefillBankInstrumentId] = useState<number | null>(null);
+  // Round 93: when opened from MMF Market for a fund the user does NOT yet hold,
+  // we can't route a deposit into it. Remember the name to show a gentle hint
+  // steering them to add it as a secondary account first.
+  const [mmfNotHeldName, setMmfNotHeldName] = useState<string | null>(null);
   // Round 39: precise government-security details. When a gov bucket is chosen we
   // capture the exact T-bill tenor (91/182/364) or bond tenor (years) so the
   // auto-created register row carries the correct maturity + WHT.
@@ -286,8 +294,16 @@ export function DepositDrawer({ open, onClose, prefill }: DepositDrawerProps) {
     if (!open || !prefill) return;
     setFormOpen(true);
     if (prefill.kind === "bank") {
-      setForm((f) => ({ ...f, destination: "bank:new" }));
+      setForm((f) => ({
+        ...f,
+        destination: "bank:new",
+        // Seed the amount from the product's minimum as a starting point; the user
+        // still confirms/edits the exact figure before anything is recorded.
+        amount: prefill.minAmount != null && prefill.minAmount > 0 ? String(prefill.minAmount) : f.amount,
+      }));
+      setPrefillBankInstrumentId(prefill.bankInstrumentId ?? null);
       const isTerm = isTermBankInstrument(prefill.instrumentType);
+      const tenorFromMonths = prefill.tenorMonths != null && prefill.tenorMonths > 0 ? String(prefill.tenorMonths) : null;
       const tenorMatch = prefill.typicalTenor ? prefill.typicalTenor.match(/\d+/) : null;
       setNewBank((b) => ({
         ...b,
@@ -295,13 +311,23 @@ export function DepositDrawer({ open, onClose, prefill }: DepositDrawerProps) {
         instrumentType: prefill.instrumentType,
         interestRate:
           prefill.indicativeRate != null ? String(prefill.indicativeRate) : b.interestRate,
-        tenorMonths: isTerm && tenorMatch ? tenorMatch[0] : b.tenorMonths,
+        tenorMonths: isTerm ? (tenorFromMonths ?? (tenorMatch ? tenorMatch[0] : b.tenorMonths)) : b.tenorMonths,
       }));
     } else if (prefill.kind === "gov") {
       setForm((f) => ({ ...f, destination: `gov:${prefill.bucket}` }));
       if (prefill.bucket === "tbill" && prefill.tbillTenorDays) {
         setGovDetail((g) => ({ ...g, tbillTenorDays: prefill.tbillTenorDays! }));
       }
+    } else if (prefill.kind === "mmf") {
+      // Round 93: preselect the held MMF account (primary or a secondary) that
+      // tracks this catalogue fund, if any. The drawer only routes money into an
+      // MMF the user actually holds; when it isn't held yet we leave the
+      // destination empty and surface a hint to add it as a secondary first.
+      const match = destinations.find(
+        (d) => d.payload.institutionType === "mmf_fund" && d.payload.mmfFundId === prefill.mmfFundId,
+      );
+      setMmfNotHeldName(match ? null : (prefill.fundName ?? "This fund"));
+      setForm((f) => ({ ...f, destination: match ? match.value : "" }));
     }
     // Only react to a NEW open/prefill pair, not to every form keystroke.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -394,6 +420,8 @@ export function DepositDrawer({ open, onClose, prefill }: DepositDrawerProps) {
     setForm({ destination: "", amount: "", depositDate: new Date().toISOString().slice(0, 10), notes: "" });
     setNewBank({ bankName: "", instrumentType: "fixed_deposit" as BankInstrumentType, interestRate: "", tenorMonths: "12" });
     setSelectedBankRef("");
+    setPrefillBankInstrumentId(null);
+    setMmfNotHeldName(null);
     setGovDetail({
       tbillTenorDays: 364,
       bondTenorYears: DEFAULT_FXD_TENOR_YEARS,
@@ -430,6 +458,10 @@ export function DepositDrawer({ open, onClose, prefill }: DepositDrawerProps) {
         }
         const res = await createBankHolding.mutateAsync({
           portfolioId,
+          // Round 93: link the new holding to its catalogue row when opened from
+          // the Bank Product Catalogue. A catalogue rate change never mutates this
+          // holding afterwards — the link is provenance only.
+          bankInstrumentId: prefillBankInstrumentId ?? undefined,
           bankName,
           label: `${bankName} ${isTerm ? `${tenor}-month ${bankInstrumentLabel(newBank.instrumentType).toLowerCase()}` : bankInstrumentLabel(newBank.instrumentType).toLowerCase()}`,
           instrumentType: newBank.instrumentType,
@@ -630,6 +662,15 @@ export function DepositDrawer({ open, onClose, prefill }: DepositDrawerProps) {
                   Cancel
                 </button>
               </div>
+
+              {/* Round 93: MMF Market → record-deposit for a fund not yet held. */}
+              {mmfNotHeldName && !form.destination && (
+                <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200 leading-snug">
+                  <span className="font-medium">{mmfNotHeldName}</span> isn&rsquo;t one of your MMF accounts yet, so there&rsquo;s
+                  no place to route this deposit. Add it as a secondary MMF account first (Holdings → MMF), then record
+                  the deposit into it.
+                </div>
+              )}
 
               {/* Destination — pick the account first */}
               <div className="space-y-1.5">
@@ -881,6 +922,9 @@ export function DepositDrawer({ open, onClose, prefill }: DepositDrawerProps) {
                           setSelectedBankRef(v);
                           const ref = bankInstrumentRefs.find((r) => String(r.id) === v);
                           if (!ref) return;
+                          // Round 93: manually quick-filling from a catalogue row also
+                          // links the created holding back to that reference product.
+                          setPrefillBankInstrumentId(ref.id);
                           const isTerm = isTermBankInstrument(ref.instrumentType as BankInstrumentType);
                           const tenorMatch = ref.typicalTenor ? ref.typicalTenor.match(/\d+/) : null;
                           setNewBank((b) => ({

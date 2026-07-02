@@ -806,6 +806,14 @@ export type InsertBankInstrument = typeof bankInstruments.$inferInsert;
 export const bankInstrumentHoldings = mysqlTable("bank_instrument_holdings", {
   id: int("id").autoincrement().primaryKey(),
   portfolioId: int("portfolioId").notNull(),
+  /**
+   * Round 93: optional link back to the global `bankInstruments` reference-catalog
+   * row this holding was opened from. Nullable — holdings added manually (no
+   * catalogue origin) leave it null. A catalogue rate change NEVER mutates the
+   * holding; this is provenance only, so the user can see which product a
+   * holding came from.
+   */
+  bankInstrumentId: int("bankInstrumentId"),
   /** Bank name, e.g. "Equity Bank" */
   bankName: varchar("bankName", { length: 200 }).notNull(),
   /** Optional user label, e.g. "Equity 3-month FD" */

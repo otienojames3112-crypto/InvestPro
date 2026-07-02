@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect } from "react";
-import { Link } from "wouter";
+import { Link, useLocation } from "wouter";
 import { dashboardHref } from "@shared/navigation";
+import { useDepositDrawer } from "@/contexts/DepositDrawerContext";
 import { AppShell } from "@/components/AppShell";
 import { trpc } from "@/lib/trpc";
 import { invalidatePortfolioMoney } from "@/lib/invalidatePortfolioMoney";
@@ -18,7 +19,13 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
-import { ArrowUpDown, ArrowUp, ArrowDown, Search, Plus, Pencil, CheckCircle2, Circle, Info, Star, AlertTriangle, ExternalLink } from "lucide-react";
+import { ArrowUpDown, ArrowUp, ArrowDown, Search, Plus, Pencil, CheckCircle2, Circle, Info, Star, AlertTriangle, ExternalLink, MoreHorizontal, PiggyBank, Receipt, PieChart } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -273,6 +280,8 @@ export default function MmfFunds({ embedded = false }: { embedded?: boolean } = 
     onSuccess: () => { invalidatePortfolioMoney(utils, portfolioId); setEditFund(null); toast.success("Fund updated — recorded in the audit trail."); },
     onError: (e) => toast.error(e.message),
   });
+  const [, navigate] = useLocation();
+  const { openDrawer } = useDepositDrawer();
   const selectFundMutation = trpc.mmfFunds.selectFund.useMutation({
     onSuccess: () => {
       invalidatePortfolioMoney(utils, portfolioId);
@@ -642,6 +651,33 @@ export default function MmfFunds({ embedded = false }: { embedded?: boolean } = 
                             <Circle className="w-3 h-3 mr-1" /> Select
                           </Button>
                         )}
+                        {/* Round 93: confirm-first actions that bridge this reference
+                            row to actual Holdings. None of these write anything on
+                            click — they open a prefilled form/drawer the user confirms. */}
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button size="icon" variant="ghost" className="h-7 w-7" aria-label="More actions">
+                              <MoreHorizontal className="w-4 h-4" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end" className="w-56">
+                            <DropdownMenuItem
+                              onClick={() =>
+                                navigate(`${dashboardHref.mmf}&addSecondary=1&fundId=${fund.id}`)
+                              }
+                            >
+                              <PiggyBank className="w-4 h-4 mr-2" /> Add as MMF account
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              onClick={() => openDrawer({ kind: "mmf", mmfFundId: fund.id, fundName: fund.fundName })}
+                            >
+                              <Receipt className="w-4 h-4 mr-2" /> Record a deposit
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => navigate("/mmf-strategy")}>
+                              <PieChart className="w-4 h-4 mr-2" /> View composition
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
                         {isManager && (
                           <>
                             <Button

@@ -1577,3 +1577,25 @@
 - [x] opportunityMaintainer.test.ts rewritten to the governed contract (addOpportunity enqueues pending, no live write; CONFLICT on existing live ref)
 - [x] Type gate 0 errors + full suite 1455/1455 green; screenshots captured (Research Desk with new tabs + pending badge, Explore federation toggle); checkpoint next
 - [x] Constraint honoured: NO new top-level page — all UX rebuilt inside the existing Research area / Research Desk
+
+
+## Round 83 — Research governance tightening + UX reorg + rate history + approved-universe Explore
+
+- [x] Reorganize Research into 3 top-level tabs: Research Desk / Explore Screener / Reference Catalogues (Research Desk default); reduce nested tab clutter
+- [x] Research Desk sub-tabs: Ask AI / Review Queue / Source Conflicts / Source Registry / Recently Approved
+- [x] Remove separate "Import & conflicts" work area; fold document import + image/screenshot upload into Ask AI (question | registered-source | source URL | pasted text | PDF | image) → same output (briefing + structured findings → draft to Review Queue)
+- [x] Conflicts become a filter inside Review Queue OR a compact Source Conflicts section (no separate nav item)
+- [x] Recently Approved = pure audit log (no second transfer step); approval already publishes to catalogue
+- [x] Server: verify catalogue row exists after promotion; if promotion fails keep pending + show error (no fake audit)
+- [x] Recently Approved rows show "Open in <catalogue>" deep link to the published row
+- [x] Strengthen per-catalogue approval validation (MMF / Bank / CBK / Market asset required-field sets); keep pending + show exactly what's missing; never promote missing numerics as zero; manager-override for market-asset missing figures
+- [x] Govern all live reference edits: MMF & Bank direct add/edit/delete → admin-only manual correction with source+as-of+reason+audit; normal user cannot edit global reference data
+- [x] Keep portfolio actions direct (set primary, add secondary MMF, record deposit/holding/purchase, track other asset)
+- [x] Manager-only controls on ALL four reference catalogues: edit / deactivate-archive / mark-stale / view audit history / view rate history; no hard delete of live rows by default
+- [x] Source registry management UI: add / edit / deactivate / mark-reviewed with fields (key, label, feeds, url, cadence, notes, active, last checked, last reviewed)
+- [x] Date-effective rate history: mmf_rate_history / cbk_rate_history / bank_product_rate_history written on verified promotion; read helpers + per-row rate-history viewer
+- [x] Explore = approved-universe screener wording (federated approved catalogues; information-only)
+- [x] Bank Product Catalogue: compact table + filters (search, product type, negotiable-only) + columns + row drawer + safe actions (no "Invest now"/"Recommended")
+- [x] Tests A–F: strengthened gate per catalogue + escape hatches + manager override; edits exempt; catalogue routing/labels; source-code governance (admin-gated, source-required, audited; bypasses closed); rate-history point shape/cadence
+- [x] Type gate clean + full suite green (1477 tests, 148 files) + checkpoint
+- [ ] Package entire codebase into ZIP and deliver

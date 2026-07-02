@@ -36,6 +36,7 @@ import {
 import { InfoHint } from "@/components/InfoHint";
 import { catalogueLabel, type ReferenceCatalogue } from "@shared/researchPipeline";
 import { formatRelativeTime } from "@/lib/format";
+import { ExtractPanel, AiPrincipleBanner } from "@/pages/AiIntake";
 
 /* ── Small shared bits ─────────────────────────────────────────────────────── */
 
@@ -522,12 +523,24 @@ export default function AskAI({ embedded = false }: { embedded?: boolean } = {})
           <TabsTrigger value="ask">
             <Sparkles className="w-3.5 h-3.5 mr-1.5" /> Ask
           </TabsTrigger>
+          <TabsTrigger value="import">
+            <FileText className="w-3.5 h-3.5 mr-1.5" /> Import a document
+          </TabsTrigger>
           <TabsTrigger value="history">
             <History className="w-3.5 h-3.5 mr-1.5" /> Enquiry history
           </TabsTrigger>
         </TabsList>
         <TabsContent value="ask" className="mt-5">
           <EnquiryPanel />
+        </TabsContent>
+        <TabsContent value="import" className="mt-5 space-y-4">
+          <p className="text-sm text-muted-foreground leading-relaxed">
+            Have a fact sheet, auction notice, price board, or screenshot? Let the librarian read it and draft the
+            figures straight into the review queue — as pasted text, a URL it fetches, an uploaded PDF, or an image.
+            Nothing is written to a catalogue until you approve it.
+          </p>
+          <AiPrincipleBanner />
+          <ExtractPanel />
         </TabsContent>
         <TabsContent value="history" className="mt-5">
           <HistoryPanel />

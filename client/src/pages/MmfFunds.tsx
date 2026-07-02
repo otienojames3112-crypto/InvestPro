@@ -5,6 +5,8 @@ import { AppShell } from "@/components/AppShell";
 import { trpc } from "@/lib/trpc";
 import { invalidatePortfolioMoney } from "@/lib/invalidatePortfolioMoney";
 import { usePortfolio } from "@/contexts/PortfolioContext";
+import { useAuth } from "@/_core/hooks/useAuth";
+import { CatalogueRowControls } from "@/components/CatalogueRowControls";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -80,6 +82,7 @@ function FundFormDialog({
     const grossYield = parseFloat(form.grossYield);
     if (isNaN(ear) || ear <= 0) { toast.error("EAR must be a positive number."); return; }
     if (isNaN(grossYield) || grossYield <= 0) { toast.error("Gross yield must be a positive number."); return; }
+    if (!form.source.trim()) { toast.error("A source URL / reference is required for governed catalogue edits."); return; }
     onSave({
       fundName: form.fundName.trim(),
       company: form.company.trim(),
@@ -157,8 +160,9 @@ function FundFormDialog({
             <Input type="date" value={form.asOfDate} onChange={set("asOfDate")} />
           </div>
           <div className="col-span-2">
-            <Label>Source URL / Reference</Label>
+            <Label>Source URL / Reference *</Label>
             <Input value={form.source} onChange={set("source")} placeholder="e.g. https://cytonn.com/..." />
+            <p className="text-[11px] text-muted-foreground mt-1">Required — every catalogue correction is recorded in the audit trail with its source.</p>
           </div>
         </div>
         <DialogFooter>
@@ -173,8 +177,19 @@ function FundFormDialog({
 export default function MmfFunds({ embedded = false }: { embedded?: boolean } = {}) {
   const { portfolioId, portfolio } = usePortfolio();
   const utils = trpc.useUtils();
+  const { user } = useAuth();
+  const isManager = user?.role === "admin";
 
   const { data: funds = [], isLoading } = trpc.mmfFunds.list.useQuery();
+  const { data: metaData } = trpc.catalogue.rowMeta.useQuery(
+    { catalogue: "mmf" },
+    { enabled: isManager },
+  );
+  const staleByRef = useMemo(() => {
+    const m = new Map<string, boolean>();
+    for (const row of Object.values(metaData?.meta ?? {})) m.set(row.targetRef, !!row.stale);
+    return m;
+  }, [metaData]);
 
   const [search, setSearch] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("ear");
@@ -269,9 +284,11 @@ export default function MmfFunds({ embedded = false }: { embedded?: boolean } = 
             {" "}(updated daily).
           </p>
         </div>
-        <Button onClick={() => setAddOpen(true)} size="sm">
-          <Plus className="w-4 h-4 mr-1" /> Add Fund
-        </Button>
+        {isManager && (
+          <Button onClick={() => setAddOpen(true)} size="sm">
+            <Plus className="w-4 h-4 mr-1" /> Add Fund
+          </Button>
+        )}
       </div>
 
       {/* Selected fund banner */}
@@ -395,6 +412,11 @@ export default function MmfFunds({ embedded = false }: { embedded?: boolean } = 
                         <div>
                           <div className="font-medium flex items-center gap-1.5">
                             {fund.fundName}
+                            {staleByRef.get(fund.fundName) && (
+                              <Badge variant="outline" className="text-[10px] py-0 px-1.5 text-amber-600 border-amber-300">
+                                <AlertTriangle className="w-2.5 h-2.5 mr-0.5" /> Stale
+                              </Badge>
+                            )}
                             {isTop5 && (
                               <Badge className="text-[10px] py-0 px-1.5 bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border-emerald-500/30">
                                 Top 5
@@ -452,22 +474,25 @@ export default function MmfFunds({ embedded = false }: { embedded?: boolean } = 
                             <Circle className="w-3 h-3 mr-1" /> Select
                           </Button>
                         )}
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          className="h-7 w-7"
-                          onClick={() => setEditFund(fund)}
-                        >
-                          <Pencil className="w-3 h-3" />
-                        </Button>
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          className="h-7 w-7 text-destructive hover:text-destructive"
-                          onClick={() => setDeleteId(fund.id)}
-                        >
-                          <Trash2 className="w-3 h-3" />
-                        </Button>
+                        {isManager && (
+                          <>
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              className="h-7 w-7"
+                              onClick={() => setEditFund(fund)}
+                            >
+                              <Pencil className="w-3 h-3" />
+                            </Button>
+                            <CatalogueRowControls
+                              catalogue="mmf"
+                              targetRef={fund.fundName}
+                              instrumentName={fund.fundName}
+                              isActive={fund.isActive}
+                              isStale={staleByRef.get(fund.fundName)}
+                            />
+                          </>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -514,7 +539,7 @@ export default function MmfFunds({ embedded = false }: { embedded?: boolean } = 
       <FundFormDialog
         open={addOpen}
         onClose={() => setAddOpen(false)}
-        onSave={(data) => addMutation.mutate({ ...data, aumMillions: data.aumMillions ?? undefined, asOfDate: data.asOfDate ?? undefined, source: data.source ?? undefined })}
+        onSave={(data) => addMutation.mutate({ ...data, aumMillions: data.aumMillions ?? undefined, asOfDate: data.asOfDate ?? undefined, source: data.source ?? "" })}
         saving={addMutation.isPending}
       />
 
@@ -524,7 +549,7 @@ export default function MmfFunds({ embedded = false }: { embedded?: boolean } = 
           open={!!editFund}
           onClose={() => setEditFund(null)}
           initial={editFund}
-          onSave={(data) => updateMutation.mutate({ id: editFund.id, fundName: data.fundName, company: data.company, grossYield: data.grossYield, ear: data.ear, managementFee: data.managementFee, minInvestment: data.minInvestment, aumMillions: data.aumMillions ?? undefined, asOfDate: data.asOfDate ?? undefined, source: data.source ?? undefined })}
+          onSave={(data) => updateMutation.mutate({ id: editFund.id, fundName: data.fundName, company: data.company, grossYield: data.grossYield, ear: data.ear, managementFee: data.managementFee, minInvestment: data.minInvestment, aumMillions: data.aumMillions ?? undefined, asOfDate: data.asOfDate ?? undefined, source: data.source ?? "" })}
           saving={updateMutation.isPending}
         />
       )}

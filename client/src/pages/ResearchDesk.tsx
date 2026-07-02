@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { useSearchParams } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { getLoginUrl } from "@/const";
@@ -47,6 +48,15 @@ import RecentlyApproved from "./RecentlyApproved";
 import { usePortfolio } from "@/contexts/PortfolioContext";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
+import {
+  Select,
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem,
+} from "@/components/ui/select";
+import { Plus } from "lucide-react";
 
 /** Human label for an asset class, falling back to the raw class. */
 function classLabel(ac: string): string {
@@ -509,9 +519,201 @@ function PendingQueue() {
 
 /* ── Source registry + cadence ─────────────────────────────────────────────── */
 
+type SourceRow = {
+  key: string;
+  label: string;
+  feeds: string;
+  url: string | null;
+  cadenceDays: number;
+  notes: string | null;
+  active: boolean;
+  lastReviewedAt: number | null;
+  lastReviewedBy: string | null;
+};
+
+const FEED_OPTIONS: { value: string; label: string }[] = [
+  { value: "mixed", label: "Mixed / several catalogues" },
+  { value: "mmf", label: "MMF market" },
+  { value: "bank", label: "Bank products" },
+  { value: "opportunity", label: "CBK & market assets" },
+];
+
+function slugify(s: string): string {
+  return s.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 64);
+}
+
+function SourceEditor({
+  open,
+  onOpenChange,
+  existing,
+}: {
+  open: boolean;
+  onOpenChange: (o: boolean) => void;
+  existing: SourceRow | null;
+}) {
+  const utils = trpc.useUtils();
+  const isEdit = existing != null;
+  const [label, setLabel] = useState(existing?.label ?? "");
+  const [key, setKey] = useState(existing?.key ?? "");
+  const [keyTouched, setKeyTouched] = useState(isEdit);
+  const [feeds, setFeeds] = useState(existing?.feeds ?? "mixed");
+  const [url, setUrl] = useState(existing?.url ?? "");
+  const [cadenceDays, setCadenceDays] = useState(String(existing?.cadenceDays ?? 30));
+  const [notes, setNotes] = useState(existing?.notes ?? "");
+  const [active, setActive] = useState(existing?.active ?? true);
+
+  // Keep local state in sync when the dialog is opened for a different row.
+  useEffect(() => {
+    if (!open) return;
+    setLabel(existing?.label ?? "");
+    setKey(existing?.key ?? "");
+    setKeyTouched(existing != null);
+    setFeeds(existing?.feeds ?? "mixed");
+    setUrl(existing?.url ?? "");
+    setCadenceDays(String(existing?.cadenceDays ?? 30));
+    setNotes(existing?.notes ?? "");
+    setActive(existing?.active ?? true);
+  }, [open, existing]);
+
+  const save = trpc.researchPipeline.upsertSource.useMutation({
+    onSuccess: () => {
+      toast.success(isEdit ? "Source updated." : "Source registered.");
+      utils.researchPipeline.listSources.invalidate();
+      utils.researchPipeline.digest.invalidate();
+      onOpenChange(false);
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  const effectiveKey = keyTouched ? key.trim() : slugify(label);
+  const cadenceNum = Number(cadenceDays);
+  const urlValid = url.trim() === "" || /^https?:\/\//.test(url.trim());
+  const canSave =
+    label.trim().length > 0 &&
+    effectiveKey.length > 0 &&
+    Number.isFinite(cadenceNum) &&
+    cadenceNum >= 1 &&
+    cadenceNum <= 365 &&
+    urlValid &&
+    !save.isPending;
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle>{isEdit ? "Edit source" : "Register a data source"}</DialogTitle>
+          <DialogDescription>
+            Operational metadata only — a name, where it lives, and how often it should be re-checked. This never stores
+            figures and never ranks a source by quality.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3">
+          <div className="space-y-1.5">
+            <Label>Name *</Label>
+            <Input
+              placeholder="e.g. CBK weekly T-bill auction results"
+              value={label}
+              onChange={(e) => setLabel(e.target.value)}
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label>Key *</Label>
+              <Input
+                placeholder="cbk-tbill-auction"
+                value={effectiveKey}
+                disabled={isEdit}
+                onChange={(e) => {
+                  setKeyTouched(true);
+                  setKey(e.target.value);
+                }}
+              />
+              {isEdit && <p className="text-[11px] text-muted-foreground">The key is fixed once created.</p>}
+            </div>
+            <div className="space-y-1.5">
+              <Label>Feeds which catalogue</Label>
+              <Select value={feeds} onValueChange={setFeeds}>
+                <SelectTrigger className="bg-background">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {FEED_OPTIONS.map((o) => (
+                    <SelectItem key={o.value} value={o.value}>
+                      {o.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label>Link (optional)</Label>
+              <Input placeholder="https://…" value={url} onChange={(e) => setUrl(e.target.value)} />
+              {!urlValid && <p className="text-[11px] text-rose-600">Must start with http:// or https://</p>}
+            </div>
+            <div className="space-y-1.5">
+              <Label>Review cadence (days) *</Label>
+              <Input
+                type="number"
+                min={1}
+                max={365}
+                value={cadenceDays}
+                onChange={(e) => setCadenceDays(e.target.value)}
+              />
+            </div>
+          </div>
+          <div className="space-y-1.5">
+            <Label>Notes (optional)</Label>
+            <Textarea
+              rows={2}
+              placeholder="What this source covers, quirks, where to look…"
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+            />
+          </div>
+          <div className="flex items-center justify-between rounded-lg border p-3">
+            <div>
+              <p className="text-sm font-medium">Active</p>
+              <p className="text-xs text-muted-foreground">Inactive sources are kept for history but hidden from the due-list.</p>
+            </div>
+            <Switch checked={active} onCheckedChange={setActive} />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" className="bg-background" onClick={() => onOpenChange(false)}>
+            Cancel
+          </Button>
+          <Button
+            disabled={!canSave}
+            onClick={() =>
+              save.mutate({
+                key: effectiveKey,
+                label: label.trim(),
+                feeds: feeds as "mmf" | "bank" | "opportunity" | "mixed",
+                url: url.trim() === "" ? "" : url.trim(),
+                cadenceDays: cadenceNum,
+                notes: notes.trim() === "" ? undefined : notes.trim(),
+                active,
+              })
+            }
+          >
+            {save.isPending ? <RefreshCw className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : null}
+            {isEdit ? "Save changes" : "Register source"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function SourceRegistryPanel() {
   const utils = trpc.useUtils();
-  const { data, isLoading } = trpc.researchPipeline.listSources.useQuery({ includeInactive: false });
+  const [includeInactive, setIncludeInactive] = useState(false);
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [editing, setEditing] = useState<SourceRow | null>(null);
+  const { data, isLoading } = trpc.researchPipeline.listSources.useQuery({ includeInactive });
+
   const markReviewed = trpc.researchPipeline.markSourceReviewed.useMutation({
     onSuccess: () => {
       toast.success("Marked as reviewed — cadence clock reset.");
@@ -520,83 +722,221 @@ function SourceRegistryPanel() {
     },
     onError: (err) => toast.error(err.message),
   });
+  const setActive = trpc.researchPipeline.setSourceActive.useMutation({
+    onSuccess: () => {
+      utils.researchPipeline.listSources.invalidate();
+      utils.researchPipeline.digest.invalidate();
+    },
+    onError: (err) => toast.error(err.message),
+  });
 
-  if (isLoading) return <Skeleton className="h-40 w-full rounded-lg" />;
-  const sources = data?.sources ?? [];
+  const openAdd = () => {
+    setEditing(null);
+    setEditorOpen(true);
+  };
+  const openEdit = (s: SourceRow) => {
+    setEditing(s);
+    setEditorOpen(true);
+  };
 
-  if (sources.length === 0) {
-    return (
-      <Empty className="py-12">
-        <div className="flex flex-col items-center gap-2 text-center">
-          <Clock className="w-9 h-9 text-muted-foreground/60" />
-          <p className="font-medium">No sources registered yet.</p>
-          <p className="text-sm text-muted-foreground max-w-sm">
-            Register the data sources this desk draws from (CBK auctions, the NSE price board, fund fact-sheets) with a
-            review cadence, and the digest will flag which are due.
-          </p>
-        </div>
-      </Empty>
-    );
-  }
+  const sources = (data?.sources ?? []) as SourceRow[];
 
   return (
     <div className="space-y-3">
-      <p className="text-xs text-muted-foreground leading-relaxed">
-        Operational metadata only — this tracks when each source was last reviewed and how often it should be. It never
-        stores figures or ranks a source by quality.
-      </p>
-      {sources.map((s) => {
-        const dayMs = 24 * 60 * 60 * 1000;
-        const nextDue = s.lastReviewedAt != null ? s.lastReviewedAt + s.cadenceDays * dayMs : null;
-        const isDue = s.lastReviewedAt == null || (nextDue != null && Date.now() >= nextDue);
-        return (
-          <div
-            key={s.key}
-            className="flex items-center justify-between gap-3 rounded-lg border p-3 flex-wrap"
-          >
-            <div className="min-w-0">
-              <div className="font-medium text-sm flex items-center gap-2 flex-wrap">
-                {s.label}
-                <Badge variant="outline" className="font-normal text-[11px]">
-                  every {s.cadenceDays}d
-                </Badge>
-                {isDue ? (
-                  <Badge className="text-[11px] bg-amber-500/15 text-amber-700 border-amber-500/30" variant="outline">
-                    <AlertTriangle className="w-3 h-3 mr-1" /> due
-                  </Badge>
-                ) : (
-                  <Badge className="text-[11px] bg-emerald-500/10 text-emerald-700 border-emerald-500/20" variant="outline">
-                    up to date
-                  </Badge>
-                )}
-              </div>
-              <div className="text-xs text-muted-foreground mt-0.5">
-                {s.lastReviewedAt
-                  ? `Last reviewed ${formatRelativeTime(s.lastReviewedAt)}${s.lastReviewedBy ? ` by ${s.lastReviewedBy}` : ""}`
-                  : "Never reviewed"}
-                {s.url && (
-                  <>
-                    {" · "}
-                    <a href={s.url} target="_blank" rel="noreferrer" className="text-primary hover:underline inline-flex items-center gap-0.5">
-                      source <ExternalLink className="w-3 h-3" />
-                    </a>
-                  </>
-                )}
-              </div>
-            </div>
-            <Button
-              size="sm"
-              variant="outline"
-              className="bg-background"
-              onClick={() => markReviewed.mutate({ key: s.key })}
-              disabled={markReviewed.isPending}
-            >
-              <CheckCircle2 className="w-3.5 h-3.5 mr-1.5" /> Mark reviewed
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <p className="text-xs text-muted-foreground leading-relaxed max-w-xl">
+          Operational metadata only — this tracks when each source was last reviewed and how often it should be. It
+          never stores figures or ranks a source by quality.
+        </p>
+        <div className="flex items-center gap-3">
+          <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
+            <Switch checked={includeInactive} onCheckedChange={setIncludeInactive} /> Show inactive
+          </label>
+          <Button size="sm" onClick={openAdd}>
+            <Plus className="w-3.5 h-3.5 mr-1.5" /> Add source
+          </Button>
+        </div>
+      </div>
+
+      {isLoading ? (
+        <Skeleton className="h-40 w-full rounded-lg" />
+      ) : sources.length === 0 ? (
+        <Empty className="py-12">
+          <div className="flex flex-col items-center gap-2 text-center">
+            <Clock className="w-9 h-9 text-muted-foreground/60" />
+            <p className="font-medium">No sources registered yet.</p>
+            <p className="text-sm text-muted-foreground max-w-sm">
+              Register the data sources this desk draws from (CBK auctions, the NSE price board, fund fact-sheets) with
+              a review cadence, and the digest will flag which are due.
+            </p>
+            <Button size="sm" className="mt-2" onClick={openAdd}>
+              <Plus className="w-3.5 h-3.5 mr-1.5" /> Add your first source
             </Button>
           </div>
-        );
-      })}
+        </Empty>
+      ) : (
+        sources.map((s) => {
+          const dayMs = 24 * 60 * 60 * 1000;
+          const nextDue = s.lastReviewedAt != null ? s.lastReviewedAt + s.cadenceDays * dayMs : null;
+          const isDue = s.active && (s.lastReviewedAt == null || (nextDue != null && Date.now() >= nextDue));
+          return (
+            <div
+              key={s.key}
+              className={`flex items-center justify-between gap-3 rounded-lg border p-3 flex-wrap ${s.active ? "" : "opacity-60"}`}
+            >
+              <div className="min-w-0">
+                <div className="font-medium text-sm flex items-center gap-2 flex-wrap">
+                  {s.label}
+                  <Badge variant="outline" className="font-normal text-[11px]">
+                    every {s.cadenceDays}d
+                  </Badge>
+                  {!s.active ? (
+                    <Badge variant="outline" className="font-normal text-[11px]">
+                      inactive
+                    </Badge>
+                  ) : isDue ? (
+                    <Badge className="text-[11px] bg-amber-500/15 text-amber-700 border-amber-500/30" variant="outline">
+                      <AlertTriangle className="w-3 h-3 mr-1" /> due
+                    </Badge>
+                  ) : (
+                    <Badge className="text-[11px] bg-emerald-500/10 text-emerald-700 border-emerald-500/20" variant="outline">
+                      up to date
+                    </Badge>
+                  )}
+                </div>
+                <div className="text-xs text-muted-foreground mt-0.5">
+                  {s.lastReviewedAt
+                    ? `Last reviewed ${formatRelativeTime(s.lastReviewedAt)}${s.lastReviewedBy ? ` by ${s.lastReviewedBy}` : ""}`
+                    : "Never reviewed"}
+                  {s.url && (
+                    <>
+                      {" · "}
+                      <a href={s.url} target="_blank" rel="noreferrer" className="text-primary hover:underline inline-flex items-center gap-0.5">
+                        source <ExternalLink className="w-3 h-3" />
+                      </a>
+                    </>
+                  )}
+                </div>
+              </div>
+              <div className="flex items-center gap-2 flex-wrap">
+                {s.active && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="bg-background"
+                    onClick={() => markReviewed.mutate({ key: s.key })}
+                    disabled={markReviewed.isPending}
+                  >
+                    <CheckCircle2 className="w-3.5 h-3.5 mr-1.5" /> Mark reviewed
+                  </Button>
+                )}
+                <Button size="sm" variant="outline" className="bg-background" onClick={() => openEdit(s)}>
+                  <PencilLine className="w-3.5 h-3.5 mr-1.5" /> Edit
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="bg-background"
+                  onClick={() => setActive.mutate({ key: s.key, active: !s.active })}
+                  disabled={setActive.isPending}
+                >
+                  {s.active ? (
+                    <>
+                      <XCircle className="w-3.5 h-3.5 mr-1.5" /> Deactivate
+                    </>
+                  ) : (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 mr-1.5" /> Reactivate
+                    </>
+                  )}
+                </Button>
+              </div>
+            </div>
+          );
+        })
+      )}
+
+      <SourceEditor open={editorOpen} onOpenChange={setEditorOpen} existing={editing} />
     </div>
+  );
+}
+
+/* ── Desk sub-tabs (URL-driven via ?desk=) ─────────────────────────────────── */
+
+function ConflictsBadge() {
+  const { data } = trpc.opportunities.conflicts.useQuery(undefined, { refetchOnWindowFocus: false });
+  const n = data?.conflicts?.length ?? 0;
+  if (n <= 0) return null;
+  return (
+    <Badge className="ml-1.5 h-4 min-w-4 px-1 text-[10px] bg-rose-500/15 text-rose-700 border-rose-500/30" variant="outline">
+      {n}
+    </Badge>
+  );
+}
+
+const DESK_TABS = ["ask", "queue", "conflicts", "sources", "approved"] as const;
+type DeskTab = (typeof DESK_TABS)[number];
+
+function DeskTabs() {
+  const [params, setParams] = useSearchParams();
+  const requested = params.get("desk");
+  const active: DeskTab = (DESK_TABS as readonly string[]).includes(requested ?? "")
+    ? (requested as DeskTab)
+    : "ask";
+  const select = (v: string) => {
+    const next = new URLSearchParams(params);
+    next.set("desk", v);
+    setParams(next, { replace: false });
+  };
+  return (
+    <Tabs value={active} onValueChange={select} className="w-full">
+      <TabsList className="flex-wrap h-auto">
+        <TabsTrigger value="ask">
+          <Sparkles className="w-3.5 h-3.5 mr-1.5" /> Ask AI
+        </TabsTrigger>
+        <TabsTrigger value="queue">
+          <Inbox className="w-3.5 h-3.5 mr-1.5" /> Review queue
+          <PendingBadge />
+        </TabsTrigger>
+        <TabsTrigger value="conflicts">
+          <GitCompareArrows className="w-3.5 h-3.5 mr-1.5" /> Source conflicts
+          <ConflictsBadge />
+        </TabsTrigger>
+        <TabsTrigger value="sources">
+          <Clock className="w-3.5 h-3.5 mr-1.5" /> Source registry
+          <InfoHint side="bottom" iconClassName="ml-1.5">
+            The registry of data sources this desk draws from, each with a review cadence so the digest can flag which
+            are due for a refresh.
+          </InfoHint>
+        </TabsTrigger>
+        <TabsTrigger value="approved">
+          <ShieldCheck className="w-3.5 h-3.5 mr-1.5" /> Recently approved
+        </TabsTrigger>
+      </TabsList>
+
+      <TabsContent value="ask" className="mt-5">
+        <AskAI embedded />
+      </TabsContent>
+      <TabsContent value="queue" className="mt-5">
+        <PendingQueue />
+      </TabsContent>
+      <TabsContent value="conflicts" className="mt-5">
+        {/* AI figure review + source-conflict resolution live together as a compact
+            "what disagrees" surface. Document/image import now lives inside Ask AI. */}
+        <div className="space-y-8">
+          <SourceConflicts embedded />
+          <div className="border-t border-border/60 pt-6">
+            <AiReview embedded />
+          </div>
+        </div>
+      </TabsContent>
+      <TabsContent value="sources" className="mt-5">
+        <SourceRegistryPanel />
+      </TabsContent>
+      <TabsContent value="approved" className="mt-5">
+        <RecentlyApproved embedded />
+      </TabsContent>
+    </Tabs>
   );
 }
 
@@ -646,67 +986,7 @@ export default function ResearchDesk({ embedded = false }: { embedded?: boolean 
 
       <DigestHeader />
 
-      <Tabs defaultValue="ask" className="w-full">
-        <TabsList className="flex-wrap h-auto">
-          <TabsTrigger value="ask">
-            <Sparkles className="w-3.5 h-3.5 mr-1.5" /> Ask AI
-          </TabsTrigger>
-          <TabsTrigger value="queue">
-            <Inbox className="w-3.5 h-3.5 mr-1.5" /> Review queue
-            <PendingBadge />
-          </TabsTrigger>
-          <TabsTrigger value="import">
-            <ClipboardCheck className="w-3.5 h-3.5 mr-1.5" /> Import &amp; conflicts
-          </TabsTrigger>
-          <TabsTrigger value="approved">
-            <ShieldCheck className="w-3.5 h-3.5 mr-1.5" /> Recently approved
-          </TabsTrigger>
-          <TabsTrigger value="sources">
-            <Clock className="w-3.5 h-3.5 mr-1.5" /> Sources
-            <InfoHint side="bottom" iconClassName="ml-1.5">
-              The registry of data sources this desk draws from, each with a review cadence so the digest can flag which
-              are due for a refresh.
-            </InfoHint>
-          </TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="ask" className="mt-5">
-          <AskAI embedded />
-        </TabsContent>
-        <TabsContent value="queue" className="mt-5">
-          <PendingQueue />
-        </TabsContent>
-        <TabsContent value="import" className="mt-5">
-          <Tabs defaultValue="doc" className="w-full">
-            <TabsList>
-              <TabsTrigger value="doc">
-                <Sparkles className="w-3.5 h-3.5 mr-1.5" /> Import a document
-              </TabsTrigger>
-              <TabsTrigger value="ai-review">
-                <ClipboardCheck className="w-3.5 h-3.5 mr-1.5" /> AI figure review
-              </TabsTrigger>
-              <TabsTrigger value="conflicts">
-                <GitCompareArrows className="w-3.5 h-3.5 mr-1.5" /> Conflicts
-              </TabsTrigger>
-            </TabsList>
-            <TabsContent value="doc" className="mt-5">
-              <AiIntake embedded />
-            </TabsContent>
-            <TabsContent value="ai-review" className="mt-5">
-              <AiReview embedded />
-            </TabsContent>
-            <TabsContent value="conflicts" className="mt-5">
-              <SourceConflicts embedded />
-            </TabsContent>
-          </Tabs>
-        </TabsContent>
-        <TabsContent value="approved" className="mt-5">
-          <RecentlyApproved embedded />
-        </TabsContent>
-        <TabsContent value="sources" className="mt-5">
-          <SourceRegistryPanel />
-        </TabsContent>
-      </Tabs>
+      <DeskTabs />
     </div>
   );
 }

@@ -29,6 +29,9 @@ const ROOT = resolve(__dirname, "..");
 const read = (p: string) => readFileSync(resolve(ROOT, p), "utf8");
 
 const research = read("client/src/pages/ResearchArea.tsx");
+// Round 83: the four reference catalogues moved out of ResearchArea into their
+// own nested module (selected via `?cat=` under the reference-catalogues tab).
+const catalogueTabs = read("client/src/pages/referenceCatalogueTabs.tsx");
 
 /** Extract the component rendered for a given tab id in an area file. */
 function renderedFor(areaSrc: string, tabId: string): string | null {
@@ -47,28 +50,34 @@ function tabIds(areaSrc: string): string[] {
 describe("Research area exposes the full renamed tab set", () => {
   const ids = tabIds(research);
 
-  it("contains the consolidated Research tab set in order (Round 81 collapsed intake into the Research Desk)", () => {
+  it("contains the Round 83 three top-level Research tabs in order (Desk, Explore, Reference Catalogues)", () => {
     expect(ids).toEqual([
+      "research-desk",
       "explore",
+      "reference-catalogues",
+    ]);
+  });
+
+  it("nests the four reference catalogues (with the right components) under reference-catalogues", () => {
+    const catIds = tabIds(catalogueTabs);
+    expect(catIds).toEqual([
       "mmf-market",
       "bank-catalogue",
       "cbk-securities",
       "market-assets",
-      "research-desk",
     ]);
-  });
-
-  it("renders the correct component for each reference tab", () => {
-    expect(renderedFor(research, "mmf-market")).toBe("MmfFunds");
-    expect(renderedFor(research, "bank-catalogue")).toBe("BankInstruments");
-    expect(renderedFor(research, "cbk-securities")).toBe("CbkSecuritiesReference");
-    expect(renderedFor(research, "market-assets")).toBe("MarketAssetsReference");
+    expect(renderedFor(catalogueTabs, "mmf-market")).toBe("MmfFunds");
+    expect(renderedFor(catalogueTabs, "bank-catalogue")).toBe("BankInstruments");
+    expect(renderedFor(catalogueTabs, "cbk-securities")).toBe("CbkSecuritiesReference");
+    expect(renderedFor(catalogueTabs, "market-assets")).toBe("MarketAssetsReference");
   });
 
   it("never renders an owned-holdings component in a Research tab", () => {
-    expect(research).not.toMatch(/\bimport\s+BankHoldings\b/);
-    expect(research).not.toMatch(/\bimport\s+MmfAccounts\b/);
-    expect(research).not.toMatch(/\bimport\s+OtherAssets\b/);
+    for (const src of [research, catalogueTabs]) {
+      expect(src).not.toMatch(/\bimport\s+BankHoldings\b/);
+      expect(src).not.toMatch(/\bimport\s+MmfAccounts\b/);
+      expect(src).not.toMatch(/\bimport\s+OtherAssets\b/);
+    }
   });
 });
 

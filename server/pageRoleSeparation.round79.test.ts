@@ -16,6 +16,8 @@ const read = (p: string) => readFileSync(resolve(ROOT, p), "utf8");
 
 const holdings = read("client/src/pages/HoldingsArea.tsx");
 const research = read("client/src/pages/ResearchArea.tsx");
+// Round 83: the reference catalogues are declared in their own nested module.
+const catalogueTabs = read("client/src/pages/referenceCatalogueTabs.tsx");
 
 /** Extract the component rendered for a given tab id in an area file. */
 function renderedFor(areaSrc: string, tabId: string): string | null {
@@ -45,11 +47,11 @@ describe("Holdings area renders ACTUAL holdings, not market catalogues", () => {
 
 describe("Research area renders MARKET reference, not owned holdings", () => {
   it("Research → Bank Catalogue renders BankInstruments (products)", () => {
-    expect(renderedFor(research, "bank-catalogue")).toBe("BankInstruments");
+    expect(renderedFor(catalogueTabs, "bank-catalogue")).toBe("BankInstruments");
   });
 
   it("Research → MMF Market renders the MMF market table (MmfFunds)", () => {
-    expect(renderedFor(research, "mmf-market")).toBe("MmfFunds");
+    expect(renderedFor(catalogueTabs, "mmf-market")).toBe("MmfFunds");
   });
 
   it("Research MMF Market no longer manages secondary MMF accounts", () => {

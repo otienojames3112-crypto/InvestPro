@@ -20,13 +20,13 @@ export const AREA_TABS: Record<AreaName, readonly string[]> = {
   plan: ["goal", "allocation", "scenarios", "ledger"],
   cashflows: ["record-in", "withdraw", "scheduled", "actual-vs-planned"],
   holdings: ["overview", "mmf", "gov", "bank", "other"],
+  // Round 83: three top-level tabs. The four reference catalogues are nested
+  // inside "reference-catalogues" via a `?cat=` param (deep-linked separately),
+  // so they are NOT top-level `?tab=` ids.
   research: [
-    "explore",
-    "mmf-market",
-    "bank-catalogue",
-    "cbk-securities",
-    "market-assets",
     "research-desk",
+    "explore",
+    "reference-catalogues",
   ],
   review: ["manager", "reconciliation", "income", "tax"],
 } as const;
@@ -84,10 +84,12 @@ export const dashboardHref = {
   changeContribution: areaTab("plan", "goal"),
   risk: areaTab("review", "manager"),
   // Research (market reference) — where to compare products before buying.
-  bankCatalogue: areaTab("research", "bank-catalogue"),
-  mmfMarket: areaTab("research", "mmf-market"),
-  cbkSecurities: areaTab("research", "cbk-securities"),
-  marketAssets: areaTab("research", "market-assets"),
+  // Round 83: the catalogues are nested under the "reference-catalogues" tab and
+  // selected via `?cat=`, so these deep-link into that tab with the catalogue id.
+  bankCatalogue: `${areaTab("research", "reference-catalogues")}&cat=bank-catalogue`,
+  mmfMarket: `${areaTab("research", "reference-catalogues")}&cat=mmf-market`,
+  cbkSecurities: `${areaTab("research", "reference-catalogues")}&cat=cbk-securities`,
+  marketAssets: `${areaTab("research", "reference-catalogues")}&cat=market-assets`,
   /** Rate settings live on Plan → Goal & Plan; `/settings` redirects there. */
   rates: "/settings",
 } as const;

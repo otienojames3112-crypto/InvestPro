@@ -122,7 +122,7 @@ export default function AiIntake({ embedded = false }: { embedded?: boolean } = 
   );
 }
 
-function AiPrincipleBanner() {
+export function AiPrincipleBanner() {
   return (
     <div className="flex items-start gap-2 rounded-lg border border-orange-500/30 bg-orange-500/5 px-3 py-2.5 text-xs text-muted-foreground">
       <ShieldAlert className="w-4 h-4 mt-0.5 shrink-0 text-orange-500" />
@@ -140,7 +140,7 @@ function AiPrincipleBanner() {
 
 type SourceKind = "text" | "url" | "pdf" | "image";
 
-function ExtractPanel() {
+export function ExtractPanel() {
   const utils = trpc.useUtils();
   const [kind, setKind] = useState<SourceKind>("text");
   const [documentText, setDocumentText] = useState("");

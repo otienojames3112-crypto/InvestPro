@@ -47,6 +47,13 @@ describe("Phase 7 — legacy route redirects", () => {
     for (const [area, file] of Object.entries(AREA_FILE)) {
       tabsByArea[area] = parseTabIds(read(file));
     }
+    // Round 83: the four reference catalogues (mmf-market, bank-catalogue,
+    // cbk-securities, market-assets) are declared in a nested module and are
+    // still valid research redirect targets (via ?tab=reference-catalogues&cat=).
+    tabsByArea.research = [
+      ...tabsByArea.research,
+      ...parseTabIds(read("pages/referenceCatalogueTabs.tsx")),
+    ];
     for (const r of LEGACY_REDIRECTS) {
       expect(AREA_FILE[r.area], `unknown area "${r.area}"`).toBeTruthy();
       expect(

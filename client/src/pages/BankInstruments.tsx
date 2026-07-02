@@ -1,6 +1,8 @@
 import { useMemo, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { trpc } from "@/lib/trpc";
+import { useAuth } from "@/_core/hooks/useAuth";
+import { useLocation } from "wouter";
 import {
   Card,
   CardContent,
@@ -13,6 +15,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   Dialog,
   DialogContent,
@@ -21,6 +24,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import {
   Select,
   SelectContent,
@@ -36,18 +46,19 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
+import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
-import { Landmark, Plus, Pencil, Trash2, Info, Percent } from "lucide-react";
+import {
+  Landmark,
+  Plus,
+  Info,
+  Search,
+  X,
+  ExternalLink,
+  AlertTriangle,
+  ShieldCheck,
+} from "lucide-react";
+import { CatalogueRowControls } from "@/components/CatalogueRowControls";
 
 type BankInstrumentType =
   | "call_deposit"
@@ -55,6 +66,22 @@ type BankInstrumentType =
   | "ordinary_savings"
   | "target_savings"
   | "tiered_savings";
+
+const TYPE_LABEL: Record<BankInstrumentType, string> = {
+  fixed_deposit: "Fixed deposit",
+  call_deposit: "Call deposit",
+  ordinary_savings: "Ordinary savings",
+  target_savings: "Target savings",
+  tiered_savings: "Tiered savings",
+};
+
+const TYPE_LIQUIDITY: Record<BankInstrumentType, string> = {
+  fixed_deposit: "Locked for the tenor; early break usually forfeits interest.",
+  call_deposit: "Instant access; fully liquid — closest bank equivalent to an MMF.",
+  ordinary_savings: "Instant or near-instant access; variable rate.",
+  target_savings: "Locked for a chosen period; early break usually carries a penalty.",
+  tiered_savings: "Rate rises with the balance band; needs a larger minimum for the top tier.",
+};
 
 interface BankRow {
   id: number;
@@ -79,6 +106,13 @@ function kes(n: number): string {
   });
 }
 
+function asOfLabel(d: string | Date | null): string {
+  if (!d) return "—";
+  const date = typeof d === "string" ? new Date(d) : d;
+  if (Number.isNaN(date.getTime())) return "—";
+  return date.toLocaleDateString();
+}
+
 const EMPTY = {
   id: 0,
   bankName: "",
@@ -89,21 +123,43 @@ const EMPTY = {
   isNegotiable: true,
   notes: "",
   source: "",
+  reason: "",
 };
 
 export default function BankInstruments({ embedded = false }: { embedded?: boolean } = {}) {
   const utils = trpc.useUtils();
-  const { data: rows, isLoading } = trpc.bankInstruments.list.useQuery();
+  const { user } = useAuth();
+  const [, navigate] = useLocation();
+  const isManager = user?.role === "admin";
 
+  const { data: rows, isLoading } = trpc.bankInstruments.list.useQuery();
+  const { data: metaData } = trpc.catalogue.rowMeta.useQuery(
+    { catalogue: "bank" },
+    { enabled: isManager },
+  );
+  const staleByRef = useMemo(() => {
+    const m = new Map<string, boolean>();
+    for (const row of Object.values(metaData?.meta ?? {})) m.set(row.targetRef, !!row.stale);
+    return m;
+  }, [metaData]);
+
+  // Filters
+  const [search, setSearch] = useState("");
+  const [typeFilter, setTypeFilter] = useState<string>("all");
+  const [bankFilter, setBankFilter] = useState<string>("all");
+  const [rateOnly, setRateOnly] = useState(false);
+  const [negotiableOnly, setNegotiableOnly] = useState(false);
+
+  // Detail drawer + governed edit dialog
+  const [drawerRow, setDrawerRow] = useState<BankRow | null>(null);
   const [editOpen, setEditOpen] = useState(false);
-  const [deleteId, setDeleteId] = useState<number | null>(null);
   const [form, setForm] = useState({ ...EMPTY });
 
   const add = trpc.bankInstruments.add.useMutation({
     onSuccess: () => {
       utils.bankInstruments.list.invalidate();
       setEditOpen(false);
-      toast.success("Instrument added");
+      toast.success("Correction recorded in the Bank Product Catalogue.");
     },
     onError: (e) => toast.error(e.message),
   });
@@ -111,39 +167,46 @@ export default function BankInstruments({ embedded = false }: { embedded?: boole
     onSuccess: () => {
       utils.bankInstruments.list.invalidate();
       setEditOpen(false);
-      toast.success("Instrument updated");
-    },
-    onError: (e) => toast.error(e.message),
-  });
-  const remove = trpc.bankInstruments.remove.useMutation({
-    onSuccess: () => {
-      utils.bankInstruments.list.invalidate();
-      setDeleteId(null);
-      toast.success("Instrument removed");
+      toast.success("Correction recorded in the Bank Product Catalogue.");
     },
     onError: (e) => toast.error(e.message),
   });
 
-  const callRows = useMemo(
-    () => (rows ?? []).filter((r) => r.instrumentType === "call_deposit"),
-    [rows]
-  );
-  const fixedRows = useMemo(
-    () => (rows ?? []).filter((r) => r.instrumentType === "fixed_deposit"),
-    [rows]
-  );
-  const ordinarySavingsRows = useMemo(
-    () => (rows ?? []).filter((r) => r.instrumentType === "ordinary_savings"),
-    [rows]
-  );
-  const targetSavingsRows = useMemo(
-    () => (rows ?? []).filter((r) => r.instrumentType === "target_savings"),
-    [rows]
-  );
-  const tieredSavingsRows = useMemo(
-    () => (rows ?? []).filter((r) => r.instrumentType === "tiered_savings"),
-    [rows]
-  );
+  const banks = useMemo(() => {
+    const set = new Set<string>();
+    for (const r of rows ?? []) set.add(r.bankName);
+    return Array.from(set).sort();
+  }, [rows]);
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return (rows ?? []).filter((r) => {
+      if (typeFilter !== "all" && r.instrumentType !== typeFilter) return false;
+      if (bankFilter !== "all" && r.bankName !== bankFilter) return false;
+      if (rateOnly && r.indicativeRate === null) return false;
+      if (negotiableOnly && !r.isNegotiable) return false;
+      if (q) {
+        const hay = `${r.bankName} ${TYPE_LABEL[r.instrumentType]} ${r.notes ?? ""}`.toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+  }, [rows, search, typeFilter, bankFilter, rateOnly, negotiableOnly]);
+
+  const activeFilters =
+    (typeFilter !== "all" ? 1 : 0) +
+    (bankFilter !== "all" ? 1 : 0) +
+    (rateOnly ? 1 : 0) +
+    (negotiableOnly ? 1 : 0) +
+    (search.trim() ? 1 : 0);
+
+  function clearFilters() {
+    setSearch("");
+    setTypeFilter("all");
+    setBankFilter("all");
+    setRateOnly(false);
+    setNegotiableOnly(false);
+  }
 
   function openAdd() {
     setForm({ ...EMPTY });
@@ -160,13 +223,18 @@ export default function BankInstruments({ embedded = false }: { embedded?: boole
       isNegotiable: r.isNegotiable,
       notes: r.notes ?? "",
       source: r.source ?? "",
+      reason: "",
     });
     setEditOpen(true);
   }
 
   function save() {
     if (!form.bankName.trim()) {
-      toast.error("Bank name is required");
+      toast.error("Bank name is required.");
+      return;
+    }
+    if (!form.source.trim()) {
+      toast.error("A source is required for a governed reference correction.");
       return;
     }
     const payload = {
@@ -177,345 +245,347 @@ export default function BankInstruments({ embedded = false }: { embedded?: boole
       indicativeRate: form.indicativeRate === "" ? undefined : Number(form.indicativeRate),
       isNegotiable: form.isNegotiable,
       notes: form.notes || undefined,
-      source: form.source || undefined,
+      source: form.source.trim(),
     };
-    if (form.id) {
-      update.mutate({ id: form.id, ...payload });
-    } else {
-      add.mutate(payload);
-    }
-  }
-
-  function renderTable(data: BankRow[]) {
-    if (data.length === 0) {
-      return (
-        <p className="text-sm text-muted-foreground py-6 text-center">
-          None recorded yet.
-        </p>
-      );
-    }
-    return (
-      <div className="rounded-md border overflow-x-auto">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Bank</TableHead>
-              <TableHead className="text-right">Min Amount</TableHead>
-              <TableHead>Tenor</TableHead>
-              <TableHead className="text-right">Indic. Rate</TableHead>
-              <TableHead>Negotiable</TableHead>
-              <TableHead className="w-20"></TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {data.map((r) => (
-              <TableRow key={r.id}>
-                <TableCell>
-                  <div className="font-medium">{r.bankName}</div>
-                  {r.notes && (
-                    <div className="text-xs text-muted-foreground">{r.notes}</div>
-                  )}
-                </TableCell>
-                <TableCell className="text-right tabular-nums">
-                  {kes(r.minAmount)}
-                </TableCell>
-                <TableCell>{r.typicalTenor ?? "—"}</TableCell>
-                <TableCell className="text-right tabular-nums">
-                  {r.indicativeRate === null ? (
-                    <span className="text-muted-foreground">n/a</span>
-                  ) : (
-                    `${r.indicativeRate.toFixed(2)}%`
-                  )}
-                </TableCell>
-                <TableCell>
-                  {r.isNegotiable ? (
-                    <Badge variant="secondary" className="text-[10px]">
-                      Negotiable
-                    </Badge>
-                  ) : (
-                    <Badge variant="outline" className="text-[10px]">
-                      Fixed
-                    </Badge>
-                  )}
-                </TableCell>
-                <TableCell>
-                  <div className="flex items-center gap-1">
-                    <button
-                      onClick={() => openEdit(r)}
-                      className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground"
-                    >
-                      <Pencil className="w-3.5 h-3.5" />
-                    </button>
-                    <button
-                      onClick={() => setDeleteId(r.id)}
-                      className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-red-500"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </div>
-    );
+    if (form.id) update.mutate({ id: form.id, ...payload });
+    else add.mutate(payload);
   }
 
   return (
     <AppShell embedded={embedded}>
-      <div className="space-y-6">
+      <div className="space-y-5">
         {/* Header */}
         <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-3">
           <div className="flex flex-col gap-2">
             <div className="flex items-center gap-2">
               <Landmark className="w-5 h-5 text-primary" />
-              <h1
-                className="text-2xl font-bold"
-                style={{ fontFamily: "'Playfair Display', serif" }}
-              >
-                Banking Sector Instruments
+              <h1 className="text-2xl font-bold" style={{ fontFamily: "'Playfair Display', serif" }}>
+                Bank Product Catalogue
               </h1>
             </div>
             <p className="text-muted-foreground text-sm max-w-3xl">
-              Call and fixed deposit products from major Kenyan banks — a
-              reference for the cash/deposit and savings alternatives to money market funds.
-              Posted rates are indicative and almost always{" "}
-              <strong>negotiable</strong> for larger balances; treat them as a
-              starting point for your own rate conversation with the bank.
+              A neutral reference of Kenyan bank deposit and savings products. Posted rates are indicative and almost
+              always <strong>negotiable</strong> for larger balances — a starting point for your own rate conversation,
+              not a recommendation. Recording a real deposit happens in Holdings.
             </p>
           </div>
-          <Button onClick={openAdd} className="shrink-0">
-            <Plus className="w-4 h-4 mr-2" /> Add Instrument
-          </Button>
+          {isManager && (
+            <Button onClick={openAdd} className="shrink-0">
+              <Plus className="w-4 h-4 mr-2" /> Add / correct product
+            </Button>
+          )}
         </div>
 
-        {isLoading ? (
-          <p className="text-sm text-muted-foreground">Loading…</p>
-        ) : (
-          <>
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-base flex items-center gap-2">
-                  <Percent className="w-4 h-4 text-primary" /> Fixed Deposits
-                </CardTitle>
-                <CardDescription>
-                  Locked for a set tenor; higher rate but early withdrawal
-                  usually forfeits interest.
-                </CardDescription>
-              </CardHeader>
-              <CardContent>{renderTable(fixedRows)}</CardContent>
-            </Card>
+        {/* Filters */}
+        <Card>
+          <CardContent className="py-4 space-y-3">
+            <div className="flex flex-col lg:flex-row gap-3">
+              <div className="relative flex-1">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                <Input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Search bank or product…"
+                  className="pl-9"
+                />
+              </div>
+              <Select value={typeFilter} onValueChange={setTypeFilter}>
+                <SelectTrigger className="lg:w-52"><SelectValue placeholder="Product type" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All product types</SelectItem>
+                  {(Object.keys(TYPE_LABEL) as BankInstrumentType[]).map((t) => (
+                    <SelectItem key={t} value={t}>{TYPE_LABEL[t]}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Select value={bankFilter} onValueChange={setBankFilter}>
+                <SelectTrigger className="lg:w-44"><SelectValue placeholder="Bank" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All banks</SelectItem>
+                  {banks.map((b) => (
+                    <SelectItem key={b} value={b}>{b}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex items-center gap-5 flex-wrap">
+              <label className="flex items-center gap-2 text-sm cursor-pointer">
+                <Switch checked={rateOnly} onCheckedChange={setRateOnly} />
+                Rate available only
+              </label>
+              <label className="flex items-center gap-2 text-sm cursor-pointer">
+                <Switch checked={negotiableOnly} onCheckedChange={setNegotiableOnly} />
+                Negotiable only
+              </label>
+              {activeFilters > 0 && (
+                <Button variant="ghost" size="sm" onClick={clearFilters} className="ml-auto">
+                  <X className="w-3.5 h-3.5 mr-1" /> Clear filters
+                </Button>
+              )}
+            </div>
+          </CardContent>
+        </Card>
 
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-base flex items-center gap-2">
-                  <Percent className="w-4 h-4 text-primary" /> Call Deposits
-                </CardTitle>
-                <CardDescription>
-                  Instant-access interest-bearing accounts; lower rate but fully
-                  liquid — the closest bank equivalent to an MMF.
-                </CardDescription>
-              </CardHeader>
-              <CardContent>{renderTable(callRows)}</CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-base flex items-center gap-2">
-                  <Percent className="w-4 h-4 text-primary" /> Ordinary / Regular Savings
-                </CardTitle>
-                <CardDescription>
-                  Instant or near-instant access savings accounts. Lower,
-                  variable rates; some limit withdrawals to keep interest.
-                </CardDescription>
-              </CardHeader>
-              <CardContent>{renderTable(ordinarySavingsRows)}</CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-base flex items-center gap-2">
-                  <Percent className="w-4 h-4 text-primary" /> Target / Goal Savings
-                </CardTitle>
-                <CardDescription>
-                  Locked for a chosen period to enforce discipline. Often higher
-                  than ordinary savings; early break usually carries a penalty.
-                </CardDescription>
-              </CardHeader>
-              <CardContent>{renderTable(targetSavingsRows)}</CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-base flex items-center gap-2">
-                  <Percent className="w-4 h-4 text-primary" /> Tiered / High-Yield Savings
-                </CardTitle>
-                <CardDescription>
-                  Rate rises with the balance band; the strongest savings rates
-                  but usually need a larger minimum to reach the top tier.
-                </CardDescription>
-              </CardHeader>
-              <CardContent>{renderTable(tieredSavingsRows)}</CardContent>
-            </Card>
-          </>
-        )}
+        {/* Compact table */}
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base">
+              {isLoading ? "Loading…" : `${filtered.length} product${filtered.length === 1 ? "" : "s"}`}
+            </CardTitle>
+            <CardDescription>Click any row for the full detail and safe next steps.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {isLoading ? (
+              <Skeleton className="h-56 w-full rounded-lg" />
+            ) : filtered.length === 0 ? (
+              <p className="text-sm text-muted-foreground py-8 text-center">No products match these filters.</p>
+            ) : (
+              <div className="rounded-md border overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Bank</TableHead>
+                      <TableHead>Product / type</TableHead>
+                      <TableHead className="text-right">Min amount</TableHead>
+                      <TableHead>Tenor / notice</TableHead>
+                      <TableHead className="text-right">Indic. rate</TableHead>
+                      <TableHead>Negotiable</TableHead>
+                      <TableHead>As of</TableHead>
+                      {isManager && <TableHead className="w-12" />}
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {filtered.map((r) => {
+                      const stale = staleByRef.get(r.bankName);
+                      return (
+                        <TableRow
+                          key={r.id}
+                          className="cursor-pointer"
+                          onClick={() => setDrawerRow(r)}
+                        >
+                          <TableCell>
+                            <div className="font-medium flex items-center gap-1.5">
+                              {r.bankName}
+                              {!r.isActive && <Badge variant="outline" className="text-[10px]">Archived</Badge>}
+                              {stale && (
+                                <Badge variant="outline" className="text-[10px] text-amber-600 border-amber-300">
+                                  <AlertTriangle className="w-2.5 h-2.5 mr-0.5" /> Stale
+                                </Badge>
+                              )}
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant="secondary" className="text-[10px] font-normal">
+                              {TYPE_LABEL[r.instrumentType]}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums">{kes(r.minAmount)}</TableCell>
+                          <TableCell>{r.typicalTenor ?? "—"}</TableCell>
+                          <TableCell className="text-right tabular-nums">
+                            {r.indicativeRate === null ? (
+                              <span className="text-muted-foreground">Rate unavailable</span>
+                            ) : (
+                              `${r.indicativeRate.toFixed(2)}%`
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            {r.isNegotiable ? (
+                              <Badge variant="secondary" className="text-[10px]">Negotiable</Badge>
+                            ) : (
+                              <Badge variant="outline" className="text-[10px]">Fixed</Badge>
+                            )}
+                          </TableCell>
+                          <TableCell className="text-xs text-muted-foreground">{asOfLabel(r.asOfDate)}</TableCell>
+                          {isManager && (
+                            <TableCell onClick={(e) => e.stopPropagation()}>
+                              <CatalogueRowControls
+                                catalogue="bank"
+                                targetRef={r.bankName}
+                                instrumentName={r.bankName}
+                                isActive={r.isActive}
+                                isStale={stale}
+                              />
+                            </TableCell>
+                          )}
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+          </CardContent>
+        </Card>
 
         <p className="text-xs text-muted-foreground flex items-start gap-2">
           <Info className="w-3.5 h-3.5 mt-0.5 shrink-0" />
-          Interest on bank deposits is subject to 15% withholding tax (final
-          tax), same as MMF interest. Rates change frequently and are editable
-          here — keep them current from each bank's published schedule or your
-          relationship manager.
+          Interest on bank deposits is subject to 15% withholding tax (final tax), same as MMF interest. This is
+          reference data — it never affects portfolio math until you record an actual deposit in Holdings.
         </p>
       </div>
 
-      {/* Edit/Add dialog */}
+      {/* Detail drawer */}
+      <Sheet open={drawerRow !== null} onOpenChange={(o) => !o && setDrawerRow(null)}>
+        <SheetContent className="w-full sm:max-w-md overflow-y-auto">
+          {drawerRow && (
+            <>
+              <SheetHeader>
+                <SheetTitle className="flex items-center gap-2">
+                  <Landmark className="w-4 h-4 text-primary" /> {drawerRow.bankName}
+                </SheetTitle>
+                <SheetDescription>{TYPE_LABEL[drawerRow.instrumentType]}</SheetDescription>
+              </SheetHeader>
+              <div className="mt-5 space-y-4">
+                <DrawerFact label="How it works" value={TYPE_LIQUIDITY[drawerRow.instrumentType]} />
+                <div className="grid grid-cols-2 gap-3">
+                  <DrawerFact
+                    label="Indicative rate"
+                    value={drawerRow.indicativeRate === null ? "Rate unavailable" : `${drawerRow.indicativeRate.toFixed(2)}%`}
+                  />
+                  <DrawerFact label="Negotiable" value={drawerRow.isNegotiable ? "Yes — for larger balances" : "No"} />
+                  <DrawerFact label="Minimum" value={kes(drawerRow.minAmount)} />
+                  <DrawerFact label="Tenor / notice" value={drawerRow.typicalTenor ?? "—"} />
+                </div>
+                {drawerRow.notes && <DrawerFact label="Notes" value={drawerRow.notes} />}
+                <div className="grid grid-cols-2 gap-3">
+                  <DrawerFact label="Source" value={drawerRow.source ?? "—"} />
+                  <DrawerFact label="As of" value={asOfLabel(drawerRow.asOfDate)} />
+                </div>
+
+                {/* Safe actions — never "invest now" / "recommended" */}
+                <div className="border-t pt-4 space-y-2">
+                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Next steps</p>
+                  <Button
+                    className="w-full justify-start"
+                    variant="outline"
+                    onClick={() => {
+                      setDrawerRow(null);
+                      navigate(
+                        `/holdings/bank?bank=${encodeURIComponent(drawerRow.bankName)}&type=${drawerRow.instrumentType}&rate=${drawerRow.indicativeRate ?? ""}`,
+                      );
+                    }}
+                  >
+                    Record if already placed
+                  </Button>
+                  <Button
+                    className="w-full justify-start"
+                    variant="outline"
+                    onClick={() => {
+                      setDrawerRow(null);
+                      navigate(
+                        `/holdings/bank?new=1&bank=${encodeURIComponent(drawerRow.bankName)}&type=${drawerRow.instrumentType}&rate=${drawerRow.indicativeRate ?? ""}`,
+                      );
+                    }}
+                  >
+                    Create bank holding
+                  </Button>
+                  <p className="text-[11px] text-muted-foreground pt-1">
+                    Indicative reference only. Confirm the current rate and terms directly with the bank before placing
+                    funds.
+                  </p>
+                </div>
+
+                {isManager && (
+                  <div className="border-t pt-4">
+                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">
+                      Manager controls
+                    </p>
+                    <div className="flex items-center gap-2">
+                      <Button size="sm" variant="outline" className="bg-background" onClick={() => { const r = drawerRow; setDrawerRow(null); openEdit(r); }}>
+                        Edit / correct
+                      </Button>
+                      <CatalogueRowControls
+                        catalogue="bank"
+                        targetRef={drawerRow.bankName}
+                        instrumentName={drawerRow.bankName}
+                        isActive={drawerRow.isActive}
+                        isStale={staleByRef.get(drawerRow.bankName)}
+                        size="sm"
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+        </SheetContent>
+      </Sheet>
+
+      {/* Governed add / correct dialog (manager-only, source required) */}
       <Dialog open={editOpen} onOpenChange={setEditOpen}>
         <DialogContent className="max-w-lg">
           <DialogHeader>
-            <DialogTitle>
-              {form.id ? "Edit Instrument" : "Add Instrument"}
+            <DialogTitle className="flex items-center gap-2">
+              <ShieldCheck className="w-4 h-4 text-primary" />
+              {form.id ? "Correct bank product" : "Add bank product"}
             </DialogTitle>
             <DialogDescription>
-              Record a bank deposit product and its indicative rate.
+              A source-backed manager correction to global reference data. It is recorded with your name; a source is
+              required.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
-                <Label className="text-xs">Bank Name</Label>
-                <Input
-                  value={form.bankName}
-                  onChange={(e) =>
-                    setForm((f) => ({ ...f, bankName: e.target.value }))
-                  }
-                  placeholder="e.g. Equity Bank"
-                />
+                <Label className="text-xs">Bank name</Label>
+                <Input value={form.bankName} onChange={(e) => setForm((f) => ({ ...f, bankName: e.target.value }))} placeholder="e.g. Equity Bank" />
               </div>
               <div className="space-y-1.5">
                 <Label className="text-xs">Type</Label>
-                <Select
-                  value={form.instrumentType}
-                  onValueChange={(v) =>
-                    setForm((f) => ({
-                      ...f,
-                      instrumentType: v as BankInstrumentType,
-                    }))
-                  }
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
+                <Select value={form.instrumentType} onValueChange={(v) => setForm((f) => ({ ...f, instrumentType: v as BankInstrumentType }))}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="fixed_deposit">Fixed Deposit</SelectItem>
-                    <SelectItem value="call_deposit">Call Deposit</SelectItem>
-                    <SelectItem value="ordinary_savings">Ordinary / Regular Savings</SelectItem>
-                    <SelectItem value="target_savings">Target / Goal Savings</SelectItem>
-                    <SelectItem value="tiered_savings">Tiered / High-Yield Savings</SelectItem>
+                    {(Object.keys(TYPE_LABEL) as BankInstrumentType[]).map((t) => (
+                      <SelectItem key={t} value={t}>{TYPE_LABEL[t]}</SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
-                <Label className="text-xs">Min Amount (KES)</Label>
-                <Input
-                  type="number"
-                  value={form.minAmount}
-                  onChange={(e) =>
-                    setForm((f) => ({ ...f, minAmount: e.target.value }))
-                  }
-                />
+                <Label className="text-xs">Min amount (KES)</Label>
+                <Input type="number" value={form.minAmount} onChange={(e) => setForm((f) => ({ ...f, minAmount: e.target.value }))} />
               </div>
               <div className="space-y-1.5">
-                <Label className="text-xs">Indicative Rate (%)</Label>
-                <Input
-                  type="number"
-                  inputMode="decimal"
-                  value={form.indicativeRate}
-                  onChange={(e) =>
-                    setForm((f) => ({ ...f, indicativeRate: e.target.value }))
-                  }
-                  placeholder="optional"
-                />
+                <Label className="text-xs">Indicative rate (%)</Label>
+                <Input type="number" inputMode="decimal" value={form.indicativeRate} onChange={(e) => setForm((f) => ({ ...f, indicativeRate: e.target.value }))} placeholder="leave blank if unavailable" />
               </div>
             </div>
             <div className="space-y-1.5">
-              <Label className="text-xs">Typical Tenor</Label>
-              <Input
-                value={form.typicalTenor}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, typicalTenor: e.target.value }))
-                }
-                placeholder="e.g. 3, 6, 12 months"
-              />
+              <Label className="text-xs">Typical tenor / notice period</Label>
+              <Input value={form.typicalTenor} onChange={(e) => setForm((f) => ({ ...f, typicalTenor: e.target.value }))} placeholder="e.g. 3, 6, 12 months" />
             </div>
             <div className="flex items-center gap-2">
-              <input
-                id="negotiable"
-                type="checkbox"
-                checked={form.isNegotiable}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, isNegotiable: e.target.checked }))
-                }
-                className="h-4 w-4 rounded border-input"
-              />
-              <Label htmlFor="negotiable" className="text-xs">
-                Rate is negotiable for larger balances
-              </Label>
+              <Switch checked={form.isNegotiable} onCheckedChange={(v) => setForm((f) => ({ ...f, isNegotiable: v }))} />
+              <Label className="text-xs">Rate is negotiable for larger balances</Label>
             </div>
             <div className="space-y-1.5">
-              <Label className="text-xs">Source (URL or note)</Label>
-              <Input
-                value={form.source}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, source: e.target.value }))
-                }
-              />
+              <Label className="text-xs">Source (URL or note) — required</Label>
+              <Input value={form.source} onChange={(e) => setForm((f) => ({ ...f, source: e.target.value }))} placeholder="e.g. bank product page URL, factsheet date" />
             </div>
             <div className="space-y-1.5">
               <Label className="text-xs">Notes</Label>
-              <Textarea
-                value={form.notes}
-                rows={2}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, notes: e.target.value }))
-                }
-              />
+              <Textarea value={form.notes} rows={2} onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))} />
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setEditOpen(false)}>
-              Cancel
-            </Button>
+            <Button variant="outline" className="bg-background" onClick={() => setEditOpen(false)}>Cancel</Button>
             <Button onClick={save} disabled={add.isPending || update.isPending}>
-              {add.isPending || update.isPending ? "Saving…" : "Save"}
+              {add.isPending || update.isPending ? "Saving…" : "Save correction"}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
-
-      {/* Delete confirm */}
-      <AlertDialog open={deleteId !== null} onOpenChange={(o) => !o && setDeleteId(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Remove this instrument?</AlertDialogTitle>
-            <AlertDialogDescription>
-              This cannot be undone.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => deleteId && remove.mutate({ id: deleteId })}
-              className="bg-red-500 hover:bg-red-600"
-            >
-              Remove
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </AppShell>
+  );
+}
+
+function DrawerFact({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="space-y-0.5">
+      <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">{label}</p>
+      <p className="text-sm">{value}</p>
+    </div>
   );
 }

@@ -38,6 +38,8 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { profileFor, type AssetClass } from "@shared/assetModel";
+import { useAuth } from "@/_core/hooks/useAuth";
+import { CatalogueRowControls } from "@/components/CatalogueRowControls";
 import { humanCheckedCount, figureCount, type FieldProvenanceMap } from "@shared/provenance";
 import { rateStaleness } from "@/lib/rateStaleness";
 import { dashboardHref } from "@shared/navigation";
@@ -101,6 +103,17 @@ function govPrefill(r: Opportunity): DepositPrefill {
 export default function CbkSecuritiesReference({ embedded = false }: { embedded?: boolean } = {}) {
   const { data: rows = [], isLoading } = trpc.opportunities.list.useQuery();
   const { openDrawer } = useDepositDrawer();
+  const { user } = useAuth();
+  const isManager = user?.role === "admin";
+  const { data: metaData } = trpc.catalogue.rowMeta.useQuery(
+    { catalogue: "cbk" },
+    { enabled: isManager },
+  );
+  const staleByRef = useMemo(() => {
+    const m = new Map<string, boolean>();
+    for (const row of Object.values(metaData?.meta ?? {})) m.set(row.targetRef, !!row.stale);
+    return m;
+  }, [metaData]);
 
   const [search, setSearch] = useState("");
   const [classFilter, setClassFilter] = useState<string>("all");
@@ -295,7 +308,7 @@ export default function CbkSecuritiesReference({ embedded = false }: { embedded?
                   </TableHeader>
                   <TableBody>
                     {filtered.map((r) => (
-                      <GovRow key={r.ref} r={r} onRecord={() => openDrawer(govPrefill(r))} />
+                      <GovRow key={r.ref} r={r} onRecord={() => openDrawer(govPrefill(r))} isManager={isManager} staleByRef={staleByRef} />
                     ))}
                   </TableBody>
                 </Table>
@@ -314,9 +327,10 @@ export default function CbkSecuritiesReference({ embedded = false }: { embedded?
   );
 }
 
-function GovRow({ r, onRecord }: { r: Opportunity; onRecord: () => void }) {
+function GovRow({ r, onRecord, isManager, staleByRef }: { r: Opportunity; onRecord: () => void; isManager: boolean; staleByRef: Map<string, boolean> }) {
   const profile = profileFor(r.assetClass as AssetClass);
   const stale = rateStaleness(r.dataAsOf);
+  const markedStale = staleByRef.get(r.ref);
   const fp = (r.fieldProvenance ?? {}) as FieldProvenanceMap;
   const total = figureCount(fp);
   const checked = humanCheckedCount(fp);
@@ -328,6 +342,9 @@ function GovRow({ r, onRecord }: { r: Opportunity; onRecord: () => void }) {
           {r.name}
         </Link>
         <div className="text-xs text-muted-foreground mt-0.5">{r.issuer ?? r.market ?? "CBK / DhowCSD"}</div>
+        {markedStale && (
+          <Badge variant="outline" className="mt-1 mr-1 text-[10px] px-1.5 py-0 border-amber-300 text-amber-600">Stale</Badge>
+        )}
         {isTaxExempt && (
           <Badge variant="outline" className="mt-1 text-[10px] px-1.5 py-0 border-emerald-500/30 text-emerald-600 dark:text-emerald-400">
             Tax-exempt coupon
@@ -377,11 +394,22 @@ function GovRow({ r, onRecord }: { r: Opportunity; onRecord: () => void }) {
         </Tooltip>
       </TableCell>
       <TableCell>
-        <Link href={`/explore/${encodeURIComponent(r.ref)}`}>
-          <Button variant="ghost" size="icon" className="h-8 w-8" aria-label={`View ${r.name}`}>
-            <ChevronRight className="w-4 h-4" />
-          </Button>
-        </Link>
+        <div className="flex items-center justify-end gap-1">
+          {isManager && (
+            <CatalogueRowControls
+              catalogue="cbk"
+              targetRef={r.ref}
+              instrumentName={r.name}
+              isActive={r.active ?? true}
+              isStale={markedStale}
+            />
+          )}
+          <Link href={`/explore/${encodeURIComponent(r.ref)}`}>
+            <Button variant="ghost" size="icon" className="h-8 w-8" aria-label={`View ${r.name}`}>
+              <ChevronRight className="w-4 h-4" />
+            </Button>
+          </Link>
+        </div>
       </TableCell>
     </TableRow>
   );

@@ -295,13 +295,13 @@ export default function Explore({ embedded = false }: { embedded?: boolean } = {
         <div className="flex items-start justify-between gap-4 flex-wrap">
           <div>
             <h1 className="text-2xl font-bold tracking-tight" style={{ fontFamily: "'Playfair Display', serif" }}>
-              Explore Opportunities
+              Explore the Approved Universe
             </h1>
             <p className="text-muted-foreground text-sm mt-1 max-w-2xl">
-              A neutral catalog of investable instruments with publicly sourced facts.
-              Nothing here is recommended. You decide what to look at, filter, and compare —
-              and you can optionally turn on a transparent factual Score that combines the
-              published facts (it is never advice).
+              A neutral screener over the <span className="font-medium text-foreground">approved reference catalogues</span> —
+              every instrument here has already passed governed review, with its figures sourced and audited.
+              Nothing is recommended: you decide what to look at, filter, and compare, and you can optionally
+              turn on a transparent factual Score that combines the published facts (it is never advice).
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -376,11 +376,12 @@ export default function Explore({ embedded = false }: { embedded?: boolean } = {
         <Card>
           <CardHeader className="pb-3">
             <CardTitle className="text-base flex items-center gap-2">
-              <Search className="w-4 h-4" /> Filter the catalog
+              <Search className="w-4 h-4" /> Filter the approved universe
             </CardTitle>
             <CardDescription className="text-xs">
               All facets are yours to set. The list starts in a neutral order (by asset class,
-              then name) and only re-sorts when you click a column.
+              then name) and only re-sorts when you click a column. Only approved, active
+              catalogue rows appear here.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
@@ -694,9 +695,9 @@ function FederatedRow({ r }: { r: FederatedInstrument }) {
   const cat = r.catalogue as ReferenceCatalogue;
   const href =
     cat === "mmf"
-      ? "/research?tab=mmf-market"
+      ? "/research?tab=reference-catalogues&cat=mmf-market"
       : cat === "bank"
-        ? "/research?tab=bank-catalogue"
+        ? "/research?tab=reference-catalogues&cat=bank-catalogue"
         : `/explore/${encodeURIComponent(r.ref)}`;
   const figure =
     r.headlineFigure === null

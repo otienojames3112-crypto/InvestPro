@@ -1515,3 +1515,125 @@ export const catalogueAuditLog = mysqlTable("catalogue_audit_log", {
 });
 export type CatalogueAuditLog = typeof catalogueAuditLog.$inferSelect;
 export type InsertCatalogueAuditLog = typeof catalogueAuditLog.$inferInsert;
+
+/**
+ * Round 83 — DATE-EFFECTIVE RATE HISTORY.
+ *
+ * Approving a new MMF EAR or a CBK reference rate must NOT rewrite history. These
+ * append-only tables record each approved rate with an EFFECTIVE date, so the
+ * projection/accrual engine can read "the rate that applied on date D" and past
+ * accrual is never restated. A change is effective from its `effectiveAt` FORWARD.
+ *
+ * Invariants (locked by tests):
+ *   - An MMF rate change affects future accrual/projection from effectiveAt only.
+ *   - A bank product catalogue rate change never rewrites an existing fixed deposit
+ *     (those keep their own negotiated rate on bank_instrument_holdings).
+ *   - A CBK reference rate change affects future purchases / scenario assumptions,
+ *     never a security already held.
+ * These tables store REFERENCE history only; they hold no per-holding money.
+ */
+export const mmfRateHistory = mysqlTable("mmf_rate_history", {
+  id: int("id").autoincrement().primaryKey(),
+  /** The mmf_funds row this rate belongs to. */
+  mmfFundId: int("mmfFundId").notNull(),
+  /** Stable fund name (denormalised for history reads even if a row is renamed). */
+  fundName: varchar("fundName", { length: 200 }).notNull(),
+  /** Gross yield (% p.a.) as approved. */
+  grossYield: decimal("grossYield", { precision: 8, scale: 4 }),
+  /** Effective Annual Rate net of fee (% p.a.) as approved — the projection figure. */
+  ear: decimal("ear", { precision: 8, scale: 4 }),
+  /** Management fee (% p.a.) at this point in time. */
+  managementFee: decimal("managementFee", { precision: 6, scale: 4 }),
+  /** The date this rate becomes effective FORWARD (epoch ms UTC). */
+  effectiveAt: bigint("effectiveAt", { mode: "number" }).notNull(),
+  /** Provenance. */
+  source: varchar("source", { length: 300 }),
+  sourceUrl: varchar("sourceUrl", { length: 500 }),
+  /** The approval that produced this history row (traceability). */
+  researchUpdateId: int("researchUpdateId"),
+  approvedBy: varchar("approvedBy", { length: 200 }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+export type MmfRateHistory = typeof mmfRateHistory.$inferSelect;
+export type InsertMmfRateHistory = typeof mmfRateHistory.$inferInsert;
+
+/**
+ * Round 83 — CBK reference-rate history (T-bill / bond reference yields). Records
+ * each approved CBK reference rate with an effective date. These are REFERENCE
+ * assumptions that inform FUTURE purchases and scenario modelling; they never
+ * revalue a security already held.
+ */
+export const cbkRateHistory = mysqlTable("cbk_rate_history", {
+  id: int("id").autoincrement().primaryKey(),
+  /** The opportunities.ref this reference rate belongs to. */
+  opportunityRef: varchar("opportunityRef", { length: 64 }).notNull(),
+  instrumentName: varchar("instrumentName", { length: 200 }),
+  /** Security family (tbill_91 | tbill_182 | tbill_364 | ifb | fxd | …) when known. */
+  securityType: varchar("securityType", { length: 48 }),
+  /** Yield / coupon / previous average rate (% p.a.) as approved. */
+  yieldPct: decimal("yieldPct", { precision: 7, scale: 4 }),
+  yieldKind: varchar("yieldKind", { length: 48 }),
+  /** Effective from this date FORWARD (epoch ms UTC). */
+  effectiveAt: bigint("effectiveAt", { mode: "number" }).notNull(),
+  source: varchar("source", { length: 300 }),
+  sourceUrl: varchar("sourceUrl", { length: 500 }),
+  researchUpdateId: int("researchUpdateId"),
+  approvedBy: varchar("approvedBy", { length: 200 }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+export type CbkRateHistory = typeof cbkRateHistory.$inferSelect;
+export type InsertCbkRateHistory = typeof cbkRateHistory.$inferInsert;
+
+/**
+ * Round 83 — bank product catalogue rate history. Records each approved indicative
+ * bank product rate with an effective date. A catalogue rate is a REFERENCE for a
+ * NEXT deposit; it never rewrites an existing fixed deposit (those keep their own
+ * negotiated rate on bank_instrument_holdings).
+ */
+export const bankProductRateHistory = mysqlTable("bank_product_rate_history", {
+  id: int("id").autoincrement().primaryKey(),
+  /** The bank_instruments row this rate belongs to. */
+  bankInstrumentId: int("bankInstrumentId").notNull(),
+  bankName: varchar("bankName", { length: 200 }).notNull(),
+  instrumentType: varchar("instrumentType", { length: 48 }),
+  /** Indicative rate (% p.a.) as approved. */
+  indicativeRate: decimal("indicativeRate", { precision: 6, scale: 2 }),
+  /** Effective from this date FORWARD (epoch ms UTC). */
+  effectiveAt: bigint("effectiveAt", { mode: "number" }).notNull(),
+  source: varchar("source", { length: 300 }),
+  sourceUrl: varchar("sourceUrl", { length: 500 }),
+  researchUpdateId: int("researchUpdateId"),
+  approvedBy: varchar("approvedBy", { length: 200 }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+export type BankProductRateHistory = typeof bankProductRateHistory.$inferSelect;
+export type InsertBankProductRateHistory = typeof bankProductRateHistory.$inferInsert;
+
+/**
+ * Round 83 — REFERENCE-ROW LIFECYCLE / STALENESS. Adds manager-facing lifecycle
+ * metadata to every reference catalogue WITHOUT modifying the four catalogue
+ * tables (mmf_funds / bank_instruments / opportunities): one row here per
+ * (catalogue, targetRef) records whether a maintainer has marked the reference
+ * stale, the as-of date it was last confirmed, and the reason for a deactivation.
+ * This lets the UI show "stale" / "archived" badges and an audit reason on any
+ * catalogue row while keeping the catalogue tables themselves lean.
+ */
+export const referenceRowMeta = mysqlTable("reference_row_meta", {
+  id: int("id").autoincrement().primaryKey(),
+  catalogue: mysqlEnum("catalogue", ["mmf", "bank", "cbk", "market_asset"]).notNull(),
+  /** The catalogue row identity: fund name / bank name / opportunities.ref. */
+  targetRef: varchar("targetRef", { length: 200 }).notNull(),
+  /** Manager marked this reference stale (figures may be out of date). */
+  stale: boolean("stale").notNull().default(false),
+  staleReason: varchar("staleReason", { length: 300 }),
+  staleMarkedBy: varchar("staleMarkedBy", { length: 200 }),
+  staleMarkedAt: bigint("staleMarkedAt", { mode: "number" }),
+  /** Deactivation/archival reason (for the audit trail; the row is soft-hidden). */
+  archivedReason: varchar("archivedReason", { length: 300 }),
+  archivedBy: varchar("archivedBy", { length: 200 }),
+  archivedAt: bigint("archivedAt", { mode: "number" }),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+export type ReferenceRowMeta = typeof referenceRowMeta.$inferSelect;
+export type InsertReferenceRowMeta = typeof referenceRowMeta.$inferInsert;

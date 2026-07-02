@@ -385,19 +385,94 @@ export function catalogueLabel(c: ReferenceCatalogue): string {
 }
 
 /**
- * The figure keys a NEW entry in each catalogue must carry before it is complete
- * enough to publish. A single-field EDIT is exempt (it only changes one figure on
- * an already-complete row). These are intentionally minimal — the smallest set
- * that makes the catalogue row meaningful and the portfolio math well-defined.
+ * Round 83 — the FULL set of fields a NEW entry in each catalogue must carry
+ * before it is complete enough to publish into a live reference catalogue. These
+ * are the smallest sets that make each catalogue row meaningful, defensible, and
+ * the portfolio math well-defined. A single-field EDIT is exempt (it changes one
+ * figure on an already-complete row). Each field is checked against the neutral
+ * `figures` bag with alias tolerance; identity fields (name/issuer/currency) and
+ * provenance fields (source/as-of) are checked against the update envelope.
+ *
+ * The `label` is the human token shown in the "still missing" list. `escapable`
+ * fields may be satisfied by an explicit "marked unavailable / rate unavailable"
+ * flag rather than a number (e.g. a bank rate that is genuinely not published, or
+ * a market-asset price that is not quoted), so a manager can still publish a
+ * meaningful reference row without inventing a figure.
+ */
+export interface CatalogueFieldRule {
+  /** Envelope identity/provenance key, or a figures-bag key. */
+  key: string;
+  label: string;
+  /** Where to read it from. */
+  source: "figures" | "name" | "issuer" | "currency" | "provenanceSource" | "asOf";
+  /** May be satisfied by an explicit "unavailable"/"missing" flag instead of a value. */
+  escapable?: boolean;
+  /** The figures-bag flag that marks this field explicitly unavailable. */
+  escapeFlag?: string;
+}
+
+export const CATALOGUE_FIELD_RULES: Record<ReferenceCatalogue, CatalogueFieldRule[]> = {
+  // MMF Market: fund name, company/manager, gross yield or EAR, management fee,
+  // minimum investment, source, as-of. (AUM is optional — never required.)
+  mmf: [
+    { key: "name", label: "fund name", source: "name" },
+    { key: "company", label: "company / manager", source: "issuer" },
+    { key: "ear", label: "gross yield or EAR", source: "figures" },
+    { key: "managementFee", label: "management fee", source: "figures" },
+    { key: "minInvestment", label: "minimum investment", source: "figures" },
+    { key: "source", label: "source", source: "provenanceSource" },
+    { key: "asOf", label: "as-of date", source: "asOf" },
+  ],
+  // Bank Product Catalogue: bank, product type, minimum amount, tenor/notice
+  // (unless fully liquid), indicative rate OR explicit "rate unavailable",
+  // negotiable yes/no, liquidity/withdrawal terms, source, as-of.
+  bank: [
+    { key: "name", label: "bank", source: "issuer" },
+    { key: "instrumentType", label: "instrument type", source: "figures" },
+    { key: "minAmount", label: "minimum amount", source: "figures" },
+    { key: "typicalTenor", label: "tenor / notice period", source: "figures", escapable: true, escapeFlag: "fullyLiquid" },
+    { key: "indicativeRate", label: "indicative rate", source: "figures", escapable: true, escapeFlag: "rateUnavailable" },
+    { key: "isNegotiable", label: "negotiable (yes/no)", source: "figures" },
+    { key: "liquidity", label: "liquidity / withdrawal terms", source: "figures" },
+    { key: "source", label: "source", source: "provenanceSource" },
+    { key: "asOf", label: "as-of date", source: "asOf" },
+  ],
+  // CBK Securities Reference: security type, tenor, rate/coupon/previous avg rate,
+  // WHT rule, tax-exempt flag, maturity rule, source, as-of. (Issue number,
+  // auction date, value date are captured where applicable but not hard-required.)
+  cbk: [
+    { key: "securityType", label: "security type", source: "figures" },
+    { key: "tenor", label: "tenor", source: "figures" },
+    { key: "yieldPct", label: "rate / coupon / previous average rate", source: "figures" },
+    { key: "whtRule", label: "WHT rule", source: "figures" },
+    { key: "taxExempt", label: "tax-exempt flag", source: "figures" },
+    { key: "maturityRule", label: "maturity rule", source: "figures" },
+    { key: "source", label: "source", source: "provenanceSource" },
+    { key: "asOf", label: "as-of date", source: "asOf" },
+  ],
+  // Market Assets Reference: asset class, name, issuer/manager, market, currency,
+  // source, as-of, AND at least one of price / NAV / yield / return (else the row
+  // must be explicitly marked missing with a manager override).
+  market_asset: [
+    { key: "name", label: "name", source: "name" },
+    { key: "issuer", label: "issuer / manager", source: "issuer" },
+    { key: "market", label: "market", source: "figures" },
+    { key: "currency", label: "currency", source: "currency" },
+    { key: "lastPrice", label: "price / NAV / yield / return", source: "figures", escapable: true, escapeFlag: "figuresUnavailable" },
+    { key: "source", label: "source", source: "provenanceSource" },
+    { key: "asOf", label: "as-of date", source: "asOf" },
+  ],
+};
+
+/**
+ * Back-compat: the minimal figure keys per catalogue (used by tests + the
+ * portfolio-impact primary-figure lookup). Kept as the projection-relevant subset
+ * of {@link CATALOGUE_FIELD_RULES}.
  */
 export const CATALOGUE_REQUIRED_FIELDS: Record<ReferenceCatalogue, string[]> = {
-  // An MMF is only useful in projection if we know a yield.
   mmf: ["ear"],
-  // A bank product needs an indicative rate to be a reference at all.
   bank: ["indicativeRate"],
-  // A government security's defining figure is its yield.
   cbk: ["yieldPct"],
-  // A market asset is price-driven — a last price is the minimum.
   market_asset: ["lastPrice"],
 };
 
@@ -415,12 +490,27 @@ function figurePresent(figures: Record<string, unknown> | null | undefined, key:
   const aliases: Record<string, string[]> = {
     ear: ["ear", "netYield", "yieldPct", "yield", "grossYield"],
     indicativeRate: ["indicativeRate", "rate", "yieldPct"],
-    yieldPct: ["yieldPct", "yield", "coupon", "rate"],
-    lastPrice: ["lastPrice", "price", "nav"],
+    yieldPct: ["yieldPct", "yield", "coupon", "rate", "previousAvgRate"],
+    lastPrice: ["lastPrice", "price", "nav", "yieldPct", "yield", "trailingReturnPct", "trailingReturn"],
+    managementFee: ["managementFee", "expenseRatioPct", "fee"],
+    minInvestment: ["minInvestment", "minAmount"],
+    minAmount: ["minAmount", "minInvestment"],
+    instrumentType: ["instrumentType", "productType", "type"],
+    typicalTenor: ["typicalTenor", "tenor", "noticePeriod"],
+    isNegotiable: ["isNegotiable", "negotiable"],
+    liquidity: ["liquidity", "withdrawalTerms"],
+    securityType: ["securityType", "instrumentType", "type"],
+    tenor: ["tenor", "tenorYears", "typicalTenor"],
+    whtRule: ["whtRule", "wht", "withholdingTax", "whtRate"],
+    taxExempt: ["taxExempt", "taxExemptFlag", "isTaxExempt"],
+    maturityRule: ["maturityRule", "maturityDate", "maturity"],
+    market: ["market", "segment", "exchange"],
   };
   const keys = aliases[key] ?? [key];
   return keys.some((k) => {
     const v = figures[k];
+    // Booleans (e.g. taxExempt=false, isNegotiable=false) count as present.
+    if (typeof v === "boolean") return true;
     return v !== undefined && v !== null && String(v).trim() !== "";
   });
 }
@@ -428,41 +518,84 @@ function figurePresent(figures: Record<string, unknown> | null | undefined, key:
 export interface ApprovalGateResult {
   ok: boolean;
   catalogue: ReferenceCatalogue;
-  /** Required figure keys that are missing (empty when ok, or when it's an edit). */
+  /** Human labels of the required fields that are missing (empty when ok/edit). */
   missing: string[];
   /** Plain-language reason when blocked. */
   reason?: string;
 }
 
 /**
- * The catalogue-specific approval gate. A `create` must carry every required
- * figure for its catalogue; an `edit` (single-field change to an existing row) is
- * always allowed through. A blocked create is NOT rejected — it stays pending and
- * the manager sees exactly which figures are missing, and may still approve with
- * an explicit manager-vouched override value (handled server-side).
+ * Round 83 — the STRENGTHENED catalogue-specific approval gate. A `create` must
+ * carry every required field for its catalogue (identity + figures + provenance),
+ * checked against {@link CATALOGUE_FIELD_RULES}. Escapable fields (a genuinely
+ * unpublished bank rate/tenor, or an unquoted market-asset figure) may be
+ * satisfied by an explicit "unavailable" flag in the figures bag rather than a
+ * number — so a manager never has to invent a value, but the gate still forces an
+ * explicit acknowledgement. A single-field EDIT is exempt. A blocked create is
+ * NOT rejected: it stays pending and the manager sees exactly which fields are
+ * missing, and may still approve with an explicit manager-vouched override (which
+ * satisfies the escapable/primary figure) or a full gate override.
  */
 export function checkApprovalGate(args: {
   assetClass: AssetClass;
   changeKind: UpdateChangeKind;
   figures?: Record<string, unknown> | null;
-  /** A manager override value supplied at approval — satisfies the gate. */
+  /** Identity/provenance envelope for the row being approved. */
+  name?: string | null;
+  issuer?: string | null;
+  currency?: string | null;
+  source?: string | null;
+  asOf?: number | null;
+  /** A manager override value supplied at approval — satisfies the primary figure. */
   managerValue?: string | number | null;
 }): ApprovalGateResult {
   const catalogue = catalogueForAssetClass(args.assetClass);
   if (args.changeKind === "edit") {
     return { ok: true, catalogue, missing: [] };
   }
+  const figures = args.figures ?? {};
   const hasOverride =
     args.managerValue !== undefined && args.managerValue !== null && String(args.managerValue).trim() !== "";
-  const missing = CATALOGUE_REQUIRED_FIELDS[catalogue].filter(
-    (k) => !figurePresent(args.figures, k) && !(hasOverride && k === primaryFigureKeyForCatalogue(catalogue)),
-  );
+  const primaryKey = primaryFigureKeyForCatalogue(catalogue);
+  const nonEmpty = (v: unknown) => v !== undefined && v !== null && String(v).trim() !== "";
+
+  const missing: string[] = [];
+  for (const rule of CATALOGUE_FIELD_RULES[catalogue]) {
+    // A manager-vouched override always satisfies the catalogue's PRIMARY figure.
+    if (hasOverride && rule.source === "figures" && rule.key === primaryKey) continue;
+    // An explicit "unavailable" flag satisfies an escapable field.
+    if (rule.escapable && rule.escapeFlag && figures[rule.escapeFlag] === true) continue;
+
+    let present = false;
+    switch (rule.source) {
+      case "figures":
+        present = figurePresent(figures, rule.key);
+        break;
+      case "name":
+        present = nonEmpty(args.name);
+        break;
+      case "issuer":
+        present = nonEmpty(args.issuer);
+        break;
+      case "currency":
+        present = nonEmpty(args.currency);
+        break;
+      case "provenanceSource":
+        present = nonEmpty(args.source);
+        break;
+      case "asOf":
+        present = args.asOf !== undefined && args.asOf !== null && Number(args.asOf) > 0;
+        break;
+    }
+    if (!present) missing.push(rule.label);
+  }
+
   if (missing.length === 0) return { ok: true, catalogue, missing: [] };
   return {
     ok: false,
     catalogue,
     missing,
-    reason: `${catalogueLabel(catalogue)} entries need ${missing.join(", ")} before they can be published. Add the figure(s), or approve with a manager-vouched value.`,
+    reason: `${catalogueLabel(catalogue)} entries need ${missing.join(", ")} before they can be published. Add the field(s), mark them unavailable, or approve with a manager-vouched value.`,
   };
 }
 

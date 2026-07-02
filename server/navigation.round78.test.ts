@@ -103,7 +103,10 @@ describe("Round 78 — link-integrity scanner", () => {
 
 describe("Round 78 — dashboardHref destinations are all valid", () => {
   it("every dashboardHref value is either /settings or a valid /area?tab= path", () => {
-    const tabLink = /^\/(plan|cashflows|holdings|research|review)\?tab=([a-z0-9-]+)$/;
+    // A valid destination is `/area?tab=id`, optionally followed by a nested
+    // `&cat=<catalogue-id>` selector (Round 83: the four reference catalogues are
+    // nested under research?tab=reference-catalogues and picked via `&cat=`).
+    const tabLink = /^\/(plan|cashflows|holdings|research|review)\?tab=([a-z0-9-]+)(?:&cat=[a-z0-9-]+)?$/;
     for (const [key, href] of Object.entries(dashboardHref)) {
       if (href === "/settings") continue;
       const m = tabLink.exec(href);

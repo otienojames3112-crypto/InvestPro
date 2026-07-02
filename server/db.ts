@@ -1,4 +1,4 @@
-import { and, eq, desc, asc, sql, inArray } from "drizzle-orm";
+import { and, eq, desc, asc, sql, inArray, lte } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import {
   InsertUser,
@@ -2299,6 +2299,10 @@ import {
   researchTasks,
   researchFindings,
   catalogueAuditLog,
+  mmfRateHistory,
+  cbkRateHistory,
+  bankProductRateHistory,
+  referenceRowMeta,
   type ResearchUpdate,
   type InsertResearchUpdate,
   type SourceRegistryRow,
@@ -2309,6 +2313,7 @@ import {
   type InsertResearchFinding,
   type CatalogueAuditLog,
   type InsertCatalogueAuditLog,
+  type ReferenceRowMeta,
 } from "../drizzle/schema";
 import {
   validatePendingUpdate,
@@ -2316,6 +2321,7 @@ import {
   sourceDueStatus,
   checkApprovalGate,
   catalogueForAssetClass,
+  catalogueLabel,
   describePortfolioImpact,
   agentCheckDue,
   type PendingUpdateInput,
@@ -2495,6 +2501,11 @@ export async function reviewResearchUpdate(args: {
     assetClass: current.assetClass as AssetClass,
     changeKind: current.changeKind,
     figures: figuresIn,
+    name: current.name,
+    issuer: current.issuer,
+    currency: current.currency,
+    source: current.source,
+    asOf: current.asOf,
     managerValue: args.managerValue ?? null,
   });
   if (!gate.ok && !args.overrideGate) {
@@ -2530,6 +2541,11 @@ export async function reviewResearchUpdate(args: {
   });
 
   let promotedRef: string | null = current.targetRef ?? null;
+  // Round 83 — remember the promoted catalogue row so we can (a) VERIFY it exists
+  // after promotion (no fake audit) and (b) append the date-effective rate-history.
+  let promotedMmfId: number | null = null;
+  let promotedBankId: number | null = null;
+  const effectiveAt = current.asOf && Number(current.asOf) > 0 ? Number(current.asOf) : now;
 
   if (plan.target === "mmf") {
     const p = plan.payload;
@@ -2551,6 +2567,7 @@ export async function reviewResearchUpdate(args: {
     };
     if (existing[0]) {
       await db.update(mmfFunds).set(values).where(eq(mmfFunds.id, existing[0].id));
+      promotedMmfId = existing[0].id;
     } else {
       await db.insert(mmfFunds).values(values);
     }
@@ -2574,6 +2591,7 @@ export async function reviewResearchUpdate(args: {
     };
     if (existing[0]) {
       await db.update(bankInstruments).set(values).where(eq(bankInstruments.id, existing[0].id));
+      promotedBankId = existing[0].id;
     } else {
       await db.insert(bankInstruments).values(values);
     }
@@ -2623,6 +2641,28 @@ export async function reviewResearchUpdate(args: {
     promotedRef = p.ref;
   }
 
+  // ── Round 83: POST-PROMOTION VERIFICATION (no fake audit) ──
+  // Confirm the catalogue row actually exists after promotion. If it does not, the
+  // approval did NOT publish: leave the update pending and return the error rather
+  // than writing an "approved" audit entry that points at nothing.
+  const published = await verifyCataloguePublished(cat, promotedRef);
+  if (!published) {
+    // Ensure the update is still pending (it never left pending here, but be explicit).
+    await db
+      .update(researchUpdates)
+      .set({ status: "pending" })
+      .where(eq(researchUpdates.id, args.id));
+    return {
+      update: await getResearchUpdate(args.id),
+      promotedRef: null,
+      target: current.target,
+      blocked: {
+        missing: [],
+        reason: `Promotion into ${catalogueLabel(cat)} could not be verified — the catalogue row was not found after write. The update stays pending; nothing was published.`,
+      },
+    };
+  }
+
   await db
     .update(researchUpdates)
     .set({
@@ -2634,6 +2674,65 @@ export async function reviewResearchUpdate(args: {
       ...(hasOverride ? { managerValue: String(args.managerValue) } : {}),
     })
     .where(eq(researchUpdates.id, args.id));
+
+  // ── Round 83: DATE-EFFECTIVE RATE HISTORY ──
+  // Record the approved rate with an effective date so future accrual/projection
+  // reads the rate that applied from `effectiveAt` forward, and past accrual is
+  // never restated. Reference-only; holds no per-holding money.
+  try {
+    if (plan.target === "mmf") {
+      const p = plan.payload;
+      const fundId = promotedMmfId ?? (await db.select({ id: mmfFunds.id }).from(mmfFunds).where(eq(mmfFunds.fundName, p.fundName)).limit(1))[0]?.id ?? 0;
+      await db.insert(mmfRateHistory).values({
+        mmfFundId: fundId,
+        fundName: p.fundName,
+        grossYield: p.grossYield != null ? String(p.grossYield) : (p.ear != null ? String(p.ear) : null),
+        ear: p.ear != null ? String(p.ear) : (p.grossYield != null ? String(p.grossYield) : null),
+        managementFee: p.managementFee != null ? String(p.managementFee) : null,
+        effectiveAt,
+        source: p.source,
+        sourceUrl: current.sourceUrl ?? null,
+        researchUpdateId: current.id,
+        approvedBy: args.reviewedBy,
+      });
+    } else if (plan.target === "bank") {
+      const p = plan.payload;
+      if (p.indicativeRate != null) {
+        const instId = promotedBankId ?? (await db.select({ id: bankInstruments.id }).from(bankInstruments).where(eq(bankInstruments.bankName, p.bankName)).limit(1))[0]?.id ?? 0;
+        await db.insert(bankProductRateHistory).values({
+          bankInstrumentId: instId,
+          bankName: p.bankName,
+          instrumentType: p.instrumentType ?? null,
+          indicativeRate: String(p.indicativeRate),
+          effectiveAt,
+          source: p.source,
+          sourceUrl: current.sourceUrl ?? null,
+          researchUpdateId: current.id,
+          approvedBy: args.reviewedBy,
+        });
+      }
+    } else if (cat === "cbk") {
+      const p = plan.payload as { ref: string; name: string; yieldPct: number | null; yieldKind: string | null };
+      if (p.yieldPct != null) {
+        await db.insert(cbkRateHistory).values({
+          opportunityRef: p.ref,
+          instrumentName: p.name,
+          securityType: cbkSecurityTypeFor(current.assetClass, figuresIn),
+          yieldPct: String(p.yieldPct),
+          yieldKind: p.yieldKind ?? null,
+          effectiveAt,
+          source: current.source,
+          sourceUrl: current.sourceUrl ?? null,
+          researchUpdateId: current.id,
+          approvedBy: args.reviewedBy,
+        });
+      }
+    }
+  } catch (err) {
+    // Rate-history is additive bookkeeping; a failure here must never unpublish an
+    // already-verified catalogue row. Log and continue.
+    console.error("[reviewResearchUpdate] rate-history write failed:", (err as Error).message);
+  }
 
   // ── Round 82: immutable catalogue audit-log entry ("Recently Approved") ──
   // The audit catalogue speaks the four manager-facing catalogues (cbk/market_asset
@@ -2684,6 +2783,41 @@ function cleanAuditValue(v: unknown): string | null {
   if (v === null || v === undefined) return null;
   const s = String(v).trim();
   return s === "" ? null : s.slice(0, 300);
+}
+
+/**
+ * Round 83 — POST-PROMOTION VERIFICATION. Confirm that an approved update actually
+ * produced a live catalogue row before the update is marked approved. Returns true
+ * only if the expected row exists in the catalogue the asset class maps to. Used to
+ * prevent a "fake audit" — an approved entry that points at a row that was never
+ * written.
+ */
+export async function verifyCataloguePublished(
+  catalogue: ReferenceCatalogue,
+  ref: string | null,
+): Promise<boolean> {
+  const db = await getDb();
+  if (!db || !ref) return false;
+  if (catalogue === "mmf") {
+    const r = await db.select({ id: mmfFunds.id }).from(mmfFunds).where(eq(mmfFunds.fundName, ref)).limit(1);
+    return r.length > 0;
+  }
+  if (catalogue === "bank") {
+    const r = await db.select({ id: bankInstruments.id }).from(bankInstruments).where(eq(bankInstruments.bankName, ref)).limit(1);
+    return r.length > 0;
+  }
+  // cbk + market_asset both live in the opportunities catalogue, keyed by ref.
+  const r = await db.select({ id: opportunities.id }).from(opportunities).where(eq(opportunities.ref, ref)).limit(1);
+  return r.length > 0;
+}
+
+/** Infer a CBK security-family token for rate-history from asset class + figures. */
+function cbkSecurityTypeFor(assetClass: string, figures: Record<string, unknown>): string | null {
+  const explicit = figures.securityType ?? figures.instrumentType ?? figures.type;
+  if (explicit != null && String(explicit).trim() !== "") return String(explicit).trim().slice(0, 48);
+  if (assetClass === "gov_discount") return "tbill";
+  if (assetClass === "gov_coupon") return "bond";
+  return null;
 }
 
 /* ── Source registry ────────────────────────────────────────────────────────── */
@@ -2880,14 +3014,19 @@ export async function insertCatalogueAuditLog(row: InsertCatalogueAuditLog): Pro
 /** List audit entries (newest first), optionally by catalogue, capped. */
 export async function listCatalogueAudit(filter?: {
   catalogue?: ReferenceCatalogue;
+  targetRef?: string;
   limit?: number;
 }): Promise<CatalogueAuditLog[]> {
   const db = await getDb();
   if (!db) return [];
+  const conds = [] as unknown[];
+  if (filter?.catalogue) conds.push(eq(catalogueAuditLog.catalogue, filter.catalogue));
+  if (filter?.targetRef) conds.push(eq(catalogueAuditLog.targetRef, filter.targetRef));
   const base = db.select().from(catalogueAuditLog);
-  const q = filter?.catalogue
-    ? base.where(eq(catalogueAuditLog.catalogue, filter.catalogue))
-    : base;
+  const q =
+    conds.length > 0
+      ? base.where(conds.length === 1 ? (conds[0] as never) : (and(...(conds as never[])) as never))
+      : base;
   return q.orderBy(desc(catalogueAuditLog.approvedAt)).limit(filter?.limit ?? 100);
 }
 
@@ -3038,4 +3177,319 @@ export async function flagStaleSources(now = Date.now()): Promise<number> {
     }
   }
   return flagged;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * Round 83 — reference-row lifecycle (stale / archive), date-effective rate
+ * history reads, governed catalogue deactivation, and source-registry lifecycle.
+ *
+ * INVARIANTS:
+ *   - Marking a row stale or archived is a MANAGER action, always audited via
+ *     the catalogue audit log, and never silently deletes data.
+ *   - Deactivating a catalogue row hides it from Explore/screener but preserves
+ *     its history; reactivation is symmetric.
+ *   - Rate history is append-only and date-effective: reads return the row that
+ *     applied at a given instant, so past accrual is never restated.
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Reference-row meta (stale / archive lifecycle) ─────────────────────────── */
+
+/** Read the lifecycle meta for one catalogue row (or null when none recorded). */
+export async function getReferenceRowMeta(
+  catalogue: ReferenceCatalogue,
+  targetRef: string,
+): Promise<ReferenceRowMeta | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db
+    .select()
+    .from(referenceRowMeta)
+    .where(and(eq(referenceRowMeta.catalogue, catalogue), eq(referenceRowMeta.targetRef, targetRef)))
+    .limit(1);
+  return rows[0] ?? null;
+}
+
+/** Read lifecycle meta for a whole catalogue, keyed by targetRef (for list badges). */
+export async function listReferenceRowMeta(
+  catalogue: ReferenceCatalogue,
+): Promise<Record<string, ReferenceRowMeta>> {
+  const db = await getDb();
+  if (!db) return {};
+  const rows = await db.select().from(referenceRowMeta).where(eq(referenceRowMeta.catalogue, catalogue));
+  const out: Record<string, ReferenceRowMeta> = {};
+  for (const r of rows) out[r.targetRef] = r;
+  return out;
+}
+
+/** Upsert a meta row (internal). */
+async function upsertReferenceRowMeta(
+  catalogue: ReferenceCatalogue,
+  targetRef: string,
+  patch: Partial<{
+    stale: boolean;
+    staleReason: string | null;
+    staleMarkedBy: string | null;
+    staleMarkedAt: number | null;
+    archivedReason: string | null;
+    archivedBy: string | null;
+    archivedAt: number | null;
+  }>,
+): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  const existing = await getReferenceRowMeta(catalogue, targetRef);
+  if (existing) {
+    await db.update(referenceRowMeta).set(patch).where(eq(referenceRowMeta.id, existing.id));
+  } else {
+    await db.insert(referenceRowMeta).values({ catalogue, targetRef, ...patch });
+  }
+}
+
+/**
+ * Mark a catalogue row stale (data no longer trustworthy) or clear the flag.
+ * Manager action; writes a catalogue audit entry so the trail shows who/when/why.
+ */
+export async function setReferenceRowStale(args: {
+  catalogue: ReferenceCatalogue;
+  targetRef: string;
+  instrumentName: string | null;
+  stale: boolean;
+  reason?: string | null;
+  by: string;
+}): Promise<void> {
+  const now = Date.now();
+  await upsertReferenceRowMeta(args.catalogue, args.targetRef, {
+    stale: args.stale,
+    staleReason: args.stale ? args.reason ?? null : null,
+    staleMarkedBy: args.stale ? args.by : null,
+    staleMarkedAt: args.stale ? now : null,
+  });
+  await insertCatalogueAuditLog({
+    catalogue: args.catalogue,
+    targetRef: args.targetRef,
+    instrumentName: args.instrumentName,
+    changeKind: "edit",
+    field: "stale",
+    oldValue: args.stale ? "false" : "true",
+    newValue: args.stale ? "true" : "false",
+    source: args.reason ?? null,
+    sourceUrl: null,
+    researchUpdateId: null,
+    researchTaskId: null,
+    approvedBy: args.by,
+    approvedAt: now,
+    note: args.stale ? `Marked stale: ${args.reason ?? "no reason given"}` : "Stale flag cleared",
+  });
+}
+
+/* ── Governed catalogue deactivation (hide from screener, keep history) ─────── */
+
+/** Deactivate / reactivate an MMF fund by name. Manager action, audited. */
+export async function setMmfActive(fundName: string, active: boolean, by: string, reason?: string | null): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  const existing = await db.select({ id: mmfFunds.id }).from(mmfFunds).where(eq(mmfFunds.fundName, fundName)).limit(1);
+  if (!existing[0]) return false;
+  await db.update(mmfFunds).set({ isActive: active }).where(eq(mmfFunds.id, existing[0].id));
+  await recordDeactivationAudit("mmf", fundName, fundName, active, by, reason);
+  return true;
+}
+
+/** Deactivate / reactivate a bank instrument by bank name. Manager action, audited. */
+export async function setBankActive(bankName: string, active: boolean, by: string, reason?: string | null): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  const existing = await db.select({ id: bankInstruments.id }).from(bankInstruments).where(eq(bankInstruments.bankName, bankName)).limit(1);
+  if (!existing[0]) return false;
+  await db.update(bankInstruments).set({ isActive: active }).where(eq(bankInstruments.id, existing[0].id));
+  await recordDeactivationAudit("bank", bankName, bankName, active, by, reason);
+  return true;
+}
+
+/** Deactivate / reactivate an opportunity (cbk or market_asset) by ref. Manager action, audited. */
+export async function setOpportunityActive(ref: string, active: boolean, by: string, reason?: string | null): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  const existing = await db.select({ id: opportunities.id, name: opportunities.name, assetClass: opportunities.assetClass }).from(opportunities).where(eq(opportunities.ref, ref)).limit(1);
+  if (!existing[0]) return false;
+  await db.update(opportunities).set({ active }).where(eq(opportunities.id, existing[0].id));
+  const cat = catalogueForAssetClass(normaliseAssetClass(existing[0].assetClass));
+  await recordDeactivationAudit(cat, ref, existing[0].name, active, by, reason);
+  return true;
+}
+
+/** Shared audit write for (de)activation. */
+async function recordDeactivationAudit(
+  catalogue: ReferenceCatalogue,
+  targetRef: string,
+  instrumentName: string | null,
+  active: boolean,
+  by: string,
+  reason?: string | null,
+): Promise<void> {
+  const now = Date.now();
+  if (!active) {
+    await upsertReferenceRowMeta(catalogue, targetRef, {
+      archivedReason: reason ?? null,
+      archivedBy: by,
+      archivedAt: now,
+    });
+  } else {
+    await upsertReferenceRowMeta(catalogue, targetRef, {
+      archivedReason: null,
+      archivedBy: null,
+      archivedAt: null,
+    });
+  }
+  await insertCatalogueAuditLog({
+    catalogue,
+    targetRef,
+    instrumentName,
+    changeKind: "edit",
+    field: "isActive",
+    oldValue: active ? "false" : "true",
+    newValue: active ? "true" : "false",
+    source: reason ?? null,
+    sourceUrl: null,
+    researchUpdateId: null,
+    researchTaskId: null,
+    approvedBy: by,
+    approvedAt: now,
+    note: active ? "Reactivated" : `Deactivated: ${reason ?? "no reason given"}`,
+  });
+}
+
+/**
+ * Audit a manager's source-backed manual correction to a reference catalogue
+ * (item 5). Reference edits are governed: they are admin-only and always leave
+ * an immutable trail with the source. Does not touch portfolio math.
+ */
+export async function recordManualCorrectionAudit(args: {
+  catalogue: ReferenceCatalogue;
+  targetRef: string;
+  instrumentName: string | null;
+  changeKind: "create" | "edit";
+  field?: string;
+  oldValue?: string;
+  newValue?: string;
+  source: string;
+  by: string;
+}): Promise<void> {
+  await insertCatalogueAuditLog({
+    catalogue: args.catalogue,
+    targetRef: args.targetRef,
+    instrumentName: args.instrumentName,
+    changeKind: args.changeKind,
+    field: args.field ?? null,
+    oldValue: args.oldValue ?? null,
+    newValue: args.newValue ?? null,
+    source: args.source,
+    sourceUrl: null,
+    researchUpdateId: null,
+    researchTaskId: null,
+    approvedBy: args.by,
+    approvedAt: Date.now(),
+    note: "Manager manual correction (source-backed)",
+  });
+}
+
+/* ── Date-effective rate history reads ──────────────────────────────────────── */
+
+export interface RateHistoryPoint {
+  effectiveAt: number;
+  value: number | null;
+  secondary: number | null;
+  source: string | null;
+  approvedBy: string | null;
+}
+
+/** MMF rate history for a fund (by name), newest first. */
+export async function mmfRateHistoryFor(fundName: string, limit = 60): Promise<RateHistoryPoint[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db
+    .select()
+    .from(mmfRateHistory)
+    .where(eq(mmfRateHistory.fundName, fundName))
+    .orderBy(desc(mmfRateHistory.effectiveAt))
+    .limit(limit);
+  return rows.map((r) => ({
+    effectiveAt: Number(r.effectiveAt),
+    value: r.ear != null ? Number(r.ear) : null,
+    secondary: r.grossYield != null ? Number(r.grossYield) : null,
+    source: r.source ?? null,
+    approvedBy: r.approvedBy ?? null,
+  }));
+}
+
+/** Bank product indicative-rate history (by bank name), newest first. */
+export async function bankRateHistoryFor(bankName: string, limit = 60): Promise<RateHistoryPoint[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db
+    .select()
+    .from(bankProductRateHistory)
+    .where(eq(bankProductRateHistory.bankName, bankName))
+    .orderBy(desc(bankProductRateHistory.effectiveAt))
+    .limit(limit);
+  return rows.map((r) => ({
+    effectiveAt: Number(r.effectiveAt),
+    value: r.indicativeRate != null ? Number(r.indicativeRate) : null,
+    secondary: null,
+    source: r.source ?? null,
+    approvedBy: r.approvedBy ?? null,
+  }));
+}
+
+/** CBK yield history (by opportunity ref), newest first. */
+export async function cbkRateHistoryFor(ref: string, limit = 60): Promise<RateHistoryPoint[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db
+    .select()
+    .from(cbkRateHistory)
+    .where(eq(cbkRateHistory.opportunityRef, ref))
+    .orderBy(desc(cbkRateHistory.effectiveAt))
+    .limit(limit);
+  return rows.map((r) => ({
+    effectiveAt: Number(r.effectiveAt),
+    value: r.yieldPct != null ? Number(r.yieldPct) : null,
+    secondary: null,
+    source: r.source ?? null,
+    approvedBy: r.approvedBy ?? null,
+  }));
+}
+
+/**
+ * The MMF EAR that applied at a given instant (date-effective lookup). Returns the
+ * newest history row with effectiveAt <= `at`, or null if none. This is what future
+ * projection/accrual should read so a rate change is never applied retroactively.
+ */
+export async function mmfEarEffectiveAt(fundName: string, at: number): Promise<number | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db
+    .select({ ear: mmfRateHistory.ear, effectiveAt: mmfRateHistory.effectiveAt })
+    .from(mmfRateHistory)
+    .where(and(eq(mmfRateHistory.fundName, fundName), lte(mmfRateHistory.effectiveAt, at)))
+    .orderBy(desc(mmfRateHistory.effectiveAt))
+    .limit(1);
+  return rows[0]?.ear != null ? Number(rows[0].ear) : null;
+}
+
+/* ── Source-registry lifecycle extensions ───────────────────────────────────── */
+
+/** Deactivate / reactivate a source by key (kept for history, hidden from due-list). */
+export async function setSourceActive(key: string, active: boolean): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(sourceRegistry).set({ active }).where(eq(sourceRegistry.key, key));
+}
+
+/** Fetch a single source by key. */
+export async function getSource(key: string): Promise<SourceRegistryRow | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db.select().from(sourceRegistry).where(eq(sourceRegistry.key, key)).limit(1);
+  return rows[0] ?? null;
 }

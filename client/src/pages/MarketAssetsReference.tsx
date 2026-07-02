@@ -39,6 +39,8 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { profileFor, type AssetClass } from "@shared/assetModel";
+import { useAuth } from "@/_core/hooks/useAuth";
+import { CatalogueRowControls } from "@/components/CatalogueRowControls";
 import { humanCheckedCount, figureCount, type FieldProvenanceMap } from "@shared/provenance";
 import { rateStaleness } from "@/lib/rateStaleness";
 import { dashboardHref } from "@shared/navigation";
@@ -89,6 +91,17 @@ function fmtPrice(v: string | null, currency: string): string {
 export default function MarketAssetsReference({ embedded = false }: { embedded?: boolean } = {}) {
   const { data: rows = [], isLoading } = trpc.opportunities.list.useQuery();
   const [, navigate] = useLocation();
+  const { user } = useAuth();
+  const isManager = user?.role === "admin";
+  const { data: metaData } = trpc.catalogue.rowMeta.useQuery(
+    { catalogue: "market_asset" },
+    { enabled: isManager },
+  );
+  const staleByRef = useMemo(() => {
+    const m = new Map<string, boolean>();
+    for (const row of Object.values(metaData?.meta ?? {})) m.set(row.targetRef, !!row.stale);
+    return m;
+  }, [metaData]);
 
   const [search, setSearch] = useState("");
   const [classFilter, setClassFilter] = useState<string>("all");
@@ -317,7 +330,7 @@ export default function MarketAssetsReference({ embedded = false }: { embedded?:
                   </TableHeader>
                   <TableBody>
                     {filtered.map((r) => (
-                      <MarketRow key={r.ref} r={r} onTrack={() => trackHolding(r)} />
+                      <MarketRow key={r.ref} r={r} onTrack={() => trackHolding(r)} isManager={isManager} staleByRef={staleByRef} />
                     ))}
                   </TableBody>
                 </Table>
@@ -336,9 +349,10 @@ export default function MarketAssetsReference({ embedded = false }: { embedded?:
   );
 }
 
-function MarketRow({ r, onTrack }: { r: Opportunity; onTrack: () => void }) {
+function MarketRow({ r, onTrack, isManager, staleByRef }: { r: Opportunity; onTrack: () => void; isManager: boolean; staleByRef: Map<string, boolean> }) {
   const profile = profileFor(r.assetClass as AssetClass);
   const stale = rateStaleness(r.dataAsOf);
+  const markedStale = staleByRef.get(r.ref);
   const trailing = num(r.trailingReturnPct);
   const fp = (r.fieldProvenance ?? {}) as FieldProvenanceMap;
   const total = figureCount(fp);
@@ -350,6 +364,9 @@ function MarketRow({ r, onTrack }: { r: Opportunity; onTrack: () => void }) {
           {r.name}
         </Link>
         <div className="text-xs text-muted-foreground mt-0.5">{r.issuer ?? r.market ?? r.ref}</div>
+        {markedStale && (
+          <Badge variant="outline" className="mt-1 mr-1 text-[10px] px-1.5 py-0 border-amber-300 text-amber-600">Stale</Badge>
+        )}
         {profile.fxExposed && (
           <Badge variant="outline" className="mt-1 text-[10px] px-1.5 py-0 gap-1 border-blue-500/30 text-blue-600 dark:text-blue-400">
             <Globe className="w-2.5 h-2.5" /> FX risk
@@ -414,11 +431,23 @@ function MarketRow({ r, onTrack }: { r: Opportunity; onTrack: () => void }) {
         </Tooltip>
       </TableCell>
       <TableCell>
-        <Link href={`/explore/${encodeURIComponent(r.ref)}`}>
-          <Button variant="ghost" size="icon" className="h-8 w-8" aria-label={`View ${r.name}`}>
-            <ChevronRight className="w-4 h-4" />
-          </Button>
-        </Link>
+        <div className="flex items-center justify-end gap-1">
+          {isManager && (
+            <CatalogueRowControls
+              catalogue="market_asset"
+              targetRef={r.ref}
+              instrumentName={r.name}
+              isActive={r.active ?? true}
+              isStale={markedStale}
+              showRateHistory={false}
+            />
+          )}
+          <Link href={`/explore/${encodeURIComponent(r.ref)}`}>
+            <Button variant="ghost" size="icon" className="h-8 w-8" aria-label={`View ${r.name}`}>
+              <ChevronRight className="w-4 h-4" />
+            </Button>
+          </Link>
+        </div>
       </TableCell>
     </TableRow>
   );

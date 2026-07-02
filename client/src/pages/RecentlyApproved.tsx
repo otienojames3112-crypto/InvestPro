@@ -15,6 +15,22 @@ import {
 } from "lucide-react";
 import { catalogueLabel, type ReferenceCatalogue } from "@shared/researchPipeline";
 import { formatRelativeTime } from "@/lib/format";
+import { Link } from "wouter";
+
+/** Map an audit catalogue value to its Reference Catalogues sub-tab id. */
+const CATALOGUE_TAB_ID: Record<string, string> = {
+  mmf: "mmf-market",
+  bank: "bank-catalogue",
+  cbk: "cbk-securities",
+  market_asset: "market-assets",
+};
+
+function catalogueHref(catalogue: string, targetRef: string | null): string {
+  const cat = CATALOGUE_TAB_ID[catalogue] ?? "mmf-market";
+  const params = new URLSearchParams({ tab: "reference-catalogues", cat });
+  if (targetRef) params.set("ref", targetRef);
+  return `/research?${params.toString()}`;
+}
 
 const CATALOGUE_FILTERS: { value: string; label: string }[] = [
   { value: "all", label: "All catalogues" },
@@ -115,6 +131,13 @@ export default function RecentlyApproved({ embedded = false }: { embedded?: bool
                           open <ExternalLink className="w-3 h-3" />
                         </a>
                       )}
+                      <span className="text-border">·</span>
+                      <Link
+                        href={catalogueHref(e.catalogue, e.targetRef ?? null)}
+                        className="inline-flex items-center gap-1 text-primary hover:underline"
+                      >
+                        Open in {catalogueLabel(e.catalogue as ReferenceCatalogue)} <ArrowRight className="w-3 h-3" />
+                      </Link>
                     </div>
                   </div>
 

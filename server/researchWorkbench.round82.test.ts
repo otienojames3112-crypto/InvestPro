@@ -80,18 +80,30 @@ describe("Round 82 · catalogue routing is total + labelled", () => {
 
 describe("Round 82 · catalogue approval gate", () => {
   it("blocks a create that is missing its required figure and names it", () => {
+    // Round 83: the gate now checks the FULL field set, so a bare create reports
+    // the primary figure ("gross yield or EAR") among the missing labels.
     const g = checkApprovalGate({ assetClass: "cash_mmf", changeKind: "create", figures: {} });
     expect(g.ok).toBe(false);
     expect(g.catalogue).toBe("mmf");
-    expect(g.missing).toContain("ear");
+    expect(g.missing).toContain("gross yield or EAR");
     expect(g.reason).toMatch(/before they can be published/i);
   });
 
-  it("passes a create that carries the required figure (directly or via alias)", () => {
-    const direct = checkApprovalGate({ assetClass: "cash_mmf", changeKind: "create", figures: { ear: 13.9 } });
+  it("passes a create that carries every required field (directly or via alias)", () => {
+    // Round 83: identity (name/company) + provenance (source/as-of) + the full
+    // figure set are all required now.
+    const envelope = {
+      assetClass: "cash_mmf" as const,
+      changeKind: "create" as const,
+      name: "Sample MMF",
+      issuer: "Sample Asset Mgmt",
+      source: "https://example.com",
+      asOf: Date.now(),
+    };
+    const direct = checkApprovalGate({ ...envelope, figures: { ear: 13.9, managementFee: 2, minInvestment: 5000 } });
     expect(direct.ok).toBe(true);
     // netYield is a documented alias for ear.
-    const alias = checkApprovalGate({ assetClass: "cash_mmf", changeKind: "create", figures: { netYield: "13.2" } });
+    const alias = checkApprovalGate({ ...envelope, figures: { netYield: "13.2", managementFee: 2, minInvestment: 5000 } });
     expect(alias.ok).toBe(true);
   });
 
@@ -104,13 +116,21 @@ describe("Round 82 · catalogue approval gate", () => {
   it("a manager-vouched override satisfies the primary figure of a blocked create", () => {
     const blocked = checkApprovalGate({ assetClass: "bank_deposit", changeKind: "create", figures: {} });
     expect(blocked.ok).toBe(false);
+    // Round 83: the override clears the PRIMARY figure (indicative rate), but the
+    // rest of the bank field set must still be satisfied for the gate to pass.
     const overridden = checkApprovalGate({
       assetClass: "bank_deposit",
       changeKind: "create",
-      figures: {},
+      name: "KES 12-month FD",
+      issuer: "Example Bank",
+      source: "https://bank.example",
+      asOf: Date.now(),
+      figures: { instrumentType: "fixed_deposit", minAmount: 100000, typicalTenor: "12m", isNegotiable: true, liquidity: "on maturity" },
       managerValue: 11.5,
     });
     expect(overridden.ok).toBe(true);
+    // and the primary figure is no longer listed as missing
+    expect(overridden.missing).not.toContain("indicative rate");
   });
 
   it("an empty-string override does NOT satisfy the gate", () => {

@@ -124,6 +124,18 @@ import {
   listCatalogueAudit,
   listFederatedUniverse,
   primaryMmfFundNames,
+  getReferenceRowMeta,
+  listReferenceRowMeta,
+  recordManualCorrectionAudit,
+  setReferenceRowStale,
+  setMmfActive,
+  setBankActive,
+  setOpportunityActive,
+  mmfRateHistoryFor,
+  bankRateHistoryFor,
+  cbkRateHistoryFor,
+  setSourceActive,
+  getSource,
 } from "./db";
 import { OPPORTUNITY_SEED } from "./opportunitySeed";
 import {
@@ -5075,8 +5087,8 @@ export const appRouter = router({
         updatedAt: f.updatedAt,
       }));
     }),
-    /** Add a new MMF fund. */
-    add: protectedProcedure
+    /** Add a new MMF fund (manager-only, source-backed, audited). */
+    add: adminProcedure
       .input(z.object({
         fundName: z.string().min(1).max(200),
         company: z.string().min(1).max(200),
@@ -5086,9 +5098,9 @@ export const appRouter = router({
         minInvestment: z.number().min(0).optional(),
         aumMillions: z.number().min(0).optional(),
         asOfDate: z.string().optional(),
-        source: z.string().max(500).optional(),
+        source: z.string().min(1).max(500),
       }))
-      .mutation(async ({ input }) => {
+      .mutation(async ({ ctx, input }) => {
         await addMmfFund({
           fundName: input.fundName,
           company: input.company,
@@ -5101,11 +5113,19 @@ export const appRouter = router({
           source: input.source,
           isActive: true,
         });
+        await recordManualCorrectionAudit({
+          catalogue: "mmf",
+          targetRef: input.fundName,
+          instrumentName: input.fundName,
+          changeKind: "create",
+          source: input.source,
+          by: ctx.user.name ?? ctx.user.email ?? "Manager",
+        });
         return { success: true };
       }),
 
-    /** Update an MMF fund's yield / fee data. */
-    update: protectedProcedure
+    /** Update an MMF fund's yield / fee data (manager-only, source-backed, audited). */
+    update: adminProcedure
       .input(z.object({
         id: z.number().int().positive(),
         fundName: z.string().min(1).max(200).optional(),
@@ -5116,9 +5136,9 @@ export const appRouter = router({
         minInvestment: z.number().min(0).optional(),
         aumMillions: z.number().min(0).optional(),
         asOfDate: z.string().optional(),
-        source: z.string().max(500).optional(),
+        source: z.string().min(1).max(500),
       }))
-      .mutation(async ({ input }) => {
+      .mutation(async ({ ctx, input }) => {
         const { id, ...rest } = input;
         await updateMmfFund(id, {
           ...(rest.fundName !== undefined && { fundName: rest.fundName }),
@@ -5131,11 +5151,21 @@ export const appRouter = router({
           ...(rest.asOfDate !== undefined && { asOfDate: new Date(rest.asOfDate) }),
           ...(rest.source !== undefined && { source: rest.source }),
         });
+        await recordManualCorrectionAudit({
+          catalogue: "mmf",
+          targetRef: rest.fundName ?? String(id),
+          instrumentName: rest.fundName ?? null,
+          changeKind: "edit",
+          field: rest.ear !== undefined ? "ear" : undefined,
+          newValue: rest.ear != null ? String(rest.ear) : undefined,
+          source: rest.source,
+          by: ctx.user.name ?? ctx.user.email ?? "Manager",
+        });
         return { success: true };
       }),
 
-    /** Deactivate (soft-delete) an MMF fund. */
-    deactivate: protectedProcedure
+    /** Deactivate (soft-delete) an MMF fund (manager-only). */
+    deactivate: adminProcedure
       .input(z.object({ id: z.number().int().positive() }))
       .mutation(async ({ input }) => {
         await deactivateMmfFund(input.id);
@@ -6280,7 +6310,8 @@ export const appRouter = router({
         isActive: Boolean(r.isActive),
       }));
     }),
-    add: protectedProcedure
+    // Governed reference correction (manager-only, source required, audited).
+    add: adminProcedure
       .input(z.object({
         bankName: z.string().min(1).max(200),
         instrumentType: z.enum(["call_deposit", "fixed_deposit", "ordinary_savings", "target_savings", "tiered_savings"]),
@@ -6290,9 +6321,9 @@ export const appRouter = router({
         isNegotiable: z.boolean().default(true),
         notes: z.string().max(2000).optional(),
         asOfDate: z.string().optional(),
-        source: z.string().max(500).optional(),
+        source: z.string().min(1).max(500),
       }))
-      .mutation(async ({ input }) => {
+      .mutation(async ({ ctx, input }) => {
         await addBankInstrument({
           bankName: input.bankName,
           instrumentType: input.instrumentType,
@@ -6304,9 +6335,17 @@ export const appRouter = router({
           asOfDate: input.asOfDate ? new Date(input.asOfDate) : undefined,
           source: input.source,
         });
+        await recordManualCorrectionAudit({
+          catalogue: "bank",
+          targetRef: input.bankName,
+          instrumentName: input.bankName,
+          changeKind: "create",
+          source: input.source,
+          by: ctx.user.name ?? ctx.user.email ?? "Manager",
+        });
         return { success: true };
       }),
-    update: protectedProcedure
+    update: adminProcedure
       .input(z.object({
         id: z.number().int().positive(),
         bankName: z.string().min(1).max(200).optional(),
@@ -6317,9 +6356,9 @@ export const appRouter = router({
         isNegotiable: z.boolean().optional(),
         notes: z.string().max(2000).optional(),
         asOfDate: z.string().optional(),
-        source: z.string().max(500).optional(),
+        source: z.string().min(1).max(500),
       }))
-      .mutation(async ({ input }) => {
+      .mutation(async ({ ctx, input }) => {
         const { id, ...rest } = input;
         await updateBankInstrument(id, {
           ...(rest.bankName !== undefined && { bankName: rest.bankName }),
@@ -6332,9 +6371,21 @@ export const appRouter = router({
           ...(rest.asOfDate !== undefined && { asOfDate: new Date(rest.asOfDate) }),
           ...(rest.source !== undefined && { source: rest.source }),
         });
+        await recordManualCorrectionAudit({
+          catalogue: "bank",
+          targetRef: rest.bankName ?? String(id),
+          instrumentName: rest.bankName ?? null,
+          changeKind: "edit",
+          field: rest.indicativeRate !== undefined ? "indicativeRate" : undefined,
+          newValue: rest.indicativeRate != null ? String(rest.indicativeRate) : undefined,
+          source: rest.source,
+          by: ctx.user.name ?? ctx.user.email ?? "Manager",
+        });
         return { success: true };
       }),
-    remove: protectedProcedure
+    // Hard delete is disabled for live reference data. Managers deactivate/archive
+    // via catalogue.setActive (audited); this is kept only for Test-mode cleanup.
+    remove: adminProcedure
       .input(z.object({ id: z.number().int().positive() }))
       .mutation(async ({ input }) => {
         await deleteBankInstrument(input.id);
@@ -7282,6 +7333,16 @@ export const appRouter = router({
         return { ok: true };
       }),
 
+    // Round 83 — deactivate/reactivate a source (kept for history, hidden from due-list).
+    setSourceActive: adminProcedure
+      .input(z.object({ key: z.string().min(1).max(64), active: z.boolean() }))
+      .mutation(async ({ input }) => {
+        const existing = await getSource(input.key);
+        if (!existing) throw new TRPCError({ code: "NOT_FOUND", message: "Source not found." });
+        await setSourceActive(input.key, input.active);
+        return { ok: true };
+      }),
+
     // The daily Research Desk digest: how many changes await review, which sources
     // are due for a refresh, and how many ingestion conflicts are open. Read-only
     // aggregation the desk header + a scheduled owner-notification can both use.
@@ -7492,6 +7553,111 @@ export const appRouter = router({
       const instruments = await listFederatedUniverse();
       return { instruments };
     }),
+  }),
+
+  // ─── Round 83: catalogue governance (manager edit/deactivate/mark-stale) ───
+  // Every mutation here is a governed catalogue lifecycle action that writes an
+  // immutable audit entry. Deactivation hides a row from the screener but keeps its
+  // history; "stale" flags a row whose figures can no longer be trusted. Rate
+  // history is read-only and date-effective.
+  catalogue: router({
+    // Lifecycle meta for a whole catalogue (stale/archived badges), keyed by targetRef.
+    rowMeta: adminProcedure
+      .input(z.object({ catalogue: z.enum(["mmf", "bank", "cbk", "market_asset"]) }))
+      .query(async ({ input }) => {
+        const meta = await listReferenceRowMeta(input.catalogue as ReferenceCatalogue);
+        return { meta };
+      }),
+
+    // Read one row's meta (for a detail drawer).
+    rowMetaOne: adminProcedure
+      .input(z.object({ catalogue: z.enum(["mmf", "bank", "cbk", "market_asset"]), targetRef: z.string().min(1).max(200) }))
+      .query(async ({ input }) => {
+        const meta = await getReferenceRowMeta(input.catalogue as ReferenceCatalogue, input.targetRef);
+        return { meta };
+      }),
+
+    // Deactivate / reactivate a catalogue row. Manager action, audited.
+    setActive: adminProcedure
+      .input(
+        z.object({
+          catalogue: z.enum(["mmf", "bank", "cbk", "market_asset"]),
+          targetRef: z.string().min(1).max(200),
+          active: z.boolean(),
+          reason: z.string().max(300).optional(),
+        }),
+      )
+      .mutation(async ({ ctx, input }) => {
+        const by = ctx.user.name ?? ctx.user.email ?? "You";
+        let ok = false;
+        if (input.catalogue === "mmf") ok = await setMmfActive(input.targetRef, input.active, by, input.reason ?? null);
+        else if (input.catalogue === "bank") ok = await setBankActive(input.targetRef, input.active, by, input.reason ?? null);
+        else ok = await setOpportunityActive(input.targetRef, input.active, by, input.reason ?? null);
+        if (!ok) throw new TRPCError({ code: "NOT_FOUND", message: "Catalogue row not found." });
+        return { ok: true };
+      }),
+
+    // Mark a catalogue row stale (or clear the flag). Manager action, audited.
+    setStale: adminProcedure
+      .input(
+        z.object({
+          catalogue: z.enum(["mmf", "bank", "cbk", "market_asset"]),
+          targetRef: z.string().min(1).max(200),
+          instrumentName: z.string().max(200).optional(),
+          stale: z.boolean(),
+          reason: z.string().max(300).optional(),
+        }),
+      )
+      .mutation(async ({ ctx, input }) => {
+        const by = ctx.user.name ?? ctx.user.email ?? "You";
+        await setReferenceRowStale({
+          catalogue: input.catalogue as ReferenceCatalogue,
+          targetRef: input.targetRef,
+          instrumentName: input.instrumentName ?? null,
+          stale: input.stale,
+          reason: input.reason ?? null,
+          by,
+        });
+        return { ok: true };
+      }),
+
+    // Per-row audit history ("View audit history" on a catalogue row).
+    auditFor: adminProcedure
+      .input(
+        z.object({
+          catalogue: z.enum(["mmf", "bank", "cbk", "market_asset"]),
+          targetRef: z.string().min(1).max(200),
+          limit: z.number().int().min(1).max(100).optional(),
+        }),
+      )
+      .query(async ({ input }) => {
+        const entries = await listCatalogueAudit({
+          catalogue: input.catalogue as ReferenceCatalogue,
+          targetRef: input.targetRef,
+          limit: input.limit ?? 50,
+        });
+        return { entries };
+      }),
+
+    // Date-effective rate history for one row (for a sparkline / history drawer).
+    rateHistory: adminProcedure
+      .input(
+        z.object({
+          catalogue: z.enum(["mmf", "bank", "cbk"]),
+          ref: z.string().min(1).max(200),
+          limit: z.number().int().min(1).max(120).optional(),
+        }),
+      )
+      .query(async ({ input }) => {
+        const limit = input.limit ?? 60;
+        const points =
+          input.catalogue === "mmf"
+            ? await mmfRateHistoryFor(input.ref, limit)
+            : input.catalogue === "bank"
+              ? await bankRateHistoryFor(input.ref, limit)
+              : await cbkRateHistoryFor(input.ref, limit);
+        return { points };
+      }),
   }),
 });
 export type AppRouter = typeof appRouter;

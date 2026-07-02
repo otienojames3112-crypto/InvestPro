@@ -60,6 +60,7 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { CatalogueRowControls } from "@/components/CatalogueRowControls";
+import { CatalogueSourceReviewButton } from "@/components/CatalogueSourceReview";
 
 type BankInstrumentType =
   | "call_deposit"
@@ -283,9 +284,12 @@ export default function BankInstruments({ embedded = false }: { embedded?: boole
             </p>
           </div>
           {isManager && (
-            <Button onClick={openAdd} className="shrink-0">
-              <Plus className="w-4 h-4 mr-2" /> Add / correct product
-            </Button>
+            <div className="flex items-center gap-2 flex-wrap shrink-0">
+              <CatalogueSourceReviewButton catalogue="bank" isManager={isManager} size="default" />
+              <Button onClick={openAdd}>
+                <Plus className="w-4 h-4 mr-2" /> Add / correct product
+              </Button>
+            </div>
           )}
         </div>
 

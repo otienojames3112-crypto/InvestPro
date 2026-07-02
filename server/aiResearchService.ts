@@ -308,6 +308,101 @@ export function findingsToRows(taskId: number, drafts: ResearchFindingDraft[], t
   }));
 }
 
+/* ── Round 89: per-catalogue "Review source with AI" prompt builders ─────────
+ *
+ * These are PURE (network-free) and unit-tested. The per-catalogue review reuses
+ * the SAME engine (`runResearchQuestion`) and the SAME findings output — the only
+ * difference is (a) the question text tells the model to COMPARE the attached
+ * source against the manager's CURRENT rows and (b) which figures matter for that
+ * catalogue. Nothing here writes anything: findings still go to the review queue.
+ */
+
+/** A minimal shape of a current catalogue row, for the comparison snapshot. */
+export type CatalogueRowSnapshot = Record<string, string | number | null | undefined>;
+
+/**
+ * The catalogue-specific extraction instruction: which figures the model should look
+ * for in the source and how to label them, framed as a NEUTRAL fact-extraction task
+ * (never a ranking). Kept in lockstep with the reference catalogues' figure keys so a
+ * drafted finding maps cleanly onto the pending-update figures.
+ */
+export function catalogueReviewInstruction(catalogue: ReferenceCatalogue): string {
+  switch (catalogue) {
+    case "mmf":
+      return [
+        "You are reviewing a source (a Serrari-style benchmark table, a fund factsheet, a screenshot, a PDF or a URL) for the manager's MONEY MARKET FUND catalogue.",
+        "For every MMF the source mentions, extract, verbatim with units: the published EAR (effective annual rate, net of fee) as `ear`; the gross/quoted yield as `grossYield`; the annual management fee as `managementFee`; the minimum investment (KES) as `minInvestment`; and AUM in KES millions as `aumMillions`. Keep `ear` and `grossYield` as the DIFFERENT numbers the source prints — never convert one into the other.",
+        "Compare each against the CURRENT catalogue rows below. Emit a finding when: a fund is NEW (not in the current rows), any figure CHANGED versus the current row, or the source/as-of date is newer. If a current fund is clearly absent from a comprehensive source (e.g. delisted), note it in that finding's warnings as a possible STALE row — do not invent a removal figure.",
+      ].join("\n");
+    case "bank":
+      return [
+        "You are reviewing a source for the manager's BANK PRODUCT catalogue (call/fixed/savings deposits).",
+        "For every bank product the source mentions, extract, verbatim with units: the indicative rate (% p.a.) as `indicativeRate`; the minimum amount (KES) as `minAmount`; the typical tenor / notice period as `typicalTenor`; and whether the rate is negotiable as `isNegotiable` (\"true\"/\"false\"). Capture any early-break / liquidity terms in the finding's rawExcerpt. Bank rates are INDICATIVE and usually quoted GROSS of the 15% WHT — say so in warnings when the source does.",
+        "Compare each against the CURRENT catalogue rows below. Emit a finding when a product is NEW, a rate/minimum/tenor/negotiable flag/liquidity term CHANGED, or the as-of date is newer.",
+      ].join("\n");
+    case "cbk":
+      return [
+        "You are reviewing a CBK / Treasury source: Treasury bills on offer, weekly auction results, or a bond auction/re-opening notice.",
+        "For Treasury BILLS, emit ONE finding per tenor actually present — the 91-day, 182-day and 364-day bills are SEPARATE instruments. For each, extract verbatim: the annualised rate as `yieldPct`; the previous auction average rate as `prevAvgRate` when shown; the tenor in days as `tenorDays` (91/182/364); the issue number as `issueNumber`; the auction date as `auctionDate` and the value/settlement date as `valueDate`. For BONDS, extract the coupon as `coupon`, the yield-to-maturity as `yieldPct`, and the tenor.",
+        "Name each bill finding clearly by tenor (e.g. \"91-Day Treasury Bill\"). Compare against the CURRENT rows below and emit a finding when a tenor's rate/issue/dates changed or a new issue is on offer.",
+      ].join("\n");
+    case "market_asset":
+      return [
+        "You are reviewing a market source for the manager's MARKET ASSETS catalogue: an NSE price board, a REIT factsheet, an ETF factsheet, or an offshore-fund factsheet.",
+        "For every instrument the source mentions, extract, verbatim with units: the last price / NAV as `lastPrice`; the headline yield or distribution as `yieldPct` (and what it represents as `yieldKind`); the trailing 12-month return as `trailingReturnPct`; and the expense ratio as `expenseRatioPct` where shown. Trailing returns are PAST performance — say so in warnings.",
+        "Compare each against the CURRENT rows below and emit a finding when an instrument is NEW, a price/NAV/yield/trailing return CHANGED, or the as-of date is newer.",
+      ].join("\n");
+  }
+}
+
+/**
+ * Render the manager's current catalogue rows into a compact, readable snapshot the
+ * model can diff the source against. Deliberately small (name + the catalogue's key
+ * figures + source/as-of) so it fits comfortably in the prompt for a large catalogue.
+ * Returns a friendly placeholder when the catalogue is currently empty.
+ */
+export function summariseCatalogueRows(
+  catalogue: ReferenceCatalogue,
+  rows: CatalogueRowSnapshot[],
+): string {
+  if (!rows.length) return "(The catalogue is currently EMPTY — every instrument in the source is a candidate NEW row.)";
+  const fmt = (v: string | number | null | undefined) =>
+    v === null || v === undefined || v === "" ? "—" : String(v);
+  const lines = rows.slice(0, 200).map((r, i) => {
+    switch (catalogue) {
+      case "mmf":
+        return `${i + 1}. ${fmt(r.fundName)} (${fmt(r.company)}) — EAR ${fmt(r.ear)}%, gross ${fmt(r.grossYield)}%, fee ${fmt(r.managementFee)}%, min KES ${fmt(r.minInvestment)}, AUM ${fmt(r.aumMillions)}m; as-of ${fmt(r.asOfDate)}; src ${fmt(r.source)}`;
+      case "bank":
+        return `${i + 1}. ${fmt(r.bankName)} — ${fmt(r.instrumentType)}, rate ${fmt(r.indicativeRate)}%, min KES ${fmt(r.minAmount)}, tenor ${fmt(r.typicalTenor)}, negotiable ${fmt(r.isNegotiable)}; as-of ${fmt(r.asOfDate)}; src ${fmt(r.source)}`;
+      case "cbk":
+        return `${i + 1}. ${fmt(r.name)} (${fmt(r.assetClass)}) — yield ${fmt(r.yieldPct)}%, tenor ${fmt(r.tenorYears)}y; as-of ${fmt(r.dataAsOf)}; src ${fmt(r.dataSource)}`;
+      case "market_asset":
+        return `${i + 1}. ${fmt(r.name)} (${fmt(r.assetClass)}) — price ${fmt(r.lastPrice)}, yield ${fmt(r.yieldPct)}%, trailing ${fmt(r.trailingReturnPct)}%; as-of ${fmt(r.dataAsOf)}; src ${fmt(r.dataSource)}`;
+    }
+  });
+  const more = rows.length > 200 ? `\n… and ${rows.length - 200} more current rows (not shown).` : "";
+  return lines.join("\n") + more;
+}
+
+/**
+ * Build the full "review this source against my catalogue" QUESTION handed to
+ * `runResearchQuestion`. The attached source is supplied separately (as the engine's
+ * `source`), so this only carries the instruction + the current-rows snapshot.
+ */
+export function buildCatalogueReviewQuestion(
+  catalogue: ReferenceCatalogue,
+  rows: CatalogueRowSnapshot[],
+): string {
+  return [
+    catalogueReviewInstruction(catalogue),
+    "",
+    "CURRENT CATALOGUE ROWS (compare the attached source against these — do NOT restate a row that is unchanged):",
+    summariseCatalogueRows(catalogue, rows),
+    "",
+    "Return a concise briefing of what the source says versus the current rows, plus one structured FINDING per proposed change (new row, changed figure, or newer source/as-of). Every finding is a PROPOSAL the manager will review and approve — never a catalogue write, never a recommendation.",
+  ].join("\n");
+}
+
 /* ── LLM-calling wrapper (thin) ───────────────────────────────────────────── */
 
 /**

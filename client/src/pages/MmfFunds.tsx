@@ -8,6 +8,7 @@ import { usePortfolio } from "@/contexts/PortfolioContext";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { useRefFocus } from "@/hooks/useRefFocus";
 import { CatalogueRowControls } from "@/components/CatalogueRowControls";
+import { CatalogueSourceReviewButton } from "@/components/CatalogueSourceReview";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -369,9 +370,12 @@ export default function MmfFunds({ embedded = false }: { embedded?: boolean } = 
           </p>
         </div>
         {isManager && (
-          <Button onClick={() => setAddOpen(true)} size="sm">
-            <Plus className="w-4 h-4 mr-1" /> Add Fund
-          </Button>
+          <div className="flex items-center gap-2 flex-wrap">
+            <CatalogueSourceReviewButton catalogue="mmf" isManager={isManager} />
+            <Button onClick={() => setAddOpen(true)} size="sm">
+              <Plus className="w-4 h-4 mr-1" /> Add Fund
+            </Button>
+          </div>
         )}
       </div>
 

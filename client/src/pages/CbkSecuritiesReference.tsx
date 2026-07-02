@@ -42,6 +42,7 @@ import {
 import { profileFor, type AssetClass } from "@shared/assetModel";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { CatalogueRowControls } from "@/components/CatalogueRowControls";
+import { CatalogueSourceReviewButton } from "@/components/CatalogueSourceReview";
 import { humanCheckedCount, figureCount, type FieldProvenanceMap } from "@shared/provenance";
 import { rateStaleness } from "@/lib/rateStaleness";
 import { dashboardHref } from "@shared/navigation";
@@ -223,9 +224,12 @@ export default function CbkSecuritiesReference({ embedded = false }: { embedded?
               .
             </p>
           </div>
-          <Badge variant="outline" className="text-xs px-2.5 py-1 gap-1.5">
-            <Info className="w-3 h-3" /> Information only
-          </Badge>
+          <div className="flex items-center gap-2 flex-wrap">
+            <CatalogueSourceReviewButton catalogue="cbk" isManager={isManager} />
+            <Badge variant="outline" className="text-xs px-2.5 py-1 gap-1.5">
+              <Info className="w-3 h-3" /> Information only
+            </Badge>
+          </div>
         </div>
 
         {/* Persistent disclaimer */}

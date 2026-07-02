@@ -211,8 +211,10 @@ import {
 import {
   runResearchQuestion,
   findingsToRows,
+  buildCatalogueReviewQuestion,
   type ResearchScope,
   type ResearchSource,
+  type CatalogueRowSnapshot,
 } from "./aiResearchService";
 import { normaliseAssetClass } from "../shared/assetModel";
 import { runAdapter } from "./ingestion/runner";
@@ -7729,6 +7731,166 @@ export const appRouter = router({
           throw new TRPCError({ code: "BAD_REQUEST", message: result.error });
         }
         return { newFindingId: result.newFindingId, pendingUpdateId: result.updateId };
+      }),
+
+    // Round 89 — per-catalogue "Review source with AI". A manager attaches a source
+    // (Serrari benchmark / factsheet / screenshot / PDF / URL) FROM a specific
+    // catalogue page; the engine compares it against that catalogue's CURRENT rows
+    // and proposes create/edit/stale FINDINGS. It reuses the exact same ask engine +
+    // enquiry thread + findings path as `ask`, so:
+    //   • it writes NOTHING to any catalogue (findings are drafts the manager triages
+    //     into the pending queue via `draftFromFinding`, then approves on the desk), and
+    //   • it never ranks or recommends (same scrubbed briefing + findings shape).
+    // The only difference from `ask` is the QUESTION: a catalogue-specific extraction
+    // instruction plus a compact snapshot of the manager's current rows to diff against.
+    reviewCatalogueSource: adminProcedure
+      .input(
+        z.object({
+          catalogue: z.enum(["mmf", "bank", "cbk", "market_asset"]),
+          // The attached source — the SAME unified union the Ask-AI box accepts.
+          source: z.discriminatedUnion("kind", [
+            z.object({ kind: z.literal("url"), url: z.string().url().max(500) }),
+            z.object({ kind: z.literal("text"), text: z.string().min(1).max(40000) }),
+            z.object({ kind: z.literal("pdf"), fileKey: z.string().min(1).max(300) }),
+            z.object({ kind: z.literal("image"), fileKey: z.string().min(1).max(300) }),
+          ]),
+          sourceLabel: z.string().max(200).optional(),
+        }),
+      )
+      .mutation(async ({ ctx, input }) => {
+        const openId = ctx.user.openId ?? String(ctx.user.id);
+        const catalogue = input.catalogue as ReferenceCatalogue;
+
+        // Load the CURRENT rows for this catalogue as the comparison snapshot. Each
+        // catalogue reads its own live table; CBK/market share the opportunity table
+        // and are filtered by asset class so a bank source can't diff against equities.
+        let snapshot: CatalogueRowSnapshot[] = [];
+        if (catalogue === "mmf") {
+          const funds = await getMmfFunds();
+          snapshot = funds.map((f) => ({
+            fundName: f.fundName,
+            company: f.company,
+            ear: f.ear,
+            grossYield: f.grossYield,
+            managementFee: f.managementFee,
+            minInvestment: f.minInvestment,
+            aumMillions: f.aumMillions,
+            asOfDate: f.asOfDate ? String(f.asOfDate) : null,
+            source: f.source,
+          }));
+        } else if (catalogue === "bank") {
+          const banks = await getBankInstruments();
+          snapshot = banks.map((b) => ({
+            bankName: b.bankName,
+            instrumentType: b.instrumentType,
+            indicativeRate: b.indicativeRate,
+            minAmount: b.minAmount,
+            typicalTenor: b.typicalTenor,
+            isNegotiable: b.isNegotiable ? "true" : "false",
+            asOfDate: b.asOfDate ? String(b.asOfDate) : null,
+            source: b.source,
+          }));
+        } else {
+          const govClasses = ["gov_discount", "gov_coupon"];
+          const marketClasses = ["equity", "reit", "offshore_fund", "alt"];
+          const want = catalogue === "cbk" ? govClasses : marketClasses;
+          const opps = (await listOpportunities()).filter((o) => want.includes(o.assetClass));
+          snapshot = opps.map((o) => ({
+            name: o.name,
+            assetClass: o.assetClass,
+            yieldPct: o.yieldPct,
+            lastPrice: o.lastPrice,
+            trailingReturnPct: o.trailingReturnPct,
+            tenorYears: o.tenorYears,
+            dataAsOf: o.dataAsOf ? String(o.dataAsOf) : null,
+            dataSource: o.dataSource,
+          }));
+        }
+
+        const question = buildCatalogueReviewQuestion(catalogue, snapshot);
+        const scopeLabel: Record<ReferenceCatalogue, string> = {
+          mmf: "MMF Market",
+          bank: "Bank Product Catalogue",
+          cbk: "CBK Securities Reference",
+          market_asset: "Market Assets Reference",
+        };
+
+        // Open a review THREAD so the proposals group under one enquiry (reuses the
+        // Round 88 thread machinery). The thread's scope IS the catalogue.
+        const threadId = await createResearchThread({
+          createdByOpenId: openId,
+          createdByName: ctx.user.name ?? null,
+          title: `Review ${scopeLabel[catalogue]} source with AI`,
+          scope: catalogue,
+        });
+        const taskId = await createResearchTask({
+          createdByOpenId: openId,
+          createdByName: ctx.user.name ?? null,
+          prompt: `Catalogue review: ${scopeLabel[catalogue]}${input.sourceLabel ? ` — ${input.sourceLabel}` : ""}`,
+          scope: catalogue,
+          status: "running",
+          threadId: threadId ?? undefined,
+        });
+        if (!taskId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Could not create the review." });
+
+        // Persist the manager's turn (with the attached source) before the AI answers.
+        if (threadId != null) {
+          const sref =
+            input.source.kind === "url"
+              ? input.source.url
+              : input.source.kind === "text"
+                ? input.source.text.slice(0, 700)
+                : input.source.fileKey;
+          await insertResearchMessage({
+            threadId,
+            role: "user",
+            content: `Review this ${scopeLabel[catalogue]} source against the current catalogue.`,
+            sourceKind: input.source.kind,
+            sourceRef: sref,
+            sourceLabel: input.sourceLabel ?? undefined,
+          });
+        }
+
+        try {
+          // Resolve the unified source exactly like `ask` does.
+          let resolvedSource: ResearchSource;
+          if (input.source.kind === "url") {
+            resolvedSource = { kind: "url", url: input.source.url };
+          } else if (input.source.kind === "text") {
+            resolvedSource = { kind: "text", text: input.source.text };
+          } else if (input.source.kind === "pdf") {
+            resolvedSource = { kind: "pdf", fileUrl: await storageGetSignedUrl(input.source.fileKey) };
+          } else {
+            resolvedSource = { kind: "image", imageUrl: await storageGetSignedUrl(input.source.fileKey) };
+          }
+          const res = await runResearchQuestion({
+            question,
+            scope: catalogue as ResearchScope,
+            source: resolvedSource,
+            sourceLabel: input.sourceLabel ?? null,
+          });
+          const rows = findingsToRows(taskId, res.findings, threadId);
+          await insertResearchFindings(rows);
+          await completeResearchTask(taskId, {
+            answerSummary: res.answer.slice(0, 4000),
+            aiModel: res.model,
+            findingCount: rows.length,
+          });
+          if (threadId != null) {
+            await insertResearchMessage({ threadId, role: "assistant", content: res.answer.slice(0, 8000), taskId });
+            await touchResearchThread(threadId);
+          }
+          const findings = await listResearchFindings({ taskId });
+          return { taskId, threadId, catalogue, answer: res.answer, model: res.model, findings };
+        } catch (err) {
+          await completeResearchTask(taskId, {
+            error: (err instanceof Error ? err.message : String(err)).slice(0, 500),
+          });
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `The review engine could not read this source: ${err instanceof Error ? err.message : String(err)}`,
+          });
+        }
       }),
   }),
 

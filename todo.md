@@ -1649,4 +1649,13 @@
 - [x] AskAI.tsx: threaded conversation view; "Ask a follow-up" with optional per-follow-up source; findings grouped for the thread; correct-a-figure action with versioned diff; thread-based history
 - [x] Tests: prompt/context assembly, per-follow-up source, correctFinding versioning+audit+drafted pending, factual-sort-not-advice (server/round88ThreadedResearch.test.ts, 17 tests)
 - [x] Full suite + tsc green (1545 tests pass, tsc clean); verify UI; checkpoint
+- [x] Package full codebase ZIP and deliver
+
+## Round 89 — Per-catalogue "Review source with AI" (reuse Research Desk pipeline)
+- [x] Backend: catalogue-scoped AI source review (research.reviewCatalogueSource) — loads current catalogue rows as comparison context, proposes create/edit/stale findings tagged to the catalogue, reuses ask engine + findings + enqueue (no auto-publish)
+- [x] Per-catalogue extraction hints (catalogueReviewInstruction): MMF (EAR/gross yield/mgmt fee/min invest/AUM/source/as-of/stale); Bank (new product/rate/min amount/tenor+notice/negotiable/liquidity+early-break); CBK (91/182/364 tenor, issue number, auction date, value date, rate/prev avg rate, source URL, as-of); Market (price/NAV/yield/trailing return/source/as-of/new row)
+- [x] Frontend: manager-only "Review <X> source with AI" button + CatalogueSourceReview dialog on MMF, Bank, CBK, Market Assets pages (no new page); shows proposed findings; routes to Review Queue (verified in preview)
+- [x] Post-approval portfolio-impact note: inherited via the shared draftFromFinding → queue → approve path (impactOf → describePortfolioImpact) — primary MMF rate / bank product / CBK yield future-only, historical actuals never restated
+- [x] Tests (server/round89CatalogueReview.test.ts, 17 tests): MMF review proposes-not-publishes; approval updates MMF Market + rate history; bank review proposes; CBK review extracts 91/182/364; unapproved updates do not affect Dashboard/Ledger/Accrual/Tax/Reconciliation
+- [x] Full suite + tsc green (1562 tests pass, tsc clean); verified UI; checkpoint
 - [ ] Package full codebase ZIP and deliver

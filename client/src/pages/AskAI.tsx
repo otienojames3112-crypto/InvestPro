@@ -89,7 +89,7 @@ function fmtFields(fields: Record<string, unknown> | null | undefined): { key: s
 
 /* ── Finding type (now carries Round 88 versioning fields) ──────────────────── */
 
-type Finding = {
+export type Finding = {
   id: number;
   instrumentName: string;
   issuer: string | null;
@@ -249,7 +249,7 @@ function CorrectFigureDialog({
 
 /* ── A single finding card (draft / dismiss / correct) ──────────────────────── */
 
-function FindingCard({ finding, onChanged }: { finding: Finding; onChanged: () => void }) {
+export function FindingCard({ finding, onChanged }: { finding: Finding; onChanged: () => void }) {
   const [correctOpen, setCorrectOpen] = useState(false);
   const draft = trpc.research.draftFromFinding.useMutation({
     onSuccess: () => {
@@ -444,7 +444,7 @@ function imageMimeFor(file: File): "image/png" | "image/jpeg" | "image/webp" {
   return "image/png";
 }
 
-type AskSource =
+export type AskSource =
   | { kind: "url"; url: string }
   | { kind: "text"; text: string }
   | { kind: "pdf"; fileKey: string }
@@ -456,7 +456,7 @@ type AskSource =
  * null when nothing is attached). Reused by both the opening box and the follow-up
  * composer so every turn can carry its OWN source.
  */
-function useSourceAttachment() {
+export function useSourceAttachment() {
   const upload = trpc.opportunities.aiUploadDocument.useMutation();
   const [show, setShow] = useState(false);
   const [mode, setMode] = useState<SourceMode>("url");

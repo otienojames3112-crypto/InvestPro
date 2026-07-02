@@ -38,7 +38,14 @@ import {
 import { InfoHint } from "@/components/InfoHint";
 import { ASSET_PROFILES } from "@shared/assetModel";
 import type { AssetClass } from "@shared/assetModel";
-import { promotionTargetForAssetClass, type PromotionTarget } from "@shared/researchPipeline";
+import {
+  promotionTargetForAssetClass,
+  type PromotionTarget,
+  catalogueForAssetClass,
+  catalogueLabel,
+  type ReferenceCatalogue,
+} from "@shared/researchPipeline";
+import { useLocation } from "wouter";
 import { formatRelativeTime } from "@/lib/format";
 import AiIntake from "./AiIntake";
 import AiReview from "./AiReview";
@@ -282,8 +289,25 @@ function ApproveDialog({
 
 /* ── Pending update review queue ───────────────────────────────────────────── */
 
+/** Map a reference catalogue to its Reference Catalogues sub-tab id (shared with
+ *  RecentlyApproved). Building the deep-link here lets an approval jump straight to
+ *  the freshly-published row, which the catalogue page focuses + highlights. */
+const CATALOGUE_TAB_ID: Record<ReferenceCatalogue, string> = {
+  mmf: "mmf-market",
+  bank: "bank-catalogue",
+  cbk: "cbk-securities",
+  market_asset: "market-assets",
+};
+
+function publishedRowHref(catalogue: ReferenceCatalogue, targetRef: string | null): string {
+  const params = new URLSearchParams({ tab: "reference-catalogues", cat: CATALOGUE_TAB_ID[catalogue] });
+  if (targetRef) params.set("ref", targetRef);
+  return `/research?${params.toString()}`;
+}
+
 function PendingQueue() {
   const utils = trpc.useUtils();
+  const [, navigate] = useLocation();
   const { portfolioId } = usePortfolio();
   const { data, isLoading } = trpc.researchPipeline.listUpdates.useQuery({ status: "pending" });
   const [rejectId, setRejectId] = useState<number | null>(null);
@@ -303,11 +327,24 @@ function PendingQueue() {
           );
           return;
         }
-        toast.success(
-          res.promotedRef
-            ? `Approved — promoted into the live catalogue as "${res.promotedRef}".`
-            : "Approved and promoted.",
-        );
+        // Item 5: name the exact catalogue it was published into, and offer a one-click
+        // jump to the freshly-published row (deep-link ?ref= focuses + highlights it).
+        // The catalogue is derived from the promoted update's own asset class.
+        void vars;
+        const promotedAc = res.update?.assetClass as AssetClass | undefined;
+        const cat = promotedAc ? catalogueForAssetClass(promotedAc) : null;
+        const label = cat ? catalogueLabel(cat) : "the live catalogue";
+        if (res.promotedRef && cat) {
+          const href = publishedRowHref(cat, res.promotedRef);
+          toast.success(`Approved and published to ${label} as \u201c${res.promotedRef}\u201d.`, {
+            action: {
+              label: "Open published row",
+              onClick: () => navigate(href),
+            },
+          });
+        } else {
+          toast.success(`Approved and published to ${label}.`);
+        }
       } else {
         toast.success("Rejected — no catalogue change made.");
       }

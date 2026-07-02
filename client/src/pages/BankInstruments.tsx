@@ -3,6 +3,7 @@ import { AppShell } from "@/components/AppShell";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { useLocation } from "wouter";
+import { useRefFocus } from "@/hooks/useRefFocus";
 import {
   Card,
   CardContent,
@@ -143,8 +144,10 @@ export default function BankInstruments({ embedded = false }: { embedded?: boole
     return m;
   }, [metaData]);
 
-  // Filters
-  const [search, setSearch] = useState("");
+  const refFocus = useRefFocus();
+
+  // Filters (search prefilled from a deep-link ?ref= so the row is easy to spot)
+  const [search, setSearch] = useState(() => refFocus.focusRef ?? "");
   const [typeFilter, setTypeFilter] = useState<string>("all");
   const [bankFilter, setBankFilter] = useState<string>("all");
   const [rateOnly, setRateOnly] = useState(false);
@@ -360,7 +363,9 @@ export default function BankInstruments({ embedded = false }: { embedded?: boole
                       return (
                         <TableRow
                           key={r.id}
-                          className="cursor-pointer"
+                          ref={refFocus.registerRow(r.bankName)}
+                          data-ref={r.bankName}
+                          className={`cursor-pointer ${refFocus.isFocused(r.bankName) ? "bg-primary/5" : ""}`}
                           onClick={() => setDrawerRow(r)}
                         >
                           <TableCell>

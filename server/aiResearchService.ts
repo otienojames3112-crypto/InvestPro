@@ -25,7 +25,13 @@
 
 import { invokeLLM } from "./_core/llm";
 import { stripVerdictFields } from "../shared/aiIntake";
-import { contentToText, parseJsonLoose, fetchDocumentText, isThinFetch } from "./aiIntakeService";
+import {
+  contentToText,
+  parseJsonLoose,
+  fetchDocumentText,
+  isThinFetch,
+  resolveVisionModel,
+} from "./aiIntakeService";
 import { normaliseAssetClass, type AssetClass } from "../shared/assetModel";
 import { catalogueForAssetClass, type ReferenceCatalogue } from "../shared/researchPipeline";
 
@@ -297,33 +303,136 @@ export function findingsToRows(taskId: number, drafts: ResearchFindingDraft[]) {
  * fetch was thin/JS-rendered); otherwise the model answers from its own knowledge and
  * MUST self-report lower confidence + cite what it relied on.
  */
+/**
+ * A source a manager can attach to a research question. ONE unified union so the
+ * UI does not force a manager to choose "Ask AI" vs "Import a document": whether the
+ * source is a URL, pasted text, a PDF, or a screenshot, it becomes grounding text for
+ * the SAME briefing prompt and the SAME structured-findings output shape.
+ *   - url:   fetched + stripped server-side (thin-fetch nudge preserved as a warning)
+ *   - text:  pasted verbatim
+ *   - pdf:   read directly by the model via a signed file_url, transcribed to text
+ *   - image: read by a vision-capable model via a signed image_url, transcribed to text
+ */
+export type ResearchSource =
+  | { kind: "url"; url: string }
+  | { kind: "text"; text: string }
+  | { kind: "pdf"; fileUrl: string }
+  | { kind: "image"; imageUrl: string };
+
+/**
+ * Transcribe a PDF or screenshot into plain text the briefing prompt can ground on.
+ * The model is instructed to transcribe ONLY what is printed (no inference), mirroring
+ * the librarian's OCR-grade faithfulness. Returns the transcript (possibly empty).
+ * FAILS LOUDLY for an image when no vision-capable model is available, so a manager is
+ * told to paste the text instead of silently getting nothing.
+ */
+export async function transcribeSourceToText(
+  source: { kind: "pdf"; fileUrl: string } | { kind: "image"; imageUrl: string },
+): Promise<{ text: string; model: string | null }> {
+  let modelOverride: string | undefined;
+  if (source.kind === "image") {
+    const visionModel = await resolveVisionModel();
+    if (!visionModel) {
+      throw new Error(
+        "The current AI model can't read images. Use 'Paste text' instead and type the figures you can see.",
+      );
+    }
+    modelOverride = visionModel;
+  }
+
+  const instruction =
+    source.kind === "pdf"
+      ? "Transcribe the readable text and figures from the attached PDF document. Preserve numbers, labels, dates and units verbatim. Do not summarise, infer, or add anything not printed in the document."
+      : "Transcribe ONLY the text and figures visibly printed in the attached image (a screenshot or photo of a quote board, fact sheet, or notice). Preserve numbers, labels, dates and units verbatim. Never infer a value that is not shown.";
+
+  const userContent =
+    source.kind === "pdf"
+      ? ([
+          { type: "text", text: instruction },
+          { type: "file_url", file_url: { url: source.fileUrl, mime_type: "application/pdf" as const } },
+        ] as const)
+      : ([
+          { type: "text", text: instruction },
+          { type: "image_url", image_url: { url: source.imageUrl, detail: "high" as const } },
+        ] as const);
+
+  const res = await invokeLLM({
+    messages: [
+      {
+        role: "system",
+        content:
+          "You are an OCR-grade transcription assistant. Return the readable text content of the attached document as plain text, verbatim. Do not add commentary.",
+      },
+      // Cast: invokeLLM accepts multimodal content arrays at runtime.
+      { role: "user", content: userContent as unknown as string },
+    ],
+    ...(modelOverride ? { model: modelOverride } : {}),
+    temperature: 0,
+  });
+  return { text: contentToText(res.choices?.[0]?.message?.content).trim(), model: res.model ?? null };
+}
+
 export async function runResearchQuestion(args: {
   question: string;
   scope: ResearchScope;
   sourceUrl?: string | null;
   /** Pre-supplied source text (e.g. pasted by the manager, or a source registry doc). */
   sourceText?: string | null;
+  /**
+   * The unified attached source. When present it takes precedence over the legacy
+   * `sourceUrl`/`sourceText` fields (which are kept for backward compatibility).
+   */
+  source?: ResearchSource | null;
+  /** Human label for the attached source, threaded into findings' provenance. */
+  sourceLabel?: string | null;
 }): Promise<ResearchAnswer> {
   const scopeLine =
     args.scope === "any" ? "" : `\nConstrain your findings to this scope: ${args.scope}.`;
 
   let grounding = "";
   const groundingWarnings: string[] = [];
-  if (args.sourceText && args.sourceText.trim() !== "") {
-    grounding = `\n\nGROUND YOUR FINDINGS IN THIS SOURCE DOCUMENT (extract only what it states):\n${args.sourceText.slice(0, 40000)}`;
-  } else if (args.sourceUrl) {
-    try {
-      const text = await fetchDocumentText(args.sourceUrl);
-      if (isThinFetch(text)) {
+
+  // Normalise the legacy fields into the unified union so there is a single code path.
+  let source: ResearchSource | null = args.source ?? null;
+  if (!source) {
+    if (args.sourceText && args.sourceText.trim() !== "") {
+      source = { kind: "text", text: args.sourceText };
+    } else if (args.sourceUrl && args.sourceUrl.trim() !== "") {
+      source = { kind: "url", url: args.sourceUrl };
+    }
+  }
+
+  if (source) {
+    if (source.kind === "text") {
+      grounding = `\n\nGROUND YOUR FINDINGS IN THIS SOURCE DOCUMENT (extract only what it states):\n${source.text.slice(0, 40000)}`;
+    } else if (source.kind === "url") {
+      try {
+        const text = await fetchDocumentText(source.url);
+        if (isThinFetch(text)) {
+          groundingWarnings.push(
+            "The linked page returned very little readable text (it may be JavaScript-rendered), so figures may be incomplete. Consider pasting the text or uploading a screenshot instead.",
+          );
+        }
+        grounding = `\n\nGROUND YOUR FINDINGS IN THIS SOURCE (${source.url}):\n${text}`;
+      } catch (err) {
         groundingWarnings.push(
-          "The linked page returned very little readable text (it may be JavaScript-rendered), so figures may be incomplete.",
+          `Could not fetch the linked source (${err instanceof Error ? err.message : String(err)}); answered from general knowledge instead.`,
         );
       }
-      grounding = `\n\nGROUND YOUR FINDINGS IN THIS SOURCE (${args.sourceUrl}):\n${text}`;
-    } catch (err) {
-      groundingWarnings.push(
-        `Could not fetch the linked source (${err instanceof Error ? err.message : String(err)}); answered from general knowledge instead.`,
-      );
+    } else {
+      // pdf | image → transcribe to text via the (vision-capable) model, then ground on it.
+      const label = source.kind === "pdf" ? "uploaded PDF" : "uploaded screenshot";
+      const transcript = await transcribeSourceToText(source);
+      if (transcript.text.trim() === "") {
+        groundingWarnings.push(
+          `The ${label} produced no readable text — figures may be incomplete. Try pasting the text instead.`,
+        );
+      } else {
+        grounding = `\n\nGROUND YOUR FINDINGS IN THIS SOURCE (read from an ${label}${args.sourceLabel ? `: ${args.sourceLabel}` : ""}):\n${transcript.text.slice(0, 40000)}`;
+        groundingWarnings.push(
+          `Figures were transcribed by AI from an ${label} — confirm each against the original before acting.`,
+        );
+      }
     }
   }
 

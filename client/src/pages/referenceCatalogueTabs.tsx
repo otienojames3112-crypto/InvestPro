@@ -1,9 +1,10 @@
-import { Scale, Landmark, Building2, LineChart } from "lucide-react";
+import { Scale, Landmark, Building2, LineChart, Compass } from "lucide-react";
 import type { AreaTab } from "@/components/TabbedArea";
 import MmfFunds from "./MmfFunds";
 import BankInstruments from "./BankInstruments";
 import CbkSecuritiesReference from "./CbkSecuritiesReference";
 import MarketAssetsReference from "./MarketAssetsReference";
+import Explore from "./Explore";
 
 /**
  * The four published reference catalogues, nested under the single
@@ -42,5 +43,12 @@ export const CATALOGUE_TABS: AreaTab[] = [
     icon: LineChart,
     hint: "Listed equities, REITs and offshore funds sourced from public market data — prices, yields and trailing returns. Reference only; assets you actually hold live under Holdings → Other.",
     render: () => <MarketAssetsReference embedded />,
+  },
+  {
+    id: "all-approved",
+    label: "All Approved Instruments",
+    icon: Compass,
+    hint: "A neutral, read-only screener across every approved row in all four catalogues at once — search, filter, and optionally turn on a transparent Plan-fit score. Published facts only; unapproved AI findings never appear here, and it never picks anything for you.",
+    render: () => <Explore embedded />,
   },
 ];

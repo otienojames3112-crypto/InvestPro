@@ -1,22 +1,25 @@
 import { useMemo } from "react";
 import { useSearchParams } from "wouter";
-import { Inbox, Compass, Library } from "lucide-react";
+import { Inbox, Library } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { TabbedArea, type AreaTab } from "@/components/TabbedArea";
-import Explore from "./Explore";
 import ResearchDesk from "./ResearchDesk";
 import { CATALOGUE_TABS } from "./referenceCatalogueTabs";
 
 /**
  * Research — the consolidated "find, reference and govern" area.
  *
- * Round 83 structure (three top-level tabs):
+ * Round 85 structure (two top-level tabs):
  *   1. Research Desk       — the governed workbench (Ask AI, Review Queue, Source
  *                            Conflicts, Source Registry, Recently Approved).
- *   2. Explore Screener    — a read-only screener over the APPROVED federated
- *                            universe across all four catalogues.
- *   3. Reference Catalogues — the four published catalogues (MMF, Bank, CBK,
- *                            Market Assets) with manager governance controls.
+ *   2. Reference Catalogues — the four published catalogues (MMF, Bank, CBK,
+ *                            Market Assets) PLUS "All Approved Instruments" — the
+ *                            read-only screener over the approved federated
+ *                            universe. All are nested via `?cat=`.
+ *
+ * The Explore screener is no longer a top-level tab; it lives inside Reference
+ * Catalogues as "All Approved Instruments" so the top level stays about the raw
+ * pipeline (Desk) vs the published reference data (Catalogues).
  *
  * Nothing an AI or a source proposes reaches a live catalogue until a manager
  * approves it on the Research Desk; approval publishes straight into the correct
@@ -98,17 +101,10 @@ const TABS: AreaTab[] = [
     render: () => <ResearchDesk embedded />,
   },
   {
-    id: "explore",
-    label: "Explore Screener",
-    icon: Compass,
-    hint: "Search and filter the approved universe across all four catalogues. A screener over published facts only — unapproved AI findings never appear here, and it never picks anything for you.",
-    render: () => <Explore embedded />,
-  },
-  {
     id: "reference-catalogues",
     label: "Reference Catalogues",
     icon: Library,
-    hint: "The four published reference catalogues. Managers can edit, deactivate, mark stale, or view the audit history of any row; reference data is never money — only confirmed holdings affect your plan.",
+    hint: "The four published reference catalogues plus All Approved Instruments — a read-only screener across every approved row. Managers can edit, deactivate, mark stale, or view the audit history of any row; reference data is never money — only confirmed holdings affect your plan.",
     render: () => <ReferenceCatalogues />,
   },
 ];

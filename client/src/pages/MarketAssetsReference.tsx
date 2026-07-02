@@ -1,6 +1,8 @@
 import { useMemo, useState } from "react";
 import { Link, useLocation } from "wouter";
 import { AppShell } from "@/components/AppShell";
+import { useRefFocus } from "@/hooks/useRefFocus";
+import type { RefFocus } from "@/hooks/useRefFocus";
 import { trpc } from "@/lib/trpc";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -103,7 +105,8 @@ export default function MarketAssetsReference({ embedded = false }: { embedded?:
     return m;
   }, [metaData]);
 
-  const [search, setSearch] = useState("");
+  const refFocus = useRefFocus();
+  const [search, setSearch] = useState(() => refFocus.focusRef ?? "");
   const [classFilter, setClassFilter] = useState<string>("all");
   const [currencyFilter, setCurrencyFilter] = useState<string>("all");
   const [sortKey, setSortKey] = useState<SortKey | null>(null);
@@ -330,7 +333,7 @@ export default function MarketAssetsReference({ embedded = false }: { embedded?:
                   </TableHeader>
                   <TableBody>
                     {filtered.map((r) => (
-                      <MarketRow key={r.ref} r={r} onTrack={() => trackHolding(r)} isManager={isManager} staleByRef={staleByRef} />
+                      <MarketRow key={r.ref} r={r} onTrack={() => trackHolding(r)} isManager={isManager} staleByRef={staleByRef} refFocus={refFocus} />
                     ))}
                   </TableBody>
                 </Table>
@@ -349,7 +352,7 @@ export default function MarketAssetsReference({ embedded = false }: { embedded?:
   );
 }
 
-function MarketRow({ r, onTrack, isManager, staleByRef }: { r: Opportunity; onTrack: () => void; isManager: boolean; staleByRef: Map<string, boolean> }) {
+function MarketRow({ r, onTrack, isManager, staleByRef, refFocus }: { r: Opportunity; onTrack: () => void; isManager: boolean; staleByRef: Map<string, boolean>; refFocus: RefFocus }) {
   const profile = profileFor(r.assetClass as AssetClass);
   const stale = rateStaleness(r.dataAsOf);
   const markedStale = staleByRef.get(r.ref);
@@ -358,7 +361,11 @@ function MarketRow({ r, onTrack, isManager, staleByRef }: { r: Opportunity; onTr
   const total = figureCount(fp);
   const checked = humanCheckedCount(fp);
   return (
-    <TableRow className="align-top">
+    <TableRow
+      ref={refFocus.registerRow(r.ref, r.name)}
+      data-ref={r.ref}
+      className={`align-top ${refFocus.isFocused(r.ref, r.name) ? "bg-primary/5" : ""}`}
+    >
       <TableCell>
         <Link href={`/explore/${encodeURIComponent(r.ref)}`} className="font-medium text-foreground hover:text-primary hover:underline">
           {r.name}

@@ -48,11 +48,11 @@ describe("legacy route redirects forward every old URL to a real area + tab", ()
   });
 
   it("preserves extra query params from the old deep-link (e.g. ?class=)", () => {
-    const r: LegacyRedirect = { from: "/explore", area: "research", tab: "explore" };
+    const r: LegacyRedirect = { from: "/explore", area: "research", tab: "all-approved" };
     const target = buildRedirectTarget(r, "class=equity&foo=bar");
     const url = new URL(target, "https://x.test");
     expect(url.pathname).toBe("/research");
-    expect(url.searchParams.get("tab")).toBe("explore");
+    expect(url.searchParams.get("tab")).toBe("all-approved");
     expect(url.searchParams.get("class")).toBe("equity");
     expect(url.searchParams.get("foo")).toBe("bar");
   });

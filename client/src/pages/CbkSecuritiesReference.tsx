@@ -1,6 +1,8 @@
 import { useMemo, useState } from "react";
 import { Link } from "wouter";
 import { AppShell } from "@/components/AppShell";
+import { useRefFocus } from "@/hooks/useRefFocus";
+import type { RefFocus } from "@/hooks/useRefFocus";
 import { trpc } from "@/lib/trpc";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -115,7 +117,8 @@ export default function CbkSecuritiesReference({ embedded = false }: { embedded?
     return m;
   }, [metaData]);
 
-  const [search, setSearch] = useState("");
+  const refFocus = useRefFocus();
+  const [search, setSearch] = useState(() => refFocus.focusRef ?? "");
   const [classFilter, setClassFilter] = useState<string>("all");
   const [sortKey, setSortKey] = useState<SortKey | null>(null);
   const [sortDir, setSortDir] = useState<SortDir>("asc");
@@ -308,7 +311,7 @@ export default function CbkSecuritiesReference({ embedded = false }: { embedded?
                   </TableHeader>
                   <TableBody>
                     {filtered.map((r) => (
-                      <GovRow key={r.ref} r={r} onRecord={() => openDrawer(govPrefill(r))} isManager={isManager} staleByRef={staleByRef} />
+                      <GovRow key={r.ref} r={r} onRecord={() => openDrawer(govPrefill(r))} isManager={isManager} staleByRef={staleByRef} refFocus={refFocus} />
                     ))}
                   </TableBody>
                 </Table>
@@ -327,7 +330,7 @@ export default function CbkSecuritiesReference({ embedded = false }: { embedded?
   );
 }
 
-function GovRow({ r, onRecord, isManager, staleByRef }: { r: Opportunity; onRecord: () => void; isManager: boolean; staleByRef: Map<string, boolean> }) {
+function GovRow({ r, onRecord, isManager, staleByRef, refFocus }: { r: Opportunity; onRecord: () => void; isManager: boolean; staleByRef: Map<string, boolean>; refFocus: RefFocus }) {
   const profile = profileFor(r.assetClass as AssetClass);
   const stale = rateStaleness(r.dataAsOf);
   const markedStale = staleByRef.get(r.ref);
@@ -336,7 +339,11 @@ function GovRow({ r, onRecord, isManager, staleByRef }: { r: Opportunity; onReco
   const checked = humanCheckedCount(fp);
   const isTaxExempt = /ifb|infrastructure/i.test(`${r.name} ${r.factNote ?? ""}`);
   return (
-    <TableRow className="align-top">
+    <TableRow
+      ref={refFocus.registerRow(r.ref, r.name)}
+      data-ref={r.ref}
+      className={`align-top ${refFocus.isFocused(r.ref, r.name) ? "bg-primary/5" : ""}`}
+    >
       <TableCell>
         <Link href={`/explore/${encodeURIComponent(r.ref)}`} className="font-medium text-foreground hover:text-primary hover:underline">
           {r.name}

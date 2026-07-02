@@ -6,15 +6,17 @@ import { trpc } from "@/lib/trpc";
 import { invalidatePortfolioMoney } from "@/lib/invalidatePortfolioMoney";
 import { usePortfolio } from "@/contexts/PortfolioContext";
 import { useAuth } from "@/_core/hooks/useAuth";
+import { useRefFocus } from "@/hooks/useRefFocus";
 import { CatalogueRowControls } from "@/components/CatalogueRowControls";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
-import { ArrowUpDown, ArrowUp, ArrowDown, Search, Plus, Pencil, Trash2, CheckCircle2, Circle, Info, Star, AlertTriangle } from "lucide-react";
+import { ArrowUpDown, ArrowUp, ArrowDown, Search, Plus, Pencil, CheckCircle2, Circle, Info, Star, AlertTriangle, ExternalLink } from "lucide-react";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -43,7 +45,44 @@ type Fund = {
 type SortKey = "fundName" | "ear" | "grossYield" | "managementFee" | "minInvestment" | "aumMillions";
 type SortDir = "asc" | "desc";
 
-const INDUSTRY_AVG_EAR = 9.24; // Jun 2026 Serrari data (mean of 27 active funds)
+/** Shorten a source string/URL into a readable label (host, or the raw text). */
+function sourceLabel(source: string | null): string | null {
+  if (!source) return null;
+  const s = source.trim();
+  if (!s) return null;
+  try {
+    const u = new URL(s);
+    return u.hostname.replace(/^www\./, "");
+  } catch {
+    return s.length > 32 ? `${s.slice(0, 30)}…` : s;
+  }
+}
+
+function isUrl(source: string | null): boolean {
+  if (!source) return false;
+  try {
+    const u = new URL(source.trim());
+    return u.protocol === "http:" || u.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+/** Days since an ISO/date string, or null when unparseable. */
+function daysSince(dateStr: string | null): number | null {
+  if (!dateStr) return null;
+  const t = new Date(dateStr).getTime();
+  if (isNaN(t)) return null;
+  return Math.floor((Date.now() - t) / 86_400_000);
+}
+
+function freshnessTone(days: number | null): { label: string; cls: string } {
+  if (days == null) return { label: "No date", cls: "text-muted-foreground" };
+  if (days <= 7) return { label: `${days}d ago`, cls: "text-emerald-600 dark:text-emerald-400" };
+  if (days <= 30) return { label: `${days}d ago`, cls: "text-foreground" };
+  if (days <= 90) return { label: `${days}d ago`, cls: "text-amber-600 dark:text-amber-400" };
+  return { label: `${days}d ago`, cls: "text-red-600 dark:text-red-400" };
+}
 
 function FundFormDialog({
   open,
@@ -55,9 +94,10 @@ function FundFormDialog({
   open: boolean;
   onClose: () => void;
   initial?: Partial<Fund>;
-  onSave: (data: Omit<Fund, "id" | "isActive" | "createdAt" | "updatedAt">) => void;
+  onSave: (data: Omit<Fund, "id" | "isActive"> & { reason?: string }) => void;
   saving: boolean;
 }) {
+  const isEdit = !!initial;
   const [form, setForm] = useState({
     fundName: initial?.fundName ?? "",
     company: initial?.company ?? "",
@@ -68,9 +108,10 @@ function FundFormDialog({
     aumMillions: String(initial?.aumMillions ?? ""),
     asOfDate: initial?.asOfDate ?? "",
     source: initial?.source ?? "",
+    reason: "",
   });
 
-  const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement>) =>
+  const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
     setForm((f) => ({ ...f, [k]: e.target.value }));
 
   const handleSave = () => {
@@ -93,14 +134,15 @@ function FundFormDialog({
       aumMillions: form.aumMillions ? parseFloat(form.aumMillions) : null,
       asOfDate: form.asOfDate || null,
       source: form.source || null,
+      reason: form.reason.trim() || undefined,
     });
   };
 
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>{initial ? "Edit Fund" : "Add MMF Fund"}</DialogTitle>
+          <DialogTitle>{isEdit ? "Edit Fund" : "Add MMF Fund"}</DialogTitle>
         </DialogHeader>
         <div className="grid grid-cols-2 gap-3 py-2">
           <div className="col-span-2">
@@ -127,11 +169,6 @@ function FundFormDialog({
               const ear = parseFloat(form.ear);
               const gross = parseFloat(form.grossYield);
               if (isNaN(ear) || isNaN(gross) || gross <= 0) return null;
-              // Guard: net-of-fee EAR can never EXCEED the gross yield (net = gross
-              // minus fee). Many Kenyan funds publish the two as effectively equal,
-              // so only warn when EAR sits ABOVE gross by a clear margin — the
-              // tell-tale sign a pre-fee "gross" rate was pasted into the net field
-              // (which overstates returns ~1.5–2%).
               if (ear > gross + 0.05) {
                 return (
                   <p className="text-[11px] text-amber-600 dark:text-amber-400 mt-1 flex items-start gap-1 leading-snug">
@@ -164,6 +201,20 @@ function FundFormDialog({
             <Input value={form.source} onChange={set("source")} placeholder="e.g. https://cytonn.com/..." />
             <p className="text-[11px] text-muted-foreground mt-1">Required — every catalogue correction is recorded in the audit trail with its source.</p>
           </div>
+          {isEdit && (
+            <div className="col-span-2">
+              <Label>Reason for correction (optional)</Label>
+              <Textarea
+                value={form.reason}
+                onChange={set("reason")}
+                rows={2}
+                placeholder="e.g. Corrected EAR after the fund republished its June factsheet."
+              />
+              <p className="text-[11px] text-muted-foreground mt-1">
+                Recorded verbatim in the immutable audit trail alongside the old &rarr; new value.
+              </p>
+            </div>
+          )}
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={onClose} disabled={saving}>Cancel</Button>
@@ -179,6 +230,7 @@ export default function MmfFunds({ embedded = false }: { embedded?: boolean } = 
   const utils = trpc.useUtils();
   const { user } = useAuth();
   const isManager = user?.role === "admin";
+  const refFocus = useRefFocus();
 
   const { data: funds = [], isLoading } = trpc.mmfFunds.list.useQuery();
   const { data: metaData } = trpc.catalogue.rowMeta.useQuery(
@@ -191,23 +243,20 @@ export default function MmfFunds({ embedded = false }: { embedded?: boolean } = 
     return m;
   }, [metaData]);
 
-  const [search, setSearch] = useState("");
+  // Prefill the search box from a deep-link ?ref= so the row is easy to spot even
+  // before the highlight fades.
+  const [search, setSearch] = useState(() => refFocus.focusRef ?? "");
   const [sortKey, setSortKey] = useState<SortKey>("ear");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [addOpen, setAddOpen] = useState(false);
   const [editFund, setEditFund] = useState<Fund | null>(null);
-  const [deleteId, setDeleteId] = useState<number | null>(null);
 
   const addMutation = trpc.mmfFunds.add.useMutation({
     onSuccess: () => { invalidatePortfolioMoney(utils, portfolioId); setAddOpen(false); toast.success("Fund added."); },
     onError: (e) => toast.error(e.message),
   });
   const updateMutation = trpc.mmfFunds.update.useMutation({
-    onSuccess: () => { invalidatePortfolioMoney(utils, portfolioId); setEditFund(null); toast.success("Fund updated."); },
-    onError: (e) => toast.error(e.message),
-  });
-  const deactivateMutation = trpc.mmfFunds.deactivate.useMutation({
-    onSuccess: () => { invalidatePortfolioMoney(utils, portfolioId); setDeleteId(null); toast.success("Fund removed."); },
+    onSuccess: () => { invalidatePortfolioMoney(utils, portfolioId); setEditFund(null); toast.success("Fund updated — recorded in the audit trail."); },
     onError: (e) => toast.error(e.message),
   });
   const selectFundMutation = trpc.mmfFunds.selectFund.useMutation({
@@ -220,9 +269,6 @@ export default function MmfFunds({ embedded = false }: { embedded?: boolean } = 
 
   const selectedFundId = portfolio?.mmfFundId ?? null;
 
-  // Changing the primary fund re-drives the headline projection (its EAR feeds
-  // every future MMF month), so it goes through an explicit confirmation rather
-  // than firing on a single click.
   const [confirmFund, setConfirmFund] = useState<{ id: number; name: string } | null>(null);
   const currentPrimaryName = funds.find((f) => f.id === selectedFundId)?.fundName ?? null;
   const requestSetPrimary = (id: number, name: string) => setConfirmFund({ id, name });
@@ -231,6 +277,31 @@ export default function MmfFunds({ embedded = false }: { embedded?: boolean } = 
     if (sortKey === key) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
     else { setSortKey(key); setSortDir("desc"); }
   };
+
+  // ── Computed, source-of-truth statistics (item 4) ────────────────────────────
+  // Every headline number below is derived from the live catalogue rows, NOT a
+  // hardcoded constant. This keeps the copy honest whatever the data provider is.
+  const stats = useMemo(() => {
+    const active = funds.filter((f) => f.isActive !== false);
+    const count = active.length;
+    const avgEar = count ? active.reduce((s, f) => s + f.ear, 0) / count : null;
+    const top5 = [...active].sort((a, b) => b.ear - a.ear).slice(0, 5);
+    const top5AvgEar = top5.length ? top5.reduce((s, f) => s + f.ear, 0) / top5.length : null;
+    const sources = new Set(active.map((f) => sourceLabel(f.source)).filter(Boolean) as string[]);
+    // Latest as-of date across the catalogue (freshness of the whole set).
+    let latestAsOf: string | null = null;
+    for (const f of active) {
+      if (f.asOfDate && (!latestAsOf || new Date(f.asOfDate) > new Date(latestAsOf))) latestAsOf = f.asOfDate;
+    }
+    // Completeness: how many rows carry BOTH a source and an as-of date.
+    const complete = active.filter((f) => !!f.source && !!f.asOfDate).length;
+    return { count, avgEar, top5AvgEar, sources: Array.from(sources), latestAsOf, complete };
+  }, [funds]);
+
+  const top5Ids = useMemo(
+    () => [...funds].filter((f) => f.isActive !== false).sort((a, b) => b.ear - a.ear).slice(0, 5).map((f) => f.id),
+    [funds],
+  );
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
@@ -251,10 +322,6 @@ export default function MmfFunds({ embedded = false }: { embedded?: boolean } = 
     });
   }, [filtered, sortKey, sortDir]);
 
-  const top5Ear = useMemo(() => {
-    return [...funds].sort((a, b) => b.ear - a.ear).slice(0, 5).map((f) => f.id);
-  }, [funds]);
-
   const SortIcon = ({ k }: { k: SortKey }) => {
     if (sortKey !== k) return <ArrowUpDown className="w-3 h-3 opacity-40 ml-1" />;
     return sortDir === "asc"
@@ -263,25 +330,32 @@ export default function MmfFunds({ embedded = false }: { embedded?: boolean } = 
   };
 
   const selectedFund = funds.find((f) => f.id === selectedFundId);
+  const avgEar = stats.avgEar;
+
+  // Source-aware provider phrase: names the distinct source(s) actually present in
+  // the data instead of assuming a single hardcoded provider.
+  const providerPhrase = useMemo(() => {
+    if (stats.sources.length === 0) return "the sources recorded against each fund";
+    if (stats.sources.length === 1) return stats.sources[0];
+    if (stats.sources.length === 2) return `${stats.sources[0]} and ${stats.sources[1]}`;
+    return `${stats.sources[0]}, ${stats.sources[1]} and ${stats.sources.length - 2} other source${stats.sources.length - 2 > 1 ? "s" : ""}`;
+  }, [stats.sources]);
 
   return (
     <AppShell embedded={embedded}>
     <div className="p-6 lg:p-8 space-y-6 max-w-6xl">
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">MMF Fund Tracker</h1>
-          <p className="text-muted-foreground text-sm mt-1">
-            27 CMA-regulated Kenyan money market funds. Select one to use its EAR in your projection.
-            {" "}Data from{" "}
-            <a
-              href="https://serrarigroup.com/ke/mmf/"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="underline text-primary hover:text-primary/80 font-medium"
-            >
-              Serrari Group
-            </a>
-            {" "}(updated daily).
+          <h1 className="text-2xl font-bold tracking-tight">MMF Market</h1>
+          <p className="text-muted-foreground text-sm mt-1 max-w-2xl">
+            {stats.count > 0 ? (
+              <>
+                {stats.count} CMA-regulated Kenyan money market fund{stats.count === 1 ? "" : "s"} currently in the
+                catalogue, sourced from {providerPhrase}. Select one to use its published EAR in your projection.
+              </>
+            ) : (
+              <>No funds in the catalogue yet. Approved research proposals appear here once published.</>
+            )}
           </p>
         </div>
         {isManager && (
@@ -324,18 +398,52 @@ export default function MmfFunds({ embedded = false }: { embedded?: boolean } = 
         </Card>
       )}
 
-      {/* Industry average note */}
-      <div className="flex items-center gap-2 text-xs text-muted-foreground">
-        <Info className="w-3 h-3" />
-        Industry average EAR (Jun 2026): <strong>{INDUSTRY_AVG_EAR}%</strong> ·{" "}
-        <a
-          href="https://serrarigroup.com/ke/mmf/"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="underline hover:text-foreground"
-        >
-          Verify on Serrari ↗
-        </a>
+      {/* Computed stat strip — every figure is derived from the live rows */}
+      {stats.count > 0 && (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <Card>
+            <CardContent className="py-3 px-4">
+              <div className="text-xs text-muted-foreground">Funds tracked</div>
+              <div className="text-xl font-bold tabular-nums">{stats.count}</div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="py-3 px-4">
+              <div className="text-xs text-muted-foreground">Average EAR</div>
+              <div className="text-xl font-bold tabular-nums">{avgEar != null ? `${avgEar.toFixed(2)}%` : "—"}</div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="py-3 px-4">
+              <div className="text-xs text-muted-foreground">Top-5 avg EAR</div>
+              <div className="text-xl font-bold tabular-nums">{stats.top5AvgEar != null ? `${stats.top5AvgEar.toFixed(2)}%` : "—"}</div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="py-3 px-4">
+              <div className="text-xs text-muted-foreground">With source + date</div>
+              <div className="text-xl font-bold tabular-nums">
+                {stats.complete}/{stats.count}
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {/* Freshness / completeness note — dynamic, no hardcoded provider or date */}
+      <div className="flex items-center gap-2 text-xs text-muted-foreground flex-wrap">
+        <Info className="w-3 h-3 shrink-0" />
+        {stats.latestAsOf ? (
+          <>Most recent data point: <strong>{stats.latestAsOf}</strong>.</>
+        ) : (
+          <>No as-of dates recorded yet.</>
+        )}
+        {stats.complete < stats.count && (
+          <span className="text-amber-600 dark:text-amber-400">
+            {stats.count - stats.complete} fund{stats.count - stats.complete === 1 ? "" : "s"} missing a source or date —
+            complete them via Edit for a fully sourced catalogue.
+          </span>
+        )}
       </div>
 
       {/* Search */}
@@ -386,7 +494,7 @@ export default function MmfFunds({ embedded = false }: { embedded?: boolean } = 
                     AUM (M) <SortIcon k="aumMillions" />
                   </button>
                 </th>
-                <th className="text-left px-4 py-3 font-medium">As of</th>
+                <th className="text-left px-4 py-3 font-medium">Source &amp; freshness</th>
                 <th className="px-4 py-3" />
               </tr>
             </thead>
@@ -399,18 +507,25 @@ export default function MmfFunds({ embedded = false }: { embedded?: boolean } = 
               )}
               {sorted.map((fund, idx) => {
                 const isSelected = fund.id === selectedFundId;
-                const isTop5 = top5Ear.includes(fund.id);
-                const vsAvg = fund.ear - INDUSTRY_AVG_EAR;
+                const isTop5 = top5Ids.includes(fund.id);
+                const vsAvg = avgEar != null ? fund.ear - avgEar : null;
+                const focused = refFocus.isFocused(fund.fundName);
+                const src = sourceLabel(fund.source);
+                const fresh = freshnessTone(daysSince(fund.asOfDate));
                 return (
                   <tr
                     key={fund.id}
-                    className={`border-b transition-colors ${isSelected ? "bg-primary/8" : "hover:bg-muted/30"}`}
+                    ref={refFocus.registerRow(fund.fundName)}
+                    data-ref={fund.fundName}
+                    className={`border-b transition-colors ${
+                      isSelected ? "bg-primary/8" : focused ? "bg-primary/5" : "hover:bg-muted/30"
+                    }`}
                   >
                     <td className="px-4 py-3 text-muted-foreground text-xs">{idx + 1}</td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2">
                         <div>
-                          <div className="font-medium flex items-center gap-1.5">
+                          <div className="font-medium flex items-center gap-1.5 flex-wrap">
                             {fund.fundName}
                             {staleByRef.get(fund.fundName) && (
                               <Badge variant="outline" className="text-[10px] py-0 px-1.5 text-amber-600 border-amber-300">
@@ -433,12 +548,14 @@ export default function MmfFunds({ embedded = false }: { embedded?: boolean } = 
                       </div>
                     </td>
                     <td className="px-4 py-3 text-right">
-                      <span className={`font-semibold ${fund.ear >= INDUSTRY_AVG_EAR ? "text-emerald-600 dark:text-emerald-400" : "text-muted-foreground"}`}>
+                      <span className={`font-semibold ${avgEar != null && fund.ear >= avgEar ? "text-emerald-600 dark:text-emerald-400" : "text-muted-foreground"}`}>
                         {fund.ear.toFixed(2)}%
                       </span>
-                      <div className="text-[10px] text-muted-foreground">
-                        {vsAvg >= 0 ? "+" : ""}{vsAvg.toFixed(1)}% vs avg
-                      </div>
+                      {vsAvg != null && (
+                        <div className="text-[10px] text-muted-foreground">
+                          {vsAvg >= 0 ? "+" : ""}{vsAvg.toFixed(1)}% vs avg
+                        </div>
+                      )}
                     </td>
                     <td className="px-4 py-3 text-right text-muted-foreground">{fund.grossYield.toFixed(2)}%</td>
                     <td className="px-4 py-3 text-right text-muted-foreground">{fund.managementFee.toFixed(2)}%</td>
@@ -448,8 +565,28 @@ export default function MmfFunds({ embedded = false }: { embedded?: boolean } = 
                     <td className="px-4 py-3 text-right text-muted-foreground">
                       {fund.aumMillions != null ? fund.aumMillions.toLocaleString("en-KE", { maximumFractionDigits: 0 }) : "—"}
                     </td>
-                    <td className="px-4 py-3 text-muted-foreground text-xs">
-                      {fund.asOfDate ?? "—"}
+                    <td className="px-4 py-3">
+                      <div className="flex flex-col gap-0.5">
+                        {src ? (
+                          isUrl(fund.source) ? (
+                            <a
+                              href={fund.source as string}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-xs text-primary underline underline-offset-2 inline-flex items-center gap-1 max-w-[160px] truncate"
+                            >
+                              {src} <ExternalLink className="w-2.5 h-2.5 shrink-0" />
+                            </a>
+                          ) : (
+                            <span className="text-xs text-foreground max-w-[160px] truncate">{src}</span>
+                          )
+                        ) : (
+                          <span className="text-xs text-amber-600 dark:text-amber-400">No source</span>
+                        )}
+                        <span className={`text-[10px] ${fresh.cls}`}>
+                          {fund.asOfDate ? `as of ${fund.asOfDate} · ${fresh.label}` : "no as-of date"}
+                        </span>
+                      </div>
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-1 justify-end">
@@ -523,25 +660,20 @@ export default function MmfFunds({ embedded = false }: { embedded?: boolean } = 
 
       <p className="text-xs text-muted-foreground">
         EAR = Effective Annual Rate net of management fee, before 15% WHT. WHT is applied by the projection engine.
-        Data last updated 21 Jun 2026 from{" "}
-        <a
-          href="https://serrarigroup.com/ke/mmf/"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="underline text-primary hover:text-primary/80"
-        >
-          serrarigroup.com/ke/mmf/
-        </a>
-        {" "}— click to verify current rates, then use the Edit button to update any fund.
+        Every figure above (fund count, average and top-5 EAR, freshness) is computed from the live catalogue rows —
+        each fund carries its own source and as-of date. Managers correct a figure via Edit; each correction is
+        recorded in the audit trail with its source and reason.
       </p>
 
       {/* Add dialog */}
-      <FundFormDialog
-        open={addOpen}
-        onClose={() => setAddOpen(false)}
-        onSave={(data) => addMutation.mutate({ ...data, aumMillions: data.aumMillions ?? undefined, asOfDate: data.asOfDate ?? undefined, source: data.source ?? "" })}
-        saving={addMutation.isPending}
-      />
+      {addOpen && (
+        <FundFormDialog
+          open={addOpen}
+          onClose={() => setAddOpen(false)}
+          onSave={(data) => addMutation.mutate({ ...data, aumMillions: data.aumMillions ?? undefined, asOfDate: data.asOfDate ?? undefined, source: data.source ?? "" })}
+          saving={addMutation.isPending}
+        />
+      )}
 
       {/* Edit dialog */}
       {editFund && (
@@ -549,32 +681,22 @@ export default function MmfFunds({ embedded = false }: { embedded?: boolean } = 
           open={!!editFund}
           onClose={() => setEditFund(null)}
           initial={editFund}
-          onSave={(data) => updateMutation.mutate({ id: editFund.id, fundName: data.fundName, company: data.company, grossYield: data.grossYield, ear: data.ear, managementFee: data.managementFee, minInvestment: data.minInvestment, aumMillions: data.aumMillions ?? undefined, asOfDate: data.asOfDate ?? undefined, source: data.source ?? "" })}
+          onSave={(data) => updateMutation.mutate({
+            id: editFund.id,
+            fundName: data.fundName,
+            company: data.company,
+            grossYield: data.grossYield,
+            ear: data.ear,
+            managementFee: data.managementFee,
+            minInvestment: data.minInvestment,
+            aumMillions: data.aumMillions ?? undefined,
+            asOfDate: data.asOfDate ?? undefined,
+            source: data.source ?? "",
+            reason: data.reason,
+          })}
           saving={updateMutation.isPending}
         />
       )}
-
-      {/* Delete confirm */}
-      <Dialog open={deleteId !== null} onOpenChange={(v) => !v && setDeleteId(null)}>
-        <DialogContent className="max-w-sm">
-          <DialogHeader>
-            <DialogTitle>Remove Fund?</DialogTitle>
-          </DialogHeader>
-          <p className="text-sm text-muted-foreground">
-            This will deactivate the fund and remove it from the list. The fund will no longer appear in the selector.
-          </p>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setDeleteId(null)}>Cancel</Button>
-            <Button
-              variant="destructive"
-              onClick={() => deleteId !== null && deactivateMutation.mutate({ id: deleteId })}
-              disabled={deactivateMutation.isPending}
-            >
-              Remove
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
       {/* Set-primary confirmation — switching the primary fund re-drives the projection */}
       <AlertDialog open={confirmFund !== null} onOpenChange={(v) => !v && setConfirmFund(null)}>

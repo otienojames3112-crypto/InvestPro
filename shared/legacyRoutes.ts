@@ -30,7 +30,9 @@ export const LEGACY_REDIRECTS: readonly LegacyRedirect[] = [
   { from: "/bank-instruments", area: "holdings", tab: "bank" },
   { from: "/other-assets", area: "holdings", tab: "other" },
   // Research area
-  { from: "/explore", area: "research", tab: "explore" },
+  // Round 85: the Explore screener is now the nested "all-approved" catalogue
+  // tab, reached via ?tab=reference-catalogues&cat=all-approved.
+  { from: "/explore", area: "research", tab: "all-approved" },
   { from: "/mmf-strategy", area: "research", tab: "mmf-market" },
   { from: "/ai-intake", area: "research", tab: "research-desk" },
   { from: "/ai-review", area: "research", tab: "research-desk" },

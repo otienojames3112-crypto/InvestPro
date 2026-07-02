@@ -3373,8 +3373,12 @@ export async function recordManualCorrectionAudit(args: {
   oldValue?: string;
   newValue?: string;
   source: string;
+  sourceUrl?: string | null;
+  /** Optional manager-supplied justification for the correction (item 5). */
+  reason?: string | null;
   by: string;
 }): Promise<void> {
+  const reason = args.reason?.trim();
   await insertCatalogueAuditLog({
     catalogue: args.catalogue,
     targetRef: args.targetRef,
@@ -3384,13 +3388,48 @@ export async function recordManualCorrectionAudit(args: {
     oldValue: args.oldValue ?? null,
     newValue: args.newValue ?? null,
     source: args.source,
-    sourceUrl: null,
+    sourceUrl: args.sourceUrl ?? null,
     researchUpdateId: null,
     researchTaskId: null,
     approvedBy: args.by,
     approvedAt: Date.now(),
-    note: "Manager manual correction (source-backed)",
+    note: reason ? `Manager manual correction: ${reason}` : "Manager manual correction (source-backed)",
   });
+}
+
+/**
+ * Append a date-effective MMF rate-history point after a governed manual EAR edit
+ * (item 5), so a fund's published-rate timeline reflects manager corrections, not
+ * only approvals from the research pipeline. Best-effort: never throws into the
+ * caller (a failed history write must not fail the edit).
+ */
+export async function appendMmfManualRatePoint(args: {
+  fundName: string;
+  ear: number | null;
+  grossYield: number | null;
+  source: string;
+  by: string;
+}): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  try {
+    const found = await db
+      .select({ id: mmfFunds.id })
+      .from(mmfFunds)
+      .where(eq(mmfFunds.fundName, args.fundName))
+      .limit(1);
+    await db.insert(mmfRateHistory).values({
+      mmfFundId: found[0]?.id ?? 0,
+      fundName: args.fundName,
+      grossYield: args.grossYield != null ? String(args.grossYield) : (args.ear != null ? String(args.ear) : null),
+      ear: args.ear != null ? String(args.ear) : (args.grossYield != null ? String(args.grossYield) : null),
+      source: args.source,
+      approvedBy: args.by,
+      effectiveAt: Date.now(),
+    });
+  } catch (err) {
+    console.error("[appendMmfManualRatePoint] failed:", (err as Error).message);
+  }
 }
 
 /* ── Date-effective rate history reads ──────────────────────────────────────── */

@@ -18,6 +18,17 @@ import HoldingsArea from "./pages/HoldingsArea";
 import ResearchArea from "./pages/ResearchArea";
 import ReviewArea from "./pages/ReviewArea";
 import { LEGACY_REDIRECTS } from "@shared/legacyRoutes";
+import { CATALOGUE_TABS } from "./pages/referenceCatalogueTabs";
+
+/**
+ * The nested Reference-Catalogue ids (mmf-market, bank-catalogue, cbk-securities,
+ * market-assets, all-approved). These are NOT top-level `?tab=` ids — they live
+ * under the `reference-catalogues` tab and are selected with `?cat=`. A legacy
+ * redirect that names one of these must therefore forward to
+ * `reference-catalogues&cat=<id>`, not `?tab=<id>` (which would silently fall
+ * back to the Research Desk).
+ */
+const CATALOGUE_TAB_IDS = new Set(CATALOGUE_TABS.map((t) => t.id));
 
 /**
  * Legacy-route redirect. Each old standalone page now lives as a tab inside one
@@ -28,7 +39,15 @@ import { LEGACY_REDIRECTS } from "@shared/legacyRoutes";
 function TabRedirect({ area, tab }: { area: string; tab: string }) {
   const search = useSearch();
   const existing = new URLSearchParams(search);
-  existing.set("tab", tab);
+  // Nested Reference-Catalogue targets resolve to the reference-catalogues tab
+  // with the catalogue selected via ?cat= (preserving any extra params such as
+  // the allocation → all-approved ?class= handoff).
+  if (area === "research" && CATALOGUE_TAB_IDS.has(tab)) {
+    existing.set("tab", "reference-catalogues");
+    existing.set("cat", tab);
+  } else {
+    existing.set("tab", tab);
+  }
   return <Redirect to={`/${area}?${existing.toString()}`} replace />;
 }
 

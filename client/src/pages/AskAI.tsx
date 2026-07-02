@@ -15,7 +15,11 @@ import {
   SelectContent,
   SelectItem,
 } from "@/components/ui/select";
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import { toast } from "sonner";
 import { Streamdown } from "streamdown";
 import {
@@ -32,11 +36,16 @@ import {
   History,
   Loader2,
   FileText,
+  Paperclip,
+  ChevronDown,
+  Link2,
+  Image as ImageIcon,
+  Type as TypeIcon,
 } from "lucide-react";
 import { InfoHint } from "@/components/InfoHint";
 import { catalogueLabel, type ReferenceCatalogue } from "@shared/researchPipeline";
 import { formatRelativeTime } from "@/lib/format";
-import { ExtractPanel, AiPrincipleBanner } from "@/pages/AiIntake";
+import { AiPrincipleBanner } from "@/pages/AiIntake";
 
 /* ── Small shared bits ─────────────────────────────────────────────────────── */
 
@@ -226,17 +235,42 @@ function FindingCard({ finding, onChanged }: { finding: Finding; onChanged: () =
   );
 }
 
+/* ── Unified source attachment (item 1): url | text | pdf | image ───────────── */
+
+type SourceMode = "url" | "text" | "pdf" | "image";
+
+async function fileToBase64(file: File): Promise<string> {
+  const buf = await file.arrayBuffer();
+  let binary = "";
+  const bytes = new Uint8Array(buf);
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  return btoa(binary);
+}
+
+function imageMimeFor(file: File): "image/png" | "image/jpeg" | "image/webp" {
+  const t = file.type.toLowerCase();
+  if (t.includes("webp")) return "image/webp";
+  if (t.includes("jpeg") || t.includes("jpg")) return "image/jpeg";
+  return "image/png";
+}
+
 /* ── The enquiry box + latest result ───────────────────────────────────────── */
 
 function EnquiryPanel() {
   const utils = trpc.useUtils();
   const [question, setQuestion] = useState("");
   const [scope, setScope] = useState("any");
+  const [showSource, setShowSource] = useState(false);
+  const [sourceMode, setSourceMode] = useState<SourceMode>("url");
   const [sourceUrl, setSourceUrl] = useState("");
   const [sourceText, setSourceText] = useState("");
-  const [showSource, setShowSource] = useState(false);
+  const [pdfFile, setPdfFile] = useState<File | null>(null);
+  const [imageFile, setImageFile] = useState<File | null>(null);
+  const [sourceLabel, setSourceLabel] = useState("");
+  const [uploading, setUploading] = useState(false);
   const [activeTaskId, setActiveTaskId] = useState<number | null>(null);
 
+  const upload = trpc.opportunities.aiUploadDocument.useMutation();
   const ask = trpc.research.ask.useMutation({
     onSuccess: (res) => {
       setActiveTaskId(res.taskId);
@@ -252,28 +286,75 @@ function EnquiryPanel() {
     onError: (err) => toast.error(err.message),
   });
 
-  const canAsk = question.trim().length >= 4 && !ask.isPending;
+  // Whether the chosen source mode has enough input to attach (source is always OPTIONAL).
+  const sourceProvided =
+    showSource &&
+    (sourceMode === "url"
+      ? /^https?:\/\//.test(sourceUrl.trim())
+      : sourceMode === "text"
+        ? sourceText.trim().length >= 20
+        : sourceMode === "pdf"
+          ? !!pdfFile
+          : !!imageFile);
+
+  const busy = ask.isPending || uploading;
+  const canAsk = question.trim().length >= 4 && !busy;
   const result = ask.data;
 
-  function submit() {
+  async function submit() {
     if (!canAsk) return;
-    ask.mutate({
+    const base = {
       question: question.trim(),
       scope: scope as "any" | "mmf" | "bank" | "cbk" | "market_asset" | "macro",
-      sourceUrl: sourceUrl.trim() === "" ? undefined : sourceUrl.trim(),
-      sourceText: sourceText.trim() === "" ? undefined : sourceText.trim(),
-    });
+      sourceLabel: sourceLabel.trim() === "" ? undefined : sourceLabel.trim(),
+    };
+    try {
+      // No source attached → plain question.
+      if (!sourceProvided) {
+        ask.mutate(base);
+        return;
+      }
+      if (sourceMode === "url") {
+        ask.mutate({ ...base, source: { kind: "url", url: sourceUrl.trim() } });
+      } else if (sourceMode === "text") {
+        ask.mutate({ ...base, source: { kind: "text", text: sourceText.trim() } });
+      } else if (sourceMode === "pdf" && pdfFile) {
+        setUploading(true);
+        const base64 = await fileToBase64(pdfFile);
+        const { fileKey } = await upload.mutateAsync({ base64, fileName: pdfFile.name, mimeType: "application/pdf" });
+        setUploading(false);
+        ask.mutate({ ...base, source: { kind: "pdf", fileKey } });
+      } else if (sourceMode === "image" && imageFile) {
+        setUploading(true);
+        const base64 = await fileToBase64(imageFile);
+        const { fileKey } = await upload.mutateAsync({ base64, fileName: imageFile.name, mimeType: imageMimeFor(imageFile) });
+        setUploading(false);
+        ask.mutate({ ...base, source: { kind: "image", fileKey } });
+      }
+    } catch (err) {
+      setUploading(false);
+      toast.error(err instanceof Error ? err.message : "Upload failed.");
+    }
   }
+
+  const MODE_TABS: { value: SourceMode; label: string; icon: React.ReactNode }[] = [
+    { value: "url", label: "URL", icon: <Link2 className="w-3.5 h-3.5" /> },
+    { value: "text", label: "Paste text", icon: <TypeIcon className="w-3.5 h-3.5" /> },
+    { value: "pdf", label: "Upload PDF", icon: <FileText className="w-3.5 h-3.5" /> },
+    { value: "image", label: "Upload image", icon: <ImageIcon className="w-3.5 h-3.5" /> },
+  ];
 
   return (
     <div className="space-y-5">
       <Card className="border-primary/15 bg-gradient-to-br from-primary/[0.04] to-transparent">
         <CardHeader className="pb-3">
           <CardTitle className="text-base flex items-center gap-2">
-            <Sparkles className="w-4 h-4 text-primary" /> Ask a research question
+            <Sparkles className="w-4 h-4 text-primary" /> Ask AI a question — optionally give it a source
             <InfoHint side="bottom" iconClassName="ml-0.5">
-              Ask in plain English. The assistant writes a briefing and proposes structured findings you can triage into
-              the review queue. It never writes to a catalogue and never recommends anything.
+              Ask in plain English. Optionally attach one source — a URL, pasted text, a PDF, or a screenshot — and the
+              assistant grounds its briefing in it. Either way you get the same output: a briefing plus structured
+              findings you can triage into the review queue. It never writes to a catalogue and never recommends
+              anything.
             </InfoHint>
           </CardTitle>
           <CardDescription>
@@ -288,7 +369,7 @@ function EnquiryPanel() {
             onChange={(e) => setQuestion(e.target.value)}
             rows={3}
             onKeyDown={(e) => {
-              if ((e.metaKey || e.ctrlKey) && e.key === "Enter") submit();
+              if ((e.metaKey || e.ctrlKey) && e.key === "Enter") void submit();
             }}
           />
           <div className="flex items-end gap-3 flex-wrap">
@@ -307,55 +388,133 @@ function EnquiryPanel() {
                 </SelectContent>
               </Select>
             </div>
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              className="text-xs text-muted-foreground"
-              onClick={() => setShowSource((s) => !s)}
-            >
-              {showSource ? "Hide" : "Add"} a specific source (optional)
-            </Button>
             <div className="flex-1" />
-            <Button onClick={submit} disabled={!canAsk}>
-              {ask.isPending ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <Send className="w-4 h-4 mr-1.5" />}
-              Ask
+            <Button onClick={() => void submit()} disabled={!canAsk}>
+              {busy ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <Send className="w-4 h-4 mr-1.5" />}
+              {uploading ? "Uploading…" : ask.isPending ? "Asking…" : "Ask"}
             </Button>
           </div>
 
-          {showSource && (
-            <div className="space-y-2 rounded-lg border border-dashed p-3">
+          {/* Unified "Add a specific source" — url / text / pdf / image, all optional */}
+          <Collapsible open={showSource} onOpenChange={setShowSource}>
+            <CollapsibleTrigger asChild>
+              <Button type="button" variant="ghost" size="sm" className="text-xs text-muted-foreground -ml-2">
+                <Paperclip className="w-3.5 h-3.5 mr-1.5" />
+                {showSource ? "Hide source" : "Add a specific source (optional)"}
+                <ChevronDown className={`w-3.5 h-3.5 ml-1 transition-transform ${showSource ? "rotate-180" : ""}`} />
+              </Button>
+            </CollapsibleTrigger>
+            <CollapsibleContent className="space-y-3 rounded-lg border border-dashed p-3 mt-2">
+              <p className="text-[11px] text-muted-foreground leading-relaxed">
+                Attach one source and the assistant grounds its briefing in it. A URL is fetched and stripped to text; a
+                PDF or screenshot is read directly. Whatever the source, nothing is written to a catalogue — findings
+                land in the review queue for you to approve.
+              </p>
+
+              {/* Source mode picker */}
+              <div className="flex flex-wrap gap-1 rounded-lg border border-border p-1 w-fit">
+                {MODE_TABS.map((m) => (
+                  <button
+                    key={m.value}
+                    type="button"
+                    onClick={() => setSourceMode(m.value)}
+                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-md transition-colors ${
+                      sourceMode === m.value
+                        ? "bg-primary text-primary-foreground"
+                        : "text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    {m.icon}
+                    {m.label}
+                  </button>
+                ))}
+              </div>
+
               <div className="space-y-1">
-                <Label className="text-xs text-muted-foreground">Source URL (the assistant will read it)</Label>
+                <Label className="text-xs text-muted-foreground">Source label (optional)</Label>
                 <Input
-                  placeholder="https://…"
-                  value={sourceUrl}
-                  onChange={(e) => setSourceUrl(e.target.value)}
+                  placeholder="e.g. CIC MMF fact sheet, May 2026"
+                  value={sourceLabel}
+                  onChange={(e) => setSourceLabel(e.target.value)}
                   className="bg-background"
                 />
               </div>
-              <div className="space-y-1">
-                <Label className="text-xs text-muted-foreground">…or paste source text</Label>
-                <Textarea
-                  placeholder="Paste a fact-sheet, auction result, or price table…"
-                  value={sourceText}
-                  onChange={(e) => setSourceText(e.target.value)}
-                  rows={4}
-                />
-              </div>
-            </div>
-          )}
+
+              {sourceMode === "url" && (
+                <div className="space-y-1">
+                  <Label className="text-xs text-muted-foreground">Source URL (the assistant will read it)</Label>
+                  <Input
+                    placeholder="https://…"
+                    value={sourceUrl}
+                    onChange={(e) => setSourceUrl(e.target.value)}
+                    className="bg-background"
+                  />
+                </div>
+              )}
+              {sourceMode === "text" && (
+                <div className="space-y-1">
+                  <Label className="text-xs text-muted-foreground">Paste source text</Label>
+                  <Textarea
+                    placeholder="Paste a fact-sheet, auction result, or price table…"
+                    value={sourceText}
+                    onChange={(e) => setSourceText(e.target.value)}
+                    rows={5}
+                    className="font-mono text-xs"
+                  />
+                  <p className="text-[11px] text-muted-foreground">{sourceText.trim().length} characters</p>
+                </div>
+              )}
+              {sourceMode === "pdf" && (
+                <div className="space-y-1">
+                  <Label className="text-xs text-muted-foreground">Upload a PDF (the assistant reads it directly)</Label>
+                  <Input
+                    type="file"
+                    accept="application/pdf"
+                    onChange={(e) => setPdfFile(e.target.files?.[0] ?? null)}
+                    className="bg-background"
+                  />
+                  {pdfFile && (
+                    <p className="text-[11px] text-muted-foreground">
+                      {pdfFile.name} · {(pdfFile.size / 1024 / 1024).toFixed(2)} MB
+                    </p>
+                  )}
+                </div>
+              )}
+              {sourceMode === "image" && (
+                <div className="space-y-1">
+                  <Label className="text-xs text-muted-foreground">
+                    Upload a screenshot / photo (a vision AI transcribes only what is printed)
+                  </Label>
+                  <Input
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp"
+                    onChange={(e) => setImageFile(e.target.files?.[0] ?? null)}
+                    className="bg-background"
+                  />
+                  {imageFile && (
+                    <p className="text-[11px] text-muted-foreground">
+                      {imageFile.name} · {(imageFile.size / 1024 / 1024).toFixed(2)} MB
+                    </p>
+                  )}
+                  <p className="text-[11px] text-muted-foreground">
+                    If the current AI model can&rsquo;t read images, you&rsquo;ll get a clear message asking you to paste
+                    the text instead.
+                  </p>
+                </div>
+              )}
+            </CollapsibleContent>
+          </Collapsible>
         </CardContent>
       </Card>
 
-      {ask.isPending && (
+      {busy && (
         <div className="space-y-3">
           <Skeleton className="h-32 w-full rounded-lg" />
           <Skeleton className="h-24 w-full rounded-lg" />
         </div>
       )}
 
-      {result && !ask.isPending && (
+      {result && !busy && (
         <div className="space-y-4">
           <Card>
             <CardHeader className="pb-2">
@@ -376,9 +535,7 @@ function EnquiryPanel() {
           <div>
             <h3 className="text-sm font-semibold flex items-center gap-2 mb-3">
               <Inbox className="w-4 h-4 text-primary" /> Findings to triage
-              <span className="text-xs font-normal text-muted-foreground">
-                ({result.findings.length})
-              </span>
+              <span className="text-xs font-normal text-muted-foreground">({result.findings.length})</span>
             </h3>
             {result.findings.length === 0 ? (
               <Empty className="py-8">
@@ -411,7 +568,7 @@ function EnquiryPanel() {
   );
 }
 
-/* ── Enquiry history ───────────────────────────────────────────────────────── */
+/* ── Enquiry history (secondary, collapsed by default) ──────────────────────── */
 
 function HistoryPanel() {
   const { data, isLoading } = trpc.research.listTasks.useQuery({ limit: 30 });
@@ -422,13 +579,13 @@ function HistoryPanel() {
 
   if (tasks.length === 0) {
     return (
-      <Empty className="py-12">
+      <Empty className="py-10">
         <div className="flex flex-col items-center gap-2 text-center">
-          <History className="w-9 h-9 text-muted-foreground/60" />
-          <p className="font-medium">No enquiries yet.</p>
-          <p className="text-sm text-muted-foreground max-w-sm">
-            Ask a research question and it will be logged here with its findings, so you can revisit what you looked into
-            and when.
+          <History className="w-8 h-8 text-muted-foreground/60" />
+          <p className="font-medium text-sm">No enquiries yet.</p>
+          <p className="text-xs text-muted-foreground max-w-sm">
+            Ask a research question and it will be logged here with its findings, so you can revisit what you looked
+            into and when.
           </p>
         </div>
       </Empty>
@@ -436,7 +593,7 @@ function HistoryPanel() {
   }
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-2.5">
       {tasks.map((t) => (
         <Card key={t.id}>
           <CardHeader className="pb-2">
@@ -516,36 +673,29 @@ function TaskDetail({ taskId }: { taskId: number }) {
 
 export default function AskAI({ embedded = false }: { embedded?: boolean } = {}) {
   void embedded;
+  const [showHistory, setShowHistory] = useState(false);
   return (
-    <div className="space-y-5">
-      <Tabs defaultValue="ask" className="w-full">
-        <TabsList>
-          <TabsTrigger value="ask">
-            <Sparkles className="w-3.5 h-3.5 mr-1.5" /> Ask
-          </TabsTrigger>
-          <TabsTrigger value="import">
-            <FileText className="w-3.5 h-3.5 mr-1.5" /> Import a document
-          </TabsTrigger>
-          <TabsTrigger value="history">
-            <History className="w-3.5 h-3.5 mr-1.5" /> Enquiry history
-          </TabsTrigger>
-        </TabsList>
-        <TabsContent value="ask" className="mt-5">
-          <EnquiryPanel />
-        </TabsContent>
-        <TabsContent value="import" className="mt-5 space-y-4">
-          <p className="text-sm text-muted-foreground leading-relaxed">
-            Have a fact sheet, auction notice, price board, or screenshot? Let the librarian read it and draft the
-            figures straight into the review queue — as pasted text, a URL it fetches, an uploaded PDF, or an image.
-            Nothing is written to a catalogue until you approve it.
-          </p>
-          <AiPrincipleBanner />
-          <ExtractPanel />
-        </TabsContent>
-        <TabsContent value="history" className="mt-5">
+    <div className="space-y-6">
+      <AiPrincipleBanner />
+      <EnquiryPanel />
+
+      {/* Enquiry history — kept, but secondary: collapsed by default so it does not
+          compete with Ask. Item 2/3. */}
+      <Collapsible open={showHistory} onOpenChange={setShowHistory}>
+        <div className="flex items-center gap-2 border-t pt-4">
+          <CollapsibleTrigger asChild>
+            <Button variant="ghost" size="sm" className="text-xs text-muted-foreground -ml-2">
+              <History className="w-3.5 h-3.5 mr-1.5" />
+              {showHistory ? "Hide enquiry history" : "Show enquiry history"}
+              <ChevronDown className={`w-3.5 h-3.5 ml-1 transition-transform ${showHistory ? "rotate-180" : ""}`} />
+            </Button>
+          </CollapsibleTrigger>
+          <span className="text-[11px] text-muted-foreground">A log of past questions and their findings.</span>
+        </div>
+        <CollapsibleContent className="mt-3">
           <HistoryPanel />
-        </TabsContent>
-      </Tabs>
+        </CollapsibleContent>
+      </Collapsible>
     </div>
   );
 }

@@ -20,12 +20,13 @@ export const AREA_TABS: Record<AreaName, readonly string[]> = {
   plan: ["goal", "allocation", "scenarios", "ledger"],
   cashflows: ["record-in", "withdraw", "scheduled", "actual-vs-planned"],
   holdings: ["overview", "mmf", "gov", "bank", "other"],
-  // Round 83: three top-level tabs. The four reference catalogues are nested
-  // inside "reference-catalogues" via a `?cat=` param (deep-linked separately),
-  // so they are NOT top-level `?tab=` ids.
+  // Round 85: two top-level tabs. The Explore screener is no longer a top-level
+  // tab — it now lives as "All Approved Instruments" nested inside
+  // "reference-catalogues" (via `?cat=all-approved`), alongside the four
+  // published catalogues. The catalogues are selected with a `?cat=` param and
+  // are NOT top-level `?tab=` ids.
   research: [
     "research-desk",
-    "explore",
     "reference-catalogues",
   ],
   review: ["manager", "reconciliation", "income", "tax"],

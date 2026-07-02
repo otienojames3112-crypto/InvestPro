@@ -38,6 +38,7 @@ import {
   getMmfFund,
   addMmfFund,
   updateMmfFund,
+  appendMmfManualRatePoint,
   deactivateMmfFund,
   setPortfolioMmfFund,
   getOtherHoldings,
@@ -198,6 +199,7 @@ import {
   runResearchQuestion,
   findingsToRows,
   type ResearchScope,
+  type ResearchSource,
 } from "./aiResearchService";
 import { normaliseAssetClass } from "../shared/assetModel";
 import { runAdapter } from "./ingestion/runner";
@@ -5137,9 +5139,13 @@ export const appRouter = router({
         aumMillions: z.number().min(0).optional(),
         asOfDate: z.string().optional(),
         source: z.string().min(1).max(500),
+        // Item 5: an optional manager justification, recorded in the audit note.
+        reason: z.string().max(300).optional(),
       }))
       .mutation(async ({ ctx, input }) => {
-        const { id, ...rest } = input;
+        const { id, reason, ...rest } = input;
+        // Capture the prior EAR so the audit can show old→new for the headline figure.
+        const before = await getMmfFund(id);
         await updateMmfFund(id, {
           ...(rest.fundName !== undefined && { fundName: rest.fundName }),
           ...(rest.company !== undefined && { company: rest.company }),
@@ -5151,16 +5157,31 @@ export const appRouter = router({
           ...(rest.asOfDate !== undefined && { asOfDate: new Date(rest.asOfDate) }),
           ...(rest.source !== undefined && { source: rest.source }),
         });
+        const fundNameForAudit = rest.fundName ?? before?.fundName ?? String(id);
+        const by = ctx.user.name ?? ctx.user.email ?? "Manager";
         await recordManualCorrectionAudit({
           catalogue: "mmf",
-          targetRef: rest.fundName ?? String(id),
-          instrumentName: rest.fundName ?? null,
+          targetRef: fundNameForAudit,
+          instrumentName: fundNameForAudit,
           changeKind: "edit",
           field: rest.ear !== undefined ? "ear" : undefined,
+          oldValue: rest.ear !== undefined && before?.ear != null ? String(before.ear) : undefined,
           newValue: rest.ear != null ? String(rest.ear) : undefined,
           source: rest.source,
-          by: ctx.user.name ?? ctx.user.email ?? "Manager",
+          reason: reason ?? null,
+          by,
         });
+        // When the headline EAR actually changed, append a date-effective rate-history
+        // point so the fund's rate timeline reflects this governed manual correction.
+        if (rest.ear !== undefined && (before?.ear == null || Number(before.ear) !== rest.ear)) {
+          await appendMmfManualRatePoint({
+            fundName: fundNameForAudit,
+            ear: rest.ear,
+            grossYield: rest.grossYield ?? (before?.grossYield != null ? Number(before.grossYield) : null),
+            source: rest.source,
+            by,
+          });
+        }
         return { success: true };
       }),
 
@@ -7434,8 +7455,21 @@ export const appRouter = router({
         z.object({
           question: z.string().min(4).max(2000),
           scope: z.enum(["mmf", "bank", "cbk", "market_asset", "macro", "any"]).default("any"),
+          // Legacy fields (still accepted for backward compatibility).
           sourceUrl: z.string().url().max(500).optional().or(z.literal("")),
           sourceText: z.string().max(40000).optional(),
+          // UNIFIED source union (item 1). A single optional attachment: URL, pasted text,
+          // an uploaded PDF (fileKey from aiUploadDocument), or an uploaded screenshot. All
+          // converge on the same briefing + findings output — no "Ask vs Import" fork.
+          source: z
+            .discriminatedUnion("kind", [
+              z.object({ kind: z.literal("url"), url: z.string().url().max(500) }),
+              z.object({ kind: z.literal("text"), text: z.string().min(1).max(40000) }),
+              z.object({ kind: z.literal("pdf"), fileKey: z.string().min(1).max(300) }),
+              z.object({ kind: z.literal("image"), fileKey: z.string().min(1).max(300) }),
+            ])
+            .optional(),
+          sourceLabel: z.string().max(200).optional(),
         }),
       )
       .mutation(async ({ ctx, input }) => {
@@ -7448,11 +7482,28 @@ export const appRouter = router({
         });
         if (!taskId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Could not create the enquiry." });
         try {
+          // Resolve the unified source: PDF/image file keys become signed URLs the model
+          // reads; url/text pass straight through. Legacy sourceUrl/sourceText are folded
+          // into the union inside runResearchQuestion when `source` is omitted.
+          let resolvedSource: ResearchSource | null = null;
+          if (input.source) {
+            if (input.source.kind === "url") {
+              resolvedSource = { kind: "url", url: input.source.url };
+            } else if (input.source.kind === "text") {
+              resolvedSource = { kind: "text", text: input.source.text };
+            } else if (input.source.kind === "pdf") {
+              resolvedSource = { kind: "pdf", fileUrl: await storageGetSignedUrl(input.source.fileKey) };
+            } else {
+              resolvedSource = { kind: "image", imageUrl: await storageGetSignedUrl(input.source.fileKey) };
+            }
+          }
           const res = await runResearchQuestion({
             question: input.question,
             scope: input.scope as ResearchScope,
             sourceUrl: input.sourceUrl && input.sourceUrl !== "" ? input.sourceUrl : null,
             sourceText: input.sourceText ?? null,
+            source: resolvedSource,
+            sourceLabel: input.sourceLabel ?? null,
           });
           const rows = findingsToRows(taskId, res.findings);
           await insertResearchFindings(rows);

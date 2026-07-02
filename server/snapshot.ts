@@ -801,7 +801,7 @@ export async function buildPortfolioSnapshot(
       nextActions.push({
         id: `under-${row.bucket}`,
         label: `Holdings are under the ${row.bucket} target — explore instruments`,
-        href: `/research?tab=explore&class=${row.bucket}`,
+        href: `/research?tab=reference-catalogues&cat=all-approved&class=${row.bucket}`,
       });
     }
   }

@@ -295,7 +295,7 @@ export default function Explore({ embedded = false }: { embedded?: boolean } = {
         <div className="flex items-start justify-between gap-4 flex-wrap">
           <div>
             <h1 className="text-2xl font-bold tracking-tight" style={{ fontFamily: "'Playfair Display', serif" }}>
-              Explore the Approved Universe
+              All Approved Instruments
             </h1>
             <p className="text-muted-foreground text-sm mt-1 max-w-2xl">
               A neutral screener over the <span className="font-medium text-foreground">approved reference catalogues</span> —
@@ -349,6 +349,7 @@ export default function Explore({ embedded = false }: { embedded?: boolean } = {
                 variant="outline"
                 onClick={() => navigate("/explore/new")}
                 className="active:scale-[0.97] transition-transform"
+                title="Add a new instrument to a reference catalogue (opens the governed editor)"
               >
                 <PlusCircle className="w-4 h-4 mr-1.5" /> Add instrument
               </Button>
@@ -693,12 +694,20 @@ type FederatedInstrument = inferRouterOutputs<AppRouter>["explore"]["federatedUn
  */
 function FederatedRow({ r }: { r: FederatedInstrument }) {
   const cat = r.catalogue as ReferenceCatalogue;
-  const href =
+  // Every federated row now routes back into its Reference Catalogue tab with a
+  // ?ref= deep link, so the target row is scrolled-to and highlighted there. This
+  // keeps the approved universe entirely inside Reference Catalogues (no escape to
+  // the standalone /explore/:ref detail route, which no longer has a top-level tab).
+  const catParam =
     cat === "mmf"
-      ? "/research?tab=reference-catalogues&cat=mmf-market"
+      ? "mmf-market"
       : cat === "bank"
-        ? "/research?tab=reference-catalogues&cat=bank-catalogue"
-        : `/explore/${encodeURIComponent(r.ref)}`;
+        ? "bank-catalogue"
+        : cat === "cbk"
+          ? "cbk-securities"
+          : "market-assets";
+  const refValue = cat === "mmf" || cat === "bank" ? r.name : r.ref;
+  const href = `/research?tab=reference-catalogues&cat=${catParam}&ref=${encodeURIComponent(refValue)}`;
   const figure =
     r.headlineFigure === null
       ? "—"

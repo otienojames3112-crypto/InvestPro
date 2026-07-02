@@ -50,26 +50,27 @@ function tabIds(areaSrc: string): string[] {
 describe("Research area exposes the full renamed tab set", () => {
   const ids = tabIds(research);
 
-  it("contains the Round 83 three top-level Research tabs in order (Desk, Explore, Reference Catalogues)", () => {
+  it("contains the Round 85 two top-level Research tabs in order (Desk, Reference Catalogues)", () => {
     expect(ids).toEqual([
       "research-desk",
-      "explore",
       "reference-catalogues",
     ]);
   });
 
-  it("nests the four reference catalogues (with the right components) under reference-catalogues", () => {
+  it("nests the four catalogues plus All Approved Instruments (with the right components) under reference-catalogues", () => {
     const catIds = tabIds(catalogueTabs);
     expect(catIds).toEqual([
       "mmf-market",
       "bank-catalogue",
       "cbk-securities",
       "market-assets",
+      "all-approved",
     ]);
     expect(renderedFor(catalogueTabs, "mmf-market")).toBe("MmfFunds");
     expect(renderedFor(catalogueTabs, "bank-catalogue")).toBe("BankInstruments");
     expect(renderedFor(catalogueTabs, "cbk-securities")).toBe("CbkSecuritiesReference");
     expect(renderedFor(catalogueTabs, "market-assets")).toBe("MarketAssetsReference");
+    expect(renderedFor(catalogueTabs, "all-approved")).toBe("Explore");
   });
 
   it("never renders an owned-holdings component in a Research tab", () => {

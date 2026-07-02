@@ -1602,3 +1602,18 @@
 
 ## Round 84 — Bug fix: nested-button DOM error
 - [x] Fix nested-button DOM error on /research?tab=reference-catalogues&cat=mmf-market. InfoHint tooltip trigger changed from a native button to a focusable span role="button" tabIndex={0}, eliminating nested-button HTML violations app-wide (InfoHint is placed inside sortable headers and row action buttons). Added regression test server/infoHintNesting.test.ts (3 tests). Full suite 149 files / 1480 tests green; tsc clean.
+
+## Round 85 — Research UX/pipeline audit (11 items)
+
+- [x] 1. Backend: extend research.ask to accept a source union (none/url/text/pdf/image) via one path
+- [x] 2. Ask AI: merge "Import a document" into Ask panel's "Add a specific source" (url/text/pdf/image); remove Import tab
+- [x] 3. Ask AI: keep Enquiry History but make it secondary
+- [x] 4. Approval publishes immediately into matching catalogue; failed promotion stays pending + shows error
+- [x] 5. Recently Approved: "Approved and published to X" + "Open published row" button
+- [x] 6. Deep-link ?ref= row focus (scroll + highlight + prefill search) on MMF, Bank, CBK, Market Assets
+- [x] 7. MMF Market: neutral/dynamic copy; compute active count, avg EAR, top-5 avg, latest as-of from rows
+- [x] 8. MMF Market: add Source & Freshness column (source name, link, as-of, stale badge, history)
+- [x] 9. MMF approval completeness gate; AUM optional-but-flagged; never store missing numerics as 0
+- [x] 10. Govern direct MMF edits: require source/as-of/reason/old/new; write catalogue audit + rate history
+- [x] 11. Remove top-level Explore Screener; add "All Approved Instruments" (approved-only) + optional "Plan Fit" diagnostics under Reference Catalogues
+- [x] 12. Tests for all of the above (A–E) — server/round85ResearchUx.test.ts (17 tests)

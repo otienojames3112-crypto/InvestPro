@@ -70,7 +70,7 @@ describe("Research area exposes the full renamed tab set", () => {
     expect(renderedFor(catalogueTabs, "bank-catalogue")).toBe("BankInstruments");
     expect(renderedFor(catalogueTabs, "cbk-securities")).toBe("CbkSecuritiesReference");
     expect(renderedFor(catalogueTabs, "market-assets")).toBe("MarketAssetsReference");
-    expect(renderedFor(catalogueTabs, "all-approved")).toBe("Explore");
+    expect(renderedFor(catalogueTabs, "all-approved")).toBe("AllApprovedInstruments");
   });
 
   it("never renders an owned-holdings component in a Research tab", () => {

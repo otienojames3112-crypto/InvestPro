@@ -353,8 +353,9 @@ function EnquiryPanel() {
             <InfoHint side="bottom" iconClassName="ml-0.5">
               Ask in plain English. Optionally attach one source — a URL, pasted text, a PDF, or a screenshot — and the
               assistant grounds its briefing in it. Either way you get the same output: a briefing plus structured
-              findings you can triage into the review queue. It never writes to a catalogue and never recommends
-              anything.
+              findings you can triage into the review queue. It can sort and compare the facts it finds (e.g. list
+              funds by quoted yield), but it never writes to a catalogue, never tells you what to buy or sell, and
+              never recommends one instrument over another — you make every decision.
             </InfoHint>
           </CardTitle>
           <CardDescription>

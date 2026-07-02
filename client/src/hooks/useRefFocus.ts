@@ -34,7 +34,7 @@ function norm(v: string | null | undefined): string {
 }
 
 export function useRefFocus() {
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const focusRef = searchParams.get("ref");
   const focusKey = norm(focusRef);
 
@@ -84,9 +84,35 @@ export function useRefFocus() {
     [focusKey],
   );
 
+  /**
+   * Round 86 — cross-catalogue leak guard.
+   *
+   * A page calls this once its rows have loaded, passing every candidate identifier
+   * present on this catalogue (fund/bank names, opportunity refs, etc.). If a `?ref=`
+   * was supplied but matches NOTHING here, the ref clearly belongs to a different
+   * catalogue (a stale deep link that survived a tab switch): we clear the URL's
+   * `?ref=` and invoke `onClear` so the page can also reset any search box it prefilled
+   * from the ref. When the ref does match, nothing happens (the highlight still runs).
+   */
+  const clearIfMissing = useCallback(
+    (candidates: (string | null | undefined)[], onClear?: () => void) => {
+      if (!focusKey) return;
+      const anyMatch = candidates.some((c) => norm(c) === focusKey);
+      if (anyMatch) return;
+      setActiveRef(null);
+      onClear?.();
+      setSearchParams((prev) => {
+        const next = new URLSearchParams(prev);
+        if (next.has("ref")) next.delete("ref");
+        return next;
+      }, { replace: true });
+    },
+    [focusKey, setSearchParams],
+  );
+
   return useMemo(
-    () => ({ focusRef, focusKey, activeRef, isFocused, registerRow }),
-    [focusRef, focusKey, activeRef, isFocused, registerRow],
+    () => ({ focusRef, focusKey, activeRef, isFocused, registerRow, clearIfMissing }),
+    [focusRef, focusKey, activeRef, isFocused, registerRow, clearIfMissing],
   );
 }
 

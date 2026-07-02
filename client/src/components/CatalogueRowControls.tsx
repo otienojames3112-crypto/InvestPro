@@ -75,6 +75,10 @@ export function CatalogueRowControls({
     // Best-effort refresh of the underlying catalogue lists.
     utils.mmfFunds?.list?.invalidate?.();
     utils.bankInstruments?.list?.invalidate?.();
+    // Round 86: also refresh the approved-universe screener so a deactivate /
+    // mark-stale action is reflected on the All Approved Instruments view.
+    utils.explore?.approvedList?.invalidate?.();
+    utils.explore?.federatedUniverse?.invalidate?.();
   };
 
   const setActive = trpc.catalogue.setActive.useMutation({

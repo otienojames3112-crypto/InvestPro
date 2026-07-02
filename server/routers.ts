@@ -137,6 +137,10 @@ import {
   cbkRateHistoryFor,
   setSourceActive,
   getSource,
+  archiveAllReferenceRows,
+  clearPendingResearchQueue,
+  clearCatalogueAuditLog,
+  resetReferenceCataloguesToSeed,
 } from "./db";
 import { OPPORTUNITY_SEED } from "./opportunitySeed";
 import {
@@ -181,9 +185,11 @@ import {
 } from "../shared/provenance";
 import {
   scoreAndRank,
+  scoreInstrument,
   catalogNetYieldPct,
   DEFAULT_SCORE_WEIGHTS,
   type ScoreInput,
+  type LiquidityFacet,
 } from "../shared/instrumentScore";
 import type { InsertOpportunity, InsertAiIntakeAudit } from "../drizzle/schema";
 import {
@@ -7604,6 +7610,55 @@ export const appRouter = router({
       const instruments = await listFederatedUniverse();
       return { instruments };
     }),
+
+    // Round 86 — the dedicated "All Approved Instruments" surface. Returns the
+    // APPROVED reference universe (listFederatedUniverse already gates out
+    // unverified/AI-only/archived rows) plus a ref-keyed, fully-itemised Plan Fit
+    // diagnostic per row (reusing the SAME transparent scoreInstrument engine the
+    // Explore surface used). Plan Fit is a factual composite, never a
+    // recommendation; the client sorts by it ONLY on an explicit user choice and
+    // defaults to a neutral order. Public: published/approved data only.
+    approvedList: publicProcedure.query(async () => {
+      const instruments = await listFederatedUniverse();
+      const nowMs = Date.now();
+      const scoreInputs: ScoreInput[] = instruments.map((r) => ({
+        ref: r.ref,
+        name: r.name,
+        assetClass: r.assetClass ?? "other",
+        issuer: r.issuer,
+        currency: r.currency ?? "KES",
+        // MMF/bank headline figures are already net-of-fee/near-net; opportunity
+        // yields run through the same net-of-WHT helper the scorer expects.
+        netYieldPct:
+          r.catalogue === "cbk" || r.catalogue === "market_asset"
+            ? catalogNetYieldPct({
+                yieldPct: r.headlineFigure,
+                yieldKind: null,
+                assetClass: r.assetClass ?? "other",
+                factNote: null,
+              })
+            : r.headlineFigure,
+        expenseRatioPct: r.expenseRatioPct,
+        liquidity: (r.liquidity as LiquidityFacet | null) ?? null,
+        dataAsOf: r.dataAsOf,
+        verificationState: r.verificationState as VerificationState,
+        active: true,
+      }));
+      const scored = scoreInputs.map((i) => scoreInstrument(i, { nowMs }));
+      const planFit = Object.fromEntries(
+        scored.map((s) => [
+          s.ref,
+          {
+            score: s.score,
+            eligible: s.eligible,
+            ineligibleReasons: s.ineligibleReasons,
+            components: s.components,
+            netYieldPct: s.netYieldPct,
+          },
+        ]),
+      );
+      return { instruments, planFit, weights: DEFAULT_SCORE_WEIGHTS, scoredAt: nowMs };
+    }),
   }),
 
   // ─── Round 83: catalogue governance (manager edit/deactivate/mark-stale) ───
@@ -7708,6 +7763,42 @@ export const appRouter = router({
               ? await bankRateHistoryFor(input.ref, limit)
               : await cbkRateHistoryFor(input.ref, limit);
         return { points };
+      }),
+  }),
+
+  // ─── Round 86: Test-Mode reference-data cleanup (manager-only) ─────────────
+  // Lets a manager reset the workspace's REFERENCE data after exercising the
+  // research pipeline with test rows. Every mutation is admin-only and every
+  // destructive path is explicit. The Live-safe default (archiveAll) NEVER hard-
+  // deletes catalogue rows; only `resetToSeed` truncates, and it requires an
+  // explicit confirm flag so it can't fire by accident.
+  researchAdmin: router({
+    // Live-safe: deactivate + archive every active reference row across all four
+    // catalogues. History is preserved (rows can be reactivated from the catalogue).
+    archiveAllReferenceRows: adminProcedure
+      .input(z.object({ reason: z.string().max(300).optional() }).optional())
+      .mutation(async ({ ctx, input }) => {
+        const by = ctx.user.name ?? ctx.user.email ?? "You";
+        const res = await archiveAllReferenceRows(by, input?.reason ?? "Test-Mode cleanup: archive all reference rows");
+        return res;
+      }),
+
+    // Clear the pending research queue (delete pending research updates).
+    clearPendingQueue: adminProcedure.mutation(async () => {
+      return clearPendingResearchQueue();
+    }),
+
+    // Clear the catalogue approval audit trail (the "recently approved" log).
+    clearApprovalAuditLog: adminProcedure.mutation(async () => {
+      return clearCatalogueAuditLog();
+    }),
+
+    // HARD reset the three reference catalogues to their seed state. Destructive:
+    // requires an explicit confirm flag. Re-seeds the opportunity catalog from code.
+    resetToSeed: adminProcedure
+      .input(z.object({ confirm: z.literal(true) }))
+      .mutation(async () => {
+        return resetReferenceCataloguesToSeed(OPPORTUNITY_SEED);
       }),
   }),
 });

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { AppShell } from "@/components/AppShell";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
@@ -148,6 +148,16 @@ export default function BankInstruments({ embedded = false }: { embedded?: boole
 
   // Filters (search prefilled from a deep-link ?ref= so the row is easy to spot)
   const [search, setSearch] = useState(() => refFocus.focusRef ?? "");
+
+  // Round 86: drop a stale foreign ?ref= (and its prefill) once rows load, so a ref
+  // from another catalogue can't filter this one down to nothing.
+  useEffect(() => {
+    if (isLoading || !refFocus.focusRef) return;
+    refFocus.clearIfMissing(
+      (rows ?? []).map((r) => r.bankName),
+      () => setSearch((s) => (s === refFocus.focusRef ? "" : s)),
+    );
+  }, [isLoading, rows, refFocus]);
   const [typeFilter, setTypeFilter] = useState<string>("all");
   const [bankFilter, setBankFilter] = useState<string>("all");
   const [rateOnly, setRateOnly] = useState(false);

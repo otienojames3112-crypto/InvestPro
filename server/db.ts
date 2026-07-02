@@ -3047,6 +3047,20 @@ export interface FederatedInstrument {
   headlineFigure: number | null;
   headlineLabel: string;
   source: string | null;
+  /** As-of timestamp (epoch ms UTC) for the headline figure, when known — drives freshness. */
+  dataAsOf: number | null;
+  /** Row-level human-verification state (approved rows are human_verified/human_entered, or curated). */
+  verificationState: string;
+  /** Neutral liquidity facet (daily | t_plus_settlement | term | illiquid), when known. */
+  liquidity: string | null;
+  /** Maturity date (epoch ms UTC) for term instruments, when known — feeds maturity-fit diagnostics. */
+  maturityDate: number | null;
+  /** Expense ratio / management fee (%), when known — feeds the fee-drag diagnostic. */
+  expenseRatioPct: number | null;
+  /** The catalogue-row identity used by lifecycle governance (fund/bank name or opportunities.ref). */
+  targetRef: string;
+  /** Manager marked this reference stale (figures may be out of date). */
+  stale: boolean;
 }
 
 /**
@@ -3060,8 +3074,31 @@ export async function listFederatedUniverse(): Promise<FederatedInstrument[]> {
   if (!db) return [];
   const out: FederatedInstrument[] = [];
 
+  // The approved universe must show ONLY truly-approved rows. We exclude any row a
+  // manager has archived (referenceRowMeta.archivedAt set), and — for the scraped
+  // catalogues (opportunities → cbk/market_asset) — we require the row to have
+  // passed human verification. Curated catalogues (MMF, bank) are maintained by
+  // hand, so an active row there is by definition approved; scraped_unverified /
+  // ai_extracted opportunity seed rows (e.g. NSE:EABL) are held back until a human
+  // confirms them, exactly like the public opportunities catalog does.
+  const APPROVED_STATES = new Set(["human_verified", "human_entered"]);
+
+  // Pre-load archived + stale lifecycle meta per catalogue so we can gate/flag rows
+  // without a per-row query.
+  const meta = {
+    mmf: await listReferenceRowMeta("mmf"),
+    bank: await listReferenceRowMeta("bank"),
+    cbk: await listReferenceRowMeta("cbk"),
+    market_asset: await listReferenceRowMeta("market_asset"),
+  } as const;
+  const isArchived = (cat: ReferenceCatalogue, targetRef: string): boolean =>
+    meta[cat][targetRef]?.archivedAt != null;
+  const isStale = (cat: ReferenceCatalogue, targetRef: string): boolean =>
+    !!meta[cat][targetRef]?.stale;
+
   const mmfs = await db.select().from(mmfFunds).where(eq(mmfFunds.isActive, true));
   for (const m of mmfs) {
+    if (isArchived("mmf", m.fundName)) continue;
     out.push({
       catalogue: "mmf",
       ref: `mmf:${m.id}`,
@@ -3072,11 +3109,19 @@ export async function listFederatedUniverse(): Promise<FederatedInstrument[]> {
       headlineFigure: m.ear != null ? Number(m.ear) : null,
       headlineLabel: "EAR %",
       source: m.source ?? null,
+      dataAsOf: (m as { updatedAt?: Date }).updatedAt ? new Date((m as { updatedAt: Date }).updatedAt).getTime() : null,
+      verificationState: "human_entered",
+      liquidity: "daily",
+      maturityDate: null,
+      expenseRatioPct: (m as { managementFee?: string | null }).managementFee != null ? Number((m as { managementFee: string }).managementFee) : null,
+      targetRef: m.fundName,
+      stale: isStale("mmf", m.fundName),
     });
   }
 
   const banks = await db.select().from(bankInstruments).where(eq(bankInstruments.isActive, true));
   for (const b of banks) {
+    if (isArchived("bank", b.bankName)) continue;
     out.push({
       catalogue: "bank",
       ref: `bank:${b.id}`,
@@ -3087,6 +3132,18 @@ export async function listFederatedUniverse(): Promise<FederatedInstrument[]> {
       headlineFigure: b.indicativeRate != null ? Number(b.indicativeRate) : null,
       headlineLabel: "Indicative rate %",
       source: b.source ?? null,
+      dataAsOf: (b as { updatedAt?: Date }).updatedAt ? new Date((b as { updatedAt: Date }).updatedAt).getTime() : null,
+      verificationState: "human_entered",
+      // Bank products carry no liquidity column; derive it from the instrument type
+      // so the maturity/liquidity diagnostics have something factual to reason with.
+      liquidity:
+        b.instrumentType === "fixed_deposit" || b.instrumentType === "target_savings"
+          ? "term"
+          : "daily",
+      maturityDate: null,
+      expenseRatioPct: null,
+      targetRef: b.bankName,
+      stale: isStale("bank", b.bankName),
     });
   }
 
@@ -3096,6 +3153,11 @@ export async function listFederatedUniverse(): Promise<FederatedInstrument[]> {
     const cat = catalogueForAssetClass(ac);
     // opportunities only feeds the cbk + market_asset catalogues.
     if (cat !== "cbk" && cat !== "market_asset") continue;
+    // Approval gate: only human-verified/entered rows are part of the approved
+    // universe. Scraped-but-unverified or purely AI-extracted seed rows are excluded.
+    if (o.unverified) continue;
+    if (!APPROVED_STATES.has(o.verificationState)) continue;
+    if (isArchived(cat, o.ref)) continue;
     const headline = o.yieldPct != null ? Number(o.yieldPct) : o.lastPrice != null ? Number(o.lastPrice) : null;
     out.push({
       catalogue: cat,
@@ -3107,6 +3169,13 @@ export async function listFederatedUniverse(): Promise<FederatedInstrument[]> {
       headlineFigure: headline,
       headlineLabel: o.yieldPct != null ? "Yield %" : "Last price",
       source: o.dataSource ?? null,
+      dataAsOf: o.dataAsOf ? new Date(o.dataAsOf).getTime() : null,
+      verificationState: o.verificationState,
+      liquidity: o.liquidity ?? null,
+      maturityDate: o.maturityDate ? new Date(o.maturityDate).getTime() : null,
+      expenseRatioPct: o.expenseRatioPct != null ? Number(o.expenseRatioPct) : null,
+      targetRef: o.ref,
+      stale: isStale(cat, o.ref),
     });
   }
 
@@ -3531,4 +3600,93 @@ export async function getSource(key: string): Promise<SourceRegistryRow | null> 
   if (!db) return null;
   const rows = await db.select().from(sourceRegistry).where(eq(sourceRegistry.key, key)).limit(1);
   return rows[0] ?? null;
+}
+
+/* ── Round 86: Test-Mode reference-data cleanup (manager-only) ───────────────────
+ *
+ * These helpers let a manager reset the workspace's REFERENCE data (catalogues,
+ * the pending research queue, and the approval audit trail) back to a clean state
+ * after exercising the research pipeline with test rows.
+ *
+ * SAFETY CONTRACT:
+ *   - Reference catalogues (mmf/bank/opportunities) are NEVER hard-deleted by the
+ *     Live-safe path: `archiveAllReferenceRows` deactivates + archives every row,
+ *     preserving history exactly like a per-row deactivate does.
+ *   - `resetReferenceCataloguesToSeed` is the ONLY path that hard-deletes catalogue
+ *     rows, and it is gated to Test Mode at the router. It truncates the three
+ *     catalogue tables + their lifecycle meta and re-seeds the opportunity catalog.
+ *   - The pending research queue and the catalogue audit log are working/audit
+ *     tables (not tracked money), so clearing them is a plain delete.
+ */
+
+/** Soft-archive (deactivate + mark archived) EVERY active reference row. Live-safe. */
+export async function archiveAllReferenceRows(by: string, reason: string): Promise<{ archived: number }> {
+  const db = await getDb();
+  if (!db) return { archived: 0 };
+  let archived = 0;
+  const mmfs = await db.select({ name: mmfFunds.fundName }).from(mmfFunds).where(eq(mmfFunds.isActive, true));
+  for (const m of mmfs) {
+    await setMmfActive(m.name, false, by, reason);
+    await upsertReferenceRowMeta("mmf", m.name, { archivedReason: reason, archivedBy: by, archivedAt: Date.now() });
+    archived += 1;
+  }
+  const banks = await db.select({ name: bankInstruments.bankName }).from(bankInstruments).where(eq(bankInstruments.isActive, true));
+  for (const b of banks) {
+    await setBankActive(b.name, false, by, reason);
+    await upsertReferenceRowMeta("bank", b.name, { archivedReason: reason, archivedBy: by, archivedAt: Date.now() });
+    archived += 1;
+  }
+  const opps = await db.select({ ref: opportunities.ref, assetClass: opportunities.assetClass }).from(opportunities).where(eq(opportunities.active, true));
+  for (const o of opps) {
+    const cat = catalogueForAssetClass(normaliseAssetClass(o.assetClass));
+    if (cat !== "cbk" && cat !== "market_asset") continue;
+    await setOpportunityActive(o.ref, false, by, reason);
+    await upsertReferenceRowMeta(cat, o.ref, { archivedReason: reason, archivedBy: by, archivedAt: Date.now() });
+    archived += 1;
+  }
+  return { archived };
+}
+
+/** Clear the pending research queue (delete pending research updates). Working data. */
+export async function clearPendingResearchQueue(): Promise<{ deleted: number }> {
+  const db = await getDb();
+  if (!db) return { deleted: 0 };
+  const pending = await db.select({ id: researchUpdates.id }).from(researchUpdates).where(eq(researchUpdates.status, "pending"));
+  if (pending.length === 0) return { deleted: 0 };
+  await db.delete(researchUpdates).where(eq(researchUpdates.status, "pending"));
+  return { deleted: pending.length };
+}
+
+/** Clear the catalogue approval audit log (the "recently approved" trail). Audit data. */
+export async function clearCatalogueAuditLog(): Promise<{ deleted: number }> {
+  const db = await getDb();
+  if (!db) return { deleted: 0 };
+  const rows = await db.select({ id: catalogueAuditLog.id }).from(catalogueAuditLog);
+  if (rows.length === 0) return { deleted: 0 };
+  await db.delete(catalogueAuditLog);
+  return { deleted: rows.length };
+}
+
+/**
+ * HARD reset the three reference catalogues to their seed state. TEST-MODE ONLY —
+ * the router gates this. Truncates catalogue tables + their rate history + lifecycle
+ * meta, then re-seeds the opportunity catalog. MMF/bank are left empty (they have no
+ * code seed; a manager re-adds curated rows or approves them via the pipeline).
+ */
+export async function resetReferenceCataloguesToSeed(
+  seed: InsertOpportunity[],
+): Promise<{ opportunitiesSeeded: number }> {
+  const db = await getDb();
+  if (!db) return { opportunitiesSeeded: 0 };
+  // Truncate catalogue rows + their history + lifecycle meta.
+  await db.delete(mmfRateHistory);
+  await db.delete(cbkRateHistory);
+  await db.delete(bankProductRateHistory);
+  await db.delete(referenceRowMeta);
+  await db.delete(mmfFunds);
+  await db.delete(bankInstruments);
+  await db.delete(opportunities);
+  // Re-seed the opportunity catalog from code.
+  for (const row of seed) await upsertOpportunity(row);
+  return { opportunitiesSeeded: seed.length };
 }

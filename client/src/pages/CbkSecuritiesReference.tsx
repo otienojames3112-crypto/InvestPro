@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { Link } from "wouter";
 import { AppShell } from "@/components/AppShell";
 import { useRefFocus } from "@/hooks/useRefFocus";
@@ -127,6 +127,16 @@ export default function CbkSecuritiesReference({ embedded = false }: { embedded?
     () => rows.filter((r) => (GOV_CLASSES as readonly string[]).includes(r.assetClass)),
     [rows],
   );
+
+  // Round 86: a ?ref= that matches no CBK security is a stale cross-catalogue link;
+  // clear it (and its prefill) once rows load so this catalogue isn't filtered to nothing.
+  useEffect(() => {
+    if (isLoading || !refFocus.focusRef) return;
+    refFocus.clearIfMissing(
+      govRows.flatMap((r) => [r.ref, r.name]),
+      () => setSearch((s) => (s === refFocus.focusRef ? "" : s)),
+    );
+  }, [isLoading, govRows, refFocus]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();

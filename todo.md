@@ -1617,3 +1617,18 @@
 - [x] 10. Govern direct MMF edits: require source/as-of/reason/old/new; write catalogue audit + rate history
 - [x] 11. Remove top-level Explore Screener; add "All Approved Instruments" (approved-only) + optional "Plan Fit" diagnostics under Reference Catalogues
 - [x] 12. Tests for all of the above (A–E) — server/round85ResearchUx.test.ts (17 tests)
+
+
+## Round 86 — Research audit: approved-universe + governance
+
+- [x] 1. Build dedicated AllApprovedInstruments.tsx (approved federated universe only; drop Explore.tsx screener for this tab)
+- [x] 2. Remove This-catalogue/All-catalogues toggle, scopeView, OpportunityRow, opportunities.list/scored, "Add instrument" from the approved-universe page
+- [x] 3. Wording: "approved reference universe", "filter approved instruments", "Plan Fit diagnostics" (not Score/screener); add the approved-universe explainer sentence
+- [x] 4. Plan Fit diagnostics: transparent components (net-of-tax yield, maturity fit, liquidity fit, source freshness, issuer concentration, tax/fee drag); neutral default order, sort by Plan Fit only on explicit choice
+- [x] 5. Fix ?ref= cross-catalogue leakage: clear ref on cat switch unless the new catalogue owns it; do not prefill search unless the row exists in that catalogue
+- [x] 6. Restrict federated universe to truly-approved rows (active && !unverified && verificationState in human_verified/human_entered, or has approval audit entry); exclude scraped_unverified/ai_extracted seed rows like NSE:EABL
+- [x] 7. Lifecycle controls on approved-universe: Open/Manage in catalogue (1-click), Deactivate/archive, Mark stale, View audit history (reuse CatalogueRowControls)
+- [x] 8. Test Mode manager-only cleanup: clear/reset seeded reference catalogues, clear pending research queue, clear test recently-approved audit log; Live never hard-deletes (deactivate/archive only)
+- [x] 9. Ask AI principle banner: allow factual extract/compare/sort/summarize; ban buy/sell/recommend/best
+- [x] 10. Ask AI system prompt: allow factual sorting/comparison by disclosed column; keep recommendation ban
+- [x] 11. Tests A–D (approved-universe purity, ref clearing, archive controls, Ask-AI copy/prompt)

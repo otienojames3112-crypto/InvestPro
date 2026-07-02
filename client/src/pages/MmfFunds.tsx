@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { Link } from "wouter";
 import { dashboardHref } from "@shared/navigation";
 import { AppShell } from "@/components/AppShell";
@@ -246,6 +246,16 @@ export default function MmfFunds({ embedded = false }: { embedded?: boolean } = 
   // Prefill the search box from a deep-link ?ref= so the row is easy to spot even
   // before the highlight fades.
   const [search, setSearch] = useState(() => refFocus.focusRef ?? "");
+
+  // Round 86: if the ?ref= belongs to another catalogue (a stale link), clear the
+  // prefilled search and drop the ref so this catalogue doesn't filter to nothing.
+  useEffect(() => {
+    if (isLoading || !refFocus.focusRef) return;
+    refFocus.clearIfMissing(
+      funds.map((f) => f.fundName),
+      () => setSearch((s) => (s === refFocus.focusRef ? "" : s)),
+    );
+  }, [isLoading, funds, refFocus]);
   const [sortKey, setSortKey] = useState<SortKey>("ear");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [addOpen, setAddOpen] = useState(false);

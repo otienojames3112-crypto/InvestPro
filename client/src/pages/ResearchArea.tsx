@@ -43,6 +43,12 @@ function ReferenceCatalogues() {
   const select = (id: string) => {
     const next = new URLSearchParams(params);
     next.set("cat", id);
+    // Round 86: a `?ref=` (or `?class=`) deep link belongs to ONE catalogue. When the
+    // manager switches to a different catalogue tab we must drop it, otherwise the
+    // new catalogue would prefill its search with a foreign reference (e.g. an
+    // NSE:EABL ref leaking onto the MMF Market tab).
+    next.delete("ref");
+    next.delete("class");
     setParams(next, { replace: false });
   };
 

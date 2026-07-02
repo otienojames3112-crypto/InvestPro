@@ -56,10 +56,15 @@ export function TabbedArea({
 
   const selectTab = useCallback(
     (id: string) => {
-      // Preserve any other query params already present (e.g. a deep-link the
-      // child page reads, like ?class= on the allocation→explore handoff).
+      // Preserve unrelated params, but drop nested deep-link params that belong to a
+      // specific sub-view (a catalogue row `?ref=`, a nested catalogue `?cat=`, or an
+      // allocation handoff `?class=`). Carrying them across a top-level tab switch is
+      // what let a stale row ref leak onto the wrong catalogue (Round 86).
       const next = new URLSearchParams(params);
       next.set("tab", id);
+      next.delete("ref");
+      next.delete("cat");
+      next.delete("class");
       setParams(next, { replace: false });
     },
     [params, setParams],

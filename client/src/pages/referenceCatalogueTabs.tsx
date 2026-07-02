@@ -4,7 +4,7 @@ import MmfFunds from "./MmfFunds";
 import BankInstruments from "./BankInstruments";
 import CbkSecuritiesReference from "./CbkSecuritiesReference";
 import MarketAssetsReference from "./MarketAssetsReference";
-import Explore from "./Explore";
+import AllApprovedInstruments from "./AllApprovedInstruments";
 
 /**
  * The four published reference catalogues, nested under the single
@@ -49,6 +49,6 @@ export const CATALOGUE_TABS: AreaTab[] = [
     label: "All Approved Instruments",
     icon: Compass,
     hint: "A neutral, read-only screener across every approved row in all four catalogues at once — search, filter, and optionally turn on a transparent Plan-fit score. Published facts only; unapproved AI findings never appear here, and it never picks anything for you.",
-    render: () => <Explore embedded />,
+    render: () => <AllApprovedInstruments embedded />,
   },
 ];

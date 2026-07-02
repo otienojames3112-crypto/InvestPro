@@ -116,7 +116,7 @@ describe("Round 85 · B — Explore is nested, not a top-level Research tab", ()
     const m = catalogueTabs.match(
       /id:\s*"all-approved"[\s\S]*?render:\s*\(\)\s*=>\s*<([A-Za-z0-9_]+)/,
     );
-    expect(m?.[1]).toBe("Explore");
+    expect(m?.[1]).toBe("AllApprovedInstruments");
   });
 });
 

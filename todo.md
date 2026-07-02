@@ -1639,4 +1639,14 @@
 - [x] client: show a friendly "sign-in link expired" banner when ?authError present, with a re-login button
 - [x] tests: cover the failure-path redirect + authError banner
 - [x] full suite + tsc green; checkpoint for redeploy
-- [ ] plain-English guide: continuing the tool outside Manus
+- [x] plain-English guide: continuing the tool outside Manus
+
+## Round 88 — Threaded Ask AI (manager research assistant)
+- [x] Migration 0016: research_threads, research_messages; finding versioning (superseded_by_id/supersedes_id/corrected_by/corrected_at/correction_reason); task+finding threadId
+- [x] aiResearchService: domain-context + holdings-vs-reference invariants in system prompt; priorMessages context assembly; findingsToRows threadId tagging
+- [x] db.ts: thread create/get/list/touch + message insert/list; correctResearchFinding (versioned finding + drafted governed pending edit); listFindings threadId filter + superseded status
+- [x] routers.research: thread-aware ask (create/continue thread, persist turns, prior context, per-follow-up source); listThreads/getThread/setThreadArchived; correctFinding
+- [x] AskAI.tsx: threaded conversation view; "Ask a follow-up" with optional per-follow-up source; findings grouped for the thread; correct-a-figure action with versioned diff; thread-based history
+- [x] Tests: prompt/context assembly, per-follow-up source, correctFinding versioning+audit+drafted pending, factual-sort-not-advice (server/round88ThreadedResearch.test.ts, 17 tests)
+- [x] Full suite + tsc green (1545 tests pass, tsc clean); verify UI; checkpoint
+- [ ] Package full codebase ZIP and deliver

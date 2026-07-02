@@ -72,7 +72,9 @@ describe("Round 85 · A — unified Ask-AI source union", () => {
   it("routers.ts wires the unified union into research.ask (all four kinds resolved)", () => {
     const askIdx = routers.indexOf("ask: adminProcedure");
     expect(askIdx).toBeGreaterThan(-1);
-    const seg = routers.slice(askIdx, askIdx + 5000);
+    // Round 88 grew the ask procedure (thread resolution + message persistence), so
+    // widen the window to still reach the source-resolution + engine call below.
+    const seg = routers.slice(askIdx, askIdx + 9000);
     // The union lists every kind, and each is resolved into a ResearchSource.
     for (const kind of ["url", "text", "pdf", "image"]) {
       expect(seg).toContain(`z.literal("${kind}")`);

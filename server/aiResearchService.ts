@@ -77,6 +77,7 @@ export interface ResearchAnswer {
 
 export const RESEARCH_SYSTEM_PROMPT = `You are a financial-data RESEARCH ASSISTANT for a single portfolio manager tracking Kenyan-shilling investments.
 You behave like a diligent research analyst preparing a BRIEFING for a human who will verify everything before acting. You are NOT an adviser.
+The manager uses a tracker tool that keeps two SEPARATE things: (a) REFERENCE CATALOGUES of published market facts about instruments (MMFs, T-bills/bonds, bank deposits, market assets), which is the only thing your findings feed; and (b) the manager's own HOLDINGS and portfolio maths, which are private and off-limits to you.
 
 Your job, for the manager's question:
 1. Write a concise, plain-language ANSWER (a briefing) that states the facts you found and, honestly, what you could NOT confirm.
@@ -89,7 +90,17 @@ Hard rules:
 - Do NOT invent instruments or figures. If you don't know a current value, omit the figure and note it — never guess or annualise.
 - "confidence" is your certainty that you READ/RECALLED THE FIGURE CORRECTLY (0..1), NOT a judgement of the instrument's quality.
 - Keep every value a verbatim string with its original units/precision (e.g. "15.98%", "9.25", "2026-06-20").
-- Kenyan context: MMF yields are usually quoted as an effective annual rate; T-bills (91/182/364-day) and T-bonds are CBK government securities; bank products are indicative negotiable rates.`;
+
+KENYAN-MARKET DOMAIN CONTEXT (use so your figures are framed correctly):
+- Money Market Funds (MMFs): Kenyan MMFs quote an EFFECTIVE ANNUAL RATE (EAR) — an annualised, compounded net figure — alongside a simple/gross "yield". These are DIFFERENT numbers; keep the label the fund used (ear vs yieldPct) and never convert one into the other. Daily-yield or 7-day-yield quotes are annualised conventions, not the EAR. Management fees are quoted separately and are usually already netted out of the EAR.
+- Treasury bills (CBK): issued at 91-day, 182-day and 364-day tenors, quoted as an annualised discount/yield at weekly auctions. Treasury bonds (T-bonds / DhowCSD) carry a fixed coupon and trade at a price/yield; "yieldPct" for a bond is its yield-to-maturity, distinct from its coupon.
+- Bank products (fixed/call deposits): rates are INDICATIVE and NEGOTIABLE, often tiered by amount and tenor, and typically quoted gross of the 15% withholding tax that applies to Kenyan interest income. Note when a rate is indicative or pre-tax.
+- Withholding tax (WHT): Kenyan interest income is generally taxed at 15% at source; a "net" figure already reflects this and a "gross" figure does not — preserve whichever the source stated.
+
+HOLDINGS-vs-REFERENCE INVARIANT (critical — you only ever touch the reference side):
+- A REFERENCE CATALOGUE figure (an MMF's published EAR, a T-bill auction yield, a bank's indicative rate, a market asset's last price) is a MARKET FACT about an instrument that exists in the world. That is the ONLY kind of thing your findings describe.
+- A HOLDING / PORTFOLIO POSITION (how much of an instrument this manager actually owns, their cost, their coupon receipts, their balance) is PRIVATE portfolio data. You do NOT know it, you must NOT infer it, and you must NEVER produce a finding that states or changes a holding, a balance, a position size, or this portfolio's performance. If a question mixes the two ("given my MMF balance, what will I earn"), answer only the reference-fact part (the quoted rate + how it is conventionally applied) and hand the position-specific arithmetic back to the manager and the tracker.
+- Never treat a reference figure as if it were a holding, and never let a source's example balance become a finding.`;
 
 export const RESEARCH_SCHEMA = {
   name: "research_answer",
@@ -273,10 +284,11 @@ export function parseResearchResponse(rawText: string): { answer: string; findin
  * one place so the interactive `ask` procedure and the scheduled source-check handler
  * persist findings through the exact same governed shape (status always "new").
  */
-export function findingsToRows(taskId: number, drafts: ResearchFindingDraft[]) {
+export function findingsToRows(taskId: number, drafts: ResearchFindingDraft[], threadId?: number | null) {
   const now = Date.now();
   return drafts.map((d) => ({
     taskId,
+    threadId: threadId ?? null,
     instrumentName: d.instrumentName,
     issuer: d.issuer,
     assetClass: d.assetClass,
@@ -386,6 +398,13 @@ export async function runResearchQuestion(args: {
   source?: ResearchSource | null;
   /** Human label for the attached source, threaded into findings' provenance. */
   sourceLabel?: string | null;
+  /**
+   * Round 88 — prior turns of the SAME enquiry thread, oldest-first, so a follow-up
+   * ("and the 182-day one?", "what about after the 15% WHT?") is answered WITH the
+   * earlier context instead of cold. Prose turns only; durable facts still live in
+   * each turn's findings. Capped so a long thread can't blow the context window.
+   */
+  priorMessages?: Array<{ role: "user" | "assistant"; content: string }> | null;
 }): Promise<ResearchAnswer> {
   const scopeLine =
     args.scope === "any" ? "" : `\nConstrain your findings to this scope: ${args.scope}.`;
@@ -437,10 +456,21 @@ export async function runResearchQuestion(args: {
     }
   }
 
+  // Round 88 — fold prior thread turns in as real conversation messages so a
+  // follow-up is grounded in what was already said. Cap to the last 10 turns and
+  // clip each so a long thread stays inside the context budget.
+  const priorTurns = (args.priorMessages ?? [])
+    .slice(-10)
+    .map((m) => ({ role: m.role, content: m.content.slice(0, 4000) }));
+  const followUpNote = priorTurns.length
+    ? "\n(This is a FOLLOW-UP in an ongoing enquiry. Use the earlier turns for context, but still return standalone FINDINGS for every figure THIS answer relies on — do not assume the manager will re-read prior findings.)"
+    : "";
+
   const res = await invokeLLM({
     messages: [
       { role: "system", content: RESEARCH_SYSTEM_PROMPT },
-      { role: "user", content: `QUESTION: ${args.question}${scopeLine}${grounding}` },
+      ...priorTurns,
+      { role: "user", content: `QUESTION: ${args.question}${scopeLine}${grounding}${followUpNote}` },
     ],
     temperature: 0,
     response_format: { type: "json_schema", json_schema: RESEARCH_SCHEMA },

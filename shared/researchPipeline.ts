@@ -76,6 +76,10 @@ export interface PendingUpdateInput {
   findingId?: number | null;
   /** Round 82 — for a single-field EDIT, the figure key this update changes. */
   field?: string | null;
+  /** Round 88 — the live value BEFORE this edit (captured for the audit trail). */
+  oldValue?: string | null;
+  /** Round 88 — the manager-vouched new value proposed by this edit. */
+  managerValue?: string | null;
 }
 
 export interface ValidationResult {

@@ -2298,6 +2298,8 @@ import {
   sourceRegistry,
   researchTasks,
   researchFindings,
+  researchThreads,
+  researchMessages,
   catalogueAuditLog,
   mmfRateHistory,
   cbkRateHistory,
@@ -2311,6 +2313,10 @@ import {
   type InsertResearchTask,
   type ResearchFinding,
   type InsertResearchFinding,
+  type ResearchThread,
+  type InsertResearchThread,
+  type ResearchMessage,
+  type InsertResearchMessage,
   type CatalogueAuditLog,
   type InsertCatalogueAuditLog,
   type ReferenceRowMeta,
@@ -2361,6 +2367,12 @@ export async function enqueueResearchUpdate(input: PendingUpdateInput): Promise<
     aiModel: input.aiModel ?? null,
     sourceKey: input.sourceKey ?? null,
     status: "pending", // invariant: always pending on creation
+    // Round 82/88 — carry the single-field EDIT detail + finding linkage so the
+    // review queue and the audit trail can show old → (proposed) new on the figure.
+    findingId: input.findingId ?? null,
+    field: input.field ?? null,
+    oldValue: input.oldValue ?? null,
+    managerValue: input.managerValue ?? null,
   };
   const res = await db.insert(researchUpdates).values(row);
   return extractInsertId(res);
@@ -2953,15 +2965,17 @@ export async function getResearchFinding(id: number): Promise<ResearchFinding | 
   return rows[0] ?? null;
 }
 
-/** List findings (newest first), optionally filtered by task and/or triage status. */
+/** List findings (newest first), optionally filtered by task, thread and/or triage status. */
 export async function listResearchFindings(filter?: {
   taskId?: number;
-  status?: "new" | "drafted" | "dismissed";
+  threadId?: number;
+  status?: "new" | "drafted" | "dismissed" | "superseded";
 }): Promise<ResearchFinding[]> {
   const db = await getDb();
   if (!db) return [];
   const clauses = [] as ReturnType<typeof eq>[];
   if (filter?.taskId != null) clauses.push(eq(researchFindings.taskId, filter.taskId));
+  if (filter?.threadId != null) clauses.push(eq(researchFindings.threadId, filter.threadId));
   if (filter?.status) clauses.push(eq(researchFindings.status, filter.status));
   const base = db.select().from(researchFindings);
   const q = clauses.length ? base.where(and(...clauses)) : base;
@@ -2979,10 +2993,10 @@ export async function countNewFindings(): Promise<number> {
   return Number(rows[0]?.n ?? 0);
 }
 
-/** Update a finding's triage status (drafted → links its pending update; dismissed). */
+/** Update a finding's triage status (drafted → links its pending update; dismissed; superseded). */
 export async function updateFindingStatus(
   id: number,
-  status: "new" | "drafted" | "dismissed",
+  status: "new" | "drafted" | "dismissed" | "superseded",
   patch?: { reviewedBy?: string | null; draftedUpdateId?: number | null },
 ): Promise<void> {
   const db = await getDb();
@@ -2996,6 +3010,179 @@ export async function updateFindingStatus(
       ...(patch?.draftedUpdateId != null ? { draftedUpdateId: patch.draftedUpdateId } : {}),
     })
     .where(eq(researchFindings.id, id));
+}
+
+/* ── Round 88 — Research THREADS + MESSAGES (the enquiry conversation) ──────────
+ * A thread groups an opening question and its follow-ups. Each turn is a message;
+ * each AI answer still spawns its own research_task + findings (traceability). No
+ * catalogue figure ever lives here — this is the transcript + prior-context store.
+ */
+
+/** Create a new enquiry thread. Returns the new id (or null when DB-less). */
+export async function createResearchThread(input: InsertResearchThread): Promise<number | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const res = await db.insert(researchThreads).values(input);
+  return extractInsertId(res);
+}
+
+/** Fetch a single thread by id. */
+export async function getResearchThread(id: number): Promise<ResearchThread | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db.select().from(researchThreads).where(eq(researchThreads.id, id)).limit(1);
+  return rows[0] ?? null;
+}
+
+/** List enquiry threads (most-recently-updated first), excluding archived by default. */
+export async function listResearchThreads(opts?: { includeArchived?: boolean; limit?: number }): Promise<ResearchThread[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const base = db.select().from(researchThreads);
+  const q = opts?.includeArchived ? base : base.where(eq(researchThreads.archived, false));
+  return q.orderBy(desc(researchThreads.updatedAt)).limit(opts?.limit ?? 50);
+}
+
+/** Touch a thread's updatedAt (called after each new turn) and optionally archive it. */
+export async function touchResearchThread(id: number, patch?: { archived?: boolean }): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db
+    .update(researchThreads)
+    .set({ updatedAt: new Date(), ...(patch?.archived != null ? { archived: patch.archived } : {}) })
+    .where(eq(researchThreads.id, id));
+}
+
+/** Insert one transcript message. Returns the new id. */
+export async function insertResearchMessage(input: InsertResearchMessage): Promise<number | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const res = await db.insert(researchMessages).values(input);
+  return extractInsertId(res);
+}
+
+/** List a thread's messages in chronological order (id asc == created order). */
+export async function listResearchMessages(threadId: number): Promise<ResearchMessage[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select()
+    .from(researchMessages)
+    .where(eq(researchMessages.threadId, threadId))
+    .orderBy(asc(researchMessages.id));
+}
+
+/**
+ * Round 88 — VERSIONED FINDING CORRECTION. A manager edits one extracted figure on
+ * a finding. We do NOT mutate the original: we write a NEW finding row (the
+ * corrected version) carrying the edited figures, link the two (old.supersededById
+ * → new, new.supersedesId → old, old.status → 'superseded'), and — crucially —
+ * draft a PENDING research_update (a governed catalogue-edit proposal) so the
+ * correction flows through the normal review queue with old → new + reason +
+ * source. Nothing touches a live catalogue here; only an approval does. Returns the
+ * new finding id + the drafted update id.
+ */
+export async function correctResearchFinding(args: {
+  findingId: number;
+  field: string;
+  newValue: string;
+  reason: string;
+  by: string;
+  byName?: string | null;
+}): Promise<{ newFindingId: number | null; updateId: number | null } | { error: string }> {
+  const db = await getDb();
+  if (!db) return { newFindingId: null, updateId: null };
+
+  const original = await getResearchFinding(args.findingId);
+  if (!original) return { error: "Finding not found." };
+  if (original.status === "superseded" || original.supersededById != null) {
+    return { error: "This finding has already been corrected; correct its latest version instead." };
+  }
+  const field = args.field.trim();
+  const newValue = args.newValue.trim();
+  const reason = args.reason.trim();
+  if (field === "") return { error: "A field to correct is required." };
+  if (newValue === "") return { error: "A corrected value is required." };
+  if (reason === "") return { error: "A plain-English reason for the correction is required." };
+
+  const oldFigures = (original.extractedFields ?? {}) as Record<string, unknown>;
+  const oldValueRaw = oldFigures[field];
+  const oldValue = oldValueRaw === undefined || oldValueRaw === null ? null : String(oldValueRaw);
+  const nextFigures: Record<string, unknown> = { ...oldFigures, [field]: newValue };
+
+  const now = Date.now();
+
+  // 1) Write the corrected version as a NEW finding row (status 'new' so it can be
+  //    triaged like any other, but carrying the correction provenance + a back-link).
+  const correctedRow: InsertResearchFinding = {
+    taskId: original.taskId,
+    threadId: original.threadId ?? null,
+    instrumentName: original.instrumentName,
+    issuer: original.issuer,
+    assetClass: original.assetClass,
+    targetCatalogue: original.targetCatalogue,
+    currency: original.currency,
+    extractedFields: nextFigures,
+    sourceLabel: original.sourceLabel,
+    sourceUrl: original.sourceUrl,
+    sourceAsOf: original.sourceAsOf,
+    checkedAt: now,
+    // A manager-vouched correction is at least as certain as the original.
+    confidence: original.confidence,
+    missingFields: original.missingFields,
+    warnings: original.warnings,
+    rawExcerpt: original.rawExcerpt,
+    status: "new",
+    supersedesId: original.id,
+    correctedBy: args.by,
+    correctedAt: now,
+    correctionReason: reason,
+  };
+  const insertRes = await db.insert(researchFindings).values(correctedRow);
+  const newFindingId = extractInsertId(insertRes);
+
+  // 2) Point the original at its successor and mark it superseded (never deleted).
+  await db
+    .update(researchFindings)
+    .set({ status: "superseded", supersededById: newFindingId, reviewedBy: args.by, reviewedAt: now })
+    .where(eq(researchFindings.id, original.id));
+
+  // 3) Draft a governed PENDING update so the correction goes through review with
+  //    old → new + reason + source. This is an EDIT to the target catalogue row.
+  //    Source of record for the correction: the manager, citing the finding's
+  //    original source plus their stated reason.
+  const source = (original.sourceLabel ?? "Manager correction").slice(0, 300);
+  let updateId: number | null = null;
+  try {
+    updateId = await enqueueResearchUpdate({
+      changeKind: "edit",
+      targetRef: original.instrumentName,
+      name: original.instrumentName,
+      assetClass: original.assetClass ?? "alt",
+      issuer: original.issuer,
+      currency: original.currency,
+      figures: { [field]: newValue },
+      source,
+      sourceUrl: original.sourceUrl,
+      asOf: original.sourceAsOf ?? null,
+      origin: "manual",
+      findingId: newFindingId,
+      field,
+      oldValue,
+      managerValue: newValue,
+    });
+  } catch (err) {
+    // If the governed enqueue rejects (e.g. an edit lacking a targetRef), surface it
+    // but keep the versioned finding — the correction chain is still recorded.
+    return { error: `Correction recorded, but could not draft a review item: ${err instanceof Error ? err.message : String(err)}` };
+  }
+
+  // 4) Close the loop: the corrected finding is now 'drafted' to that update.
+  if (newFindingId != null && updateId != null) {
+    await updateFindingStatus(newFindingId, "drafted", { reviewedBy: args.by, draftedUpdateId: updateId });
+  }
+
+  return { newFindingId, updateId };
 }
 
 /* ── Catalogue audit log (immutable "Recently Approved" trail) ──────────────── */

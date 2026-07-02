@@ -122,6 +122,13 @@ import {
   listResearchFindings,
   countNewFindings,
   updateFindingStatus,
+  createResearchThread,
+  getResearchThread,
+  listResearchThreads,
+  touchResearchThread,
+  insertResearchMessage,
+  listResearchMessages,
+  correctResearchFinding,
   listCatalogueAudit,
   listFederatedUniverse,
   primaryMmfFundNames,
@@ -7434,19 +7441,51 @@ export const appRouter = router({
         return { task, findings };
       }),
 
-    // The findings inbox, optionally filtered by triage status.
+    // The findings inbox, optionally filtered by task, thread and/or triage status.
     listFindings: adminProcedure
       .input(
         z
           .object({
             taskId: z.number().int().positive().optional(),
-            status: z.enum(["new", "drafted", "dismissed"]).optional(),
+            threadId: z.number().int().positive().optional(),
+            status: z.enum(["new", "drafted", "dismissed", "superseded"]).optional(),
           })
           .optional(),
       )
       .query(async ({ input }) => {
         const findings = await listResearchFindings(input ?? undefined);
         return { findings };
+      }),
+
+    // Round 88 — the enquiry THREAD list (most-recently-updated first).
+    listThreads: adminProcedure
+      .input(z.object({ includeArchived: z.boolean().optional(), limit: z.number().int().min(1).max(100).optional() }).optional())
+      .query(async ({ input }) => {
+        const threads = await listResearchThreads({ includeArchived: input?.includeArchived, limit: input?.limit });
+        return { threads };
+      }),
+
+    // Round 88 — a single thread: its transcript (messages) + every finding it
+    // produced across all its turns. The result panel renders the conversation and
+    // the running set of draft facts together.
+    getThread: adminProcedure
+      .input(z.object({ id: z.number().int().positive() }))
+      .query(async ({ input }) => {
+        const thread = await getResearchThread(input.id);
+        if (!thread) throw new TRPCError({ code: "NOT_FOUND", message: "Enquiry thread not found." });
+        const messages = await listResearchMessages(input.id);
+        const findings = await listResearchFindings({ threadId: input.id });
+        return { thread, messages, findings };
+      }),
+
+    // Round 88 — archive/unarchive a thread (hides it from the default enquiry list).
+    setThreadArchived: adminProcedure
+      .input(z.object({ id: z.number().int().positive(), archived: z.boolean() }))
+      .mutation(async ({ input }) => {
+        const thread = await getResearchThread(input.id);
+        if (!thread) throw new TRPCError({ code: "NOT_FOUND", message: "Enquiry thread not found." });
+        await touchResearchThread(input.id, { archived: input.archived });
+        return { ok: true };
       }),
 
     // Cheap untriaged-findings count for the inbox badge.
@@ -7476,17 +7515,65 @@ export const appRouter = router({
             ])
             .optional(),
           sourceLabel: z.string().max(200).optional(),
+          // Round 88 — continue an existing enquiry THREAD (a follow-up) when supplied.
+          // Omit to open a NEW thread from this question.
+          threadId: z.number().int().positive().optional(),
         }),
       )
       .mutation(async ({ ctx, input }) => {
+        const openId = ctx.user.openId ?? String(ctx.user.id);
+        const scopeEnum = input.scope as "mmf" | "bank" | "cbk" | "market_asset" | "macro" | "any";
+
+        // Round 88 — resolve the thread. A follow-up continues an existing thread;
+        // otherwise we open a new one titled from the opening question. We also gather
+        // the prior prose turns (oldest-first) to feed the engine as context.
+        let threadId = input.threadId ?? null;
+        let priorMessages: Array<{ role: "user" | "assistant"; content: string }> = [];
+        if (threadId != null) {
+          const thread = await getResearchThread(threadId);
+          if (!thread) throw new TRPCError({ code: "NOT_FOUND", message: "Enquiry thread not found." });
+          const msgs = await listResearchMessages(threadId);
+          priorMessages = msgs.map((m) => ({ role: m.role as "user" | "assistant", content: m.content }));
+        } else {
+          threadId = await createResearchThread({
+            createdByOpenId: openId,
+            createdByName: ctx.user.name ?? null,
+            title: input.question.slice(0, 200),
+            scope: scopeEnum,
+          });
+        }
+
         const taskId = await createResearchTask({
-          createdByOpenId: ctx.user.openId ?? String(ctx.user.id),
+          createdByOpenId: openId,
           createdByName: ctx.user.name ?? null,
           prompt: input.question,
           scope: input.scope,
           status: "running",
+          threadId: threadId ?? undefined,
         });
         if (!taskId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Could not create the enquiry." });
+
+        // Persist the manager's turn (with any attached source) BEFORE the AI answers,
+        // so the transcript is durable even if the engine errors.
+        if (threadId != null) {
+          const sk = input.source?.kind ?? null;
+          const sref =
+            input.source?.kind === "url"
+              ? input.source.url
+              : input.source?.kind === "text"
+                ? input.source.text.slice(0, 700)
+                : input.source?.kind === "pdf" || input.source?.kind === "image"
+                  ? input.source.fileKey
+                  : null;
+          await insertResearchMessage({
+            threadId,
+            role: "user",
+            content: input.question,
+            sourceKind: sk ?? undefined,
+            sourceRef: sref ?? undefined,
+            sourceLabel: input.sourceLabel ?? undefined,
+          });
+        }
         try {
           // Resolve the unified source: PDF/image file keys become signed URLs the model
           // reads; url/text pass straight through. Legacy sourceUrl/sourceText are folded
@@ -7510,16 +7597,27 @@ export const appRouter = router({
             sourceText: input.sourceText ?? null,
             source: resolvedSource,
             sourceLabel: input.sourceLabel ?? null,
+            priorMessages,
           });
-          const rows = findingsToRows(taskId, res.findings);
+          const rows = findingsToRows(taskId, res.findings, threadId);
           await insertResearchFindings(rows);
           await completeResearchTask(taskId, {
             answerSummary: res.answer.slice(0, 4000),
             aiModel: res.model,
             findingCount: rows.length,
           });
+          // Persist the AI turn + bump the thread so the enquiry list re-sorts.
+          if (threadId != null) {
+            await insertResearchMessage({
+              threadId,
+              role: "assistant",
+              content: res.answer.slice(0, 8000),
+              taskId,
+            });
+            await touchResearchThread(threadId);
+          }
           const findings = await listResearchFindings({ taskId });
-          return { taskId, answer: res.answer, model: res.model, findings };
+          return { taskId, threadId, answer: res.answer, model: res.model, findings };
         } catch (err) {
           await completeResearchTask(taskId, {
             error: (err instanceof Error ? err.message : String(err)).slice(0, 500),
@@ -7599,6 +7697,38 @@ export const appRouter = router({
         const by = ctx.user.name ?? ctx.user.email ?? "You";
         await updateFindingStatus(input.findingId, "dismissed", { reviewedBy: by });
         return { ok: true };
+      }),
+
+    // Round 88 — CORRECT a finding's extracted figure. This does NOT mutate the
+    // original: it versions the finding (writes a corrected successor, links the two,
+    // supersedes the original) and drafts a governed PENDING catalogue-edit carrying
+    // old → new + the manager's reason + the finding's source. It NEVER touches a
+    // live catalogue or any holding — the correction still flows through the review
+    // queue. Returns the new finding id + the drafted pending-update id.
+    correctFinding: adminProcedure
+      .input(
+        z.object({
+          findingId: z.number().int().positive(),
+          field: z.string().min(1).max(48),
+          newValue: z.string().min(1).max(300),
+          reason: z.string().min(3).max(600),
+        }),
+      )
+      .mutation(async ({ ctx, input }) => {
+        const by = ctx.user.openId ?? String(ctx.user.id);
+        const byName = ctx.user.name ?? ctx.user.email ?? "You";
+        const result = await correctResearchFinding({
+          findingId: input.findingId,
+          field: input.field,
+          newValue: input.newValue,
+          reason: input.reason,
+          by,
+          byName,
+        });
+        if ("error" in result) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: result.error });
+        }
+        return { newFindingId: result.newFindingId, pendingUpdateId: result.updateId };
       }),
   }),
 

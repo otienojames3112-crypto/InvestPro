@@ -1433,12 +1433,68 @@ export const researchTasks = mysqlTable("research_tasks", {
   findingCount: int("findingCount").notNull().default(0),
   /** Error message if the enquiry failed. */
   error: varchar("error", { length: 400 }),
+  /** Round 88 — the enquiry thread this task belongs to (null = legacy one-shot). */
+  threadId: int("thread_id"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   /** Completion timestamp (epoch ms UTC). */
   completedAt: bigint("completedAt", { mode: "number" }),
 });
 export type ResearchTask = typeof researchTasks.$inferSelect;
 export type InsertResearchTask = typeof researchTasks.$inferInsert;
+
+/**
+ * Round 88 — RESEARCH THREADS. One row per enquiry CONVERSATION on the Ask AI
+ * panel. A thread groups the opening question and every follow-up together so
+ * prior turns can be fed back to the model as context. A thread is metadata only:
+ * it never holds a catalogue figure and never writes a catalogue. Each turn still
+ * spawns its own research_task (traceability) and its own findings.
+ */
+export const researchThreads = mysqlTable("research_threads", {
+  id: int("id").autoincrement().primaryKey(),
+  /** Optional portfolio the enquiry was framed for. */
+  portfolioId: int("portfolioId"),
+  /** Who opened the thread (manager open id). */
+  createdByOpenId: varchar("createdByOpenId", { length: 200 }).notNull(),
+  createdByName: varchar("createdByName", { length: 200 }),
+  /** Short title (derived from the opening question) for the enquiry list. */
+  title: varchar("title", { length: 300 }).notNull(),
+  /** Which catalogue family the thread is scoped to (any = unconstrained). */
+  scope: mysqlEnum("scope", ["mmf", "bank", "cbk", "market_asset", "macro", "any"]).notNull().default("any"),
+  /** Archived threads are hidden from the default enquiry list. */
+  archived: boolean("archived").notNull().default(false),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+export type ResearchThread = typeof researchThreads.$inferSelect;
+export type InsertResearchThread = typeof researchThreads.$inferInsert;
+
+/**
+ * Round 88 — RESEARCH MESSAGES. The ordered turns of a research thread. A user
+ * message is the manager's question (optionally with one attached source); an
+ * assistant message is the AI's prose answer, linked back to the research_task
+ * that produced it (and thus to its findings). This is the durable transcript
+ * used both to render the conversation and to assemble prior context for the
+ * next follow-up. It never holds a catalogue figure.
+ */
+export const researchMessages = mysqlTable("research_messages", {
+  id: int("id").autoincrement().primaryKey(),
+  threadId: int("thread_id").notNull(),
+  /** Turn role. */
+  role: mysqlEnum("role", ["user", "assistant"]).notNull(),
+  /** The question text (user) or the prose answer (assistant). */
+  content: text("content").notNull(),
+  /** For a user turn, the kind of source attached to THIS follow-up (nullable). */
+  sourceKind: mysqlEnum("source_kind", ["url", "text", "pdf", "image"]),
+  /** For a user turn, the source reference: a URL, pasted-text digest, or storage key. */
+  sourceRef: varchar("source_ref", { length: 700 }),
+  /** Human label for the attached source (shown in the transcript). */
+  sourceLabel: varchar("source_label", { length: 300 }),
+  /** For an assistant turn, the research_tasks row that produced it. */
+  taskId: int("task_id"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+export type ResearchMessage = typeof researchMessages.$inferSelect;
+export type InsertResearchMessage = typeof researchMessages.$inferInsert;
 
 /**
  * Round 82 — RESEARCH FINDINGS. The structured, VERDICT-FREE draft facts an
@@ -1476,11 +1532,27 @@ export const researchFindings = mysqlTable("research_findings", {
   /** A short verbatim excerpt from the source supporting the figures. */
   rawExcerpt: text("rawExcerpt"),
   /** Triage lifecycle: new = untouched; drafted = turned into a pending update; dismissed. */
-  status: mysqlEnum("status", ["new", "drafted", "dismissed"]).notNull().default("new"),
+  status: mysqlEnum("status", ["new", "drafted", "dismissed", "superseded"]).notNull().default("new"),
   /** If drafted, the research_updates row it produced. */
   draftedUpdateId: int("draftedUpdateId"),
   reviewedBy: varchar("reviewedBy", { length: 200 }),
   reviewedAt: bigint("reviewedAt", { mode: "number" }),
+  /** Round 88 — the enquiry thread this finding belongs to (null = legacy). */
+  threadId: int("thread_id"),
+  /**
+   * Round 88 — VERSIONING. When a manager corrects a finding's extracted figure,
+   * a NEW finding row is written as the corrected version and the OLD row's
+   * supersededById points at it (old.status becomes 'superseded'). The new row's
+   * supersedesId points back at the old one, so the full correction chain is
+   * reconstructable. Both are null for an original, never-corrected finding.
+   */
+  supersededById: int("superseded_by_id"),
+  supersedesId: int("supersedes_id"),
+  /** Round 88 — who corrected this finding + when (for the corrected version row). */
+  correctedBy: varchar("corrected_by", { length: 200 }),
+  correctedAt: bigint("corrected_at", { mode: "number" }),
+  /** Round 88 — the manager's plain-English reason for the correction. */
+  correctionReason: text("correction_reason"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
 export type ResearchFinding = typeof researchFindings.$inferSelect;

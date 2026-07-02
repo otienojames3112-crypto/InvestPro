@@ -1423,8 +1423,51 @@ export const researchTasks = mysqlTable("research_tasks", {
   prompt: text("prompt").notNull(),
   /** Which catalogue family the question was scoped to (any = unconstrained). */
   scope: mysqlEnum("scope", ["mmf", "bank", "cbk", "market_asset", "macro", "any"]).notNull().default("any"),
-  /** Lifecycle of the enquiry itself. */
-  status: mysqlEnum("status", ["running", "done", "error"]).notNull().default("running"),
+  /** Lifecycle of the enquiry itself. Round 91 widened it so a task can end in
+   * `needs_source_fix` (the attached source could not be read) or `failed` (the AI
+   * engine errored) distinctly from a clean `done`. `running` is retained for
+   * backward compatibility with legacy one-shot rows. */
+  status: mysqlEnum("status", [
+    "running",
+    "queued",
+    "done",
+    "error",
+    "needs_source_fix",
+    "failed",
+  ]).notNull().default("running"),
+  /** Round 91 — fine-grained STAGE for the pollable task machine, surfaced verbatim
+   * in the UI: queued → reading_source → asking_ai → extracting → done, or the two
+   * terminal error stages. Kept separate from `status` so the client can render a
+   * live progress label without overloading the coarse lifecycle enum. */
+  stage: mysqlEnum("stage", [
+    "queued",
+    "reading_source",
+    "asking_ai",
+    "extracting",
+    "done",
+    "needs_source_fix",
+    "failed",
+  ]).notNull().default("queued"),
+  /** Round 91 — whether this is a free-form Ask-AI enquiry or a catalogue Review. A
+   * `review` task REQUIRES a readable source and never answers from general knowledge. */
+  kind: mysqlEnum("kind", ["ask", "review"]).notNull().default("ask"),
+  /** Round 91 — the catalogue a `review` task diffs against (null for `ask`). */
+  reviewCatalogue: mysqlEnum("review_catalogue", ["mmf", "bank", "cbk", "market_asset"]),
+  /** Round 91 — the PENDING attached source, persisted at start so a separate
+   * `processResearchTask` call can read + run it without the browser holding a
+   * single long request open. Null when no source was attached. */
+  sourceKind: mysqlEnum("source_kind", ["url", "text", "pdf", "image"]),
+  /** URL, verbatim pasted text, or a storage fileKey depending on sourceKind. */
+  sourceRef: text("source_ref"),
+  /** Human label for the attached source (echoed onto findings' provenance). */
+  sourceLabel: varchar("source_label", { length: 200 }),
+  /** Round 91 — whether the manager pre-authorised answering WITHOUT a readable
+   * source (Ask AI only; ignored for review). */
+  allowUnsourced: boolean("allow_unsourced").notNull().default(false),
+  /** Round 91 — the SourceReadResult outcome (JSON) once the read has run, so the UI
+   * can show a source-status panel: {ok,kind,label,url?,chars?,thin?,warnings?} on
+   * success or {ok:false,reason,message,retryHint} on failure. */
+  sourceStatus: json("source_status"),
   /** The AI's prose answer to the manager's question (context, not a fact). */
   answerSummary: text("answerSummary"),
   /** The model that answered (audit only; never a quality signal). */
@@ -1520,6 +1563,9 @@ export const researchFindings = mysqlTable("research_findings", {
   extractedFields: json("extractedFields").$type<Record<string, unknown>>(),
   sourceLabel: varchar("sourceLabel", { length: 300 }),
   sourceUrl: varchar("sourceUrl", { length: 500 }),
+  /** Round 91 — the KIND of source these figures were read from (url/text/pdf/image),
+   * null when the finding was not grounded in a readable source. */
+  sourceKind: mysqlEnum("finding_source_kind", ["url", "text", "pdf", "image"]),
   /** As-of date the source reported (epoch ms UTC). */
   sourceAsOf: bigint("sourceAsOf", { mode: "number" }),
   /** When the AI actually checked the source (epoch ms UTC). */

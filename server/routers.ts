@@ -115,6 +115,7 @@ import {
   sourceDueList,
   createResearchTask,
   completeResearchTask,
+  setResearchTaskStage,
   getResearchTask,
   listResearchTasks,
   insertResearchFindings,
@@ -212,10 +213,12 @@ import {
 } from "../shared/researchPipeline";
 import {
   runResearchQuestion,
+  readSource,
   findingsToRows,
   buildCatalogueReviewQuestion,
   type ResearchScope,
   type ResearchSource,
+  type SourceReadResult,
   type CatalogueRowSnapshot,
 } from "./aiResearchService";
 import { normaliseAssetClass } from "../shared/assetModel";
@@ -874,6 +877,281 @@ async function snapshotAndMaybeNotifyDrift(
     }
   }
   return ctx.drift;
+}
+
+/* ══ Round 91 — robust source-gated research task pipeline ═══════════════════
+ *
+ * A single ordered runner shared by Ask AI and "Review source with AI". It performs
+ * the read ONCE, up front, through `readSource()` so a source-read failure (bad URL,
+ * JS-only page, unreadable PDF/image, storage error) is classified DISTINCTLY from an
+ * AI-engine failure. The task's live `stage` is advanced so the UI can poll real
+ * progress, and the SourceReadResult is persisted for the source-status panel.
+ *
+ * Divergence between the two callers:
+ *   • REVIEW requires a readable source. A failed read stops BEFORE the LLM, records
+ *     `needs_source_fix`, and produces ZERO findings — it never answers from memory.
+ *   • ASK may proceed on a failed read (answering from general knowledge) only when the
+ *     manager opted in (`allowUnsourced`) or attached no source at all; the answer and
+ *     every finding are stamped "not grounded in the attached source".
+ */
+
+type PendingResearchSource =
+  | { kind: "url"; url: string }
+  | { kind: "text"; text: string }
+  | { kind: "pdf"; fileKey: string }
+  | { kind: "image"; fileKey: string };
+
+/** Resolve a pending source (fileKeys → signed URLs) into the engine's ResearchSource. */
+async function resolveResearchSource(src: PendingResearchSource): Promise<ResearchSource> {
+  switch (src.kind) {
+    case "url":
+      return { kind: "url", url: src.url };
+    case "text":
+      return { kind: "text", text: src.text };
+    case "pdf":
+      return { kind: "pdf", fileUrl: await storageGetSignedUrl(src.fileKey) };
+    case "image":
+      return { kind: "image", imageUrl: await storageGetSignedUrl(src.fileKey) };
+  }
+}
+
+/** A compact, human label for a pending source, for provenance + the message log. */
+function defaultSourceLabel(src: PendingResearchSource, explicit?: string | null): string {
+  if (explicit && explicit.trim() !== "") return explicit.trim();
+  switch (src.kind) {
+    case "url":
+      try {
+        return new URL(src.url).hostname.replace(/^www\./, "");
+      } catch {
+        return src.url;
+      }
+    case "text":
+      return "Pasted source text";
+    case "pdf":
+      return "Uploaded PDF";
+    case "image":
+      return "Uploaded screenshot";
+  }
+}
+
+/** The comparison snapshot of a catalogue's CURRENT rows for a review task. */
+async function catalogueSnapshot(catalogue: ReferenceCatalogue): Promise<CatalogueRowSnapshot[]> {
+  if (catalogue === "mmf") {
+    const funds = await getMmfFunds();
+    return funds.map((f) => ({
+      fundName: f.fundName,
+      company: f.company,
+      ear: f.ear,
+      grossYield: f.grossYield,
+      managementFee: f.managementFee,
+      minInvestment: f.minInvestment,
+      aumMillions: f.aumMillions,
+      asOfDate: f.asOfDate ? String(f.asOfDate) : null,
+      source: f.source,
+    }));
+  }
+  if (catalogue === "bank") {
+    const banks = await getBankInstruments();
+    return banks.map((b) => ({
+      bankName: b.bankName,
+      instrumentType: b.instrumentType,
+      indicativeRate: b.indicativeRate,
+      minAmount: b.minAmount,
+      typicalTenor: b.typicalTenor,
+      isNegotiable: b.isNegotiable ? "true" : "false",
+      asOfDate: b.asOfDate ? String(b.asOfDate) : null,
+      source: b.source,
+    }));
+  }
+  const govClasses = ["gov_discount", "gov_coupon"];
+  const marketClasses = ["equity", "reit", "offshore_fund", "alt"];
+  const want = catalogue === "cbk" ? govClasses : marketClasses;
+  const opps = (await listOpportunities()).filter((o) => want.includes(o.assetClass));
+  return opps.map((o) => ({
+    name: o.name,
+    assetClass: o.assetClass,
+    yieldPct: o.yieldPct,
+    lastPrice: o.lastPrice,
+    trailingReturnPct: o.trailingReturnPct,
+    tenorYears: o.tenorYears,
+    dataAsOf: o.dataAsOf ? String(o.dataAsOf) : null,
+    dataSource: o.dataSource,
+  }));
+}
+
+/** JSON shape persisted to research_tasks.source_status and surfaced in the UI. */
+function sourceStatusJson(read: SourceReadResult) {
+  return read.ok
+    ? {
+        ok: true as const,
+        kind: read.kind,
+        label: read.label,
+        url: read.url ?? null,
+        chars: read.text.length,
+        thin: read.thin,
+        warnings: read.warnings,
+      }
+    : {
+        ok: false as const,
+        reason: read.reason,
+        message: read.message,
+        retryHint: read.retryHint,
+      };
+}
+
+export interface ExecuteResearchTaskResult {
+  taskId: number;
+  threadId: number | null;
+  answer: string;
+  model: string | null;
+  findings: Awaited<ReturnType<typeof listResearchFindings>>;
+  stage: "done" | "needs_source_fix" | "failed";
+  sourceStatus: ReturnType<typeof sourceStatusJson> | null;
+}
+
+/**
+ * Run a persisted research task to completion: read the source (if any), gate review,
+ * call the engine with the pre-read grounding, persist findings, and advance the stage.
+ * Records the AI turn on the thread. Never throws for a SOURCE problem — it resolves the
+ * task to `needs_source_fix`. Engine errors resolve the task to `failed`.
+ */
+async function executeResearchTask(opts: {
+  taskId: number;
+  threadId: number | null;
+  kind: "ask" | "review";
+  question: string;
+  scope: ResearchScope;
+  source: PendingResearchSource | null;
+  sourceLabel: string | null;
+  allowUnsourced: boolean;
+  priorMessages?: Array<{ role: "user" | "assistant"; content: string }>;
+}): Promise<ExecuteResearchTaskResult> {
+  const { taskId, threadId, kind } = opts;
+  try {
+    // ── Stage 1: READ THE SOURCE (once, before any LLM call) ──────────────────
+    let preRead: SourceReadResult | null = null;
+    let statusJson: ReturnType<typeof sourceStatusJson> | null = null;
+    if (opts.source) {
+      await setResearchTaskStage(taskId, "reading_source");
+      const resolved = await resolveResearchSource(opts.source);
+      const label = defaultSourceLabel(opts.source, opts.sourceLabel);
+      // Review REQUIRES readable text, so a thin fetch is FATAL there; Ask AI tolerates it.
+      preRead = await readSource(resolved, { label, thinIsFatal: kind === "review" });
+      statusJson = sourceStatusJson(preRead);
+      await setResearchTaskStage(taskId, "reading_source", { sourceStatus: statusJson });
+
+      if (!preRead.ok) {
+        // REVIEW never falls back to general knowledge — stop, no findings.
+        if (kind === "review") {
+          await completeResearchTask(taskId, {
+            status: "needs_source_fix",
+            stage: "needs_source_fix",
+            answerSummary: preRead.message,
+            findingCount: 0,
+            sourceStatus: statusJson,
+            error: preRead.message,
+          });
+          if (threadId != null) {
+            await insertResearchMessage({ threadId, role: "assistant", content: preRead.message, taskId });
+            await touchResearchThread(threadId);
+          }
+          return {
+            taskId,
+            threadId,
+            answer: preRead.message,
+            model: null,
+            findings: await listResearchFindings({ taskId }),
+            stage: "needs_source_fix",
+            sourceStatus: statusJson,
+          };
+        }
+        // ASK with a source that failed BUT the manager did not pre-authorise an
+        // unsourced answer → also stop with needs_source_fix (don't silently guess).
+        if (!opts.allowUnsourced) {
+          await completeResearchTask(taskId, {
+            status: "needs_source_fix",
+            stage: "needs_source_fix",
+            answerSummary: preRead.message,
+            findingCount: 0,
+            sourceStatus: statusJson,
+            error: preRead.message,
+          });
+          if (threadId != null) {
+            await insertResearchMessage({ threadId, role: "assistant", content: preRead.message, taskId });
+            await touchResearchThread(threadId);
+          }
+          return {
+            taskId,
+            threadId,
+            answer: preRead.message,
+            model: null,
+            findings: await listResearchFindings({ taskId }),
+            stage: "needs_source_fix",
+            sourceStatus: statusJson,
+          };
+        }
+        // else: Ask AI, manager opted in → fall through and answer WITH the failed
+        // read passed as preRead (runResearchQuestion stamps the ungrounded warning).
+      }
+    }
+
+    // ── Stage 2: ASK THE AI ───────────────────────────────────────────────────
+    await setResearchTaskStage(taskId, "asking_ai", statusJson ? { sourceStatus: statusJson } : undefined);
+    const res = await runResearchQuestion({
+      question: opts.question,
+      scope: opts.scope,
+      sourceLabel: opts.sourceLabel,
+      preRead,
+      priorMessages: opts.priorMessages ?? null,
+    });
+
+    // ── Stage 3: EXTRACT + PERSIST FINDINGS ───────────────────────────────────
+    await setResearchTaskStage(taskId, "extracting", statusJson ? { sourceStatus: statusJson } : undefined);
+    const rows = findingsToRows(taskId, res.findings, threadId);
+    await insertResearchFindings(rows);
+    await completeResearchTask(taskId, {
+      status: "done",
+      stage: "done",
+      answerSummary: res.answer.slice(0, 4000),
+      aiModel: res.model,
+      findingCount: rows.length,
+      sourceStatus: statusJson ?? undefined,
+    });
+    if (threadId != null) {
+      await insertResearchMessage({ threadId, role: "assistant", content: res.answer.slice(0, 8000), taskId });
+      await touchResearchThread(threadId);
+    }
+    return {
+      taskId,
+      threadId,
+      answer: res.answer,
+      model: res.model,
+      findings: await listResearchFindings({ taskId }),
+      stage: "done",
+      sourceStatus: statusJson,
+    };
+  } catch (err) {
+    const message = (err instanceof Error ? err.message : String(err)).slice(0, 500);
+    await completeResearchTask(taskId, { status: "failed", stage: "failed", error: message });
+    if (threadId != null) {
+      await insertResearchMessage({
+        threadId,
+        role: "assistant",
+        content: `The research engine could not complete this enquiry: ${message}`,
+        taskId,
+      });
+      await touchResearchThread(threadId);
+    }
+    return {
+      taskId,
+      threadId,
+      answer: "",
+      model: null,
+      findings: await listResearchFindings({ taskId }),
+      stage: "failed",
+      sourceStatus: null,
+    };
+  }
 }
 
 // ─── Zod schemas ─────────────────────────────────────────────────────────────
@@ -7519,6 +7797,10 @@ export const appRouter = router({
             ])
             .optional(),
           sourceLabel: z.string().max(200).optional(),
+          // Round 91 — the manager pre-authorises answering from general knowledge when
+          // an attached source cannot be read. Defaults false: a failed read on Ask AI
+          // then resolves to `needs_source_fix` instead of silently guessing.
+          allowUnsourced: z.boolean().optional(),
           // Round 88 — continue an existing enquiry THREAD (a follow-up) when supplied.
           // Omit to open a NEW thread from this question.
           threadId: z.number().int().positive().optional(),
@@ -7547,12 +7829,34 @@ export const appRouter = router({
           });
         }
 
+        // Fold the legacy sourceUrl/sourceText fields into the unified pending-source shape
+        // so there is a SINGLE source path through the runner.
+        const pending: PendingResearchSource | null = input.source
+          ? input.source.kind === "url"
+            ? { kind: "url", url: input.source.url }
+            : input.source.kind === "text"
+              ? { kind: "text", text: input.source.text }
+              : input.source.kind === "pdf"
+                ? { kind: "pdf", fileKey: input.source.fileKey }
+                : { kind: "image", fileKey: input.source.fileKey }
+          : input.sourceUrl && input.sourceUrl !== ""
+            ? { kind: "url", url: input.sourceUrl }
+            : input.sourceText && input.sourceText.trim() !== ""
+              ? { kind: "text", text: input.sourceText }
+              : null;
+
         const taskId = await createResearchTask({
           createdByOpenId: openId,
           createdByName: ctx.user.name ?? null,
           prompt: input.question,
           scope: input.scope,
           status: "running",
+          stage: "queued",
+          kind: "ask",
+          sourceKind: pending?.kind ?? undefined,
+          sourceRef: pending ? (pending.kind === "url" ? pending.url : pending.kind === "text" ? pending.text.slice(0, 60000) : pending.fileKey) : undefined,
+          sourceLabel: input.sourceLabel ?? undefined,
+          allowUnsourced: input.allowUnsourced ?? false,
           threadId: threadId ?? undefined,
         });
         if (!taskId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Could not create the enquiry." });
@@ -7560,77 +7864,179 @@ export const appRouter = router({
         // Persist the manager's turn (with any attached source) BEFORE the AI answers,
         // so the transcript is durable even if the engine errors.
         if (threadId != null) {
-          const sk = input.source?.kind ?? null;
           const sref =
-            input.source?.kind === "url"
-              ? input.source.url
-              : input.source?.kind === "text"
-                ? input.source.text.slice(0, 700)
-                : input.source?.kind === "pdf" || input.source?.kind === "image"
-                  ? input.source.fileKey
+            pending?.kind === "url"
+              ? pending.url
+              : pending?.kind === "text"
+                ? pending.text.slice(0, 700)
+                : pending?.kind === "pdf" || pending?.kind === "image"
+                  ? pending.fileKey
                   : null;
           await insertResearchMessage({
             threadId,
             role: "user",
             content: input.question,
-            sourceKind: sk ?? undefined,
+            sourceKind: pending?.kind ?? undefined,
             sourceRef: sref ?? undefined,
             sourceLabel: input.sourceLabel ?? undefined,
           });
         }
-        try {
-          // Resolve the unified source: PDF/image file keys become signed URLs the model
-          // reads; url/text pass straight through. Legacy sourceUrl/sourceText are folded
-          // into the union inside runResearchQuestion when `source` is omitted.
-          let resolvedSource: ResearchSource | null = null;
-          if (input.source) {
-            if (input.source.kind === "url") {
-              resolvedSource = { kind: "url", url: input.source.url };
-            } else if (input.source.kind === "text") {
-              resolvedSource = { kind: "text", text: input.source.text };
-            } else if (input.source.kind === "pdf") {
-              resolvedSource = { kind: "pdf", fileUrl: await storageGetSignedUrl(input.source.fileKey) };
-            } else {
-              resolvedSource = { kind: "image", imageUrl: await storageGetSignedUrl(input.source.fileKey) };
-            }
-          }
-          const res = await runResearchQuestion({
-            question: input.question,
-            scope: input.scope as ResearchScope,
-            sourceUrl: input.sourceUrl && input.sourceUrl !== "" ? input.sourceUrl : null,
-            sourceText: input.sourceText ?? null,
-            source: resolvedSource,
-            sourceLabel: input.sourceLabel ?? null,
-            priorMessages,
-          });
-          const rows = findingsToRows(taskId, res.findings, threadId);
-          await insertResearchFindings(rows);
-          await completeResearchTask(taskId, {
-            answerSummary: res.answer.slice(0, 4000),
-            aiModel: res.model,
-            findingCount: rows.length,
-          });
-          // Persist the AI turn + bump the thread so the enquiry list re-sorts.
-          if (threadId != null) {
-            await insertResearchMessage({
-              threadId,
-              role: "assistant",
-              content: res.answer.slice(0, 8000),
-              taskId,
-            });
-            await touchResearchThread(threadId);
-          }
-          const findings = await listResearchFindings({ taskId });
-          return { taskId, threadId, answer: res.answer, model: res.model, findings };
-        } catch (err) {
-          await completeResearchTask(taskId, {
-            error: (err instanceof Error ? err.message : String(err)).slice(0, 500),
-          });
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: `The research engine could not complete this enquiry: ${err instanceof Error ? err.message : String(err)}`,
+
+        // Run the ordered pipeline (read → ask → extract). It classifies a source-read
+        // failure as `needs_source_fix` (Ask AI answers from memory only when the manager
+        // set allowUnsourced) and an engine failure as `failed` — never conflated.
+        const out = await executeResearchTask({
+          taskId,
+          threadId,
+          kind: "ask",
+          question: input.question,
+          scope: input.scope as ResearchScope,
+          source: pending,
+          sourceLabel: input.sourceLabel ?? null,
+          allowUnsourced: input.allowUnsourced ?? false,
+          priorMessages,
+        });
+        return {
+          taskId: out.taskId,
+          threadId: out.threadId,
+          answer: out.answer,
+          model: out.model,
+          findings: out.findings,
+          stage: out.stage,
+          sourceStatus: out.sourceStatus,
+        };
+      }),
+
+    // Round 91 — POLLABLE task flow. `startResearchTask` persists the enquiry, its
+    // thread, the manager's turn, and the PENDING source, then returns the taskId+
+    // threadId IMMEDIATELY at stage `queued` (no long blocking request). The client
+    // then calls `processResearchTask` (which does the read+AI+extract) and polls
+    // `getTask` for the live stage + findings. This is the resumable pattern that fits
+    // the serverless runtime (no always-on worker, 180s request cap).
+    startResearchTask: adminProcedure
+      .input(
+        z.object({
+          question: z.string().min(4).max(2000),
+          scope: z.enum(["mmf", "bank", "cbk", "market_asset", "macro", "any"]).default("any"),
+          source: z
+            .discriminatedUnion("kind", [
+              z.object({ kind: z.literal("url"), url: z.string().url().max(500) }),
+              z.object({ kind: z.literal("text"), text: z.string().min(1).max(40000) }),
+              z.object({ kind: z.literal("pdf"), fileKey: z.string().min(1).max(300) }),
+              z.object({ kind: z.literal("image"), fileKey: z.string().min(1).max(300) }),
+            ])
+            .optional(),
+          sourceLabel: z.string().max(200).optional(),
+          allowUnsourced: z.boolean().optional(),
+          threadId: z.number().int().positive().optional(),
+        }),
+      )
+      .mutation(async ({ ctx, input }) => {
+        const openId = ctx.user.openId ?? String(ctx.user.id);
+        const scopeEnum = input.scope as "mmf" | "bank" | "cbk" | "market_asset" | "macro" | "any";
+        let threadId = input.threadId ?? null;
+        if (threadId != null) {
+          const thread = await getResearchThread(threadId);
+          if (!thread) throw new TRPCError({ code: "NOT_FOUND", message: "Enquiry thread not found." });
+        } else {
+          threadId = await createResearchThread({
+            createdByOpenId: openId,
+            createdByName: ctx.user.name ?? null,
+            title: input.question.slice(0, 200),
+            scope: scopeEnum,
           });
         }
+        const pending: PendingResearchSource | null = input.source
+          ? input.source.kind === "url"
+            ? { kind: "url", url: input.source.url }
+            : input.source.kind === "text"
+              ? { kind: "text", text: input.source.text }
+              : input.source.kind === "pdf"
+                ? { kind: "pdf", fileKey: input.source.fileKey }
+                : { kind: "image", fileKey: input.source.fileKey }
+          : null;
+        const taskId = await createResearchTask({
+          createdByOpenId: openId,
+          createdByName: ctx.user.name ?? null,
+          prompt: input.question,
+          scope: input.scope,
+          status: "queued",
+          stage: "queued",
+          kind: "ask",
+          sourceKind: pending?.kind ?? undefined,
+          sourceRef: pending ? (pending.kind === "url" ? pending.url : pending.kind === "text" ? pending.text.slice(0, 60000) : pending.fileKey) : undefined,
+          sourceLabel: input.sourceLabel ?? undefined,
+          allowUnsourced: input.allowUnsourced ?? false,
+          threadId: threadId ?? undefined,
+        });
+        if (!taskId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Could not create the enquiry." });
+        if (threadId != null) {
+          const sref =
+            pending?.kind === "url" ? pending.url : pending?.kind === "text" ? pending.text.slice(0, 700) : pending?.fileKey ?? null;
+          await insertResearchMessage({
+            threadId,
+            role: "user",
+            content: input.question,
+            sourceKind: pending?.kind ?? undefined,
+            sourceRef: sref ?? undefined,
+            sourceLabel: input.sourceLabel ?? undefined,
+          });
+        }
+        return { taskId, threadId, stage: "queued" as const };
+      }),
+
+    // Round 91 — run a queued task to completion. Reads the persisted pending source,
+    // gathers prior thread turns, and drives the same executeResearchTask pipeline. Safe
+    // to call once per queued task; a task already past `queued` is returned as-is.
+    processResearchTask: adminProcedure
+      .input(z.object({ taskId: z.number().int().positive() }))
+      .mutation(async ({ input }) => {
+        const task = await getResearchTask(input.taskId);
+        if (!task) throw new TRPCError({ code: "NOT_FOUND", message: "Enquiry not found." });
+        if (task.stage !== "queued") {
+          // Already processed (or in flight) — return the current state for the poller.
+          const findings = await listResearchFindings({ taskId: task.id });
+          return {
+            taskId: task.id,
+            threadId: task.threadId ?? null,
+            answer: task.answerSummary ?? "",
+            model: task.aiModel ?? null,
+            findings,
+            stage: task.stage as "done" | "needs_source_fix" | "failed" | "reading_source" | "asking_ai" | "extracting",
+            sourceStatus: (task.sourceStatus as ExecuteResearchTaskResult["sourceStatus"]) ?? null,
+          };
+        }
+        // Rebuild the pending source from the persisted columns.
+        const pending: PendingResearchSource | null =
+          task.sourceKind && task.sourceRef
+            ? task.sourceKind === "url"
+              ? { kind: "url", url: task.sourceRef }
+              : task.sourceKind === "text"
+                ? { kind: "text", text: task.sourceRef }
+                : task.sourceKind === "pdf"
+                  ? { kind: "pdf", fileKey: task.sourceRef }
+                  : { kind: "image", fileKey: task.sourceRef }
+            : null;
+        let priorMessages: Array<{ role: "user" | "assistant"; content: string }> = [];
+        if (task.threadId != null) {
+          const msgs = await listResearchMessages(task.threadId);
+          // Drop the just-persisted opening user turn's duplication by keeping prose only.
+          priorMessages = msgs
+            .filter((m) => m.taskId == null || m.taskId !== task.id)
+            .map((m) => ({ role: m.role as "user" | "assistant", content: m.content }));
+        }
+        const out = await executeResearchTask({
+          taskId: task.id,
+          threadId: task.threadId ?? null,
+          kind: (task.kind as "ask" | "review") ?? "ask",
+          question: task.prompt,
+          scope: task.scope as ResearchScope,
+          source: pending,
+          sourceLabel: task.sourceLabel ?? null,
+          allowUnsourced: Boolean(task.allowUnsourced),
+          priorMessages,
+        });
+        return out;
       }),
 
     // Triage a finding INTO the pending queue: enqueue a research_update (origin ai)
@@ -7763,52 +8169,10 @@ export const appRouter = router({
         const openId = ctx.user.openId ?? String(ctx.user.id);
         const catalogue = input.catalogue as ReferenceCatalogue;
 
-        // Load the CURRENT rows for this catalogue as the comparison snapshot. Each
-        // catalogue reads its own live table; CBK/market share the opportunity table
-        // and are filtered by asset class so a bank source can't diff against equities.
-        let snapshot: CatalogueRowSnapshot[] = [];
-        if (catalogue === "mmf") {
-          const funds = await getMmfFunds();
-          snapshot = funds.map((f) => ({
-            fundName: f.fundName,
-            company: f.company,
-            ear: f.ear,
-            grossYield: f.grossYield,
-            managementFee: f.managementFee,
-            minInvestment: f.minInvestment,
-            aumMillions: f.aumMillions,
-            asOfDate: f.asOfDate ? String(f.asOfDate) : null,
-            source: f.source,
-          }));
-        } else if (catalogue === "bank") {
-          const banks = await getBankInstruments();
-          snapshot = banks.map((b) => ({
-            bankName: b.bankName,
-            instrumentType: b.instrumentType,
-            indicativeRate: b.indicativeRate,
-            minAmount: b.minAmount,
-            typicalTenor: b.typicalTenor,
-            isNegotiable: b.isNegotiable ? "true" : "false",
-            asOfDate: b.asOfDate ? String(b.asOfDate) : null,
-            source: b.source,
-          }));
-        } else {
-          const govClasses = ["gov_discount", "gov_coupon"];
-          const marketClasses = ["equity", "reit", "offshore_fund", "alt"];
-          const want = catalogue === "cbk" ? govClasses : marketClasses;
-          const opps = (await listOpportunities()).filter((o) => want.includes(o.assetClass));
-          snapshot = opps.map((o) => ({
-            name: o.name,
-            assetClass: o.assetClass,
-            yieldPct: o.yieldPct,
-            lastPrice: o.lastPrice,
-            trailingReturnPct: o.trailingReturnPct,
-            tenorYears: o.tenorYears,
-            dataAsOf: o.dataAsOf ? String(o.dataAsOf) : null,
-            dataSource: o.dataSource,
-          }));
-        }
-
+        // Load the CURRENT rows for this catalogue as the comparison snapshot (shared
+        // helper; CBK/market are filtered by asset class so a bank source can't diff
+        // against equities).
+        const snapshot: CatalogueRowSnapshot[] = await catalogueSnapshot(catalogue);
         const question = buildCatalogueReviewQuestion(catalogue, snapshot);
         const scopeLabel: Record<ReferenceCatalogue, string> = {
           mmf: "MMF Market",
@@ -7817,20 +8181,33 @@ export const appRouter = router({
           market_asset: "Market Assets Reference",
         };
 
-        // Open a review THREAD so the proposals group under one enquiry (reuses the
-        // Round 88 thread machinery). The thread's scope IS the catalogue.
+        // Open a review THREAD so the proposals group under one enquiry.
         const threadId = await createResearchThread({
           createdByOpenId: openId,
           createdByName: ctx.user.name ?? null,
           title: `Review ${scopeLabel[catalogue]} source with AI`,
           scope: catalogue,
         });
+        const pending: PendingResearchSource =
+          input.source.kind === "url"
+            ? { kind: "url", url: input.source.url }
+            : input.source.kind === "text"
+              ? { kind: "text", text: input.source.text }
+              : input.source.kind === "pdf"
+                ? { kind: "pdf", fileKey: input.source.fileKey }
+                : { kind: "image", fileKey: input.source.fileKey };
         const taskId = await createResearchTask({
           createdByOpenId: openId,
           createdByName: ctx.user.name ?? null,
           prompt: `Catalogue review: ${scopeLabel[catalogue]}${input.sourceLabel ? ` — ${input.sourceLabel}` : ""}`,
           scope: catalogue,
           status: "running",
+          stage: "queued",
+          kind: "review",
+          reviewCatalogue: catalogue,
+          sourceKind: pending.kind,
+          sourceRef: pending.kind === "url" ? pending.url : pending.kind === "text" ? pending.text.slice(0, 60000) : pending.fileKey,
+          sourceLabel: input.sourceLabel ?? undefined,
           threadId: threadId ?? undefined,
         });
         if (!taskId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Could not create the review." });
@@ -7838,61 +8215,41 @@ export const appRouter = router({
         // Persist the manager's turn (with the attached source) before the AI answers.
         if (threadId != null) {
           const sref =
-            input.source.kind === "url"
-              ? input.source.url
-              : input.source.kind === "text"
-                ? input.source.text.slice(0, 700)
-                : input.source.fileKey;
+            pending.kind === "url" ? pending.url : pending.kind === "text" ? pending.text.slice(0, 700) : pending.fileKey;
           await insertResearchMessage({
             threadId,
             role: "user",
             content: `Review this ${scopeLabel[catalogue]} source against the current catalogue.`,
-            sourceKind: input.source.kind,
+            sourceKind: pending.kind,
             sourceRef: sref,
             sourceLabel: input.sourceLabel ?? undefined,
           });
         }
 
-        try {
-          // Resolve the unified source exactly like `ask` does.
-          let resolvedSource: ResearchSource;
-          if (input.source.kind === "url") {
-            resolvedSource = { kind: "url", url: input.source.url };
-          } else if (input.source.kind === "text") {
-            resolvedSource = { kind: "text", text: input.source.text };
-          } else if (input.source.kind === "pdf") {
-            resolvedSource = { kind: "pdf", fileUrl: await storageGetSignedUrl(input.source.fileKey) };
-          } else {
-            resolvedSource = { kind: "image", imageUrl: await storageGetSignedUrl(input.source.fileKey) };
-          }
-          const res = await runResearchQuestion({
-            question,
-            scope: catalogue as ResearchScope,
-            source: resolvedSource,
-            sourceLabel: input.sourceLabel ?? null,
-          });
-          const rows = findingsToRows(taskId, res.findings, threadId);
-          await insertResearchFindings(rows);
-          await completeResearchTask(taskId, {
-            answerSummary: res.answer.slice(0, 4000),
-            aiModel: res.model,
-            findingCount: rows.length,
-          });
-          if (threadId != null) {
-            await insertResearchMessage({ threadId, role: "assistant", content: res.answer.slice(0, 8000), taskId });
-            await touchResearchThread(threadId);
-          }
-          const findings = await listResearchFindings({ taskId });
-          return { taskId, threadId, catalogue, answer: res.answer, model: res.model, findings };
-        } catch (err) {
-          await completeResearchTask(taskId, {
-            error: (err instanceof Error ? err.message : String(err)).slice(0, 500),
-          });
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: `The review engine could not read this source: ${err instanceof Error ? err.message : String(err)}`,
-          });
-        }
+        // Drive the SAME ordered pipeline. kind:"review" forces the source gate: a
+        // failed/thin read stops BEFORE the LLM, records `needs_source_fix`, and yields
+        // ZERO findings — it never answers from general knowledge. A readable source
+        // proceeds to the identical scrubbed briefing + findings path as `ask`.
+        const out = await executeResearchTask({
+          taskId,
+          threadId,
+          kind: "review",
+          question,
+          scope: catalogue as ResearchScope,
+          source: pending,
+          sourceLabel: input.sourceLabel ?? null,
+          allowUnsourced: false,
+        });
+        return {
+          taskId: out.taskId,
+          threadId: out.threadId,
+          catalogue,
+          answer: out.answer,
+          model: out.model,
+          findings: out.findings,
+          stage: out.stage,
+          sourceStatus: out.sourceStatus,
+        };
       }),
   }),
 

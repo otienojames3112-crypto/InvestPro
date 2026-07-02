@@ -2921,19 +2921,58 @@ export async function createResearchTask(input: InsertResearchTask): Promise<num
 /** Mark a task done/error and record the AI answer + finding count. */
 export async function completeResearchTask(
   id: number,
-  patch: { answerSummary?: string | null; aiModel?: string | null; findingCount?: number; error?: string | null },
+  patch: {
+    answerSummary?: string | null;
+    aiModel?: string | null;
+    findingCount?: number;
+    error?: string | null;
+    /** Round 91 — explicit terminal status. Defaults to done, or error/failed when
+     * `error` is set. Pass "needs_source_fix" when the SOURCE (not the engine) failed. */
+    status?: "done" | "error" | "failed" | "needs_source_fix";
+    /** Round 91 — the terminal stage to record (mirrors status for the UI machine). */
+    stage?: "done" | "failed" | "needs_source_fix";
+    /** Round 91 — the SourceReadResult JSON to persist for the source-status panel. */
+    sourceStatus?: unknown;
+  },
+): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  const status = patch.status ?? (patch.error ? "error" : "done");
+  const stage = patch.stage ?? (status === "done" ? "done" : status === "needs_source_fix" ? "needs_source_fix" : "failed");
+  await db
+    .update(researchTasks)
+    .set({
+      status,
+      stage,
+      answerSummary: patch.answerSummary ?? null,
+      aiModel: patch.aiModel ?? null,
+      findingCount: patch.findingCount ?? 0,
+      error: patch.error ?? null,
+      ...(patch.sourceStatus !== undefined ? { sourceStatus: patch.sourceStatus as never } : {}),
+      completedAt: Date.now(),
+    })
+    .where(eq(researchTasks.id, id));
+}
+
+/**
+ * Round 91 — advance a task's live STAGE (queued → reading_source → asking_ai →
+ * extracting) while it is still running, so the client's poll shows real progress.
+ * Optionally records the SourceReadResult JSON alongside the stage bump. Does NOT set
+ * a terminal status — use completeResearchTask for that.
+ */
+export async function setResearchTaskStage(
+  id: number,
+  stage: "queued" | "reading_source" | "asking_ai" | "extracting",
+  patch?: { sourceStatus?: unknown },
 ): Promise<void> {
   const db = await getDb();
   if (!db) return;
   await db
     .update(researchTasks)
     .set({
-      status: patch.error ? "error" : "done",
-      answerSummary: patch.answerSummary ?? null,
-      aiModel: patch.aiModel ?? null,
-      findingCount: patch.findingCount ?? 0,
-      error: patch.error ?? null,
-      completedAt: Date.now(),
+      stage,
+      status: "running",
+      ...(patch?.sourceStatus !== undefined ? { sourceStatus: patch.sourceStatus as never } : {}),
     })
     .where(eq(researchTasks.id, id));
 }

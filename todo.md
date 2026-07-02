@@ -1666,10 +1666,24 @@
 - [x] Ask AI follow-up hardening: retain prior turns/findings/source, attach new source (URL/text/PDF/image), state whether answer used prior/new/both; copy "Ask a follow-up" + "Add another source for this follow-up"; test C (prior turns, attach URL, attach PDF/image, correction versions finding)
 - [x] Archive recoverability: manager-only Active/Archived/All filter per catalogue (CatalogueScopeFilter); archived rows show badge/archived-by/date/reason/reactivate via ArchivedRowsPanel (catalogue.listArchived + listArchivedCatalogueRows); never hard-delete in live. (All Approved toggle in phase 7); test D
 - [x] Bank row identity: stable targetRef = bank:<bankInstrument.id> (or productRef) across catalogue rows, All Approved, CatalogueRowControls, Recently Approved links, setBankActive, setReferenceRowStale, auditFor, rateHistory, promotion/update targetRef; test E (two NCBA products, archive only fixed deposit, call stays active, audit/links point to fixed only)
-- [ ] All Approved Instruments wording: replace screener/read-only screener/score with approved reference universe / approved instruments table / filter approved instruments / Plan Fit diagnostics; add approved-universe blurb; move to first sub-tab under Reference Catalogues; remove stale "This catalogue / All catalogues / Add instrument" controls if present
+- [x] All Approved Instruments wording: replace screener/read-only screener/score with approved reference universe / approved instruments table / filter approved instruments / Plan Fit diagnostics; add approved-universe blurb; move to first sub-tab under Reference Catalogues; remove stale "This catalogue / All catalogues / Add instrument" controls if present
+- [x] All Approved: manager-only "Include archived rows" toggle (off by default) merging archived universe with Archived badge + Reactivate, never scored (Plan Fit suppressed for archived rows); row controls invalidate approvedArchived
 - [x] Source provenance fallback: after parsing findings, fill sourceLabel/sourceUrl from attached source when model omits (Uploaded PDF/screenshot/Pasted source text/URL hostname); do not invent sourceAsOf
 - [x] Missing-fields alignment: missingFieldsForFinding now calls checkApprovalGate (via assetClassForCatalogue) with the finding envelope so FindingCard shows all gate-missing fields before Approve; test F
 - [x] CBK source-review completeness: applyCbkRuleFill deterministic rule-fill (tbill_91/182/364 securityType+tenor+whtRule 15% on discount+taxExempt false+maturityRule=value+tenor; IFB taxExempt true/wht 0; FXD wht 15%/10% by tenor) without forcing AI to invent; incomplete (no rate) stays pending; test G
-- [ ] Keep Review Queue / Recently Approved single governed path (no direct publish from Review source with AI)
-- [ ] Full suite + tsc green; verify UI; checkpoint
-- [ ] Package full codebase ZIP and deliver
+- [x] Keep Review Queue / Recently Approved single governed path (no direct publish from Review source with AI)
+- [x] Full suite + tsc green (1583 passed, 4 consecutive runs); verify UI; checkpoint b2b85883
+- [x] Package full codebase ZIP and deliver
+
+# Round 91 — Robust manager-grade AI workflows (Ask AI + Review source with AI)
+
+- [x] Split source-read errors from AI-engine errors: add SourceReadResult ({ok:true,text,label,url?,warnings[]} | {ok:false,reason:url_unreadable|thin_fetch|pdf_unreadable|image_unreadable|storage_error,message,retryHint}); use before any LLM call
+- [x] Ask AI: on source-read failure show non-blocking source warning; only answer if manager allows "answer without source" or no source required; answer states it was NOT grounded in the failed source
+- [x] Review source with AI: on source-read failure do NOT call LLM, do NOT create findings; show actionable message "I could not read this source. Paste the text, upload a PDF, or upload a screenshot."; never a bare "failed to fetch"
+- [x] Task-based flow: startResearchTask returns taskId/threadId immediately (creates task+thread, stores prompt+source metadata); processResearchTask does read+LLM+parse+save+mark done/error; client polls research.getTask/getThread/listFindings — no single long blocking mutation
+- [x] Review source with AI requires a readable source: only compares attached source (text/url/pdf/image) vs current catalogue rows; unreadable => stop, never propose from memory
+- [x] UI source status panel (Ask AI + CatalogueSourceReview): read OK + char count, thin/JS-rendered warning, could-not-fetch, PDF read OK, image transcribed OK; thin-fetch shows "Only X characters were readable. Paste the page text or upload a screenshot for better extraction."
+- [x] UI task state machine: Queued / Reading source / Asking AI / Extracting findings / Done / Needs source fix / Failed
+- [x] Preserve source provenance on every finding: source label, source URL if any, source kind (url/text/pdf/image), checkedAt, sourceAsOf if present, transcription warning; stamp label/url from attached source when model omits
+- [x] Tests: (a) Ask AI unreadable URL => source warning but still answers if allowed; (b) Review unreadable URL => no findings + source-fix message; (c) Review never falls back to general knowledge; (d) long task resumable/pollable via taskId; (e) PDF/image source status visible; (f) findings preserve provenance
+- [x] Full suite + tsc green (1595 passed, 4 consecutive runs); routes verified (/research?tab=ask + per-catalogue Review button, admin-gated); checkpoint and deliver

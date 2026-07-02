@@ -59,6 +59,11 @@ export interface ResearchFindingDraft {
   extractedFields: Record<string, string>;
   sourceLabel: string | null;
   sourceUrl: string | null;
+  /** Round 91 — the KIND of source this finding was read from (url/text/pdf/image),
+   * or null when the answer was not grounded in a readable source. */
+  sourceKind: SourceKind | null;
+  /** Round 91 — when the source was READ (epoch ms UTC). Distinct from sourceAsOf. */
+  checkedAt: number | null;
   /** ISO date the figures are as-of, if stated. */
   sourceAsOf: string | null;
   /** 0..1 self-reported extraction confidence (NOT a quality verdict). */
@@ -330,6 +335,10 @@ export function normaliseFinding(raw: unknown): ResearchFindingDraft | null {
     extractedFields: figures,
     sourceLabel,
     sourceUrl,
+    // Round 91 — provenance kind/checkedAt are stamped by runResearchQuestion once the
+    // source has actually been read; the parser leaves them null.
+    sourceKind: null,
+    checkedAt: null,
     sourceAsOf: sourceAsOfStr,
     confidence: hasSource ? confidence : Math.min(confidence, 0.3),
     missingFields,
@@ -375,9 +384,10 @@ export function findingsToRows(taskId: number, drafts: ResearchFindingDraft[], t
     extractedFields: d.extractedFields,
     sourceLabel: d.sourceLabel,
     sourceUrl: d.sourceUrl,
+    sourceKind: d.sourceKind ?? null,
     // Schema stores as-of as an epoch-ms UTC bigint; parse the ISO string the model gave.
     sourceAsOf: d.sourceAsOf ? (Number.isFinite(Date.parse(d.sourceAsOf)) ? Date.parse(d.sourceAsOf) : null) : null,
-    checkedAt: now,
+    checkedAt: d.checkedAt ?? now,
     confidence: confidenceBucket(d.confidence, Boolean(d.sourceLabel || d.sourceUrl)),
     missingFields: d.missingFields,
     warnings: d.warnings,
@@ -505,6 +515,153 @@ export type ResearchSource =
   | { kind: "pdf"; fileUrl: string }
   | { kind: "image"; imageUrl: string };
 
+/** The kind of source a finding was read from (for provenance + UI status). */
+export type SourceKind = "url" | "text" | "pdf" | "image";
+
+/**
+ * Round 91 — the OUTCOME of trying to READ a source, kept STRICTLY separate from any
+ * AI-engine outcome. `readSource()` runs BEFORE the LLM, so a URL fetch failure, a
+ * thin (JS-rendered) page, an unreadable PDF/screenshot, or a storage error each
+ * surface as a TYPED read failure with an actionable retry hint — never as a generic
+ * "failed to fetch" tangled up with an LLM/timeout error.
+ *
+ *   ok:true  → we have grounding `text` (+ char count via text.length), a display
+ *              `label`, the optional `url`, the source `kind`, and any non-fatal
+ *              `warnings` (e.g. "thin fetch", "transcribed by AI").
+ *   ok:false → a `reason` the UI can branch on, a human `message`, and a `retryHint`
+ *              telling the manager exactly what to do (paste text / upload a PDF /
+ *              upload a screenshot).
+ */
+export type SourceReadResult =
+  | {
+      ok: true;
+      kind: SourceKind;
+      text: string;
+      label: string;
+      url?: string;
+      /** Non-fatal caveats (thin page, AI transcription) to show + stamp on findings. */
+      warnings: string[];
+      /** True when the fetch succeeded but returned implausibly little text. */
+      thin: boolean;
+    }
+  | {
+      ok: false;
+      kind: SourceKind;
+      reason: "url_unreadable" | "thin_fetch" | "pdf_unreadable" | "image_unreadable" | "storage_error";
+      message: string;
+      retryHint: string;
+    };
+
+const PASTE_OR_UPLOAD_HINT =
+  "Paste the text, upload a PDF, or upload a screenshot.";
+
+/**
+ * Read an attached source to grounding text, classifying every failure. This is the
+ * single choke point both Ask AI and Review call BEFORE the LLM. For `text` it is a
+ * pure pass-through; for `url` it fetches + strips HTML (flagging a thin result); for
+ * `pdf`/`image` it OCR-transcribes via the model. A thin URL fetch is returned as a
+ * NON-fatal `ok:true` with `thin:true` (Ask AI can still answer, Review must decide),
+ * except when the page is so thin it is effectively empty, which is a hard failure.
+ */
+export async function readSource(
+  source: ResearchSource,
+  opts?: { label?: string | null; thinIsFatal?: boolean },
+): Promise<SourceReadResult> {
+  const label = opts?.label && opts.label.trim() !== "" ? opts.label.trim() : null;
+
+  if (source.kind === "text") {
+    const text = source.text.trim();
+    if (text === "") {
+      return {
+        ok: false,
+        kind: "text",
+        reason: "thin_fetch",
+        message: "The pasted text was empty.",
+        retryHint: "Paste the figures or the page text you want me to read.",
+      };
+    }
+    return { ok: true, kind: "text", text, label: label ?? "Pasted source text", warnings: [], thin: false };
+  }
+
+  if (source.kind === "url") {
+    const hostLabel = (() => {
+      try {
+        return new URL(source.url).hostname.replace(/^www\./, "");
+      } catch {
+        return source.url;
+      }
+    })();
+    let text: string;
+    try {
+      text = await fetchDocumentText(source.url);
+    } catch (err) {
+      return {
+        ok: false,
+        kind: "url",
+        reason: "url_unreadable",
+        message: `I could not read this link (${err instanceof Error ? err.message : String(err)}).`,
+        retryHint: PASTE_OR_UPLOAD_HINT,
+      };
+    }
+    const thin = isThinFetch(text);
+    if (thin && opts?.thinIsFatal) {
+      return {
+        ok: false,
+        kind: "url",
+        reason: "thin_fetch",
+        message: `Only ${text.trim().length} characters were readable from this page (it may be JavaScript-rendered).`,
+        retryHint: "Paste the page text or upload a screenshot for better extraction.",
+      };
+    }
+    const warnings = thin
+      ? [
+          `Only ${text.trim().length} characters were readable from the linked page (it may be JavaScript-rendered), so figures may be incomplete. Paste the page text or upload a screenshot for better extraction.`,
+        ]
+      : [];
+    return { ok: true, kind: "url", text, label: label ?? hostLabel, url: source.url, warnings, thin };
+  }
+
+  // pdf | image → OCR-transcribe via the model.
+  const isPdf = source.kind === "pdf";
+  const displayLabel = label ?? (isPdf ? "Uploaded PDF" : "Uploaded screenshot");
+  let transcript: { text: string; model: string | null };
+  try {
+    transcript = await transcribeSourceToText(source);
+  } catch (err) {
+    return {
+      ok: false,
+      kind: source.kind,
+      reason: isPdf ? "pdf_unreadable" : "image_unreadable",
+      message: `I could not read this ${isPdf ? "PDF" : "image"} (${err instanceof Error ? err.message : String(err)}).`,
+      retryHint: isPdf
+        ? "Paste the text, or upload a clearer PDF or a screenshot."
+        : "Paste the text, or upload a clearer screenshot.",
+    };
+  }
+  const text = transcript.text.trim();
+  if (text === "") {
+    return {
+      ok: false,
+      kind: source.kind,
+      reason: isPdf ? "pdf_unreadable" : "image_unreadable",
+      message: `The ${isPdf ? "PDF" : "image"} produced no readable text.`,
+      retryHint: isPdf
+        ? "Paste the text, or upload a clearer PDF or a screenshot."
+        : "Paste the text, or upload a clearer screenshot.",
+    };
+  }
+  return {
+    ok: true,
+    kind: source.kind,
+    text,
+    label: displayLabel,
+    warnings: [
+      `Figures were transcribed by AI from an ${isPdf ? "uploaded PDF" : "uploaded screenshot"} — confirm each against the original before acting.`,
+    ],
+    thin: false,
+  };
+}
+
 /**
  * Transcribe a PDF or screenshot into plain text the briefing prompt can ground on.
  * The model is instructed to transcribe ONLY what is printed (no inference), mirroring
@@ -578,6 +735,16 @@ export async function runResearchQuestion(args: {
    * each turn's findings. Capped so a long thread can't blow the context window.
    */
   priorMessages?: Array<{ role: "user" | "assistant"; content: string }> | null;
+  /**
+   * Round 91 — a source that has ALREADY been read via `readSource()` (the single
+   * choke point, run BEFORE this function so a read failure is classified distinctly).
+   * When supplied AND ok:true, we ground on its text + carry its warnings + provenance
+   * and DO NOT fetch/transcribe again. When supplied AND ok:false, the caller must have
+   * already decided whether to proceed (Ask AI may, with a warning); we simply answer
+   * WITHOUT grounding and record that it was not grounded in the failed source. When
+   * omitted, the legacy self-read path below runs (kept for backward compatibility).
+   */
+  preRead?: SourceReadResult | null;
 }): Promise<ResearchAnswer> {
   const scopeLine =
     args.scope === "any" ? "" : `\nConstrain your findings to this scope: ${args.scope}.`;
@@ -595,7 +762,28 @@ export async function runResearchQuestion(args: {
     }
   }
 
-  if (source) {
+  // Round 91 — the derived source KIND + LABEL used for provenance stamping. Defined
+  // here so both the pre-read and legacy paths feed the same fallback below.
+  let sourceKind: SourceKind | null = args.preRead?.ok ? args.preRead.kind : source?.kind ?? null;
+  let provenanceLabel: string | null =
+    args.preRead?.ok ? args.preRead.label : args.sourceLabel && args.sourceLabel.trim() !== "" ? args.sourceLabel.trim() : null;
+
+  if (args.preRead) {
+    // A source was read ahead of time. Trust that outcome; never re-read here.
+    if (args.preRead.ok) {
+      const s = args.preRead;
+      grounding = `\n\nGROUND YOUR FINDINGS ONLY IN THIS SOURCE (${s.label}${s.url ? ` — ${s.url}` : ""}); extract only what it states and do not fill from general knowledge:\n${s.text.slice(0, 40000)}`;
+      groundingWarnings.push(...s.warnings);
+    } else {
+      // The source could not be read. The caller (Ask AI) chose to proceed anyway, so
+      // we answer from general knowledge and say so LOUDLY on every finding + the note.
+      groundingWarnings.push(
+        `This answer was NOT grounded in the attached source (${args.preRead.message}) — it draws on general knowledge and must be verified before acting.`,
+      );
+      sourceKind = null;
+      provenanceLabel = null;
+    }
+  } else if (source) {
     if (source.kind === "text") {
       grounding = `\n\nGROUND YOUR FINDINGS IN THIS SOURCE DOCUMENT (extract only what it states):\n${source.text.slice(0, 40000)}`;
     } else if (source.kind === "url") {
@@ -659,6 +847,9 @@ export async function runResearchQuestion(args: {
   // wrongly capped to a hint — and, because provenance now satisfies the gate's
   // `source` rule, its missing-fields list is recomputed to match.
   const fallbackLabel = ((): string | null => {
+    // Round 91 — when the source was pre-read, its resolved label wins (and a failed
+    // read intentionally produced a null provenanceLabel so we stamp nothing).
+    if (provenanceLabel !== null || args.preRead) return provenanceLabel;
     if (args.sourceLabel && args.sourceLabel.trim() !== "") return args.sourceLabel.trim();
     if (!source) return null;
     switch (source.kind) {
@@ -676,7 +867,12 @@ export async function runResearchQuestion(args: {
         return "Pasted source text";
     }
   })();
-  const fallbackUrl = source && source.kind === "url" ? source.url : null;
+  const fallbackUrl =
+    args.preRead?.ok && args.preRead.url
+      ? args.preRead.url
+      : source && source.kind === "url"
+        ? source.url
+        : null;
 
   const stamped = findings.map((f) => {
     const hadSource = Boolean(f.sourceLabel || f.sourceUrl);
@@ -702,10 +898,21 @@ export async function runResearchQuestion(args: {
     };
   });
 
+  // Round 91 — stamp the source KIND + read time onto every finding. checkedAt is set
+  // whenever we had a readable source (pre-read ok, or the legacy self-read produced
+  // grounding); it stays null when the answer was ungrounded.
+  const grounded = Boolean(grounding);
+  const checkedAt = grounded ? Date.now() : null;
+  const kindStamped = stamped.map((f) => ({
+    ...f,
+    sourceKind: f.sourceKind ?? (grounded ? sourceKind : null),
+    checkedAt: f.checkedAt ?? checkedAt,
+  }));
+
   // Attach any grounding warnings to every finding so the manager sees the caveat.
   const withWarnings = groundingWarnings.length
-    ? stamped.map((f) => ({ ...f, warnings: [...f.warnings, ...groundingWarnings] }))
-    : stamped;
+    ? kindStamped.map((f) => ({ ...f, warnings: [...f.warnings, ...groundingWarnings] }))
+    : kindStamped;
 
   return { answer, findings: withWarnings, model: res.model ?? null };
 }

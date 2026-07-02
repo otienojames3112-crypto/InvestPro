@@ -79,9 +79,20 @@ describe("Round 85 · A — unified Ask-AI source union", () => {
     for (const kind of ["url", "text", "pdf", "image"]) {
       expect(seg).toContain(`z.literal("${kind}")`);
     }
+    // Round 91 — the ask procedure now DELEGATES to the shared executeResearchTask
+    // pipeline (which reads the source once, BEFORE the LLM, and classifies read
+    // failures). The file-key→signed-URL resolution and the engine call therefore live
+    // in that shared helper, not inline in `ask`. Assert the delegation here, and the
+    // resolution + engine call at the shared helper below.
+    expect(seg).toContain("executeResearchTask");
+    const helperIdx = routers.indexOf("async function resolveResearchSource");
+    expect(helperIdx).toBeGreaterThan(-1);
+    const helper = routers.slice(helperIdx, routers.indexOf("// ─── Zod schemas"));
     // File-key kinds are turned into signed URLs the model reads.
-    expect(seg).toContain("storageGetSignedUrl");
-    expect(seg).toContain("runResearchQuestion");
+    expect(helper).toContain("storageGetSignedUrl");
+    // The shared pipeline reads the source (the single choke point) then calls the engine.
+    expect(helper).toContain("readSource");
+    expect(helper).toContain("runResearchQuestion");
   });
 
   it("the Ask AI page no longer has a separate Import-document tab/fork", () => {

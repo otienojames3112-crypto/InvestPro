@@ -20,7 +20,13 @@ import {
   ArrowRight,
   ExternalLink,
 } from "lucide-react";
-import { FindingCard, useSourceAttachment, type Finding } from "@/pages/AskAI";
+import {
+  FindingCard,
+  useSourceAttachment,
+  SourceStatusPanel,
+  type Finding,
+  type SourceStatus,
+} from "@/pages/AskAI";
 
 /**
  * Round 89 — the per-catalogue "Review source with AI" workflow, mounted INSIDE each
@@ -77,7 +83,13 @@ function ReviewDialog({
 }) {
   const copy = COPY[catalogue];
   const attach = useSourceAttachment();
-  const [result, setResult] = useState<{ answer: string; taskId: number; findings: Finding[] } | null>(null);
+  const [result, setResult] = useState<{
+    answer: string;
+    taskId: number;
+    findings: Finding[];
+    stage: string;
+    sourceStatus: SourceStatus | null;
+  } | null>(null);
   const utils = trpc.useUtils();
 
   // Findings for the current review task; re-fetched after a draft/dismiss so the
@@ -89,14 +101,24 @@ function ReviewDialog({
 
   const review = trpc.research.reviewCatalogueSource.useMutation({
     onSuccess: (data) => {
+      const sourceStatus = (data.sourceStatus ?? null) as SourceStatus | null;
+      const stage = (data.stage as string | undefined) ?? "done";
       setResult({
         answer: data.answer,
         taskId: data.taskId,
         // The mutation already returns the freshly-created findings; seed the panel
         // with them so the first render never depends on the follow-up query.
         findings: Array.isArray(data.findings) ? (data.findings as unknown as Finding[]) : [],
+        stage,
+        sourceStatus,
       });
-      toast.success("Source reviewed — review each proposal below and send the ones you want to the queue.");
+      if (stage === "needs_source_fix") {
+        // The SOURCE could not be read — this is NOT an AI failure, and NO proposals
+        // were generated. Tell the manager exactly how to fix the source and retry.
+        toast.error("I couldn\u2019t read that source, so I didn\u2019t propose any changes. Fix the source and try again.");
+      } else {
+        toast.success("Source reviewed \u2014 review each proposal below and send the ones you want to the queue.");
+      }
       // Refresh the desk's pending/new-finding counts in the background.
       utils.research.listFindings.invalidate();
     },
@@ -121,6 +143,7 @@ function ReviewDialog({
     }, 200);
   }
 
+  const needsSourceFix = result?.stage === "needs_source_fix";
   const busy = review.isPending || attach.uploading;
   // `research.listFindings` returns `{ findings: [...] }`, NOT a bare array. Unwrap it
   // defensively (Array.isArray guard) and fall back to the findings the mutation
@@ -168,8 +191,38 @@ function ReviewDialog({
           </div>
         )}
 
-        {result && (
+        {result && needsSourceFix && (
           <div className="space-y-4">
+            <SourceStatusPanel status={result.sourceStatus} />
+            <div className="rounded-md border border-amber-500/30 bg-amber-500/[0.06] px-3 py-2 text-sm text-foreground">
+              I didn&rsquo;t propose any changes because I couldn&rsquo;t read the source. This is a source problem,
+              not an AI answer &mdash; nothing was compared against your catalogue.
+            </div>
+            <div className="flex flex-col gap-3">
+              {attach.node}
+              <DialogFooter className="gap-2 sm:gap-2">
+                <Button
+                  variant="outline"
+                  className="bg-background"
+                  onClick={() => {
+                    setResult(null);
+                  }}
+                  disabled={busy}
+                >
+                  Cancel
+                </Button>
+                <Button onClick={runReview} disabled={busy || !attach.provided}>
+                  {busy ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Bot className="w-4 h-4 mr-2" />}
+                  {attach.uploading ? "Uploading\u2026" : review.isPending ? "Reviewing\u2026" : "Retry review"}
+                </Button>
+              </DialogFooter>
+            </div>
+          </div>
+        )}
+
+        {result && !needsSourceFix && (
+          <div className="space-y-4">
+            <SourceStatusPanel status={result.sourceStatus} />
             <div className="rounded-lg border border-border bg-card px-3 py-2">
               <div className="prose prose-sm dark:prose-invert max-w-none text-sm">
                 <Streamdown>{result.answer}</Streamdown>

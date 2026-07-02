@@ -55,6 +55,8 @@ import {
   GitBranch,
   Archive,
   Plus,
+  FileCheck2,
+  FileWarning,
 } from "lucide-react";
 import { InfoHint } from "@/components/InfoHint";
 import { catalogueLabel, type ReferenceCatalogue } from "@shared/researchPipeline";
@@ -125,6 +127,88 @@ type Message = {
   taskId: number | null;
   createdAt: string | Date | null;
 };
+
+/* ── Round 91: source-read status (mirror of server SourceReadResult) ───────── */
+
+/**
+ * The JSON the server persists on a task after `readSource` runs. It is deliberately
+ * SEPARATE from the AI answer: a manager can see the source was read (or exactly why it
+ * could not be) independently of whether the model produced anything. `ok:false` never
+ * means “the AI failed” — it means the SOURCE could not be turned into text.
+ */
+export type SourceStatus =
+  | {
+      ok: true;
+      kind: "url" | "text" | "pdf" | "image";
+      label: string;
+      url?: string;
+      chars?: number;
+      thin?: boolean;
+      warnings?: string[];
+    }
+  | {
+      ok: false;
+      kind: "url" | "text" | "pdf" | "image";
+      reason: "url_unreadable" | "thin_fetch" | "pdf_unreadable" | "image_unreadable" | "storage_error";
+      message: string;
+      retryHint: string;
+    };
+
+function sourceKindIcon(kind: "url" | "text" | "pdf" | "image") {
+  if (kind === "url") return <Link2 className="w-3.5 h-3.5" />;
+  if (kind === "pdf") return <FileText className="w-3.5 h-3.5" />;
+  if (kind === "image") return <ImageIcon className="w-3.5 h-3.5" />;
+  return <TypeIcon className="w-3.5 h-3.5" />;
+}
+
+/**
+ * Renders the source-read outcome as a compact panel. Green when the source was read
+ * (with char count + any thin-page / AI-transcription caveats); amber when it could NOT
+ * be read, showing the human message + the exact retry hint (paste text / upload a PDF /
+ * upload a screenshot). Renders nothing when there is no status (e.g. no source attached).
+ */
+export function SourceStatusPanel({ status }: { status: SourceStatus | null | undefined }) {
+  if (!status) return null;
+  if (status.ok) {
+    return (
+      <div className="rounded-md border border-emerald-500/25 bg-emerald-500/[0.06] px-3 py-2 text-xs text-foreground">
+        <div className="flex items-center gap-2 font-medium">
+          <FileCheck2 className="w-3.5 h-3.5 text-emerald-600" />
+          <span className="inline-flex items-center gap-1">
+            {sourceKindIcon(status.kind)} Source read
+          </span>
+          {typeof status.chars === "number" && (
+            <span className="text-muted-foreground">· {status.chars.toLocaleString()} characters</span>
+          )}
+        </div>
+        <div className="mt-1 truncate text-muted-foreground" title={status.url ?? status.label}>
+          {status.label}
+          {status.url ? ` — ${status.url}` : ""}
+        </div>
+        {status.warnings && status.warnings.length > 0 && (
+          <ul className="mt-1.5 space-y-1">
+            {status.warnings.map((w, i) => (
+              <li key={i} className="flex items-start gap-1.5 text-amber-600">
+                <AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" />
+                <span>{w}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    );
+  }
+  return (
+    <div className="rounded-md border border-amber-500/30 bg-amber-500/[0.08] px-3 py-2 text-xs text-foreground">
+      <div className="flex items-center gap-2 font-medium text-amber-700">
+        <FileWarning className="w-3.5 h-3.5" />
+        <span className="inline-flex items-center gap-1">{sourceKindIcon(status.kind)} Couldn&rsquo;t read the source</span>
+      </div>
+      <div className="mt-1">{status.message}</div>
+      <div className="mt-1 text-muted-foreground">{status.retryHint}</div>
+    </div>
+  );
+}
 
 /* ── Correct-a-figure dialog: versions the finding + drafts the fix ─────────── */
 
@@ -700,10 +784,17 @@ function Conversation({ threadId, onExit }: { threadId: number; onExit: () => vo
   const utils = trpc.useUtils();
   const { data, isLoading } = trpc.research.getThread.useQuery({ id: threadId });
   const [question, setQuestion] = useState("");
+  const [allowUnsourced, setAllowUnsourced] = useState(false);
+  const [sourceStatus, setSourceStatus] = useState<SourceStatus | null>(null);
   const src = useSourceAttachment({ followUp: true });
 
   const ask = trpc.research.ask.useMutation({
     onSuccess: (res) => {
+      setSourceStatus((res.sourceStatus ?? null) as SourceStatus | null);
+      if ((res.stage as string | undefined) === "needs_source_fix") {
+        toast.error("I couldn\u2019t read that source. Fix it and retry, or tick \u201cAnswer without the source\u201d to proceed on general knowledge.");
+        return;
+      }
       toast.success(
         res.findings.length > 0
           ? `Answered — ${res.findings.length} finding${res.findings.length === 1 ? "" : "s"} added below.`
@@ -725,6 +816,7 @@ function Conversation({ threadId, onExit }: { threadId: number; onExit: () => vo
   async function submitFollowUp() {
     if (!canAsk) return;
     try {
+      setSourceStatus(null);
       const { source, label } = await src.resolve();
       ask.mutate({
         question: question.trim(),
@@ -732,6 +824,7 @@ function Conversation({ threadId, onExit }: { threadId: number; onExit: () => vo
         threadId,
         source: source ?? undefined,
         sourceLabel: label ?? undefined,
+        allowUnsourced: source ? allowUnsourced : undefined,
       });
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Upload failed.");
@@ -799,6 +892,22 @@ function Conversation({ threadId, onExit }: { threadId: number; onExit: () => vo
               if ((e.metaKey || e.ctrlKey) && e.key === "Enter") void submitFollowUp();
             }}
           />
+          {sourceStatus && <SourceStatusPanel status={sourceStatus} />}
+          {src.provided && (
+            <label className="flex items-start gap-2 rounded-md border border-border bg-background px-3 py-2 text-xs text-muted-foreground cursor-pointer">
+              <input
+                type="checkbox"
+                className="mt-0.5 accent-primary"
+                checked={allowUnsourced}
+                onChange={(e) => setAllowUnsourced(e.target.checked)}
+              />
+              <span>
+                <span className="font-medium text-foreground">Answer even if I can&rsquo;t read the source.</span> The
+                answer will be marked <em>not grounded in the source</em> and must be verified. Leave unticked to be told
+                to fix the source first.
+              </span>
+            </label>
+          )}
           <div className="flex items-center justify-between gap-2 flex-wrap">
             {src.node}
             <div className="flex-1" />
@@ -857,10 +966,20 @@ function OpeningPanel({ onStarted }: { onStarted: (threadId: number) => void }) 
   const utils = trpc.useUtils();
   const [question, setQuestion] = useState("");
   const [scope, setScope] = useState<Scope>("any");
+  const [allowUnsourced, setAllowUnsourced] = useState(false);
+  const [sourceStatus, setSourceStatus] = useState<SourceStatus | null>(null);
   const src = useSourceAttachment();
 
   const ask = trpc.research.ask.useMutation({
     onSuccess: (res) => {
+      setSourceStatus((res.sourceStatus ?? null) as SourceStatus | null);
+      const blocked = (res.stage as string | undefined) === "needs_source_fix";
+      if (blocked) {
+        // The attached source could not be read and the manager did NOT pre-authorise
+        // answering without it: no briefing, no findings. Point them at the fix.
+        toast.error("I couldn\u2019t read that source. Fix it and retry, or tick \u201cAnswer without the source\u201d to proceed on general knowledge.");
+        return;
+      }
       toast.success(
         res.findings.length > 0
           ? `Briefing ready — ${res.findings.length} finding${res.findings.length === 1 ? "" : "s"} to triage.`
@@ -880,12 +999,14 @@ function OpeningPanel({ onStarted }: { onStarted: (threadId: number) => void }) 
   async function submit() {
     if (!canAsk) return;
     try {
+      setSourceStatus(null);
       const { source, label } = await src.resolve();
       ask.mutate({
         question: question.trim(),
         scope,
         source: source ?? undefined,
         sourceLabel: label ?? undefined,
+        allowUnsourced: source ? allowUnsourced : undefined,
       });
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Upload failed.");
@@ -920,6 +1041,23 @@ function OpeningPanel({ onStarted }: { onStarted: (threadId: number) => void }) 
             if ((e.metaKey || e.ctrlKey) && e.key === "Enter") void submit();
           }}
         />
+        {sourceStatus && <SourceStatusPanel status={sourceStatus} />}
+        {src.provided && (
+          <label className="flex items-start gap-2 rounded-md border border-border bg-background px-3 py-2 text-xs text-muted-foreground cursor-pointer">
+            <input
+              type="checkbox"
+              className="mt-0.5 accent-primary"
+              checked={allowUnsourced}
+              onChange={(e) => setAllowUnsourced(e.target.checked)}
+            />
+            <span>
+              <span className="font-medium text-foreground">Answer even if I can&rsquo;t read the source.</span>{" "}
+              If the attached source can&rsquo;t be fetched or transcribed, answer from general knowledge instead of
+              stopping &mdash; the answer will be clearly marked as <em>not grounded in the source</em> and must be
+              verified before acting. Leave unticked to be told to fix the source first.
+            </span>
+          </label>
+        )}
         <div className="flex items-end gap-3 flex-wrap">
           <div className="space-y-1">
             <Label className="text-xs text-muted-foreground">Focus</Label>

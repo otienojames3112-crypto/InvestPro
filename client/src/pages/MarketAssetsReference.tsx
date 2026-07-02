@@ -44,6 +44,7 @@ import { profileFor, type AssetClass } from "@shared/assetModel";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { CatalogueRowControls } from "@/components/CatalogueRowControls";
 import { CatalogueSourceReviewButton } from "@/components/CatalogueSourceReview";
+import { ArchivedRowsPanel, CatalogueScopeFilter, type CatalogueRowScope } from "@/components/ArchivedRowsPanel";
 import { humanCheckedCount, figureCount, type FieldProvenanceMap } from "@shared/provenance";
 import { rateStaleness } from "@/lib/rateStaleness";
 import { dashboardHref } from "@shared/navigation";
@@ -108,6 +109,8 @@ export default function MarketAssetsReference({ embedded = false }: { embedded?:
 
   const refFocus = useRefFocus();
   const [search, setSearch] = useState(() => refFocus.focusRef ?? "");
+  // Round 90 — manager-only Active/Archived/All view. Non-managers stay on "active".
+  const [scope, setScope] = useState<CatalogueRowScope>("active");
   const [classFilter, setClassFilter] = useState<string>("all");
   const [currencyFilter, setCurrencyFilter] = useState<string>("all");
   const [sortKey, setSortKey] = useState<SortKey | null>(null);
@@ -294,18 +297,32 @@ export default function MarketAssetsReference({ embedded = false }: { embedded?:
                 </Select>
               </div>
             </div>
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
               <p className="text-xs text-muted-foreground">
                 Showing <span className="font-semibold text-foreground">{filtered.length}</span> of {marketRows.length}
               </p>
-              <Button variant="outline" size="sm" onClick={resetFilters} className="h-8 text-xs">
-                Reset filters &amp; sort
-              </Button>
+              <div className="flex items-center gap-2">
+                <CatalogueScopeFilter value={scope} onChange={setScope} />
+                <Button variant="outline" size="sm" onClick={resetFilters} className="h-8 text-xs">
+                  Reset filters &amp; sort
+                </Button>
+              </div>
             </div>
           </CardContent>
         </Card>
 
+        {/* Archived rows (manager-only, when viewing Archived or All) */}
+        {isManager && scope !== "active" && (
+          <Card>
+            <CardContent className="p-4 space-y-3">
+              <div className="text-sm font-medium">Archived market assets</div>
+              <ArchivedRowsPanel catalogue="market_asset" />
+            </CardContent>
+          </Card>
+        )}
+
         {/* Table */}
+        {scope !== "archived" && (
         <Card>
           <CardContent className="p-0">
             {isLoading ? (
@@ -355,6 +372,7 @@ export default function MarketAssetsReference({ embedded = false }: { embedded?:
             )}
           </CardContent>
         </Card>
+        )}
 
         <p className="text-xs text-muted-foreground flex items-center gap-1.5">
           <Info className="w-3.5 h-3.5" />

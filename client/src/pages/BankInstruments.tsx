@@ -61,6 +61,7 @@ import {
 } from "lucide-react";
 import { CatalogueRowControls } from "@/components/CatalogueRowControls";
 import { CatalogueSourceReviewButton } from "@/components/CatalogueSourceReview";
+import { ArchivedRowsPanel, CatalogueScopeFilter, type CatalogueRowScope } from "@/components/ArchivedRowsPanel";
 
 type BankInstrumentType =
   | "call_deposit"
@@ -147,18 +148,26 @@ export default function BankInstruments({ embedded = false }: { embedded?: boole
 
   const refFocus = useRefFocus();
 
-  // Filters (search prefilled from a deep-link ?ref= so the row is easy to spot)
-  const [search, setSearch] = useState(() => refFocus.focusRef ?? "");
+  // Filters (search prefilled from a deep-link ?ref= so the row is easy to spot).
+  // Round 90: bank rows are keyed by the stable `bank:<id>` ref, which is NOT a
+  // human-readable name — so never prefill it into the free-text search (the row is
+  // still scrolled-to + highlighted via refFocus.registerRow). Only prefill a plain
+  // name/text ref.
+  const [search, setSearch] = useState(() =>
+    refFocus.focusRef && !/^bank:\d+$/.test(refFocus.focusRef) ? refFocus.focusRef : "",
+  );
 
   // Round 86: drop a stale foreign ?ref= (and its prefill) once rows load, so a ref
   // from another catalogue can't filter this one down to nothing.
   useEffect(() => {
     if (isLoading || !refFocus.focusRef) return;
     refFocus.clearIfMissing(
-      (rows ?? []).map((r) => r.bankName),
+      (rows ?? []).map((r) => `bank:${r.id}`),
       () => setSearch((s) => (s === refFocus.focusRef ? "" : s)),
     );
   }, [isLoading, rows, refFocus]);
+  // Round 90 — manager-only Active/Archived/All view. Non-managers stay on "active".
+  const [scope, setScope] = useState<CatalogueRowScope>("active");
   const [typeFilter, setTypeFilter] = useState<string>("all");
   const [bankFilter, setBankFilter] = useState<string>("all");
   const [rateOnly, setRateOnly] = useState(false);
@@ -335,15 +344,29 @@ export default function BankInstruments({ embedded = false }: { embedded?: boole
                 Negotiable only
               </label>
               {activeFilters > 0 && (
-                <Button variant="ghost" size="sm" onClick={clearFilters} className="ml-auto">
+                <Button variant="ghost" size="sm" onClick={clearFilters}>
                   <X className="w-3.5 h-3.5 mr-1" /> Clear filters
                 </Button>
               )}
+              <div className="ml-auto">
+                <CatalogueScopeFilter value={scope} onChange={setScope} />
+              </div>
             </div>
           </CardContent>
         </Card>
 
+        {/* Archived rows (manager-only, when viewing Archived or All) */}
+        {isManager && scope !== "active" && (
+          <Card>
+            <CardContent className="p-4 space-y-3">
+              <div className="text-sm font-medium">Archived bank products</div>
+              <ArchivedRowsPanel catalogue="bank" />
+            </CardContent>
+          </Card>
+        )}
+
         {/* Compact table */}
+        {scope !== "archived" && (
         <Card>
           <CardHeader className="pb-3">
             <CardTitle className="text-base">
@@ -373,13 +396,17 @@ export default function BankInstruments({ embedded = false }: { embedded?: boole
                   </TableHeader>
                   <TableBody>
                     {filtered.map((r) => {
-                      const stale = staleByRef.get(r.bankName);
+                      // Round 90 — lifecycle + focus key off the STABLE per-product ref
+                      // `bank:<id>`, never the shared bank name, so two products at the same
+                      // bank never collide.
+                      const bankRef = `bank:${r.id}`;
+                      const stale = staleByRef.get(bankRef);
                       return (
                         <TableRow
                           key={r.id}
-                          ref={refFocus.registerRow(r.bankName)}
-                          data-ref={r.bankName}
-                          className={`cursor-pointer ${refFocus.isFocused(r.bankName) ? "bg-primary/5" : ""}`}
+                          ref={refFocus.registerRow(bankRef)}
+                          data-ref={bankRef}
+                          className={`cursor-pointer ${refFocus.isFocused(bankRef) ? "bg-primary/5" : ""}`}
                           onClick={() => setDrawerRow(r)}
                         >
                           <TableCell>
@@ -419,8 +446,8 @@ export default function BankInstruments({ embedded = false }: { embedded?: boole
                             <TableCell onClick={(e) => e.stopPropagation()}>
                               <CatalogueRowControls
                                 catalogue="bank"
-                                targetRef={r.bankName}
-                                instrumentName={r.bankName}
+                                targetRef={bankRef}
+                                instrumentName={`${r.bankName} · ${TYPE_LABEL[r.instrumentType]}`}
                                 isActive={r.isActive}
                                 isStale={stale}
                               />
@@ -435,6 +462,7 @@ export default function BankInstruments({ embedded = false }: { embedded?: boole
             )}
           </CardContent>
         </Card>
+        )}
 
         <p className="text-xs text-muted-foreground flex items-start gap-2">
           <Info className="w-3.5 h-3.5 mt-0.5 shrink-0" />
@@ -515,10 +543,10 @@ export default function BankInstruments({ embedded = false }: { embedded?: boole
                       </Button>
                       <CatalogueRowControls
                         catalogue="bank"
-                        targetRef={drawerRow.bankName}
-                        instrumentName={drawerRow.bankName}
+                        targetRef={`bank:${drawerRow.id}`}
+                        instrumentName={`${drawerRow.bankName} · ${TYPE_LABEL[drawerRow.instrumentType]}`}
                         isActive={drawerRow.isActive}
-                        isStale={staleByRef.get(drawerRow.bankName)}
+                        isStale={staleByRef.get(`bank:${drawerRow.id}`)}
                         size="sm"
                       />
                     </div>

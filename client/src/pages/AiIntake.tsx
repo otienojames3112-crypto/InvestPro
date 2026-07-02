@@ -127,10 +127,10 @@ export function AiPrincipleBanner() {
     <div className="flex items-start gap-2 rounded-lg border border-orange-500/30 bg-orange-500/5 px-3 py-2.5 text-xs text-muted-foreground">
       <ShieldAlert className="w-4 h-4 mt-0.5 shrink-0 text-orange-500" />
       <span>
-        AI output is marked <strong className="text-orange-500">AI-extracted · unverified</strong> — the
-        least-trusted state of all, below scraped data. It never overwrites a value you or a scraper produced, it
-        cannot rank or recommend, and it never becomes the source of record. It is only a faster way to reach the
-        same human-verified destination.
+        AI drafts are <strong className="text-orange-500">unverified until you approve them</strong>. The assistant
+        can extract, compare, sort and summarise the facts it finds — but it does not publish, change any holding, or
+        execute anything, and it never tells you what to buy, sell, or hold. Every draft waits in the review queue;
+        only your approval promotes it, and <strong className="text-foreground">approved = manager-verified</strong>.
       </span>
     </div>
   );

@@ -1,4 +1,4 @@
-import { and, eq, desc, asc, sql, inArray, lte } from "drizzle-orm";
+import { and, eq, desc, asc, sql, inArray, lte, isNotNull } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import {
   InsertUser,
@@ -2586,9 +2586,11 @@ export async function reviewResearchUpdate(args: {
     promotedRef = p.fundName;
   } else if (plan.target === "bank") {
     const p = plan.payload;
-    const existing = current.targetRef
-      ? await db.select({ id: bankInstruments.id }).from(bankInstruments).where(eq(bankInstruments.bankName, current.targetRef)).limit(1)
-      : [];
+    // Round 90 — resolve the exact product being edited via the stable `bank:<id>`
+    // ref (falling back to a legacy bank-name lookup) so an edit updates ONLY that
+    // product, never a namesake at the same bank.
+    const resolvedBank = current.targetRef ? await resolveBankRef(current.targetRef) : null;
+    const existing = resolvedBank ? [{ id: resolvedBank.id }] : [];
     const values = {
       bankName: p.bankName,
       instrumentType: (p.instrumentType ?? "fixed_deposit") as
@@ -2605,9 +2607,11 @@ export async function reviewResearchUpdate(args: {
       await db.update(bankInstruments).set(values).where(eq(bankInstruments.id, existing[0].id));
       promotedBankId = existing[0].id;
     } else {
-      await db.insert(bankInstruments).values(values);
+      const insertRes = await db.insert(bankInstruments).values(values);
+      promotedBankId = extractInsertId(insertRes);
     }
-    promotedRef = p.bankName;
+    // The catalogue row's stable identity is `bank:<id>` — audit + lifecycle key off it.
+    promotedRef = promotedBankId != null ? `bank:${promotedBankId}` : p.bankName;
   } else {
     // opportunity — write through the same upsert-by-ref path, with human_entered provenance.
     const p = plan.payload;
@@ -2815,8 +2819,9 @@ export async function verifyCataloguePublished(
     return r.length > 0;
   }
   if (catalogue === "bank") {
-    const r = await db.select({ id: bankInstruments.id }).from(bankInstruments).where(eq(bankInstruments.bankName, ref)).limit(1);
-    return r.length > 0;
+    // Accept a stable `bank:<id>` ref or a legacy bank name.
+    const resolved = await resolveBankRef(ref);
+    return resolved != null;
   }
   // cbk + market_asset both live in the opportunities catalogue, keyed by ref.
   const r = await db.select({ id: opportunities.id }).from(opportunities).where(eq(opportunities.ref, ref)).limit(1);
@@ -3308,7 +3313,10 @@ export async function listFederatedUniverse(): Promise<FederatedInstrument[]> {
 
   const banks = await db.select().from(bankInstruments).where(eq(bankInstruments.isActive, true));
   for (const b of banks) {
-    if (isArchived("bank", b.bankName)) continue;
+    // Round 90 — lifecycle keys off the STABLE per-product ref `bank:<id>`, never the
+    // shared bank name, so two products at the same bank archive/stale independently.
+    const bankRef = `bank:${b.id}`;
+    if (isArchived("bank", bankRef)) continue;
     out.push({
       catalogue: "bank",
       ref: `bank:${b.id}`,
@@ -3329,8 +3337,8 @@ export async function listFederatedUniverse(): Promise<FederatedInstrument[]> {
           : "daily",
       maturityDate: null,
       expenseRatioPct: null,
-      targetRef: b.bankName,
-      stale: isStale("bank", b.bankName),
+      targetRef: bankRef,
+      stale: isStale("bank", bankRef),
     });
   }
 
@@ -3477,6 +3485,177 @@ export async function listReferenceRowMeta(
   return out;
 }
 
+/**
+ * Round 90 — archive recoverability. Return the ARCHIVED rows for a catalogue so a
+ * manager can see, audit, and reactivate them (they are hidden from the normal
+ * active lists). Each row is resolved back to a human-readable label + its stable
+ * targetRef, joined with the archived-by/at/reason meta. Manager-only at the router.
+ */
+export type ArchivedCatalogueRow = {
+  targetRef: string;
+  label: string;
+  sublabel: string | null;
+  archivedAt: number | null;
+  archivedBy: string | null;
+  archivedReason: string | null;
+};
+
+export async function listArchivedCatalogueRows(
+  catalogue: ReferenceCatalogue,
+): Promise<ArchivedCatalogueRow[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const metaRows = (
+    await db
+      .select()
+      .from(referenceRowMeta)
+      .where(and(eq(referenceRowMeta.catalogue, catalogue), isNotNull(referenceRowMeta.archivedAt)))
+  ).sort((a, b) => (b.archivedAt ?? 0) - (a.archivedAt ?? 0));
+  if (metaRows.length === 0) return [];
+
+  const out: ArchivedCatalogueRow[] = [];
+  for (const m of metaRows) {
+    let label = m.targetRef;
+    let sublabel: string | null = null;
+    if (catalogue === "mmf") {
+      const row = (await db.select().from(mmfFunds).where(eq(mmfFunds.fundName, m.targetRef)).limit(1))[0];
+      if (row) {
+        label = row.fundName;
+        sublabel = row.company ?? null;
+      }
+    } else if (catalogue === "bank") {
+      const resolved = await resolveBankRef(m.targetRef);
+      if (resolved) {
+        const row = (await db.select().from(bankInstruments).where(eq(bankInstruments.id, resolved.id)).limit(1))[0];
+        if (row) {
+          label = row.bankName;
+          sublabel = row.instrumentType ?? null;
+        }
+      }
+    } else {
+      const row = (await db.select().from(opportunities).where(eq(opportunities.ref, m.targetRef)).limit(1))[0];
+      if (row) {
+        label = row.name;
+        sublabel = row.issuer ?? null;
+      }
+    }
+    out.push({
+      targetRef: m.targetRef,
+      label,
+      sublabel,
+      archivedAt: m.archivedAt ?? null,
+      archivedBy: m.archivedBy ?? null,
+      archivedReason: m.archivedReason ?? null,
+    });
+  }
+  return out;
+}
+
+/**
+ * Round 90 — archive recoverability for All Approved Instruments. Returns the
+ * ARCHIVED reference rows across all four catalogues in the SAME shape as
+ * {@link listFederatedUniverse} (a FederatedInstrument each), so the All Approved
+ * table can merge them behind the manager-only "Include archived rows" toggle
+ * (off by default). Unlike the active universe, this deliberately KEEPS rows a
+ * manager archived (referenceRowMeta.archivedAt set). Manager-only at the router.
+ */
+export async function listArchivedFederatedUniverse(): Promise<FederatedInstrument[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const out: FederatedInstrument[] = [];
+
+  const meta = {
+    mmf: await listReferenceRowMeta("mmf"),
+    bank: await listReferenceRowMeta("bank"),
+    cbk: await listReferenceRowMeta("cbk"),
+    market_asset: await listReferenceRowMeta("market_asset"),
+  } as const;
+  const isArchived = (cat: ReferenceCatalogue, targetRef: string): boolean =>
+    meta[cat][targetRef]?.archivedAt != null;
+  const isStale = (cat: ReferenceCatalogue, targetRef: string): boolean =>
+    !!meta[cat][targetRef]?.stale;
+
+  // MMF — include ANY fund (active or not) whose row is archived.
+  const mmfs = await db.select().from(mmfFunds);
+  for (const m of mmfs) {
+    if (!isArchived("mmf", m.fundName)) continue;
+    out.push({
+      catalogue: "mmf",
+      ref: `mmf:${m.id}`,
+      name: m.fundName,
+      issuer: m.company,
+      assetClass: "cash_mmf",
+      currency: "KES",
+      headlineFigure: m.ear != null ? Number(m.ear) : null,
+      headlineLabel: "EAR %",
+      source: m.source ?? null,
+      dataAsOf: (m as { updatedAt?: Date }).updatedAt ? new Date((m as { updatedAt: Date }).updatedAt).getTime() : null,
+      verificationState: "human_entered",
+      liquidity: "daily",
+      maturityDate: null,
+      expenseRatioPct: (m as { managementFee?: string | null }).managementFee != null ? Number((m as { managementFee: string }).managementFee) : null,
+      targetRef: m.fundName,
+      stale: isStale("mmf", m.fundName),
+    });
+  }
+
+  const banks = await db.select().from(bankInstruments);
+  for (const b of banks) {
+    const bankRef = `bank:${b.id}`;
+    if (!isArchived("bank", bankRef)) continue;
+    out.push({
+      catalogue: "bank",
+      ref: `bank:${b.id}`,
+      name: b.bankName,
+      issuer: b.bankName,
+      assetClass: "bank_deposit",
+      currency: "KES",
+      headlineFigure: b.indicativeRate != null ? Number(b.indicativeRate) : null,
+      headlineLabel: "Indicative rate %",
+      source: b.source ?? null,
+      dataAsOf: (b as { updatedAt?: Date }).updatedAt ? new Date((b as { updatedAt: Date }).updatedAt).getTime() : null,
+      verificationState: "human_entered",
+      liquidity:
+        b.instrumentType === "fixed_deposit" || b.instrumentType === "target_savings"
+          ? "term"
+          : "daily",
+      maturityDate: null,
+      expenseRatioPct: null,
+      targetRef: bankRef,
+      stale: isStale("bank", bankRef),
+    });
+  }
+
+  const opps = await db.select().from(opportunities);
+  for (const o of opps) {
+    const ac = normaliseAssetClass(o.assetClass);
+    const cat = catalogueForAssetClass(ac);
+    if (cat !== "cbk" && cat !== "market_asset") continue;
+    if (!isArchived(cat, o.ref)) continue;
+    const headline = o.yieldPct != null ? Number(o.yieldPct) : o.lastPrice != null ? Number(o.lastPrice) : null;
+    out.push({
+      catalogue: cat,
+      ref: o.ref,
+      name: o.name,
+      issuer: o.issuer ?? null,
+      assetClass: ac,
+      currency: o.currency,
+      headlineFigure: headline,
+      headlineLabel: o.yieldPct != null ? "Yield %" : "Last price",
+      source: o.dataSource ?? null,
+      dataAsOf: o.dataAsOf ? new Date(o.dataAsOf).getTime() : null,
+      verificationState: o.verificationState,
+      liquidity: o.liquidity ?? null,
+      maturityDate: o.maturityDate ? new Date(o.maturityDate).getTime() : null,
+      expenseRatioPct: o.expenseRatioPct != null ? Number(o.expenseRatioPct) : null,
+      targetRef: o.ref,
+      stale: isStale(cat, o.ref),
+    });
+  }
+
+  return out;
+}
+
 /** Upsert a meta row (internal). */
 async function upsertReferenceRowMeta(
   catalogue: ReferenceCatalogue,
@@ -3551,14 +3730,52 @@ export async function setMmfActive(fundName: string, active: boolean, by: string
   return true;
 }
 
-/** Deactivate / reactivate a bank instrument by bank name. Manager action, audited. */
-export async function setBankActive(bankName: string, active: boolean, by: string, reason?: string | null): Promise<boolean> {
+/**
+ * Round 90 — resolve a bank reference to its exact row. Two catalogue products at
+ * the SAME bank (e.g. NCBA fixed deposit + NCBA call deposit) share a `bankName`,
+ * so keying lifecycle actions on the name collides them. The stable reference is
+ * `bank:<id>`; we still accept a bare bank name for backward compatibility with any
+ * legacy meta / audit rows, resolving it to the first matching instrument.
+ */
+export async function resolveBankRef(
+  ref: string,
+): Promise<{ id: number; bankName: string } | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const m = /^bank:(\d+)$/.exec(ref.trim());
+  if (m) {
+    const id = Number(m[1]);
+    const r = await db
+      .select({ id: bankInstruments.id, bankName: bankInstruments.bankName })
+      .from(bankInstruments)
+      .where(eq(bankInstruments.id, id))
+      .limit(1);
+    return r[0] ?? null;
+  }
+  // Legacy: a bare bank name. Resolve to the first matching instrument.
+  const r = await db
+    .select({ id: bankInstruments.id, bankName: bankInstruments.bankName })
+    .from(bankInstruments)
+    .where(eq(bankInstruments.bankName, ref))
+    .limit(1);
+  return r[0] ?? null;
+}
+
+/**
+ * Deactivate / reactivate a bank instrument. Accepts a stable `bank:<id>` ref
+ * (preferred) or a legacy bank name. Manager action, audited against the same ref
+ * so the audit trail and the row's Manage menu line up per-product.
+ */
+export async function setBankActive(ref: string, active: boolean, by: string, reason?: string | null): Promise<boolean> {
   const db = await getDb();
   if (!db) return false;
-  const existing = await db.select({ id: bankInstruments.id }).from(bankInstruments).where(eq(bankInstruments.bankName, bankName)).limit(1);
-  if (!existing[0]) return false;
-  await db.update(bankInstruments).set({ isActive: active }).where(eq(bankInstruments.id, existing[0].id));
-  await recordDeactivationAudit("bank", bankName, bankName, active, by, reason);
+  const resolved = await resolveBankRef(ref);
+  if (!resolved) return false;
+  await db.update(bankInstruments).set({ isActive: active }).where(eq(bankInstruments.id, resolved.id));
+  // Audit + archive-meta are recorded against the STABLE ref so two products at the
+  // same bank never share a lifecycle row.
+  const stableRef = `bank:${resolved.id}`;
+  await recordDeactivationAudit("bank", stableRef, resolved.bankName, active, by, reason);
   return true;
 }
 
@@ -3717,14 +3934,22 @@ export async function mmfRateHistoryFor(fundName: string, limit = 60): Promise<R
   }));
 }
 
-/** Bank product indicative-rate history (by bank name), newest first. */
-export async function bankRateHistoryFor(bankName: string, limit = 60): Promise<RateHistoryPoint[]> {
+/**
+ * Bank product indicative-rate history, newest first. Accepts a stable `bank:<id>`
+ * ref (preferred — queries by `bankInstrumentId` so two products at the same bank
+ * keep separate histories) or a legacy bank name.
+ */
+export async function bankRateHistoryFor(ref: string, limit = 60): Promise<RateHistoryPoint[]> {
   const db = await getDb();
   if (!db) return [];
+  const resolved = await resolveBankRef(ref);
+  const where = resolved
+    ? eq(bankProductRateHistory.bankInstrumentId, resolved.id)
+    : eq(bankProductRateHistory.bankName, ref);
   const rows = await db
     .select()
     .from(bankProductRateHistory)
-    .where(eq(bankProductRateHistory.bankName, bankName))
+    .where(where)
     .orderBy(desc(bankProductRateHistory.effectiveAt))
     .limit(limit);
   return rows.map((r) => ({
@@ -3817,10 +4042,11 @@ export async function archiveAllReferenceRows(by: string, reason: string): Promi
     await upsertReferenceRowMeta("mmf", m.name, { archivedReason: reason, archivedBy: by, archivedAt: Date.now() });
     archived += 1;
   }
-  const banks = await db.select({ name: bankInstruments.bankName }).from(bankInstruments).where(eq(bankInstruments.isActive, true));
+  const banks = await db.select({ id: bankInstruments.id }).from(bankInstruments).where(eq(bankInstruments.isActive, true));
   for (const b of banks) {
-    await setBankActive(b.name, false, by, reason);
-    await upsertReferenceRowMeta("bank", b.name, { archivedReason: reason, archivedBy: by, archivedAt: Date.now() });
+    const bankRef = `bank:${b.id}`;
+    await setBankActive(bankRef, false, by, reason);
+    await upsertReferenceRowMeta("bank", bankRef, { archivedReason: reason, archivedBy: by, archivedAt: Date.now() });
     archived += 1;
   }
   const opps = await db.select({ ref: opportunities.ref, assetClass: opportunities.assetClass }).from(opportunities).where(eq(opportunities.active, true));

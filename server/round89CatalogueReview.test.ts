@@ -195,11 +195,22 @@ describe("Round 89 · B — reviewCatalogueSource proposes findings but publishe
     for (const f of res.findings) expect(f.status).toBe("new");
     expect(res.findings.some((f) => f.instrumentName === proposedName)).toBe(true);
 
-    // The live MMF catalogue is untouched: the proposed fund is not in mmf_funds,
-    // and the row count did not grow from this review.
+    // The live MMF catalogue is untouched by the review: the proposed fund is not in
+    // mmf_funds, and the review added no NEW live rows. (We compare the set of fund
+    // names present BEFORE the review against those present after, rather than an
+    // absolute count, so a fund a concurrent suite happens to seed can't make this
+    // review look like it published something.)
     const after = await getMmfFunds();
     expect(after.some((f) => f.fundName === proposedName)).toBe(false);
-    expect(after.length).toBe(before.length);
+    const beforeNames = new Set(before.map((f) => f.fundName));
+    const addedByReview = after
+      .map((f) => f.fundName)
+      // Vitest runs test files in parallel workers, so an unrelated suite may seed its
+      // own scratch fund (all such fixtures use the shared "ZZ " prefix) while this
+      // diff runs. We only care that OUR review call published nothing, so ignore
+      // those clearly-namespaced fixtures.
+      .filter((n) => !beforeNames.has(n) && !n.startsWith("ZZ "));
+    expect(addedByReview).toEqual([]);
   });
 });
 

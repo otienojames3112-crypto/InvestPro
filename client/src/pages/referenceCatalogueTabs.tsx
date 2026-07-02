@@ -17,6 +17,13 @@ import AllApprovedInstruments from "./AllApprovedInstruments";
  */
 export const CATALOGUE_TABS: AreaTab[] = [
   {
+    id: "all-approved",
+    label: "All Approved Instruments",
+    icon: Compass,
+    hint: "The approved reference universe: every instrument approved into one of the four catalogues, in one searchable, filterable table with optional Plan-fit diagnostics. Published facts only — unapproved AI findings never appear here, and reference data does not affect portfolio math until a holding is recorded.",
+    render: () => <AllApprovedInstruments embedded />,
+  },
+  {
     id: "mmf-market",
     label: "MMF Market",
     icon: Scale,
@@ -43,12 +50,5 @@ export const CATALOGUE_TABS: AreaTab[] = [
     icon: LineChart,
     hint: "Listed equities, REITs and offshore funds sourced from public market data — prices, yields and trailing returns. Reference only; assets you actually hold live under Holdings → Other.",
     render: () => <MarketAssetsReference embedded />,
-  },
-  {
-    id: "all-approved",
-    label: "All Approved Instruments",
-    icon: Compass,
-    hint: "A neutral, read-only screener across every approved row in all four catalogues at once — search, filter, and optionally turn on a transparent Plan-fit score. Published facts only; unapproved AI findings never appear here, and it never picks anything for you.",
-    render: () => <AllApprovedInstruments embedded />,
   },
 ];

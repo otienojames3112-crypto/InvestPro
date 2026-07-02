@@ -77,7 +77,7 @@ function ReviewDialog({
 }) {
   const copy = COPY[catalogue];
   const attach = useSourceAttachment();
-  const [result, setResult] = useState<{ answer: string; taskId: number } | null>(null);
+  const [result, setResult] = useState<{ answer: string; taskId: number; findings: Finding[] } | null>(null);
   const utils = trpc.useUtils();
 
   // Findings for the current review task; re-fetched after a draft/dismiss so the
@@ -89,7 +89,13 @@ function ReviewDialog({
 
   const review = trpc.research.reviewCatalogueSource.useMutation({
     onSuccess: (data) => {
-      setResult({ answer: data.answer, taskId: data.taskId });
+      setResult({
+        answer: data.answer,
+        taskId: data.taskId,
+        // The mutation already returns the freshly-created findings; seed the panel
+        // with them so the first render never depends on the follow-up query.
+        findings: Array.isArray(data.findings) ? (data.findings as unknown as Finding[]) : [],
+      });
       toast.success("Source reviewed — review each proposal below and send the ones you want to the queue.");
       // Refresh the desk's pending/new-finding counts in the background.
       utils.research.listFindings.invalidate();
@@ -116,7 +122,13 @@ function ReviewDialog({
   }
 
   const busy = review.isPending || attach.uploading;
-  const findings = (findingsQuery.data ?? []) as unknown as Finding[];
+  // `research.listFindings` returns `{ findings: [...] }`, NOT a bare array. Unwrap it
+  // defensively (Array.isArray guard) and fall back to the findings the mutation
+  // already returned so the result panel renders even before the query resolves.
+  const queried = findingsQuery.data?.findings;
+  const findings: Finding[] = Array.isArray(queried)
+    ? (queried as unknown as Finding[])
+    : (result?.findings ?? []);
 
   return (
     <Dialog open={open} onOpenChange={(v) => (v ? onOpenChange(true) : close())}>

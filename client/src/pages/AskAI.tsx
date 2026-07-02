@@ -456,7 +456,8 @@ export type AskSource =
  * null when nothing is attached). Reused by both the opening box and the follow-up
  * composer so every turn can carry its OWN source.
  */
-export function useSourceAttachment() {
+export function useSourceAttachment(opts?: { followUp?: boolean }) {
+  const followUp = opts?.followUp ?? false;
   const upload = trpc.opportunities.aiUploadDocument.useMutation();
   const [show, setShow] = useState(false);
   const [mode, setMode] = useState<SourceMode>("url");
@@ -526,7 +527,11 @@ export function useSourceAttachment() {
       <CollapsibleTrigger asChild>
         <Button type="button" variant="ghost" size="sm" className="text-xs text-muted-foreground -ml-2">
           <Paperclip className="w-3.5 h-3.5 mr-1.5" />
-          {show ? "Hide source" : "Add a source for this question (optional)"}
+          {show
+            ? "Hide source"
+            : followUp
+              ? "Add another source for this follow-up (optional)"
+              : "Add a source for this question (optional)"}
           <ChevronDown className={`w-3.5 h-3.5 ml-1 transition-transform ${show ? "rotate-180" : ""}`} />
         </Button>
       </CollapsibleTrigger>
@@ -625,10 +630,32 @@ function SOURCE_KIND_ICON(kind: string | null) {
   return null;
 }
 
+/** What context did a given assistant answer draw on? Derived from message order:
+ *  a non-first turn had the earlier conversation to lean on, and the paired user
+ *  turn's sourceKind tells us whether a fresh source was attached to that turn. */
+function contextNote(messages: Message[], index: number): string | null {
+  const m = messages[index];
+  if (m.role !== "assistant") return null;
+  // Find the user turn this answer responds to (the nearest preceding user message).
+  let userIdx = -1;
+  for (let i = index - 1; i >= 0; i--) {
+    if (messages[i].role === "user") {
+      userIdx = i;
+      break;
+    }
+  }
+  const hadPrior = userIdx > 0; // any earlier turn exists before this user turn
+  const hadNewSource = userIdx >= 0 && !!messages[userIdx].sourceKind;
+  if (hadPrior && hadNewSource) return "Answered using the earlier conversation and the source you attached to this follow-up.";
+  if (hadPrior) return "Answered using the earlier conversation in this enquiry.";
+  if (hadNewSource) return "Answered using the source you attached.";
+  return null;
+}
+
 function Transcript({ messages }: { messages: Message[] }) {
   return (
     <div className="space-y-4">
-      {messages.map((m) =>
+      {messages.map((m, idx) =>
         m.role === "user" ? (
           <div key={m.id} className="flex items-start gap-2.5">
             <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-muted">
@@ -653,6 +680,12 @@ function Transcript({ messages }: { messages: Message[] }) {
               <div className="prose prose-sm dark:prose-invert max-w-none text-sm">
                 <Streamdown>{m.content}</Streamdown>
               </div>
+              {contextNote(messages, idx) && (
+                <p className="mt-1.5 flex items-center gap-1 text-[11px] text-muted-foreground">
+                  <GitBranch className="w-3 h-3 shrink-0" />
+                  {contextNote(messages, idx)}
+                </p>
+              )}
             </div>
           </div>
         ),
@@ -667,7 +700,7 @@ function Conversation({ threadId, onExit }: { threadId: number; onExit: () => vo
   const utils = trpc.useUtils();
   const { data, isLoading } = trpc.research.getThread.useQuery({ id: threadId });
   const [question, setQuestion] = useState("");
-  const src = useSourceAttachment();
+  const src = useSourceAttachment({ followUp: true });
 
   const ask = trpc.research.ask.useMutation({
     onSuccess: (res) => {

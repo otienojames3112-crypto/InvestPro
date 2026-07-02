@@ -374,6 +374,26 @@ export function catalogueForAssetClass(ac: AssetClass): ReferenceCatalogue {
   }
 }
 
+/**
+ * Inverse of {@link catalogueForAssetClass}: a REPRESENTATIVE canonical asset class
+ * for a catalogue, so callers holding only a `ReferenceCatalogue` (e.g. an Ask-AI
+ * finding, a catalogue-review draft) can drive the shared `checkApprovalGate`. The
+ * gate keys off the catalogue derived from this class, so any representative member
+ * of the catalogue is correct (cbk→gov_discount stands in for gov_coupon too).
+ */
+export function assetClassForCatalogue(c: ReferenceCatalogue): AssetClass {
+  switch (c) {
+    case "mmf":
+      return "cash_mmf";
+    case "bank":
+      return "bank_deposit";
+    case "cbk":
+      return "gov_discount";
+    case "market_asset":
+      return "equity";
+  }
+}
+
 /** Human label for a catalogue (plain, for chrome + audit copy). */
 export function catalogueLabel(c: ReferenceCatalogue): string {
   switch (c) {

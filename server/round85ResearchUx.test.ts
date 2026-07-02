@@ -107,12 +107,13 @@ describe("Round 85 · B — Explore is nested, not a top-level Research tab", ()
 
   it("referenceCatalogueTabs exposes 'all-approved' rendering the Explore screener", () => {
     const ids = [...catalogueTabs.matchAll(/\bid:\s*"([a-z0-9-]+)"/g)].map((m) => m[1]);
+    // Round 90 — All Approved Instruments leads the catalogue tabs.
     expect(ids).toEqual([
+      "all-approved",
       "mmf-market",
       "bank-catalogue",
       "cbk-securities",
       "market-assets",
-      "all-approved",
     ]);
     // all-approved must render <Explore …>.
     const m = catalogueTabs.match(

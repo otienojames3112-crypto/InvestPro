@@ -59,12 +59,13 @@ describe("Research area exposes the full renamed tab set", () => {
 
   it("nests the four catalogues plus All Approved Instruments (with the right components) under reference-catalogues", () => {
     const catIds = tabIds(catalogueTabs);
+    // Round 90 — All Approved Instruments is the FIRST catalogue tab.
     expect(catIds).toEqual([
+      "all-approved",
       "mmf-market",
       "bank-catalogue",
       "cbk-securities",
       "market-assets",
-      "all-approved",
     ]);
     expect(renderedFor(catalogueTabs, "mmf-market")).toBe("MmfFunds");
     expect(renderedFor(catalogueTabs, "bank-catalogue")).toBe("BankInstruments");

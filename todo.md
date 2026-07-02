@@ -1658,4 +1658,18 @@
 - [x] Post-approval portfolio-impact note: inherited via the shared draftFromFinding → queue → approve path (impactOf → describePortfolioImpact) — primary MMF rate / bank product / CBK yield future-only, historical actuals never restated
 - [x] Tests (server/round89CatalogueReview.test.ts, 17 tests): MMF review proposes-not-publishes; approval updates MMF Market + rate history; bank review proposes; CBK review extracts 91/182/364; unapproved updates do not affect Dashboard/Ledger/Accrual/Tax/Reconciliation
 - [x] Full suite + tsc green (1562 tests pass, tsc clean); verified UI; checkpoint
+- [x] Package full codebase ZIP and deliver
+
+## Round 90 — Research audit fixes (governance + bugs)
+- [x] P0: fix "Review source with AI" crash — CatalogueSourceReview reads research.listFindings as array but server returns { findings: [...] }; use Array.isArray(data?.findings) guard; regression test A (mock { findings } → FindingCard renders, no x.map crash)
+- [x] Ask AI banner copy: replace old "least-trusted / cannot rank" wording with "AI drafts are unverified until you approve them… extract, compare, sort, summarize… does not publish/change holdings/execute/tell you what to buy… approved = manager-verified"; update comments/tests (allowed: factual sort by disclosed field; banned: recommendation); test B
+- [x] Ask AI follow-up hardening: retain prior turns/findings/source, attach new source (URL/text/PDF/image), state whether answer used prior/new/both; copy "Ask a follow-up" + "Add another source for this follow-up"; test C (prior turns, attach URL, attach PDF/image, correction versions finding)
+- [x] Archive recoverability: manager-only Active/Archived/All filter per catalogue (CatalogueScopeFilter); archived rows show badge/archived-by/date/reason/reactivate via ArchivedRowsPanel (catalogue.listArchived + listArchivedCatalogueRows); never hard-delete in live. (All Approved toggle in phase 7); test D
+- [x] Bank row identity: stable targetRef = bank:<bankInstrument.id> (or productRef) across catalogue rows, All Approved, CatalogueRowControls, Recently Approved links, setBankActive, setReferenceRowStale, auditFor, rateHistory, promotion/update targetRef; test E (two NCBA products, archive only fixed deposit, call stays active, audit/links point to fixed only)
+- [ ] All Approved Instruments wording: replace screener/read-only screener/score with approved reference universe / approved instruments table / filter approved instruments / Plan Fit diagnostics; add approved-universe blurb; move to first sub-tab under Reference Catalogues; remove stale "This catalogue / All catalogues / Add instrument" controls if present
+- [x] Source provenance fallback: after parsing findings, fill sourceLabel/sourceUrl from attached source when model omits (Uploaded PDF/screenshot/Pasted source text/URL hostname); do not invent sourceAsOf
+- [x] Missing-fields alignment: missingFieldsForFinding now calls checkApprovalGate (via assetClassForCatalogue) with the finding envelope so FindingCard shows all gate-missing fields before Approve; test F
+- [x] CBK source-review completeness: applyCbkRuleFill deterministic rule-fill (tbill_91/182/364 securityType+tenor+whtRule 15% on discount+taxExempt false+maturityRule=value+tenor; IFB taxExempt true/wht 0; FXD wht 15%/10% by tenor) without forcing AI to invent; incomplete (no rate) stays pending; test G
+- [ ] Keep Review Queue / Recently Approved single governed path (no direct publish from Review source with AI)
+- [ ] Full suite + tsc green; verify UI; checkpoint
 - [ ] Package full codebase ZIP and deliver

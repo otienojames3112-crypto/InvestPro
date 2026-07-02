@@ -215,11 +215,44 @@ describe("Round 82 · Ask-AI engine helpers (network-free)", () => {
     expect(confidenceBucket(0.1, true)).toBe("low");
   });
 
-  it("missingFieldsForFinding respects aliases per catalogue", () => {
-    expect(missingFieldsForFinding("mmf", {})).toEqual(["ear"]);
-    expect(missingFieldsForFinding("mmf", { grossYield: "13.2" })).toEqual([]);
-    expect(missingFieldsForFinding("cbk", { yieldPct: "15.9" })).toEqual([]);
-    expect(missingFieldsForFinding("market_asset", {})).toEqual(["lastPrice"]);
+  it("missingFieldsForFinding respects the primary-figure alias per catalogue", () => {
+    // Round 90 — missingFieldsForFinding now routes through the SAME checkApprovalGate
+    // the desk uses, so it reports EVERY required field (identity + provenance +
+    // figures), not just the primary figure. The alias behaviour we care about here is
+    // that supplying an accepted alias of the primary figure removes THAT gap.
+    const mmfEnvelope = {
+      name: "CIC MMF",
+      issuer: "CIC Asset Management",
+      source: "CIC factsheet",
+      asOf: Date.UTC(2026, 5, 20),
+    };
+    // Bare figures → the primary figure (gross yield or EAR) is among the gaps.
+    expect(missingFieldsForFinding("mmf", {})).toContain("gross yield or EAR");
+    // `grossYield` is an accepted alias for the MMF primary figure → that gap clears.
+    expect(missingFieldsForFinding("mmf", { grossYield: "13.2" })).not.toContain(
+      "gross yield or EAR",
+    );
+    // A fully-populated MMF finding clears the gate entirely.
+    expect(
+      missingFieldsForFinding(
+        "mmf",
+        {
+          grossYield: "13.2",
+          ear: "12.9",
+          managementFee: "2.0",
+          minInvestment: "1000",
+        },
+        mmfEnvelope,
+      ),
+    ).toEqual([]);
+    // CBK: the rate alias clears the primary-figure gap.
+    expect(missingFieldsForFinding("cbk", { yieldPct: "15.9" })).not.toContain(
+      "rate / coupon / previous average rate",
+    );
+    // Market assets: the primary figure gap is present when figures are bare.
+    expect(missingFieldsForFinding("market_asset", {})).toContain(
+      "price / NAV / yield / return",
+    );
   });
 
   it("normaliseFinding drops nameless findings and forces an unsourced warning", () => {
@@ -248,7 +281,10 @@ describe("Round 82 · Ask-AI engine helpers (network-free)", () => {
     });
     expect(f).not.toBeNull();
     expect(f!.confidence).toBeCloseTo(0.85);
-    expect(f!.missingFields).toEqual([]);
+    // Round 90 — missingFields now reflects the full approval gate. A bare EAR-only
+    // MMF finding still needs its manager/fee/minimum/as-of, but the PRIMARY figure
+    // (gross yield or EAR) is satisfied by the cited `ear`.
+    expect(f!.missingFields).not.toContain("gross yield or EAR");
   });
 
   it("parseResearchResponse tolerates loose JSON and returns answer + findings", () => {

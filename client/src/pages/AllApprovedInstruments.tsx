@@ -20,6 +20,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import {
   Select,
@@ -65,30 +66,37 @@ import type { inferRouterOutputs } from "@trpc/server";
 import type { AppRouter } from "../../../server/routers";
 
 /**
- * All Approved Instruments (Round 86)
+ * All Approved Instruments
  * ───────────────────────────────────
- * A dedicated, read-only screener over the APPROVED reference universe — the
+ * The approved reference universe: one searchable, filterable table over the
  * union of every governed, published row across the four reference catalogues
- * (MMF, bank, CBK securities, market assets).
+ * (MMF, bank, CBK securities, market assets). This is the first sub-tab under
+ * Reference Catalogues.
  *
- * What makes this different from the old Explore screener it replaces:
+ * Governance / framing rules:
  *  - It reads a single server view (`explore.approvedList`) whose eligibility gate
  *    already excludes unverified / AI-only / archived rows. Seed or scraped rows
  *    that were never approved (e.g. an unverified NSE:EABL) DO NOT appear here.
- *  - "Plan Fit" is a transparent, auditable composite of the published facts
- *    (net yield after tax, liquidity, fees, issuer concentration, freshness,
- *    verification). It is OFF by default, it never reorders the list unless the
- *    user explicitly clicks the column, and it is labelled a calculation — never
- *    a recommendation. There is no "best/top/buy" language anywhere.
+ *    Every row here passed the governed review path (Research → Review Queue →
+ *    manager approval).
+ *  - "Plan Fit" is a transparent, auditable diagnostic composed of the published
+ *    facts (net yield after tax, liquidity, fees, issuer concentration, freshness,
+ *    verification). It is OFF by default, it never reorders the table unless the
+ *    user explicitly clicks the column, and it is labelled a calculation / Plan
+ *    Fit diagnostic — never a recommendation. There is no "best/top/buy" or
+ *    "score" ranking language anywhere.
  *  - Reference data shown here does not affect portfolio math until a holding is
  *    actually recorded — stated plainly in the header so it is never mistaken for
  *    the user's own positions.
  *  - Managers get the same governed lifecycle controls (deactivate / mark stale /
- *    audit / rate history) inline, plus a one-click "Open in catalogue" deep link.
+ *    audit / rate history) inline, plus a one-click "Open in catalogue" deep link,
+ *    and an optional "Include archived rows" toggle (off by default).
  */
 
 type ApprovedResult = inferRouterOutputs<AppRouter>["explore"]["approvedList"];
-type ApprovedRow = ApprovedResult["instruments"][number];
+/** A table row: an approved instrument, plus a Round-90 archived flag for the
+ *  manager-only "Include archived rows" merge (false for the normal active universe). */
+type ApprovedRow = ApprovedResult["instruments"][number] & { archived: boolean };
 type PlanFitEntry = ApprovedResult["planFit"][string];
 
 const CAT_ORDER: Record<string, number> = { mmf: 0, bank: 1, cbk: 2, market_asset: 3 };
@@ -136,7 +144,23 @@ export default function AllApprovedInstruments({ embedded = false }: { embedded?
     refetchOnWindowFocus: false,
   });
 
-  const rows = useMemo(() => data?.instruments ?? [], [data]);
+  // Round 90 — manager-only "Include archived rows" toggle (OFF by default). When
+  // on, archived reference rows are merged into the table with an "Archived" badge
+  // so managers can find and recover them without leaving the approved view. They
+  // never carry a Plan Fit (they are shown for recovery/audit, never scored).
+  const [includeArchived, setIncludeArchived] = useState(false);
+  const { data: archivedData } = trpc.explore.approvedArchived.useQuery(undefined, {
+    enabled: isManager && includeArchived,
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
+  });
+
+  const rows = useMemo(() => {
+    const active = (data?.instruments ?? []).map((r) => ({ ...r, archived: false }));
+    if (!includeArchived || !isManager) return active;
+    const archived = (archivedData?.instruments ?? []).map((r) => ({ ...r, archived: true }));
+    return [...active, ...archived];
+  }, [data, archivedData, includeArchived, isManager]);
   const planFit = data?.planFit ?? {};
   const weights = data?.weights;
 
@@ -177,8 +201,9 @@ export default function AllApprovedInstruments({ embedded = false }: { embedded?
     if (sortKey === "planFit") {
       const dir = sortDir === "asc" ? 1 : -1;
       out = [...out].sort((a, b) => {
-        const sa = planFit[a.ref];
-        const sb = planFit[b.ref];
+        // Archived rows never carry a Plan Fit (shown for recovery/audit, not scored).
+        const sa = a.archived ? undefined : planFit[a.ref];
+        const sb = b.archived ? undefined : planFit[b.ref];
         const av = sa && sa.eligible && Number.isFinite(sa.score) ? sa.score : null;
         const bv = sb && sb.eligible && Number.isFinite(sb.score) ? sb.score : null;
         if (av === null && bv === null) return 0;
@@ -224,10 +249,11 @@ export default function AllApprovedInstruments({ embedded = false }: { embedded?
               All Approved Instruments
             </h1>
             <p className="text-muted-foreground text-sm mt-1 max-w-2xl">
-              Every instrument here has been <span className="font-medium text-foreground">approved into one of the
-              four reference catalogues</span> through governed review, with its figures sourced and audited. This is a
-              neutral, read-only screener: you decide what to look at, filter and compare. Nothing is recommended, and
-              nothing shown here affects your portfolio math until you actually record a holding.
+              This is the <span className="font-medium text-foreground">approved reference universe</span> — one
+              approved instruments table over every row approved into the four reference catalogues. Every row here
+              passed the governed review path (Research → Review Queue → manager approval), with its figures sourced and
+              audited. You decide what to look at, filter the approved instruments and compare them. Nothing is
+              recommended, and reference data does not affect portfolio math until you actually record a holding.
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -268,16 +294,16 @@ export default function AllApprovedInstruments({ embedded = false }: { embedded?
           </CardContent>
         </Card>
 
-        {/* Filters — the user narrows the universe */}
+        {/* Filters — the user narrows the approved instruments */}
         <Card>
           <CardHeader className="pb-3">
             <CardTitle className="text-base flex items-center gap-2">
-              <Search className="w-4 h-4" /> Filter the approved universe
+              <Search className="w-4 h-4" /> Filter the approved instruments
             </CardTitle>
             <CardDescription className="text-xs">
-              All facets are yours to set. The list starts in a neutral order (by catalogue, then name) and only
-              re-sorts when you click the Plan Fit column. Only approved, active catalogue rows appear here — unverified
-              AI findings never do.
+              All facets are yours to set. The table starts in a neutral order (by catalogue, then name) and only
+              re-sorts when you click the Plan Fit column. Only approved catalogue rows appear here — unverified AI
+              findings never do. Archived rows are hidden unless you turn on “Include archived rows”.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
@@ -327,13 +353,33 @@ export default function AllApprovedInstruments({ embedded = false }: { embedded?
                   onChange={(e) => setMaxFigure(e.target.value)} className="h-9" placeholder="e.g. 15" />
               </div>
             </div>
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between gap-3 flex-wrap">
               <p className="text-xs text-muted-foreground">
-                Showing <span className="font-semibold text-foreground">{filtered.length}</span> of {rows.length} approved
+                Showing <span className="font-semibold text-foreground">{filtered.length}</span> of {rows.length}{" "}
+                {includeArchived && isManager ? "rows (approved + archived)" : "approved"}
               </p>
-              <Button variant="outline" size="sm" onClick={resetFilters} className="h-8 text-xs">
-                Reset filters &amp; sort
-              </Button>
+              <div className="flex items-center gap-3">
+                {isManager && (
+                  <div className="flex items-center gap-2">
+                    <Switch
+                      id="include-archived"
+                      checked={includeArchived}
+                      onCheckedChange={setIncludeArchived}
+                    />
+                    <Label htmlFor="include-archived" className="text-xs font-normal cursor-pointer flex items-center gap-1">
+                      Include archived rows
+                      <InfoHint>
+                        Manager-only. Off by default. When on, archived reference rows are shown with an
+                        “Archived” badge so you can find and reactivate them from here. Archived rows are never scored
+                        (no Plan Fit) and are never hard-deleted.
+                      </InfoHint>
+                    </Label>
+                  </div>
+                )}
+                <Button variant="outline" size="sm" onClick={resetFilters} className="h-8 text-xs">
+                  Reset filters &amp; sort
+                </Button>
+              </div>
             </div>
           </CardContent>
         </Card>
@@ -382,7 +428,7 @@ export default function AllApprovedInstruments({ embedded = false }: { embedded?
                                 <ArrowUpDown className="w-3 h-3 opacity-50" />
                               )}
                             </button>
-                            <InfoHint side="left">A transparent, factual composite: net yield (after tax) minus point penalties for term lock-ups, issuer concentration, stale or unverified figures, and fees. Click any value to audit the exact points — it is a calculation, not a recommendation. Rows missing a usable figure show no Plan Fit.</InfoHint>
+                            <InfoHint side="left">A transparent Plan Fit diagnostic: net yield (after tax) minus point penalties for term lock-ups, issuer concentration, stale or unverified figures, and fees. Click any value to audit the exact points — it is a calculation / diagnostic, not a recommendation. Rows missing a usable figure show no Plan Fit.</InfoHint>
                           </span>
                         </TableHead>
                       )}
@@ -401,7 +447,7 @@ export default function AllApprovedInstruments({ embedded = false }: { embedded?
                         key={`${r.catalogue}:${r.ref}`}
                         r={r}
                         showPlanFit={showPlanFit}
-                        fit={planFit[r.ref]}
+                        fit={r.archived ? undefined : planFit[r.ref]}
                         weights={weights}
                         isManager={isManager}
                       />
@@ -419,8 +465,8 @@ export default function AllApprovedInstruments({ embedded = false }: { embedded?
         {/* Mode note */}
         <p className="text-xs text-muted-foreground flex items-center gap-1.5">
           <FlaskConical className="w-3.5 h-3.5" />
-          This screener is the same in Live and Test. Reference data does not move real money — it only becomes part
-          of your plan when you record a holding under Holdings.
+          This approved instruments table is the same in Live and Test. Reference data does not move real money — it
+          only becomes part of your plan when you record a holding under Holdings.
         </p>
       </div>
     </AppShell>
@@ -743,17 +789,24 @@ function ApprovedInstrumentRow({
   const cat = r.catalogue as ReferenceCatalogue;
   const stale = rateStaleness(r.dataAsOf ? new Date(r.dataAsOf) : null);
   return (
-    <TableRow className="align-top">
+    <TableRow className={`align-top ${r.archived ? "bg-muted/30" : ""}`}>
       <TableCell>
         <Link href={catalogueHref(r)} className="font-medium text-foreground hover:text-primary hover:underline">
           {r.name}
         </Link>
         {r.issuer && <div className="text-xs text-muted-foreground mt-0.5">{r.issuer}</div>}
-        {r.verificationState === "human_verified" && (
-          <Badge variant="outline" className="mt-1 text-[10px] px-1.5 py-0 gap-1 border-emerald-500/30 text-emerald-600 dark:text-emerald-400">
-            <ShieldCheck className="w-2.5 h-2.5" /> Verified
-          </Badge>
-        )}
+        <div className="mt-1 flex items-center gap-1 flex-wrap">
+          {r.archived && (
+            <Badge variant="outline" className="text-[10px] px-1.5 py-0 gap-1 uppercase tracking-wide">
+              <Archive className="w-2.5 h-2.5" /> Archived
+            </Badge>
+          )}
+          {!r.archived && r.verificationState === "human_verified" && (
+            <Badge variant="outline" className="text-[10px] px-1.5 py-0 gap-1 border-emerald-500/30 text-emerald-600 dark:text-emerald-400">
+              <ShieldCheck className="w-2.5 h-2.5" /> Verified
+            </Badge>
+          )}
+        </div>
       </TableCell>
       <TableCell className="whitespace-nowrap">
         <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${CAT_BADGE[cat] ?? ""}`}>
@@ -802,7 +855,7 @@ function ApprovedInstrumentRow({
               catalogue={cat as CatalogueKind}
               targetRef={r.targetRef}
               instrumentName={r.name}
-              isActive
+              isActive={!r.archived}
               isStale={r.stale}
             />
           )}

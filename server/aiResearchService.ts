@@ -33,7 +33,12 @@ import {
   resolveVisionModel,
 } from "./aiIntakeService";
 import { normaliseAssetClass, type AssetClass } from "../shared/assetModel";
-import { catalogueForAssetClass, type ReferenceCatalogue } from "../shared/researchPipeline";
+import {
+  catalogueForAssetClass,
+  type ReferenceCatalogue,
+  checkApprovalGate,
+  assetClassForCatalogue,
+} from "../shared/researchPipeline";
 
 /** The scope a manager can constrain a question to (mirrors the DB enum). */
 export type ResearchScope = "mmf" | "bank" | "cbk" | "market_asset" | "macro" | "any";
@@ -172,31 +177,86 @@ function cleanStr(v: unknown): string | null {
 }
 
 /**
- * Which required figures for the finding's target catalogue are absent from its
- * extracted figures. Mirrors CATALOGUE_REQUIRED_FIELDS via the shared gate, but here
- * we surface the list on the draft so the manager sees the gap before drafting an update.
+ * Round 90 — the required fields for the finding's target catalogue that this draft is
+ * still MISSING, computed against the SAME `checkApprovalGate` a manager will hit at
+ * approval time (not a looser local subset). This closes the audited gap where a
+ * finding looked "complete" in the card yet was blocked at Approve because the real
+ * gate wants the full envelope (identity + figures + provenance + as-of).
+ *
+ * The finding carries: figures (`extractedFields`), an identity (`instrumentName`,
+ * `issuer`, `currency`), a provenance label (`sourceLabel`/`sourceUrl`) and an as-of
+ * (`sourceAsOf`). We map those onto the gate's inputs for a `create` and surface the
+ * gate's own `missing` labels verbatim, so the card and the Approve dialog agree.
+ *
+ * Escapable fields (a genuinely unpublished bank rate/tenor, an unquoted market
+ * figure) are NOT auto-escaped here: without an explicit "unavailable" flag the gate
+ * lists them, and that is the honest thing to show the manager up front.
  */
 export function missingFieldsForFinding(
   targetCatalogue: ReferenceCatalogue,
   figures: Record<string, string>,
+  envelope?: {
+    name?: string | null;
+    issuer?: string | null;
+    currency?: string | null;
+    source?: string | null;
+    asOf?: number | null;
+  },
 ): string[] {
-  // Local copy of the minimal required keys (kept in lockstep with researchPipeline).
-  const required: Record<ReferenceCatalogue, string[]> = {
-    mmf: ["ear"],
-    bank: ["indicativeRate"],
-    cbk: ["yieldPct"],
-    market_asset: ["lastPrice"],
-  };
-  const aliases: Record<string, string[]> = {
-    ear: ["ear", "netYield", "yieldPct", "yield", "grossYield"],
-    indicativeRate: ["indicativeRate", "rate", "yieldPct"],
-    yieldPct: ["yieldPct", "yield", "coupon", "rate"],
-    lastPrice: ["lastPrice", "price", "nav"],
-  };
-  return required[targetCatalogue].filter((key) => {
-    const keys = aliases[key] ?? [key];
-    return !keys.some((k) => figures[k] !== undefined && String(figures[k]).trim() !== "");
+  const gate = checkApprovalGate({
+    assetClass: assetClassForCatalogue(targetCatalogue),
+    changeKind: "create",
+    figures,
+    name: envelope?.name ?? null,
+    issuer: envelope?.issuer ?? null,
+    currency: envelope?.currency ?? null,
+    source: envelope?.source ?? null,
+    asOf: envelope?.asOf ?? null,
   });
+  return gate.missing;
+}
+
+/**
+ * Round 90 — deterministic CBK rule-fill. For a Treasury finding whose TENOR/type the
+ * source already stated, back-fill the CONVENTIONAL, non-numeric regulatory fields the
+ * approval gate needs (security type, tenor-in-days, WHT rule, tax-exempt flag,
+ * maturity rule) from KENYAN MARKET RULES — never a rate or price (those must come
+ * from the source). This is a pure lookup, not an inference of market data: it only
+ * fires when the tenor/type is unambiguous, and it never overwrites a value the model
+ * already extracted. A bill still needs its `yieldPct` from the source to clear the
+ * gate, so an incomplete finding stays flagged.
+ */
+export function applyCbkRuleFill(figures: Record<string, string>): Record<string, string> {
+  const out = { ...figures };
+  const set = (k: string, v: string) => {
+    if (out[k] === undefined || String(out[k]).trim() === "") out[k] = v;
+  };
+  // Determine the tenor in days from any of the common signals.
+  const blob = `${out.tenorDays ?? ""} ${out.tenor ?? ""} ${out.securityType ?? ""} ${out.instrumentType ?? ""} ${out.name ?? ""}`.toLowerCase();
+  const tbillDays = /\b364\b/.test(blob) ? 364 : /\b182\b/.test(blob) ? 182 : /\b91\b/.test(blob) ? 91 : null;
+  const isTBill = tbillDays !== null || /t-?bill|treasury bill/.test(blob);
+  const isIfb = /\bifb\b|infrastructure bond/.test(blob);
+  const isFxd = /\bfxd\b|fixed coupon|treasury bond|t-?bond/.test(blob) && !isIfb;
+
+  if (isTBill && tbillDays) {
+    set("securityType", "treasury_bill");
+    set("tenorDays", String(tbillDays));
+    set("tenor", `${tbillDays}-day`);
+    set("whtRule", "15% withholding tax on the discount");
+    set("taxExempt", "false");
+    set("maturityRule", `value date + ${tbillDays} days`);
+  } else if (isIfb) {
+    set("securityType", "infrastructure_bond");
+    set("whtRule", "0% — infrastructure bonds are tax-exempt");
+    set("taxExempt", "true");
+    set("maturityRule", "fixed maturity date per prospectus");
+  } else if (isFxd) {
+    set("securityType", "treasury_bond");
+    set("whtRule", "15% withholding tax on coupon (10% for bonds of 10+ years)");
+    set("taxExempt", "false");
+    set("maturityRule", "fixed maturity date per prospectus");
+  }
+  return out;
 }
 
 /**
@@ -218,7 +278,7 @@ export function normaliseFinding(raw: unknown): ResearchFindingDraft | null {
   const assetClass = normaliseAssetClass(o.assetClass);
   const targetCatalogue = catalogueForAssetClass(assetClass);
 
-  const figures: Record<string, string> = {};
+  let figures: Record<string, string> = {};
   if (Array.isArray(o.figures)) {
     for (const f of o.figures) {
       if (!f || typeof f !== "object") continue;
@@ -229,6 +289,14 @@ export function normaliseFinding(raw: unknown): ResearchFindingDraft | null {
     }
   }
 
+  // Round 90 — for CBK findings, deterministically back-fill the conventional
+  // regulatory fields (security type, tenor-in-days, WHT rule, tax-exempt, maturity
+  // rule) the gate needs, from the tenor/type the source stated. Never fills a rate.
+  if (targetCatalogue === "cbk") {
+    figures = applyCbkRuleFill({ ...figures, name });
+    delete (figures as Record<string, string>).name; // `name` was only a rule-fill signal
+  }
+
   const warnings: string[] = Array.isArray(o.warnings)
     ? o.warnings.map((w) => cleanStr(w)).filter((w): w is string => w !== null)
     : [];
@@ -236,7 +304,17 @@ export function normaliseFinding(raw: unknown): ResearchFindingDraft | null {
   const sourceLabel = cleanStr(o.sourceLabel);
   const sourceUrl = cleanStr(o.sourceUrl);
   const hasSource = Boolean(sourceLabel || sourceUrl);
-  const missingFields = missingFieldsForFinding(targetCatalogue, figures);
+  const sourceAsOfStr = cleanStr(o.sourceAsOf);
+  const asOfMs = sourceAsOfStr && Number.isFinite(Date.parse(sourceAsOfStr)) ? Date.parse(sourceAsOfStr) : null;
+  // Round 90 — missing fields now mirror the REAL approval gate (identity + figures
+  // + provenance + as-of), so the card and the Approve dialog can never disagree.
+  const missingFields = missingFieldsForFinding(targetCatalogue, figures, {
+    name,
+    issuer: cleanStr(o.issuer),
+    currency: cleanStr(o.currency),
+    source: sourceLabel ?? sourceUrl,
+    asOf: asOfMs,
+  });
 
   // A finding with no source is inherently uncertain — force its warnings to say so.
   const finalWarnings = hasSource
@@ -252,7 +330,7 @@ export function normaliseFinding(raw: unknown): ResearchFindingDraft | null {
     extractedFields: figures,
     sourceLabel,
     sourceUrl,
-    sourceAsOf: cleanStr(o.sourceAsOf),
+    sourceAsOf: sourceAsOfStr,
     confidence: hasSource ? confidence : Math.min(confidence, 0.3),
     missingFields,
     warnings: finalWarnings,
@@ -574,10 +652,60 @@ export async function runResearchQuestion(args: {
   const text = contentToText(res.choices?.[0]?.message?.content);
   const { answer, findings } = parseResearchResponse(text);
 
+  // Round 90 — PROVENANCE FALLBACK. When a manager attached a real source but the
+  // model forgot to echo it onto a finding, back-fill the finding's provenance from
+  // the ACTUAL attached source (never inventing an as-of date). This stops a finding
+  // extracted from a genuine upload/paste/URL from being mislabelled "no source" and
+  // wrongly capped to a hint — and, because provenance now satisfies the gate's
+  // `source` rule, its missing-fields list is recomputed to match.
+  const fallbackLabel = ((): string | null => {
+    if (args.sourceLabel && args.sourceLabel.trim() !== "") return args.sourceLabel.trim();
+    if (!source) return null;
+    switch (source.kind) {
+      case "url":
+        try {
+          return new URL(source.url).hostname.replace(/^www\./, "");
+        } catch {
+          return source.url;
+        }
+      case "pdf":
+        return "Uploaded PDF";
+      case "image":
+        return "Uploaded screenshot";
+      case "text":
+        return "Pasted source text";
+    }
+  })();
+  const fallbackUrl = source && source.kind === "url" ? source.url : null;
+
+  const stamped = findings.map((f) => {
+    const hadSource = Boolean(f.sourceLabel || f.sourceUrl);
+    if (hadSource || !fallbackLabel) return f;
+    const sourceLabel = f.sourceLabel ?? fallbackLabel;
+    const sourceUrl = f.sourceUrl ?? fallbackUrl;
+    const asOfMs =
+      f.sourceAsOf && Number.isFinite(Date.parse(f.sourceAsOf)) ? Date.parse(f.sourceAsOf) : null;
+    return {
+      ...f,
+      sourceLabel,
+      sourceUrl,
+      // Drop the "no source cited" self-warning we added when the finding looked unsourced.
+      warnings: f.warnings.filter((w) => !w.startsWith("No source was cited")),
+      // Recompute against the gate now that provenance is present.
+      missingFields: missingFieldsForFinding(f.targetCatalogue, f.extractedFields, {
+        name: f.instrumentName,
+        issuer: f.issuer,
+        currency: f.currency,
+        source: sourceLabel ?? sourceUrl,
+        asOf: asOfMs,
+      }),
+    };
+  });
+
   // Attach any grounding warnings to every finding so the manager sees the caveat.
   const withWarnings = groundingWarnings.length
-    ? findings.map((f) => ({ ...f, warnings: [...f.warnings, ...groundingWarnings] }))
-    : findings;
+    ? stamped.map((f) => ({ ...f, warnings: [...f.warnings, ...groundingWarnings] }))
+    : stamped;
 
   return { answer, findings: withWarnings, model: res.model ?? null };
 }

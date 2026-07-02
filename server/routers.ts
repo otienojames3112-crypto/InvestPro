@@ -131,9 +131,11 @@ import {
   correctResearchFinding,
   listCatalogueAudit,
   listFederatedUniverse,
+  listArchivedFederatedUniverse,
   primaryMmfFundNames,
   getReferenceRowMeta,
   listReferenceRowMeta,
+  listArchivedCatalogueRows,
   recordManualCorrectionAudit,
   setReferenceRowStale,
   setMmfActive,
@@ -7951,6 +7953,16 @@ export const appRouter = router({
       );
       return { instruments, planFit, weights: DEFAULT_SCORE_WEIGHTS, scoredAt: nowMs };
     }),
+
+    // Round 90 — archive recoverability for All Approved. Returns the ARCHIVED
+    // reference rows in the SAME row shape as `approvedList.instruments`, so the
+    // page can merge them behind a manager-only "Include archived rows" toggle
+    // (off by default). No Plan Fit is computed for archived rows — they are shown
+    // for recovery/audit, never scored. Manager-only.
+    approvedArchived: adminProcedure.query(async () => {
+      const instruments = await listArchivedFederatedUniverse();
+      return { instruments };
+    }),
   }),
 
   // ─── Round 83: catalogue governance (manager edit/deactivate/mark-stale) ───
@@ -7973,6 +7985,16 @@ export const appRouter = router({
       .query(async ({ input }) => {
         const meta = await getReferenceRowMeta(input.catalogue as ReferenceCatalogue, input.targetRef);
         return { meta };
+      }),
+
+    // Round 90 — archive recoverability: the ARCHIVED rows for a catalogue, so a
+    // manager can review, audit, and reactivate them (they are hidden from the
+    // normal active lists). Manager-only.
+    listArchived: adminProcedure
+      .input(z.object({ catalogue: z.enum(["mmf", "bank", "cbk", "market_asset"]) }))
+      .query(async ({ input }) => {
+        const rows = await listArchivedCatalogueRows(input.catalogue as ReferenceCatalogue);
+        return { rows };
       }),
 
     // Deactivate / reactivate a catalogue row. Manager action, audited.

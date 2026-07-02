@@ -78,6 +78,7 @@ export function CatalogueRowControls({
     // Round 86: also refresh the approved-universe screener so a deactivate /
     // mark-stale action is reflected on the All Approved Instruments view.
     utils.explore?.approvedList?.invalidate?.();
+    utils.explore?.approvedArchived?.invalidate?.();
     utils.explore?.federatedUniverse?.invalidate?.();
   };
 

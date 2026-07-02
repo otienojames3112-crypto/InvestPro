@@ -9,6 +9,7 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import { useRefFocus } from "@/hooks/useRefFocus";
 import { CatalogueRowControls } from "@/components/CatalogueRowControls";
 import { CatalogueSourceReviewButton } from "@/components/CatalogueSourceReview";
+import { ArchivedRowsPanel, CatalogueScopeFilter, type CatalogueRowScope } from "@/components/ArchivedRowsPanel";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -247,6 +248,8 @@ export default function MmfFunds({ embedded = false }: { embedded?: boolean } = 
   // Prefill the search box from a deep-link ?ref= so the row is easy to spot even
   // before the highlight fades.
   const [search, setSearch] = useState(() => refFocus.focusRef ?? "");
+  // Round 90 — manager-only Active/Archived/All view. Non-managers stay on "active".
+  const [scope, setScope] = useState<CatalogueRowScope>("active");
 
   // Round 86: if the ?ref= belongs to another catalogue (a stale link), clear the
   // prefilled search and drop the ref so this catalogue doesn't filter to nothing.
@@ -460,18 +463,32 @@ export default function MmfFunds({ embedded = false }: { embedded?: boolean } = 
         )}
       </div>
 
-      {/* Search */}
-      <div className="relative max-w-sm">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-        <Input
-          className="pl-9"
-          placeholder="Search by name or company…"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-        />
+      {/* Search + manager-only Active/Archived/All scope filter */}
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div className="relative max-w-sm flex-1 min-w-[200px]">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+          <Input
+            className="pl-9"
+            placeholder="Search by name or company…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        </div>
+        <CatalogueScopeFilter value={scope} onChange={setScope} />
       </div>
 
+      {/* Archived rows (manager-only, when viewing Archived or All) */}
+      {isManager && scope !== "active" && (
+        <Card>
+          <CardContent className="p-4 space-y-3">
+            <div className="text-sm font-medium">Archived funds</div>
+            <ArchivedRowsPanel catalogue="mmf" onChanged={() => utils.mmfFunds.list.invalidate()} />
+          </CardContent>
+        </Card>
+      )}
+
       {/* Table */}
+      {scope !== "archived" && (
       <Card>
         <CardContent className="p-0 overflow-x-auto">
           <table className="w-full text-sm">
@@ -653,6 +670,7 @@ export default function MmfFunds({ embedded = false }: { embedded?: boolean } = 
           </table>
         </CardContent>
       </Card>
+      )}
 
       {/* Reference-vs-holdings separation — account management lives in Holdings. */}
       <Card className="border-primary/20 bg-primary/3">

@@ -61,6 +61,7 @@ import {
 import { InfoHint } from "@/components/InfoHint";
 import { catalogueLabel, type ReferenceCatalogue } from "@shared/researchPipeline";
 import { formatRelativeTime } from "@/lib/format";
+import { cn } from "@/lib/utils";
 import { AiPrincipleBanner } from "@/pages/AiIntake";
 
 /* ── Small shared bits ─────────────────────────────────────────────────────── */
@@ -786,6 +787,8 @@ function Conversation({ threadId, onExit }: { threadId: number; onExit: () => vo
   const [question, setQuestion] = useState("");
   const [allowUnsourced, setAllowUnsourced] = useState(false);
   const [sourceStatus, setSourceStatus] = useState<SourceStatus | null>(null);
+  // Round 92 — explicit per-follow-up source behaviour.
+  const [sourceMode, setSourceMode] = useState<"reuse_previous" | "new" | "none">("reuse_previous");
   const src = useSourceAttachment({ followUp: true });
 
   const ask = trpc.research.ask.useMutation({
@@ -818,6 +821,8 @@ function Conversation({ threadId, onExit }: { threadId: number; onExit: () => vo
     try {
       setSourceStatus(null);
       const { source, label } = await src.resolve();
+      // A freshly attached source implies "add another source"; otherwise honour the mode.
+      const mode: "reuse_previous" | "new" | "none" = source ? "new" : sourceMode;
       ask.mutate({
         question: question.trim(),
         scope: (data?.thread?.scope ?? "any") as Scope,
@@ -825,6 +830,7 @@ function Conversation({ threadId, onExit }: { threadId: number; onExit: () => vo
         source: source ?? undefined,
         sourceLabel: label ?? undefined,
         allowUnsourced: source ? allowUnsourced : undefined,
+        sourceMode: mode,
       });
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Upload failed.");
@@ -892,6 +898,42 @@ function Conversation({ threadId, onExit }: { threadId: number; onExit: () => vo
               if ((e.metaKey || e.ctrlKey) && e.key === "Enter") void submitFollowUp();
             }}
           />
+          {/* Round 92 — how this follow-up treats sources. A fresh attachment below always wins. */}
+          {!src.provided && (
+            <div className="space-y-1.5">
+              <div className="flex flex-wrap gap-1.5">
+                {([
+                  ["reuse_previous", "Use previous source"],
+                  ["new", "Add another source"],
+                  ["none", "Ask without source"],
+                ] as const).map(([val, lbl]) => (
+                  <button
+                    key={val}
+                    type="button"
+                    onClick={() => setSourceMode(val)}
+                    className={cn(
+                      "rounded-full border px-3 py-1 text-xs transition-colors",
+                      sourceMode === val
+                        ? "border-primary bg-primary/10 text-foreground font-medium"
+                        : "border-border bg-background text-muted-foreground hover:text-foreground",
+                    )}
+                  >
+                    {lbl}
+                  </button>
+                ))}
+              </div>
+              <p className="text-[11px] text-muted-foreground">
+                {sourceMode === "new"
+                  ? "Attach a document or URL below — I\u2019ll use the earlier conversation context plus the new source."
+                  : sourceMode === "none"
+                    ? "Using earlier conversation context."
+                    : "Using the previous source from this enquiry, plus the earlier conversation context."}
+              </p>
+            </div>
+          )}
+          {src.provided && (
+            <p className="text-[11px] text-muted-foreground">Using previous context + this new source.</p>
+          )}
           {sourceStatus && <SourceStatusPanel status={sourceStatus} />}
           {src.provided && (
             <label className="flex items-start gap-2 rounded-md border border-border bg-background px-3 py-2 text-xs text-muted-foreground cursor-pointer">

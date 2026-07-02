@@ -76,6 +76,25 @@ export interface ResearchFindingDraft {
   rawExcerpt: string | null;
 }
 
+/**
+ * Round 92 — a compact, durable summary of a finding ALREADY established earlier in
+ * the same enquiry thread, fed back into a follow-up so the AI reuses prior facts,
+ * honours the manager's corrections, and does not re-emit an identical finding.
+ */
+export interface PriorFindingContext {
+  instrument: string;
+  assetClass: string | null;
+  /** Verbatim figures already recorded (key -> value). */
+  figures: Record<string, string>;
+  sourceLabel: string | null;
+  sourceUrl: string | null;
+  asOf: string | null;
+  /** Triage state so the model knows what the manager did with it. */
+  status: "new" | "drafted" | "dismissed" | "superseded";
+  /** Present when this finding is a manager correction of an earlier value. */
+  correction: { field: string; oldValue: string | null; newValue: string; reason: string | null } | null;
+}
+
 /** The full result of one Ask-AI question. */
 export interface ResearchAnswer {
   answer: string;
@@ -110,7 +129,20 @@ KENYAN-MARKET DOMAIN CONTEXT (use so your figures are framed correctly):
 HOLDINGS-vs-REFERENCE INVARIANT (critical — you only ever touch the reference side):
 - A REFERENCE CATALOGUE figure (an MMF's published EAR, a T-bill auction yield, a bank's indicative rate, a market asset's last price) is a MARKET FACT about an instrument that exists in the world. That is the ONLY kind of thing your findings describe.
 - A HOLDING / PORTFOLIO POSITION (how much of an instrument this manager actually owns, their cost, their coupon receipts, their balance) is PRIVATE portfolio data. You do NOT know it, you must NOT infer it, and you must NEVER produce a finding that states or changes a holding, a balance, a position size, or this portfolio's performance. If a question mixes the two ("given my MMF balance, what will I earn"), answer only the reference-fact part (the quoted rate + how it is conventionally applied) and hand the position-specific arithmetic back to the manager and the tracker.
-- Never treat a reference figure as if it were a holding, and never let a source's example balance become a finding.`;
+- Never treat a reference figure as if it were a holding, and never let a source's example balance become a finding.
+
+HOW THIS TRACKER USES YOUR WORK (be tool-aware — say this plainly when a question touches it):
+- Reference catalogues are NOT holdings. A catalogue row is a published market fact about an instrument; it is not money the manager owns.
+- Holdings are the actual money. Balances, positions, cost, coupon receipts and this portfolio's performance live on the holdings side, which you never see or change.
+- Your findings do NOT affect any portfolio maths until a human APPROVES them. Nothing you output moves a number in the tracker on its own; a finding must be drafted into the review queue and approved by the manager first.
+- Once approved, a catalogue change may affect FUTURE PROJECTIONS ONLY — the forward-looking assumptions the tracker uses. It does not, and must not, rewrite HISTORICAL ACTUALS: past recorded balances, past coupons and realised performance are never restated by a catalogue edit.
+- Because of this, frame answers as "here is the current published figure; if you approve it, future projections would use it" — never as "your portfolio is now worth X" or "this changes your returns".
+
+PER-ASSET-CLASS FIELDS & RISKS (each catalogue type is different — use the right fields and name the relevant risk):
+- MMFs: key fields are the EFFECTIVE ANNUAL RATE (ear) and/or gross yield (yieldPct), plus the management fee. Risks/caveats: EAR vs simple-yield confusion, whether a fee is already netted, and that a quote is a snapshot that changes daily.
+- Bank products (fixed/call deposits): key fields are the indicative rate, tenor and any tier/minimum. Risks/caveats: rates are INDICATIVE and NEGOTIABLE and usually quoted GROSS of the 15% withholding tax — flag pre-tax vs net.
+- CBK securities (T-bills / T-bonds): key fields are the auction/annualised yield and tenor (91/182/364-day for bills) or coupon + yield-to-maturity (bonds). Risks/caveats: an auction yield is a point-in-time result; a bond's coupon is not its YTM; and reopened issues carry a specific issue number.
+- Market assets (equities/ETFs/other): key fields are the last price and its as-of date/currency. Risks/caveats: prices are volatile and stale quickly, and currency must be explicit.`;
 
 export const RESEARCH_SCHEMA = {
   name: "research_answer",
@@ -736,6 +768,15 @@ export async function runResearchQuestion(args: {
    */
   priorMessages?: Array<{ role: "user" | "assistant"; content: string }> | null;
   /**
+   * Round 92 — durable STRUCTURED context from earlier in the SAME enquiry thread:
+   * the findings already established (their values, source, triage status, and any
+   * correction), not just prose. Feeding these lets a follow-up reuse prior facts,
+   * respect the manager's corrections, and AVOID re-emitting an identical finding.
+   * The engine renders them into a "WHAT YOU ALREADY ESTABLISHED" block and applies a
+   * duplicate-suppression guard after parsing.
+   */
+  priorFindings?: PriorFindingContext[] | null;
+  /**
    * Round 91 — a source that has ALREADY been read via `readSource()` (the single
    * choke point, run BEFORE this function so a read failure is classified distinctly).
    * When supplied AND ok:true, we ground on its text + carry its warnings + provenance
@@ -827,11 +868,32 @@ export async function runResearchQuestion(args: {
     ? "\n(This is a FOLLOW-UP in an ongoing enquiry. Use the earlier turns for context, but still return standalone FINDINGS for every figure THIS answer relies on — do not assume the manager will re-read prior findings.)"
     : "";
 
+  // Round 92 — render the DURABLE structured facts already established in this enquiry
+  // (values, source, triage state, corrections) so the follow-up reuses them, respects
+  // the manager's corrections, and does NOT re-emit an identical finding.
+  const established = (args.priorFindings ?? []).filter((f) => f.status !== "dismissed").slice(0, 40);
+  const establishedBlock = established.length
+    ? "\n\nWHAT YOU ALREADY ESTABLISHED IN THIS ENQUIRY (durable facts — treat as known; do NOT re-emit a finding that merely repeats one of these unless a value has CHANGED; when the manager corrected a value, use the CORRECTED value and never revert to the old one):\n" +
+      established
+        .map((f, i) => {
+          const figs = Object.entries(f.figures)
+            .map(([k, v]) => `${k}=${v}`)
+            .join(", ");
+          const src = f.sourceLabel ? ` [source: ${f.sourceLabel}${f.sourceUrl ? ` — ${f.sourceUrl}` : ""}${f.asOf ? `, as-of ${f.asOf}` : ""}]` : "";
+          const corr = f.correction
+            ? ` (manager CORRECTED ${f.correction.field}: ${f.correction.oldValue ?? "—"} → ${f.correction.newValue}${f.correction.reason ? `; reason: ${f.correction.reason}` : ""})`
+            : "";
+          const state = f.status === "drafted" ? " {drafted to review queue}" : f.status === "superseded" ? " {superseded by a later correction}" : "";
+          return `${i + 1}. ${f.instrument}${f.assetClass ? ` (${f.assetClass})` : ""}: ${figs || "no figures"}${src}${corr}${state}`;
+        })
+        .join("\n")
+    : "";
+
   const res = await invokeLLM({
     messages: [
       { role: "system", content: RESEARCH_SYSTEM_PROMPT },
       ...priorTurns,
-      { role: "user", content: `QUESTION: ${args.question}${scopeLine}${grounding}${followUpNote}` },
+      { role: "user", content: `QUESTION: ${args.question}${scopeLine}${grounding}${establishedBlock}${followUpNote}` },
     ],
     temperature: 0,
     response_format: { type: "json_schema", json_schema: RESEARCH_SCHEMA },
@@ -914,5 +976,54 @@ export async function runResearchQuestion(args: {
     ? kindStamped.map((f) => ({ ...f, warnings: [...f.warnings, ...groundingWarnings] }))
     : kindStamped;
 
-  return { answer, findings: withWarnings, model: res.model ?? null };
+  // Round 92 — DUPLICATE SUPPRESSION. A follow-up must not spawn a fresh finding that
+  // merely restates something already established in this enquiry with the SAME values.
+  // We only drop a candidate when an earlier (non-dismissed) finding for the same
+  // instrument carries an identical figures bag; if ANY value differs (or a new figure
+  // appears), the finding is kept so the change is captured for triage.
+  const deduped = suppressDuplicateFindings(withWarnings, established);
+
+  return { answer, findings: deduped, model: res.model ?? null };
+}
+
+/** Case/space-insensitive key for matching an instrument across turns. */
+function instrumentKey(name: string): string {
+  return name.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+/** Normalise a figures bag to a comparable, order-independent shape (verbatim values,
+ *  trimmed; keys lower-cased). Used to decide whether a follow-up finding actually
+ *  CHANGED anything versus a prior established finding. */
+function normaliseFigures(figures: Record<string, string>): string {
+  const entries = Object.entries(figures)
+    .filter(([, v]) => v != null && String(v).trim() !== "")
+    .map(([k, v]) => [k.trim().toLowerCase(), String(v).trim()] as const)
+    .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+  return JSON.stringify(entries);
+}
+
+/**
+ * Round 92 — drop candidate findings that are exact restatements (same instrument +
+ * identical figures) of a still-valid prior finding. A candidate whose values differ
+ * from every prior finding for that instrument is always kept.
+ */
+export function suppressDuplicateFindings<T extends { instrumentName: string; extractedFields: Record<string, string> }>(
+  candidates: T[],
+  priorFindings: PriorFindingContext[],
+): T[] {
+  if (priorFindings.length === 0) return candidates;
+  const priorByInstrument = new Map<string, Set<string>>();
+  for (const p of priorFindings) {
+    if (p.status === "dismissed") continue;
+    const key = instrumentKey(p.instrument);
+    const set = priorByInstrument.get(key) ?? new Set<string>();
+    set.add(normaliseFigures(p.figures));
+    priorByInstrument.set(key, set);
+  }
+  return candidates.filter((c) => {
+    const priorSigs = priorByInstrument.get(instrumentKey(c.instrumentName));
+    if (!priorSigs) return true; // never seen this instrument before → keep
+    // Keep only if the values are NOT an exact repeat of a prior established finding.
+    return !priorSigs.has(normaliseFigures(c.extractedFields));
+  });
 }

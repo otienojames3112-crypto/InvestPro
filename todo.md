@@ -1687,3 +1687,14 @@
 - [x] Preserve source provenance on every finding: source label, source URL if any, source kind (url/text/pdf/image), checkedAt, sourceAsOf if present, transcription warning; stamp label/url from attached source when model omits
 - [x] Tests: (a) Ask AI unreadable URL => source warning but still answers if allowed; (b) Review unreadable URL => no findings + source-fix message; (c) Review never falls back to general knowledge; (d) long task resumable/pollable via taskId; (e) PDF/image source status visible; (f) findings preserve provenance
 - [x] Full suite + tsc green (1595 passed, 4 consecutive runs); routes verified (/research?tab=ask + per-catalogue Review button, admin-gated); checkpoint and deliver
+
+# Round 92 — Ask AI follow-ups as a durable analyst conversation
+
+- [x] Follow-up context: pass prior STRUCTURED findings (values, sourceLabel/url, triage status drafted/dismissed/superseded, corrections) + prior answer summaries + prior manager corrections into the follow-up prompt; do not rely only on prose messages
+- [x] Explicit per-follow-up source behavior: manager chooses Use previous source / Add another source / Ask without source
+- [x] Context banner: new source -> "Using previous context + this new source."; no new source -> "Using earlier conversation context."
+- [x] Versioned corrections: a manager correction ("issue number is 2690/091") creates a NEW corrected finding (oldValue, correctedValue, reason, source, correctedBy, correctedAt) and never overwrites the old one; then draftable into the Review Queue
+- [x] Duplicate suppression: a follow-up does NOT create duplicate findings unless a value actually changed
+- [x] Tool-aware Ask AI system prompt: reference catalogues != holdings; holdings = actual money; AI findings do not affect math until approved; approved catalogue changes affect FUTURE projections only; historical actuals not rewritten; MMF / bank products / CBK securities / market assets have different fields + risks
+- [x] Tests: (a) follow-up includes prior findings; (b) follow-up can attach new source; (c) follow-up can use previous source; (d) correction creates versioned finding; (e) follow-up does not create duplicate findings unless values changed
+- [x] Full suite + tsc green (1610 passed, 3 consecutive runs); UI wired; checkpoint and deliver

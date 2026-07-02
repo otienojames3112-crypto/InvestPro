@@ -220,6 +220,7 @@ import {
   type ResearchSource,
   type SourceReadResult,
   type CatalogueRowSnapshot,
+  type PriorFindingContext,
 } from "./aiResearchService";
 import { normaliseAssetClass } from "../shared/assetModel";
 import { runAdapter } from "./ingestion/runner";
@@ -979,6 +980,61 @@ async function catalogueSnapshot(catalogue: ReferenceCatalogue): Promise<Catalog
   }));
 }
 
+/**
+ * Round 92 — assemble the DURABLE structured context for a follow-up: every finding
+ * already recorded in this enquiry thread, mapped to a compact PriorFindingContext.
+ * This is what makes a follow-up feel like a continuing analyst conversation rather
+ * than a cold one-shot: the AI sees the prior values, their source, the manager's
+ * triage decisions (drafted/dismissed/superseded), and any correction (old → new +
+ * reason) so it reuses the corrected value and does not re-emit an identical finding.
+ */
+async function buildPriorFindingsContext(threadId: number): Promise<PriorFindingContext[]> {
+  const findings = await listResearchFindings({ threadId });
+  if (findings.length === 0) return [];
+  // Index by id so a correction row can look up its predecessor's value.
+  const byId = new Map<number, (typeof findings)[number]>();
+  for (const f of findings) byId.set(f.id, f);
+  // Oldest-first so the established narrative reads in the order it happened.
+  const ordered = [...findings].sort((a, b) => Number(a.createdAt) - Number(b.createdAt));
+  return ordered.map((f) => {
+    const rawFigs = (f.extractedFields ?? {}) as Record<string, unknown>;
+    const figures: Record<string, string> = {};
+    for (const [k, v] of Object.entries(rawFigs)) {
+      if (v != null && String(v).trim() !== "") figures[k] = String(v);
+    }
+    // If this row is a correction (it supersedes an earlier finding), describe the delta.
+    let correction: PriorFindingContext["correction"] = null;
+    if (f.supersedesId != null) {
+      const prev = byId.get(f.supersedesId);
+      const prevFigs = (prev?.extractedFields ?? {}) as Record<string, unknown>;
+      // The changed field is whichever figure differs (fall back to a generic label).
+      let field = "value";
+      let oldValue: string | null = null;
+      let newValue = "";
+      for (const [k, v] of Object.entries(figures)) {
+        const before = prevFigs[k] == null ? null : String(prevFigs[k]);
+        if (before !== v) {
+          field = k;
+          oldValue = before;
+          newValue = v;
+          break;
+        }
+      }
+      correction = { field, oldValue, newValue, reason: f.correctionReason ?? null };
+    }
+    return {
+      instrument: f.instrumentName,
+      assetClass: f.assetClass ?? null,
+      figures,
+      sourceLabel: f.sourceLabel ?? null,
+      sourceUrl: f.sourceUrl ?? null,
+      asOf: f.sourceAsOf != null ? new Date(Number(f.sourceAsOf)).toISOString().slice(0, 10) : null,
+      status: f.status,
+      correction,
+    } satisfies PriorFindingContext;
+  });
+}
+
 /** JSON shape persisted to research_tasks.source_status and surfaced in the UI. */
 function sourceStatusJson(read: SourceReadResult) {
   return read.ok
@@ -1025,6 +1081,8 @@ async function executeResearchTask(opts: {
   sourceLabel: string | null;
   allowUnsourced: boolean;
   priorMessages?: Array<{ role: "user" | "assistant"; content: string }>;
+  /** Round 92 — durable structured facts from earlier in this thread. */
+  priorFindings?: PriorFindingContext[];
 }): Promise<ExecuteResearchTaskResult> {
   const { taskId, threadId, kind } = opts;
   try {
@@ -1103,6 +1161,7 @@ async function executeResearchTask(opts: {
       sourceLabel: opts.sourceLabel,
       preRead,
       priorMessages: opts.priorMessages ?? null,
+      priorFindings: opts.priorFindings ?? null,
     });
 
     // ── Stage 3: EXTRACT + PERSIST FINDINGS ───────────────────────────────────
@@ -7804,6 +7863,11 @@ export const appRouter = router({
           // Round 88 — continue an existing enquiry THREAD (a follow-up) when supplied.
           // Omit to open a NEW thread from this question.
           threadId: z.number().int().positive().optional(),
+          // Round 92 — explicit per-follow-up SOURCE behaviour. `new` uses the attached
+          // `source`; `reuse_previous` re-reads the most recent prior turn's source in
+          // this thread (no new attachment needed); `none` asks against earlier
+          // conversation context only. Omitted → inferred (attached ⇒ new, else none).
+          sourceMode: z.enum(["reuse_previous", "new", "none"]).optional(),
         }),
       )
       .mutation(async ({ ctx, input }) => {
@@ -7815,11 +7879,31 @@ export const appRouter = router({
         // the prior prose turns (oldest-first) to feed the engine as context.
         let threadId = input.threadId ?? null;
         let priorMessages: Array<{ role: "user" | "assistant"; content: string }> = [];
+        let priorFindings: PriorFindingContext[] = [];
+        let reusedSource: PendingResearchSource | null = null;
+        let reusedSourceLabel: string | null = null;
         if (threadId != null) {
           const thread = await getResearchThread(threadId);
           if (!thread) throw new TRPCError({ code: "NOT_FOUND", message: "Enquiry thread not found." });
           const msgs = await listResearchMessages(threadId);
           priorMessages = msgs.map((m) => ({ role: m.role as "user" | "assistant", content: m.content }));
+          // Round 92 — durable structured facts already established in this enquiry.
+          priorFindings = await buildPriorFindingsContext(threadId);
+          // Round 92 — resolve a "reuse previous source" request from the latest prior
+          // user turn that carried a source (URL/text/pdf/image).
+          const lastWithSource = [...msgs].reverse().find((m) => m.role === "user" && m.sourceKind && m.sourceRef);
+          if (lastWithSource && lastWithSource.sourceKind && lastWithSource.sourceRef) {
+            const k = lastWithSource.sourceKind;
+            reusedSource =
+              k === "url"
+                ? { kind: "url", url: lastWithSource.sourceRef }
+                : k === "text"
+                  ? { kind: "text", text: lastWithSource.sourceRef }
+                  : k === "pdf"
+                    ? { kind: "pdf", fileKey: lastWithSource.sourceRef }
+                    : { kind: "image", fileKey: lastWithSource.sourceRef };
+            reusedSourceLabel = lastWithSource.sourceLabel ?? null;
+          }
         } else {
           threadId = await createResearchThread({
             createdByOpenId: openId,
@@ -7845,6 +7929,31 @@ export const appRouter = router({
               ? { kind: "text", text: input.sourceText }
               : null;
 
+        // Round 92 — apply the explicit per-follow-up source behaviour. `none` forces an
+        // unsourced (conversation-context) answer; a fresh attachment always wins ("add
+        // another source"); `reuse_previous` falls back to the thread's most recent prior
+        // source. The resolved mode is echoed back so the UI shows the right banner.
+        let effectiveSource: PendingResearchSource | null;
+        let effectiveSourceLabel: string | null;
+        let sourceModeUsed: "new" | "reuse_previous" | "none";
+        if (input.sourceMode === "none") {
+          effectiveSource = null;
+          effectiveSourceLabel = null;
+          sourceModeUsed = "none";
+        } else if (pending) {
+          effectiveSource = pending;
+          effectiveSourceLabel = input.sourceLabel ?? null;
+          sourceModeUsed = "new";
+        } else if (input.sourceMode === "reuse_previous" && reusedSource) {
+          effectiveSource = reusedSource;
+          effectiveSourceLabel = reusedSourceLabel;
+          sourceModeUsed = "reuse_previous";
+        } else {
+          effectiveSource = null;
+          effectiveSourceLabel = null;
+          sourceModeUsed = "none";
+        }
+
         const taskId = await createResearchTask({
           createdByOpenId: openId,
           createdByName: ctx.user.name ?? null,
@@ -7853,9 +7962,9 @@ export const appRouter = router({
           status: "running",
           stage: "queued",
           kind: "ask",
-          sourceKind: pending?.kind ?? undefined,
-          sourceRef: pending ? (pending.kind === "url" ? pending.url : pending.kind === "text" ? pending.text.slice(0, 60000) : pending.fileKey) : undefined,
-          sourceLabel: input.sourceLabel ?? undefined,
+          sourceKind: effectiveSource?.kind ?? undefined,
+          sourceRef: effectiveSource ? (effectiveSource.kind === "url" ? effectiveSource.url : effectiveSource.kind === "text" ? effectiveSource.text.slice(0, 60000) : effectiveSource.fileKey) : undefined,
+          sourceLabel: effectiveSourceLabel ?? undefined,
           allowUnsourced: input.allowUnsourced ?? false,
           threadId: threadId ?? undefined,
         });
@@ -7865,20 +7974,20 @@ export const appRouter = router({
         // so the transcript is durable even if the engine errors.
         if (threadId != null) {
           const sref =
-            pending?.kind === "url"
-              ? pending.url
-              : pending?.kind === "text"
-                ? pending.text.slice(0, 700)
-                : pending?.kind === "pdf" || pending?.kind === "image"
-                  ? pending.fileKey
+            effectiveSource?.kind === "url"
+              ? effectiveSource.url
+              : effectiveSource?.kind === "text"
+                ? effectiveSource.text.slice(0, 700)
+                : effectiveSource?.kind === "pdf" || effectiveSource?.kind === "image"
+                  ? effectiveSource.fileKey
                   : null;
           await insertResearchMessage({
             threadId,
             role: "user",
             content: input.question,
-            sourceKind: pending?.kind ?? undefined,
+            sourceKind: effectiveSource?.kind ?? undefined,
             sourceRef: sref ?? undefined,
-            sourceLabel: input.sourceLabel ?? undefined,
+            sourceLabel: effectiveSourceLabel ?? undefined,
           });
         }
 
@@ -7891,10 +8000,11 @@ export const appRouter = router({
           kind: "ask",
           question: input.question,
           scope: input.scope as ResearchScope,
-          source: pending,
-          sourceLabel: input.sourceLabel ?? null,
+          source: effectiveSource,
+          sourceLabel: effectiveSourceLabel,
           allowUnsourced: input.allowUnsourced ?? false,
           priorMessages,
+          priorFindings,
         });
         return {
           taskId: out.taskId,
@@ -7904,6 +8014,8 @@ export const appRouter = router({
           findings: out.findings,
           stage: out.stage,
           sourceStatus: out.sourceStatus,
+          // Round 92 — which source behaviour actually applied, for the UI banner.
+          sourceMode: sourceModeUsed,
         };
       }),
 
@@ -7929,15 +8041,33 @@ export const appRouter = router({
           sourceLabel: z.string().max(200).optional(),
           allowUnsourced: z.boolean().optional(),
           threadId: z.number().int().positive().optional(),
+          // Round 92 — explicit per-follow-up source behaviour (see `ask`).
+          sourceMode: z.enum(["reuse_previous", "new", "none"]).optional(),
         }),
       )
       .mutation(async ({ ctx, input }) => {
         const openId = ctx.user.openId ?? String(ctx.user.id);
         const scopeEnum = input.scope as "mmf" | "bank" | "cbk" | "market_asset" | "macro" | "any";
         let threadId = input.threadId ?? null;
+        let reusedSource: PendingResearchSource | null = null;
+        let reusedSourceLabel: string | null = null;
         if (threadId != null) {
           const thread = await getResearchThread(threadId);
           if (!thread) throw new TRPCError({ code: "NOT_FOUND", message: "Enquiry thread not found." });
+          const msgs = await listResearchMessages(threadId);
+          const lastWithSource = [...msgs].reverse().find((m) => m.role === "user" && m.sourceKind && m.sourceRef);
+          if (lastWithSource && lastWithSource.sourceKind && lastWithSource.sourceRef) {
+            const k = lastWithSource.sourceKind;
+            reusedSource =
+              k === "url"
+                ? { kind: "url", url: lastWithSource.sourceRef }
+                : k === "text"
+                  ? { kind: "text", text: lastWithSource.sourceRef }
+                  : k === "pdf"
+                    ? { kind: "pdf", fileKey: lastWithSource.sourceRef }
+                    : { kind: "image", fileKey: lastWithSource.sourceRef };
+            reusedSourceLabel = lastWithSource.sourceLabel ?? null;
+          }
         } else {
           threadId = await createResearchThread({
             createdByOpenId: openId,
@@ -7946,7 +8076,7 @@ export const appRouter = router({
             scope: scopeEnum,
           });
         }
-        const pending: PendingResearchSource | null = input.source
+        const attached: PendingResearchSource | null = input.source
           ? input.source.kind === "url"
             ? { kind: "url", url: input.source.url }
             : input.source.kind === "text"
@@ -7955,6 +8085,22 @@ export const appRouter = router({
                 ? { kind: "pdf", fileKey: input.source.fileKey }
                 : { kind: "image", fileKey: input.source.fileKey }
           : null;
+        // Resolve the effective source per the explicit mode (same rules as `ask`).
+        let pending: PendingResearchSource | null;
+        let pendingLabel: string | null;
+        if (input.sourceMode === "none") {
+          pending = null;
+          pendingLabel = null;
+        } else if (attached) {
+          pending = attached;
+          pendingLabel = input.sourceLabel ?? null;
+        } else if (input.sourceMode === "reuse_previous" && reusedSource) {
+          pending = reusedSource;
+          pendingLabel = reusedSourceLabel;
+        } else {
+          pending = null;
+          pendingLabel = null;
+        }
         const taskId = await createResearchTask({
           createdByOpenId: openId,
           createdByName: ctx.user.name ?? null,
@@ -7965,7 +8111,7 @@ export const appRouter = router({
           kind: "ask",
           sourceKind: pending?.kind ?? undefined,
           sourceRef: pending ? (pending.kind === "url" ? pending.url : pending.kind === "text" ? pending.text.slice(0, 60000) : pending.fileKey) : undefined,
-          sourceLabel: input.sourceLabel ?? undefined,
+          sourceLabel: pendingLabel ?? undefined,
           allowUnsourced: input.allowUnsourced ?? false,
           threadId: threadId ?? undefined,
         });
@@ -7979,7 +8125,7 @@ export const appRouter = router({
             content: input.question,
             sourceKind: pending?.kind ?? undefined,
             sourceRef: sref ?? undefined,
-            sourceLabel: input.sourceLabel ?? undefined,
+            sourceLabel: pendingLabel ?? undefined,
           });
         }
         return { taskId, threadId, stage: "queued" as const };
@@ -8018,12 +8164,15 @@ export const appRouter = router({
                   : { kind: "image", fileKey: task.sourceRef }
             : null;
         let priorMessages: Array<{ role: "user" | "assistant"; content: string }> = [];
+        let priorFindings: PriorFindingContext[] = [];
         if (task.threadId != null) {
           const msgs = await listResearchMessages(task.threadId);
           // Drop the just-persisted opening user turn's duplication by keeping prose only.
           priorMessages = msgs
             .filter((m) => m.taskId == null || m.taskId !== task.id)
             .map((m) => ({ role: m.role as "user" | "assistant", content: m.content }));
+          // Round 92 — durable structured facts already established in this enquiry.
+          priorFindings = await buildPriorFindingsContext(task.threadId);
         }
         const out = await executeResearchTask({
           taskId: task.id,
@@ -8035,6 +8184,7 @@ export const appRouter = router({
           sourceLabel: task.sourceLabel ?? null,
           allowUnsourced: Boolean(task.allowUnsourced),
           priorMessages,
+          priorFindings,
         });
         return out;
       }),

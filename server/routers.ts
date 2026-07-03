@@ -1069,6 +1069,8 @@ export interface ExecuteResearchTaskResult {
   findings: Awaited<ReturnType<typeof listResearchFindings>>;
   stage: "done" | "needs_source_fix" | "failed";
   sourceStatus: ReturnType<typeof sourceStatusJson> | null;
+  /** Round 102 — the detected source class when structured extraction ran. */
+  sourceClass?: string | null;
 }
 
 /**
@@ -1089,6 +1091,8 @@ async function executeResearchTask(opts: {
   priorMessages?: Array<{ role: "user" | "assistant"; content: string }>;
   /** Round 92 — durable structured facts from earlier in this thread. */
   priorFindings?: PriorFindingContext[];
+  /** Round 102 — intake mode passed to the engine for follow-up extraction. */
+  intakeMode?: "ask" | "extract" | null;
 }): Promise<ExecuteResearchTaskResult> {
   const { taskId, threadId, kind } = opts;
   try {
@@ -1168,6 +1172,7 @@ async function executeResearchTask(opts: {
       preRead,
       priorMessages: opts.priorMessages ?? null,
       priorFindings: opts.priorFindings ?? null,
+      intakeMode: opts.intakeMode ?? null,
     });
 
     // ── Stage 3: EXTRACT + PERSIST FINDINGS ───────────────────────────────────
@@ -1194,6 +1199,7 @@ async function executeResearchTask(opts: {
       findings: await listResearchFindings({ taskId }),
       stage: "done",
       sourceStatus: statusJson,
+      sourceClass: res.sourceClass ?? null,
     };
   } catch (err) {
     const message = (err instanceof Error ? err.message : String(err)).slice(0, 500);
@@ -8484,6 +8490,8 @@ export const appRouter = router({
           threadId: z.number().int().positive().optional(),
           // Round 92 — explicit per-follow-up source behaviour (see `ask`).
           sourceMode: z.enum(["reuse_previous", "new", "none"]).optional(),
+          // Round 102 — intake mode: "ask" (default) or "extract" (force structured extraction on follow-ups).
+          intakeMode: z.enum(["ask", "extract"]).optional(),
         }),
       )
       .mutation(async ({ ctx, input }) => {
@@ -8653,7 +8661,12 @@ export const appRouter = router({
     // gathers prior thread turns, and drives the same executeResearchTask pipeline. Safe
     // to call once per queued task; a task already past `queued` is returned as-is.
     processResearchTask: adminProcedure
-      .input(z.object({ taskId: z.number().int().positive() }))
+      .input(z.object({
+        taskId: z.number().int().positive(),
+        // Round 102 — intake mode forwarded from the client so the engine knows
+        // whether to force structured extraction on follow-ups.
+        intakeMode: z.enum(["ask", "extract"]).optional(),
+      }))
       .mutation(async ({ input }) => {
         const task = await getResearchTask(input.taskId);
         if (!task) throw new TRPCError({ code: "NOT_FOUND", message: "Enquiry not found." });
@@ -8715,6 +8728,7 @@ export const appRouter = router({
           allowUnsourced: Boolean(task.allowUnsourced),
           priorMessages,
           priorFindings,
+          intakeMode: input.intakeMode ?? null,
         });
         return out;
       }),

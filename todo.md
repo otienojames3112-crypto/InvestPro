@@ -1823,3 +1823,16 @@
 - [x] (8) Part 8: Update GettingStarted/Learn page navigation guide to cover all pages (Dashboard, Research, Reference Catalogues, Holdings, Ledger, Accrual, Tax, Reconciliation, Scenarios)
 - [x] (9) Tests: Round 101 regression suite — new ExplainKind prompts, glossary coverage, page explainer wiring (76 tests)
 - [x] (10) Full suite + tsc green; checkpoint + deliver (1841 tests passing)
+
+## Round 102 — Ask AI: Clean Research-Intake Desk
+
+- [x] (1) Add intake mode selector to AskAI.tsx ("Ask / explain" vs "Extract instrument facts")
+- [x] (2) Show detected source-class panel after source read/classification (CBK bond prospectus, CBK T-bill auction, MMF benchmark, MMF factsheet, Bank product/rate card, Market asset factsheet, Unknown)
+- [x] (3) Show extraction target label (CBK Securities Reference, MMF Market, Bank Product Catalogue, Market Assets Reference)
+- [x] (4) Fix follow-up structured extraction: run instrument-aware extraction even when priorTurns.length > 0 if source is attached and mode is "Extract instrument facts"
+- [x] (5) Build InstrumentProfilePreview component with grouped field rendering for CBK, MMF, Bank, and Market assets
+- [x] (6) Replace flat FindingCard with InstrumentProfilePreview when _extendedFields exists
+- [x] (7) Improve missing-field quality: show "Missing from source" with visual warning, no blanks/nulls/inferred values
+- [x] (8) CBK bond required-fields coverage test (all CBK_BOND_REQUIRED_FIELDS appear in InstrumentProfilePreview groups)
+- [x] (9) Acceptance tests: 38-test Round 102 regression suite (source-class panel, follow-up extraction, profile preview, missing fields, governance)
+- [x] (10) Full suite + tsc green; checkpoint + deliver (1879 tests passing)

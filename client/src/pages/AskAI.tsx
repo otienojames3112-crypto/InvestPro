@@ -64,8 +64,18 @@ import { SOURCE_CLASS_LABELS, isSourceClass } from "@shared/instrumentProfile";
 import { formatRelativeTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { AiPrincipleBanner } from "@/pages/AiIntake";
+import { InstrumentProfilePreview } from "@/components/InstrumentProfilePreview";
 
 /* ── Small shared bits ─────────────────────────────────────────────────────── */
+
+/** Round 102 — map a detected source class to the catalogue it targets. */
+function catalogueLabelForSourceClass(sc: string): string {
+  if (sc.startsWith("cbk_")) return "CBK Securities Reference";
+  if (sc.startsWith("mmf_")) return "MMF Market";
+  if (sc.startsWith("bank_")) return "Bank Product Catalogue";
+  if (sc.startsWith("market_asset_")) return "Market Assets Reference";
+  return "Reference Catalogue";
+}
 
 const SCOPE_OPTIONS: { value: string; label: string }[] = [
   { value: "any", label: "Anything" },
@@ -355,6 +365,8 @@ export type ResearchTaskResult = {
   findings: Finding[];
   stage: TaskStage;
   sourceStatus: SourceStatus | null;
+  /** Round 102 — detected source class when structured extraction ran. */
+  sourceClass?: string | null;
 };
 
 /**
@@ -380,6 +392,8 @@ export function useResearchTaskPoller() {
   const run = useCallback(
     async (
       start: () => Promise<{ taskId: number; threadId: number | null }>,
+      /** Round 102 — optional intake mode forwarded to processResearchTask. */
+      opts?: { intakeMode?: "ask" | "extract" },
     ): Promise<ResearchTaskResult> => {
       cancelled.current = false;
       setRunning(true);
@@ -388,7 +402,7 @@ export function useResearchTaskPoller() {
         const { taskId } = await start();
         // Kick the pipeline. This resolves when the task reaches a terminal stage;
         // meanwhile we poll getTask so the UI shows intermediate stages promptly.
-        const processing = process.mutateAsync({ taskId });
+        const processing = process.mutateAsync({ taskId, intakeMode: opts?.intakeMode });
         let reachedTerminal = false;
         const poll = async () => {
           while (!cancelled.current && !reachedTerminal) {
@@ -421,6 +435,7 @@ export function useResearchTaskPoller() {
           findings: (done.findings ?? []) as unknown as Finding[],
           stage: finalStage,
           sourceStatus: (done.sourceStatus ?? null) as SourceStatus | null,
+          sourceClass: (done as Record<string, unknown>).sourceClass as string | null | undefined,
         };
         return result;
       } finally {
@@ -673,22 +688,30 @@ export function FindingCard({ finding, onChanged }: { finding: Finding; onChange
         {/* Round 98: Diff table for update/stale proposals */}
         <ComparisonDiffTable extractedFields={finding.extractedFields} />
 
-        {fields.length > 0 ? (
-          <div className="flex flex-wrap gap-x-6 gap-y-2">
-            {fields.map((f) => (
-              <div key={f.key} className="text-sm">
-                <span className="text-muted-foreground">{f.key}: </span>
-                {f.missing ? (
-                  <span className="italic text-amber-600 text-xs">Missing from source</span>
-                ) : (
-                  <span className="font-medium tabular-nums">{f.value}</span>
-                )}
-              </div>
-            ))}
-          </div>
-        ) : (
-          <p className="text-sm text-muted-foreground italic">No figures extracted — identity only.</p>
-        )}
+        {/* Round 102 — grouped instrument profile preview (replaces flat field list when _extendedFields is present) */}
+        {(() => {
+          const extRaw = finding.extractedFields?._extendedFields;
+          if (extRaw) {
+            return <InstrumentProfilePreview extendedFieldsRaw={extRaw} missingFields={finding.missingFields} />;
+          }
+          // Fallback: flat field list for findings without a rich profile
+          return fields.length > 0 ? (
+            <div className="flex flex-wrap gap-x-6 gap-y-2">
+              {fields.map((f) => (
+                <div key={f.key} className="text-sm">
+                  <span className="text-muted-foreground">{f.key}: </span>
+                  {f.missing ? (
+                    <span className="italic text-amber-600 text-xs">Missing from source</span>
+                  ) : (
+                    <span className="font-medium tabular-nums">{f.value}</span>
+                  )}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground italic">No figures extracted — identity only.</p>
+          );
+        })()}
 
         {isCorrection && finding.correctionReason && (
           <div className="flex items-start gap-2 rounded-md border border-primary/25 bg-primary/[0.05] px-3 py-2 text-xs text-foreground">
@@ -707,12 +730,28 @@ export function FindingCard({ finding, onChanged }: { finding: Finding; onChange
         )}
 
         {missing.length > 0 && (
-          <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/[0.06] px-3 py-2 text-xs text-amber-700">
-            <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
-            <span>
-              Missing for a complete {finding.targetCatalogue ? catalogueLabel(finding.targetCatalogue as ReferenceCatalogue) : "catalogue"} entry:{" "}
-              {missing.join(", ")}. You can still draft it and vouch a value at approval.
-            </span>
+          <div className="rounded-md border border-amber-500/30 bg-amber-500/[0.06] px-3 py-2.5 text-xs">
+            <div className="flex items-center gap-2 mb-1.5">
+              <AlertTriangle className="w-3.5 h-3.5 shrink-0 text-amber-600" />
+              <span className="font-medium text-amber-700">
+                {missing.length} field{missing.length === 1 ? "" : "s"} missing for a complete{" "}
+                {finding.targetCatalogue ? catalogueLabel(finding.targetCatalogue as ReferenceCatalogue) : "catalogue"} entry
+              </span>
+            </div>
+            <div className="flex flex-wrap gap-1.5 ml-5.5 pl-0.5">
+              {missing.map((m) => (
+                <Badge
+                  key={m}
+                  variant="outline"
+                  className="font-normal text-[10px] bg-amber-500/10 text-amber-700 border-amber-500/25 px-1.5 py-0"
+                >
+                  {m}
+                </Badge>
+              ))}
+            </div>
+            <p className="text-[11px] text-amber-600/80 mt-1.5 ml-5.5 pl-0.5">
+              You can still draft it and vouch a value at approval.
+            </p>
           </div>
         )}
 
@@ -1060,6 +1099,8 @@ function Conversation({ threadId, onExit }: { threadId: number; onExit: () => vo
   const [sourceStatus, setSourceStatus] = useState<SourceStatus | null>(null);
   // Round 92 — explicit per-follow-up source behaviour.
   const [sourceMode, setSourceMode] = useState<"reuse_previous" | "new" | "none">("reuse_previous");
+  // Round 102 — intake mode for follow-ups ("extract" forces structured extraction on new source).
+  const [intakeMode, setIntakeMode] = useState<"ask" | "extract">("ask");
   const src = useSourceAttachment({ followUp: true });
 
   // Round 96 — follow-ups run as a pollable task (start → process → poll) so a slow
@@ -1079,6 +1120,8 @@ function Conversation({ threadId, onExit }: { threadId: number; onExit: () => vo
       const { source, label } = await src.resolve();
       // A freshly attached source implies "add another source"; otherwise honour the mode.
       const mode: "reuse_previous" | "new" | "none" = source ? "new" : sourceMode;
+      // Round 102 — when a new source is attached, auto-switch to "extract" mode.
+      const effectiveIntakeMode: "ask" | "extract" = source ? "extract" : intakeMode;
       const res = await poller.run(async () => {
         const started = await startTask.mutateAsync({
           question: question.trim(),
@@ -1088,9 +1131,10 @@ function Conversation({ threadId, onExit }: { threadId: number; onExit: () => vo
           sourceLabel: label ?? undefined,
           allowUnsourced: source ? allowUnsourced : undefined,
           sourceMode: mode,
+          intakeMode: effectiveIntakeMode,
         });
         return { taskId: started.taskId, threadId: started.threadId };
-      });
+      }, { intakeMode: effectiveIntakeMode });
       setSourceStatus(res.sourceStatus);
       if (res.stage === "needs_source_fix") {
         toast.error("I couldn’t read that source. Fix it and retry, or tick “Answer without the source” to proceed on general knowledge.");
@@ -1290,6 +1334,9 @@ function OpeningPanel({ onStarted }: { onStarted: (threadId: number) => void }) 
   const [scope, setScope] = useState<Scope>("any");
   const [allowUnsourced, setAllowUnsourced] = useState(false);
   const [sourceStatus, setSourceStatus] = useState<SourceStatus | null>(null);
+  // Round 102 — intake mode: "ask" (default conversational) or "extract" (force structured extraction).
+  const [intakeMode, setIntakeMode] = useState<"ask" | "extract">("ask");
+  const [detectedSourceClass, setDetectedSourceClass] = useState<string | null>(null);
   const src = useSourceAttachment();
 
   // Round 96 — the opening enquiry runs as a pollable task too, so the manager sees a
@@ -1314,10 +1361,12 @@ function OpeningPanel({ onStarted }: { onStarted: (threadId: number) => void }) 
           source: source ?? undefined,
           sourceLabel: label ?? undefined,
           allowUnsourced: source ? allowUnsourced : undefined,
+          intakeMode,
         });
         return { taskId: started.taskId, threadId: started.threadId };
-      });
+      }, { intakeMode });
       setSourceStatus(res.sourceStatus);
+      setDetectedSourceClass(res.sourceClass ?? null);
       if (res.stage === "needs_source_fix") {
         // The attached source could not be read and the manager did NOT pre-authorise
         // answering without it: no briefing, no findings. Point them at the fix.
@@ -1406,12 +1455,44 @@ function OpeningPanel({ onStarted }: { onStarted: (threadId: number) => void }) 
               </SelectContent>
             </Select>
           </div>
+          {/* Round 102 — intake mode selector */}
+          <div className="space-y-1">
+            <Label className="text-xs text-muted-foreground">Mode</Label>
+            <div className="flex gap-1">
+              {(["ask", "extract"] as const).map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => setIntakeMode(m)}
+                  className={cn(
+                    "rounded-full border px-3 py-1.5 text-xs transition-colors",
+                    intakeMode === m
+                      ? "border-primary bg-primary/10 text-foreground font-medium"
+                      : "border-border bg-background text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  {m === "ask" ? "Ask / explain" : "Extract facts"}
+                </button>
+              ))}
+            </div>
+          </div>
           <div className="flex-1" />
           <Button onClick={() => void submit()} disabled={!canAsk}>
             {busy ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <Send className="w-4 h-4 mr-1.5" />}
-            {src.uploading ? "Uploading…" : poller.running ? (poller.stage ? STAGE_LABELS[poller.stage] : "Asking…") : "Ask"}
+            {src.uploading ? "Uploading\u2026" : poller.running ? (poller.stage ? STAGE_LABELS[poller.stage] : "Asking\u2026") : "Ask"}
           </Button>
         </div>
+        {/* Round 102 — detected source-class panel */}
+        {detectedSourceClass && isSourceClass(detectedSourceClass) && (
+          <div className="rounded-md border border-primary/20 bg-primary/[0.04] px-3 py-2 text-xs flex items-center gap-2">
+            <FileCheck2 className="w-3.5 h-3.5 text-primary shrink-0" />
+            <span>
+              <span className="font-medium">Detected:</span>{" "}
+              {SOURCE_CLASS_LABELS[detectedSourceClass as keyof typeof SOURCE_CLASS_LABELS]} \u2014 findings will target the{" "}
+              <span className="font-medium">{catalogueLabelForSourceClass(detectedSourceClass)}</span> catalogue.
+            </span>
+          </div>
+        )}
         {src.node}
       </CardContent>
     </Card>

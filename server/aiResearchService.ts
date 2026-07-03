@@ -109,6 +109,8 @@ export interface ResearchAnswer {
   answer: string;
   findings: ResearchFindingDraft[];
   model: string | null;
+  /** Round 102 — the detected source class (null when generic/no structured extraction). */
+  sourceClass?: SourceClass | null;
 }
 
 /* ── Prompt + schema ──────────────────────────────────────────────────────── */
@@ -799,6 +801,13 @@ export async function runResearchQuestion(args: {
    * omitted, the legacy self-read path below runs (kept for backward compatibility).
    */
   preRead?: SourceReadResult | null;
+  /**
+   * Round 102 — intake mode. When "extract", the manager explicitly wants
+   * catalogue-ready structured findings even on a follow-up (overrides the
+   * priorTurns.length === 0 gate). When "ask" or omitted, the legacy behaviour
+   * applies (structured extraction only on the opening turn).
+   */
+  intakeMode?: "ask" | "extract" | null;
 }): Promise<ResearchAnswer> {
   const scopeLine =
     args.scope === "any" ? "" : `\nConstrain your findings to this scope: ${args.scope}.`;
@@ -910,7 +919,10 @@ export async function runResearchQuestion(args: {
   let answer: string = "";
   let findings: ResearchFindingDraft[] = [];
   let usedModel: string | null = null;
-  const canTryStructured = Boolean(grounding) && priorTurns.length === 0;
+  // Round 102 — allow structured extraction on follow-ups when intakeMode is "extract"
+  // and a new source is attached (grounding exists). The original gate only allowed
+  // structured extraction on the opening turn (priorTurns.length === 0).
+  const canTryStructured = Boolean(grounding) && (priorTurns.length === 0 || args.intakeMode === "extract");
   let usedStructured = false;
   if (canTryStructured && groundingText.length > 100) {
     const structured = await tryInstrumentAwareExtraction(groundingText, args.question);
@@ -1018,7 +1030,21 @@ export async function runResearchQuestion(args: {
   // appears), the finding is kept so the change is captured for triage.
   const deduped = suppressDuplicateFindings(withWarnings, established);
 
-  return { answer, findings: deduped, model: usedModel };
+  // Round 102 — surface the detected sourceClass so the frontend can show the panel.
+  let detectedSourceClass: SourceClass | null = null;
+  if (usedStructured && grounding) {
+    // The structured path already classified; re-derive from the first finding's _extendedFields.
+    try {
+      const ext = deduped[0]?.extractedFields?._extendedFields;
+      if (ext) {
+        const parsed = typeof ext === "string" ? JSON.parse(ext) : ext;
+        if (parsed?.sourceClass && isSourceClass(parsed.sourceClass)) {
+          detectedSourceClass = parsed.sourceClass;
+        }
+      }
+    } catch { /* ignore */ }
+  }
+  return { answer, findings: deduped, model: usedModel, sourceClass: detectedSourceClass };
 }
 
 /** Case/space-insensitive key for matching an instrument across turns. */

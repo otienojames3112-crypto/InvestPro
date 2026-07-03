@@ -14,10 +14,10 @@ import { CATALOGUE_TABS } from "./referenceCatalogueTabs";
  *                            Conflicts, Source Registry, Recently Approved).
  *   2. Reference Catalogues — the four published catalogues (MMF, Bank, CBK,
  *                            Market Assets) PLUS "All Approved Instruments" — the
- *                            read-only screener over the approved federated
+ *                            approved reference universe over the approved federated
  *                            universe. All are nested via `?cat=`.
  *
- * The Explore screener is no longer a top-level tab; it lives inside Reference
+ * The approved reference universe is no longer a top-level tab; it lives inside Reference
  * Catalogues as "All Approved Instruments" so the top level stays about the raw
  * pipeline (Desk) vs the published reference data (Catalogues).
  *
@@ -110,7 +110,7 @@ const TABS: AreaTab[] = [
     id: "reference-catalogues",
     label: "Reference Catalogues",
     icon: Library,
-    hint: "The four published reference catalogues plus All Approved Instruments — a read-only screener across every approved row. Managers can edit, deactivate, mark stale, or view the audit history of any row; reference data is never money — only confirmed holdings affect your plan.",
+    hint: "The four published reference catalogues plus All Approved Instruments — approved reference universe across every approved catalogue row. Managers can edit, deactivate, mark stale, or view the audit history of any row; reference data is never money — only confirmed holdings affect your plan.",
     render: () => <ReferenceCatalogues />,
   },
 ];

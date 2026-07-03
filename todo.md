@@ -1701,14 +1701,14 @@
 
 # Round 93 — Reference Catalogue → Holdings action flow
 
-- [ ] Bank Product Catalogue actions use DepositDrawer with a bank prefill (kind:bank, bankInstrumentId + bankName/instrumentType/indicativeRate/typicalTenor/minAmount/source/asOfDate); REMOVE the invalid /holdings/bank navigation; user confirms amount/rate/start/tenor/payout/WHT/notes before a holding+deposit is created
-- [ ] Add nullable bankInstrumentId on bankInstrumentHoldings (+ migration); thread it through create so an actual bank holding links back to its catalogue row; catalogue rate change never mutates existing deposit
-- [ ] MMF Market row actions: Set as primary (exists), Add as secondary MMF account, Record deposit (DepositDrawer institutionType=mmf_fund, mmfFundId), View composition; user still confirms amount/date/notes
-- [ ] Verify CBK Securities Reference "Record purchase" opens DepositDrawer prefilled (security type/tenor/rate/WHT/maturity), no holding until confirm
-- [ ] Verify Market Assets Reference "Track holding" opens Holdings → Other prefilled (name/class/price/source), no holding until confirm value/units/date/include-in-goal
-- [ ] Holdings tabs remain actual-holdings only (do NOT move reference tables in); add catalogue back-links (MMF/Government/Bank/Other → their reference pages)
-- [ ] Tests: bank catalogue create opens DepositDrawer not /holdings/bank; created bank holding stores bankInstrumentId; MMF add-secondary creates a secondary account after confirm; MMF record-deposit records a deposit to that fund; reference rows alone do not change net worth; confirmed holdings update Dashboard/Holdings/Ledger/Accrual/Tax/Review/Reconciliation
-- [ ] Full suite + tsc green; verify UI; checkpoint and deliver
+- [x] Bank Product Catalogue actions use DepositDrawer with a bank prefill (kind:bank, bankInstrumentId + bankName/instrumentType/indicativeRate/typicalTenor/minAmount/source/asOfDate); REMOVED the invalid /holdings/bank navigation; user confirms amount/rate/start/tenor/payout/WHT/notes before a holding+deposit is created
+- [x] Added nullable bankInstrumentId on bankInstrumentHoldings (+ migration 0017, applied live); threaded through bankHoldings.add + list so an actual bank holding links back to its catalogue row; provenance-only — catalogue rate change never mutates existing deposit
+- [x] MMF Market row actions: Set as primary (exists), Add as secondary MMF account (deep-link opens confirm dialog), Record deposit (DepositDrawer mmf kind → held fund destination or not-held hint), View composition (/mmf-strategy); user still confirms amount/date/notes
+- [x] Verified CBK Securities Reference "Record purchase" opens DepositDrawer prefilled via openDrawer(govPrefill) (security type/tenor/rate/WHT/maturity), no holding until confirm
+- [x] Verified Market Assets Reference "Track holding" deep-links Holdings → Other prefilled (track=1&name/class/value/notes), no holding until confirm in the Add dialog
+- [x] Holdings tabs remain actual-holdings only (Round 79 guard still green); added catalogue back-links Government→CBK ref + Other→Market Assets ref; MMF→MMF Market + Bank→Bank Catalogue already present
+- [x] Tests: round93CatalogueToHolding (17) asserts bank catalogue opens DepositDrawer not /holdings/bank, bankInstrumentId threaded end-to-end, MMF confirm-first bridges, reference-rows-are-confirm-first, and Holdings back-links; routeRedirects updated for graduated /mmf-strategy route
+- [x] Full suite (1628) + tsc green; verified UI (bank drawer, MMF add-secondary dialog, /mmf-strategy composition, back-links); checkpoint 661f132e saved
 
 ## Round 93 — working notes
 - [x] Schema: nullable `bankInstrumentId` added to `bank_instrument_holdings` + migration 0017 (applied to live DB)
@@ -1717,3 +1717,13 @@
 - [x] MMF Market row actions: add-secondary (deep-link Holdings→MMF w/ addSecondary+fundId, consumed in MmfAccounts), record-deposit (drawer mmf kind → held fund or not-held hint), view composition (/mmf-strategy mounted as real route)
 - [x] Holdings back-links: Government (Securities)→CBK ref + Other→Market Assets ref added; MMF/Bank already linked
 - [x] Tests: added server/round93CatalogueToHolding.test.ts (17); updated routeRedirects.test.ts for the graduated /mmf-strategy route; full suite 1628 passing; tsc clean
+
+# Round 94 — Retire "screener / score" wording (Plan Fit language)
+
+- [x] Swept user-facing "screener"/"score"/"scored" strings in AllApprovedInstruments, ResearchArea, referenceCatalogueTabs
+- [x] "screener" → approved reference universe (ResearchArea hint + referenceCatalogueTabs + doc comments)
+- [x] "scored" → "included in Plan Fit" (archived-rows tooltip + comments); weights note now "contributes… to the Plan Fit diagnostic"; Plan Fit never called a recommendation
+- [x] ResearchArea hint now reads "approved reference universe across every approved catalogue row"
+- [x] All Approved Instruments intro replaced with the exact required sentence
+- [x] Internal names (fit.score, sortKey planFit, netYieldPerPct) left as-is; only visible labels/tooltips changed
+- [x] Tests: added server/round94PlanFitWording.test.ts (5); full suite 1633 passing; tsc clean; UI verified; checkpoint saved

@@ -84,7 +84,7 @@ import type { AppRouter } from "../../../server/routers";
  *    verification). It is OFF by default, it never reorders the table unless the
  *    user explicitly clicks the column, and it is labelled a calculation / Plan
  *    Fit diagnostic — never a recommendation. There is no "best/top/buy" or
- *    "score" ranking language anywhere.
+ *    ranking / "score" language anywhere in the user-facing copy.
  *  - Reference data shown here does not affect portfolio math until a holding is
  *    actually recorded — stated plainly in the header so it is never mistaken for
  *    the user's own positions.
@@ -147,7 +147,7 @@ export default function AllApprovedInstruments({ embedded = false }: { embedded?
   // Round 90 — manager-only "Include archived rows" toggle (OFF by default). When
   // on, archived reference rows are merged into the table with an "Archived" badge
   // so managers can find and recover them without leaving the approved view. They
-  // never carry a Plan Fit (they are shown for recovery/audit, never scored).
+  // never carry a Plan Fit (they are shown for recovery/audit, never included in Plan Fit).
   const [includeArchived, setIncludeArchived] = useState(false);
   const { data: archivedData } = trpc.explore.approvedArchived.useQuery(undefined, {
     enabled: isManager && includeArchived,
@@ -201,7 +201,7 @@ export default function AllApprovedInstruments({ embedded = false }: { embedded?
     if (sortKey === "planFit") {
       const dir = sortDir === "asc" ? 1 : -1;
       out = [...out].sort((a, b) => {
-        // Archived rows never carry a Plan Fit (shown for recovery/audit, not scored).
+        // Archived rows never carry a Plan Fit (shown for recovery/audit, not included in Plan Fit).
         const sa = a.archived ? undefined : planFit[a.ref];
         const sb = b.archived ? undefined : planFit[b.ref];
         const av = sa && sa.eligible && Number.isFinite(sa.score) ? sa.score : null;
@@ -249,11 +249,8 @@ export default function AllApprovedInstruments({ embedded = false }: { embedded?
               All Approved Instruments
             </h1>
             <p className="text-muted-foreground text-sm mt-1 max-w-2xl">
-              This is the <span className="font-medium text-foreground">approved reference universe</span> — one
-              approved instruments table over every row approved into the four reference catalogues. Every row here
-              passed the governed review path (Research → Review Queue → manager approval), with its figures sourced and
-              audited. You decide what to look at, filter the approved instruments and compare them. Nothing is
-              recommended, and reference data does not affect portfolio math until you actually record a holding.
+              All instruments shown here have been approved into one of the reference catalogues. Reference data does
+              not affect portfolio math until a holding is recorded.
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -370,8 +367,8 @@ export default function AllApprovedInstruments({ embedded = false }: { embedded?
                       Include archived rows
                       <InfoHint>
                         Manager-only. Off by default. When on, archived reference rows are shown with an
-                        “Archived” badge so you can find and reactivate them from here. Archived rows are never scored
-                        (no Plan Fit) and are never hard-deleted.
+                        “Archived” badge so you can find and reactivate them from here. Archived rows are never
+                        included in Plan Fit and are never hard-deleted.
                       </InfoHint>
                     </Label>
                   </div>
@@ -762,8 +759,8 @@ function PlanFitCell({
           </div>
           {weights && (
             <p className="text-[10px] text-muted-foreground">
-              Net yield is scored at {weights.netYieldPerPct} point(s) per percentage point. The same weights apply to
-              every instrument.
+              Net yield contributes {weights.netYieldPerPct} point(s) per percentage point to the Plan Fit diagnostic.
+              The same weights apply to every instrument.
             </p>
           )}
         </div>

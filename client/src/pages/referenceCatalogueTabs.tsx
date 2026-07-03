@@ -20,7 +20,7 @@ export const CATALOGUE_TABS: AreaTab[] = [
     id: "all-approved",
     label: "All Approved Instruments",
     icon: Compass,
-    hint: "The approved reference universe: every instrument approved into one of the four catalogues, in one searchable, filterable table with optional Plan-fit diagnostics. Published facts only — unapproved AI findings never appear here, and reference data does not affect portfolio math until a holding is recorded.",
+    hint: "The approved reference universe: every instrument approved into one of the four catalogues, in one searchable, filterable table with optional Plan Fit diagnostics. Published facts only — unapproved AI findings never appear here, and reference data does not affect portfolio math until a holding is recorded.",
     render: () => <AllApprovedInstruments embedded />,
   },
   {

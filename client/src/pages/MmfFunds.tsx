@@ -1,4 +1,6 @@
 import { useState, useMemo, useEffect } from "react";
+import { AiExplainDialog } from "@/components/AiExplainDialog";
+import { Sparkles } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { dashboardHref } from "@shared/navigation";
 import { useDepositDrawer } from "@/contexts/DepositDrawerContext";
@@ -355,6 +357,18 @@ export default function MmfFunds({ embedded = false }: { embedded?: boolean } = 
   const selectedFund = funds.find((f) => f.id === selectedFundId);
   const avgEar = stats.avgEar;
 
+  const [catExplainOpen, setCatExplainOpen] = useState(false);
+  const catFacts = useMemo(() => {
+    const l: string[] = [`Catalogue: MMF Market. ${stats.count} funds tracked.`];
+    if (stats.avgEar) l.push(`Average EAR: ${stats.avgEar.toFixed(2)}%.`);
+    if (selectedFund) l.push(`Selected primary fund: ${selectedFund.fundName}, EAR ${selectedFund.ear}%.`);
+    return l.join("\n");
+  }, [stats, selectedFund]);
+  const catExplainQuery = trpc.aiExplain.referenceCatalogue.useQuery(
+    { portfolioId: portfolioId!, catalogueSummary: catFacts },
+    { enabled: catExplainOpen && !!portfolioId, refetchOnWindowFocus: false, retry: false },
+  );
+
   // Source-aware provider phrase: names the distinct source(s) actually present in
   // the data instead of assuming a single hardcoded provider.
   const providerPhrase = useMemo(() => {
@@ -381,14 +395,25 @@ export default function MmfFunds({ embedded = false }: { embedded?: boolean } = 
             )}
           </p>
         </div>
-        {isManager && (
-          <div className="flex items-center gap-2 flex-wrap">
-            <CatalogueSourceReviewButton catalogue="mmf" isManager={isManager} />
-            <Button onClick={() => setAddOpen(true)} size="sm">
-              <Plus className="w-4 h-4 mr-1" /> Add Fund
-            </Button>
-          </div>
-        )}
+        <div className="flex items-center gap-2 flex-wrap">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setCatExplainOpen(true)}
+            className="h-7 gap-1.5 text-xs font-medium hover:text-violet-500 hover:border-violet-500/40 active:scale-[0.97] transition-transform"
+          >
+            <Sparkles className="w-3.5 h-3.5" />
+            Explain catalogue
+          </Button>
+          {isManager && (
+            <>
+              <CatalogueSourceReviewButton catalogue="mmf" isManager={isManager} />
+              <Button onClick={() => setAddOpen(true)} size="sm">
+                <Plus className="w-4 h-4 mr-1" /> Add Fund
+              </Button>
+            </>
+          )}
+        </div>
       </div>
 
       {/* Selected fund banner */}
@@ -798,6 +823,17 @@ export default function MmfFunds({ embedded = false }: { embedded?: boolean } = 
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+      <AiExplainDialog
+        open={catExplainOpen}
+        onOpenChange={setCatExplainOpen}
+        title="Explain MMF Market catalogue"
+        description="A plain-language explanation of how the MMF Market catalogue works, what the key metrics mean (EAR, gross yield, management fee, day-count), and how to choose a fund for your plan."
+        answer={catExplainQuery.data?.answer}
+        isLoading={catExplainQuery.isLoading || catExplainQuery.isFetching}
+        isError={catExplainQuery.isError}
+        errorMessage={catExplainQuery.error?.message}
+        onRetry={() => catExplainQuery.refetch()}
+      />
     </div>
     </AppShell>
   );

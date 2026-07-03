@@ -1,8 +1,10 @@
 import { Link } from "wouter";
+import { useState, useMemo } from "react";
 import { usePortfolio } from "@/contexts/PortfolioContext";
 import { trpc } from "@/lib/trpc";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Button } from "@/components/ui/button";
 import {
   Wallet,
   PiggyBank,
@@ -12,9 +14,11 @@ import {
   ArrowRight,
   Target,
   CircleSlash,
+  Sparkles,
 } from "lucide-react";
 import { formatKES, formatKESCompact } from "@/lib/format";
 import { areaTab } from "@shared/navigation";
+import { AiExplainDialog } from "@/components/AiExplainDialog";
 
 /**
  * Holdings → Overview — a single, canonical net-worth summary.
@@ -73,6 +77,27 @@ export default function HoldingsOverview() {
     { portfolioId: portfolioId! },
     { enabled: !!portfolioId },
   );
+  const [explainOpen, setExplainOpen] = useState(false);
+
+  const holdingsFacts = useMemo(() => {
+    if (!snapshot) return null;
+    const h = snapshot.holdings;
+    const govTotal = h.tbill + h.ifb + h.fxd;
+    const mmfTotal = h.primaryMmf + h.secondaryMmf;
+    return [
+      `Full net worth: ${formatKES(h.fullNetWorth)}.`,
+      `Assigned to goal: ${formatKES(h.goalPlanAssets)}; excluded from goal: ${formatKES(h.otherAssetsExcludedFromGoal)}.`,
+      `Money market funds total: ${formatKES(mmfTotal)} (primary: ${formatKES(h.primaryMmf)}, secondary: ${formatKES(h.secondaryMmf)}).`,
+      `Government securities total: ${formatKES(govTotal)} (T-bills: ${formatKES(h.tbill)}, IFB: ${formatKES(h.ifb)}, FXD: ${formatKES(h.fxd)}).`,
+      `Bank instruments: ${formatKES(h.bank)}.`,
+      `Other assets: ${formatKES(h.otherAssetsTotal)}.`,
+    ].join("\n");
+  }, [snapshot]);
+
+  const explainQuery = trpc.aiExplain.holdings.useQuery(
+    { portfolioId: portfolioId!, holdingsSummary: holdingsFacts! },
+    { enabled: explainOpen && !!portfolioId && !!holdingsFacts, refetchOnWindowFocus: false, retry: false },
+  );
 
   if (isLoading || !snapshot) {
     return (
@@ -128,6 +153,22 @@ export default function HoldingsOverview() {
         </div>
       </Card>
 
+      {/* Explain my holdings button */}
+      <div className="flex items-center gap-2">
+        <span className="h-px flex-1 bg-border" />
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => setExplainOpen(true)}
+          disabled={!holdingsFacts}
+          className="h-7 gap-1.5 text-xs font-medium hover:text-violet-500 hover:border-violet-500/40 active:scale-[0.97] transition-transform"
+        >
+          <Sparkles className="w-3.5 h-3.5" />
+          Explain my holdings
+        </Button>
+        <span className="h-px flex-1 bg-border" />
+      </div>
+
       {/* Pockets */}
       <div className="grid gap-3 sm:grid-cols-2">
         <PocketRow
@@ -163,6 +204,19 @@ export default function HoldingsOverview() {
           accent="bg-amber-500/10 text-amber-500"
         />
       </div>
+
+      {/* AI Explain Dialog */}
+      <AiExplainDialog
+        open={explainOpen}
+        onOpenChange={setExplainOpen}
+        title="Explain my holdings"
+        description="A plain-language breakdown of your current holdings: what each pocket means, how much is assigned to your goal vs excluded, and what the concentration looks like across asset classes."
+        answer={explainQuery.data?.answer}
+        isLoading={explainQuery.isLoading || explainQuery.isFetching}
+        isError={explainQuery.isError}
+        errorMessage={explainQuery.error?.message}
+        onRetry={() => explainQuery.refetch()}
+      />
     </div>
   );
 }

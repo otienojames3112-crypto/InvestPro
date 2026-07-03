@@ -43,6 +43,9 @@ import { profileFor, type AssetClass } from "@shared/assetModel";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { CatalogueRowControls } from "@/components/CatalogueRowControls";
 import { CatalogueSourceReviewButton } from "@/components/CatalogueSourceReview";
+import { AiExplainDialog } from "@/components/AiExplainDialog";
+import { Sparkles } from "lucide-react";
+import { usePortfolio } from "@/contexts/PortfolioContext";
 import { ArchivedRowsPanel, CatalogueScopeFilter, type CatalogueRowScope } from "@/components/ArchivedRowsPanel";
 import { humanCheckedCount, figureCount, type FieldProvenanceMap } from "@shared/provenance";
 import { rateStaleness } from "@/lib/rateStaleness";
@@ -248,6 +251,21 @@ export default function CbkSecuritiesReference({ embedded = false }: { embedded?
     setSortDir("asc");
   };
 
+  const { portfolioId } = usePortfolio();
+  const [catExplainOpen, setCatExplainOpen] = useState(false);
+  const catFacts = useMemo(() => {
+    const l: string[] = [`Catalogue: CBK Securities Reference. ${filtered.length} securities shown.`];
+    const tbills = filtered.filter(r => (r.assetClass as string) === "tbill").length;
+    const bonds = filtered.filter(r => (r.assetClass as string) !== "tbill").length;
+    if (tbills) l.push(`T-bills: ${tbills}.`);
+    if (bonds) l.push(`Bonds/IFBs: ${bonds}.`);
+    return l.join("\n");
+  }, [filtered]);
+  const catExplainQuery = trpc.aiExplain.referenceCatalogue.useQuery(
+    { portfolioId: portfolioId!, catalogueSummary: catFacts },
+    { enabled: catExplainOpen && !!portfolioId, refetchOnWindowFocus: false, retry: false },
+  );
+
   return (
     <AppShell embedded={embedded}>
       <div className="p-6 lg:p-8 space-y-6 max-w-6xl">
@@ -268,6 +286,15 @@ export default function CbkSecuritiesReference({ embedded = false }: { embedded?
             </p>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setCatExplainOpen(true)}
+              className="h-7 gap-1.5 text-xs font-medium hover:text-violet-500 hover:border-violet-500/40 active:scale-[0.97] transition-transform"
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              Explain catalogue
+            </Button>
             <CatalogueSourceReviewButton catalogue="cbk" isManager={isManager} />
             <Badge variant="outline" className="text-xs px-2.5 py-1 gap-1.5">
               <Info className="w-3 h-3" /> Information only
@@ -398,6 +425,17 @@ export default function CbkSecuritiesReference({ embedded = false }: { embedded?
           face value, price and dates there before anything is written to your Government holdings.
         </p>
       </div>
+      <AiExplainDialog
+        open={catExplainOpen}
+        onOpenChange={setCatExplainOpen}
+        title="Explain CBK Securities Reference"
+        description="A plain-language explanation of how the CBK Securities Reference catalogue works, what T-bills and bonds are, how auctions work, and what coupon, tenor, ISIN, and WHT mean in this context."
+        answer={catExplainQuery.data?.answer}
+        isLoading={catExplainQuery.isLoading || catExplainQuery.isFetching}
+        isError={catExplainQuery.isError}
+        errorMessage={catExplainQuery.error?.message}
+        onRetry={() => catExplainQuery.refetch()}
+      />
     </AppShell>
   );
 }

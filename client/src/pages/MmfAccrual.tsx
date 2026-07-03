@@ -5,6 +5,9 @@ import { AppShell } from "@/components/AppShell";
 import { usePortfolio } from "@/contexts/PortfolioContext";
 import { useSelectedFund } from "@/hooks/useSelectedFund";
 import { trpc } from "@/lib/trpc";
+import { AiExplainDialog } from "@/components/AiExplainDialog";
+import { Sparkles } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
@@ -368,17 +371,43 @@ export default function MmfAccrual({ embedded = false }: { embedded?: boolean } 
   const headerCrediting = isBlended ? null : selectedAccount?.crediting ?? "daily";
   const headerWht = isBlended ? null : selectedAccount?.whtRate ?? 15;
 
+  const [accrualExplainOpen, setAccrualExplainOpen] = useState(false);
+  const accrualFacts = useMemo(() => {
+    const lines: string[] = [`Asset class: ${assetClass}`];
+    lines.push(`Primary MMF balance: KES ${mmfBalance.toLocaleString()}.`);
+    if (fundRecord) lines.push(`Primary fund: ${fundRecord.fundName}, EAR ${fundRecord.ear}%.`);
+    if (secondaryMmfs.length > 0) lines.push(`Secondary MMFs tracked: ${secondaryMmfs.length}.`);
+    lines.push(`Projection horizon: ${horizon} days.`);
+    lines.push(`MMF total gross interest (${horizon}d): ${kes(totalGross)}; WHT: ${kes(totalWht)}; net: ${kes(totalNet)}.`);
+    return lines.join("\n");
+  }, [assetClass, mmfBalance, fundRecord, secondaryMmfs, horizon, totalGross, totalWht, totalNet]);
+  const accrualExplainQuery = trpc.aiExplain.accrualTax.useQuery(
+    { portfolioId: portfolioId!, accrualSummary: accrualFacts },
+    { enabled: accrualExplainOpen && !!portfolioId, refetchOnWindowFocus: false, retry: false },
+  );
+
   return (
     <AppShell embedded={embedded}>
       <div className="space-y-6">
         {/* Header */}
         <div className="flex flex-col gap-2">
-          <div className="flex flex-wrap items-center gap-2">
-            <CalendarClock className="w-5 h-5 text-primary" />
-            <h1 className="text-2xl font-bold" style={{ fontFamily: "'Playfair Display', serif" }}>
-              Daily Income & Accrual Ledger
-            </h1>
-            <SimulatedDateChip className="ml-1" />
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <CalendarClock className="w-5 h-5 text-primary" />
+              <h1 className="text-2xl font-bold" style={{ fontFamily: "'Playfair Display', serif" }}>
+                Daily Income & Accrual Ledger
+              </h1>
+              <SimulatedDateChip className="ml-1" />
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setAccrualExplainOpen(true)}
+              className="h-7 gap-1.5 text-xs font-medium hover:text-violet-500 hover:border-violet-500/40 active:scale-[0.97] transition-transform shrink-0"
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              Explain accrual
+            </Button>
           </div>
           <p className="text-muted-foreground text-sm max-w-3xl">
             Money market funds accrue interest <strong>every day</strong> and quote a net yield after
@@ -736,6 +765,18 @@ export default function MmfAccrual({ embedded = false }: { embedded?: boolean } 
             groupLabel="Per-bank"
           />
         )}
+        {/* AI Explain Dialog */}
+        <AiExplainDialog
+          open={accrualExplainOpen}
+          onOpenChange={setAccrualExplainOpen}
+          title="Explain accrual & tax"
+          description="A plain-language explanation of how interest accrues on your MMF, government securities, and bank instruments — including day-count conventions, WHT deductions, and crediting frequency."
+          answer={accrualExplainQuery.data?.answer}
+          isLoading={accrualExplainQuery.isLoading || accrualExplainQuery.isFetching}
+          isError={accrualExplainQuery.isError}
+          errorMessage={accrualExplainQuery.error?.message}
+          onRetry={() => accrualExplainQuery.refetch()}
+        />
       </div>
     </AppShell>
   );

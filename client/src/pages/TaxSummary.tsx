@@ -1,9 +1,11 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { usePortfolio } from "@/contexts/PortfolioContext";
 import { useSelectedFund } from "@/hooks/useSelectedFund";
 import { bankHoldingValue, blendedYield, buildAllocation, estimateAnnualTaxLines } from "@shared/actuals";
 import { trpc } from "@/lib/trpc";
+import { AiExplainDialog } from "@/components/AiExplainDialog";
+import { Sparkles } from "lucide-react";
 import {
   Card,
   CardContent,
@@ -271,6 +273,24 @@ export default function TaxSummary({ embedded = false }: { embedded?: boolean } 
     downloadCsv(csv, `tax-summary-${slugify(portfolio?.name)}-${stamp}.csv`);
   };
 
+  const [taxExplainOpen, setTaxExplainOpen] = useState(false);
+  const taxFacts = useMemo(() => {
+    const l: string[] = [];
+    l.push(`Total annual gross income: ${kes(totalGross)}.`);
+    l.push(`Total annual WHT: ${kes(totalTax)}.`);
+    l.push(`Total annual net income: ${kes(totalNet)}.`);
+    l.push(`Effective tax rate: ${effectiveTaxRate.toFixed(2)}%.`);
+    for (const line of lines.slice(0, 8)) {
+      l.push(`${line.source}: gross ${kes(line.basis)}, WHT ${line.rate}% = ${kes(line.tax)}, net ${kes(line.net)}${line.exempt ? " (exempt)" : ""}${line.unverified ? " (unverified)" : ""}.`);
+    }
+    if (lines.length > 8) l.push(`...and ${lines.length - 8} more sources.`);
+    return l.join("\n");
+  }, [totalGross, totalTax, totalNet, effectiveTaxRate, lines]);
+  const taxExplainQuery = trpc.aiExplain.accrualTax.useQuery(
+    { portfolioId: portfolioId!, accrualSummary: taxFacts },
+    { enabled: taxExplainOpen && !!portfolioId, refetchOnWindowFocus: false, retry: false },
+  );
+
   return (
     <AppShell embedded={embedded}>
       <div className="space-y-6">
@@ -299,6 +319,15 @@ export default function TaxSummary({ embedded = false }: { embedded?: boolean } 
             </p>
           </div>
           <div className="flex items-center gap-2 shrink-0 print:hidden">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setTaxExplainOpen(true)}
+              className="h-7 gap-1.5 text-xs font-medium hover:text-violet-500 hover:border-violet-500/40 active:scale-[0.97] transition-transform"
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              Explain tax
+            </Button>
             <Button variant="outline" className="bg-background" onClick={handleExportCsv}>
               <Download className="w-4 h-4 mr-2" /> Download CSV
             </Button>
@@ -529,6 +558,18 @@ export default function TaxSummary({ embedded = false }: { embedded?: boolean } 
             </p>
           </CardContent>
         </Card>
+        {/* AI Explain Dialog */}
+        <AiExplainDialog
+          open={taxExplainOpen}
+          onOpenChange={setTaxExplainOpen}
+          title="Explain tax summary"
+          description="A plain-language explanation of how withholding tax (WHT) applies to each income source in your portfolio, what rates are used, and how the effective tax rate is calculated."
+          answer={taxExplainQuery.data?.answer}
+          isLoading={taxExplainQuery.isLoading || taxExplainQuery.isFetching}
+          isError={taxExplainQuery.isError}
+          errorMessage={taxExplainQuery.error?.message}
+          onRetry={() => taxExplainQuery.refetch()}
+        />
       </div>
     </AppShell>
   );

@@ -61,6 +61,9 @@ import {
 import { useDepositDrawer } from "@/contexts/DepositDrawerContext";
 import { CatalogueRowControls } from "@/components/CatalogueRowControls";
 import { CatalogueSourceReviewButton } from "@/components/CatalogueSourceReview";
+import { AiExplainDialog } from "@/components/AiExplainDialog";
+import { Sparkles } from "lucide-react";
+import { usePortfolio } from "@/contexts/PortfolioContext";
 import { ArchivedRowsPanel, CatalogueScopeFilter, type CatalogueRowScope } from "@/components/ArchivedRowsPanel";
 
 type BankInstrumentType =
@@ -134,6 +137,7 @@ export default function BankInstruments({ embedded = false }: { embedded?: boole
   const utils = trpc.useUtils();
   const { user } = useAuth();
   const { openDrawer } = useDepositDrawer();
+  const { portfolioId } = usePortfolio();
   const isManager = user?.role === "admin";
 
   const { data: rows, isLoading } = trpc.bankInstruments.list.useQuery();
@@ -178,6 +182,7 @@ export default function BankInstruments({ embedded = false }: { embedded?: boole
   const [drawerRow, setDrawerRow] = useState<BankRow | null>(null);
   const [editOpen, setEditOpen] = useState(false);
   const [form, setForm] = useState({ ...EMPTY });
+  const [catExplainOpen, setCatExplainOpen] = useState(false);
 
   const add = trpc.bankInstruments.add.useMutation({
     onSuccess: () => {
@@ -223,6 +228,17 @@ export default function BankInstruments({ embedded = false }: { embedded?: boole
     (rateOnly ? 1 : 0) +
     (negotiableOnly ? 1 : 0) +
     (search.trim() ? 1 : 0);
+
+  const catFacts = useMemo(() => {
+    const l: string[] = [`Catalogue: Bank Product Catalogue. ${filtered.length} products shown (${(rows ?? []).length} total).`];
+    const bankNames = banks.slice(0, 5).join(", ");
+    if (bankNames) l.push(`Banks represented: ${bankNames}${banks.length > 5 ? ` and ${banks.length - 5} more` : ""}.`);
+    return l.join("\n");
+  }, [filtered, rows, banks]);
+  const catExplainQuery = trpc.aiExplain.referenceCatalogue.useQuery(
+    { portfolioId: portfolioId!, catalogueSummary: catFacts },
+    { enabled: catExplainOpen && !!portfolioId, refetchOnWindowFocus: false, retry: false },
+  );
 
   function clearFilters() {
     setSearch("");
@@ -293,14 +309,25 @@ export default function BankInstruments({ embedded = false }: { embedded?: boole
               not a recommendation. Recording a real deposit happens in Holdings.
             </p>
           </div>
-          {isManager && (
-            <div className="flex items-center gap-2 flex-wrap shrink-0">
-              <CatalogueSourceReviewButton catalogue="bank" isManager={isManager} size="default" />
-              <Button onClick={openAdd}>
-                <Plus className="w-4 h-4 mr-2" /> Add / correct product
-              </Button>
-            </div>
-          )}
+          <div className="flex items-center gap-2 flex-wrap shrink-0">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setCatExplainOpen(true)}
+              className="h-7 gap-1.5 text-xs font-medium hover:text-violet-500 hover:border-violet-500/40 active:scale-[0.97] transition-transform"
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              Explain catalogue
+            </Button>
+            {isManager && (
+              <>
+                <CatalogueSourceReviewButton catalogue="bank" isManager={isManager} size="default" />
+                <Button onClick={openAdd}>
+                  <Plus className="w-4 h-4 mr-2" /> Add / correct product
+                </Button>
+              </>
+            )}
+          </div>
         </div>
 
         {/* Filters */}
@@ -662,6 +689,17 @@ export default function BankInstruments({ embedded = false }: { embedded?: boole
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      <AiExplainDialog
+        open={catExplainOpen}
+        onOpenChange={setCatExplainOpen}
+        title="Explain Bank Product Catalogue"
+        description="A plain-language explanation of how the Bank Product Catalogue works, what the key terms mean (indicative rate, tenor, notice period, negotiability, early-withdrawal penalty), and how to evaluate bank deposit products for your plan."
+        answer={catExplainQuery.data?.answer}
+        isLoading={catExplainQuery.isLoading || catExplainQuery.isFetching}
+        isError={catExplainQuery.isError}
+        errorMessage={catExplainQuery.error?.message}
+        onRetry={() => catExplainQuery.refetch()}
+      />
     </AppShell>
   );
 }

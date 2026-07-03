@@ -1810,3 +1810,16 @@
 - [x] (8) Engine: add liquidity-at-goal enforcement explanation — final month shows money liquid in MMF/cash, warns if any holding locked past goal date
 - [x] (9) Tests: Round 100 regression suite — instrument-specific narration, issue number propagation, per-MMF detail, liquidity-at-goal explanation
 - [x] (10) Full suite + tsc green; checkpoint + deliver
+
+## Round 101 — Parts 6, 7, 8: Contextual AI Explainers + Page Prompts + Glossary
+
+- [x] (1) Part 7: Add new ExplainKind variants (holdings, accrual_tax, reference_catalogue, scenario_allocation) with page-specific system prompts and guardrails
+- [x] (2) Part 7: Add new aiExplain procedures (holdings, accrualTax, referenceCatalogue, scenarioAllocation) to the router
+- [x] (3) Part 6: Add AiExplainDialog to Holdings pages (HoldingsOverview, BankHoldings, MmfAccounts)
+- [x] (4) Part 6: Add AiExplainDialog to Reference Catalogue pages (MmfFunds, BankInstruments, CbkSecuritiesReference, MarketAssetsReference)
+- [x] (5) Part 6: Add AiExplainDialog to Accrual/Tax pages (MmfAccrual, TaxSummary)
+- [x] (6) Part 6: Add AiExplainDialog to Scenarios/Allocation pages (Scenarios, AllocationPlan)
+- [x] (7) Part 8: Expand glossary.ts with ~60 new terms covering all instrument fields (General, MMFs, CBK securities, bank instruments, market assets, planning)
+- [x] (8) Part 8: Update GettingStarted/Learn page navigation guide to cover all pages (Dashboard, Research, Reference Catalogues, Holdings, Ledger, Accrual, Tax, Reconciliation, Scenarios)
+- [x] (9) Tests: Round 101 regression suite — new ExplainKind prompts, glossary coverage, page explainer wiring (76 tests)
+- [x] (10) Full suite + tsc green; checkpoint + deliver (1841 tests passing)

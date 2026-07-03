@@ -4675,14 +4675,77 @@ export const appRouter = router({
           maturityLine,
           `Reference rates last updated: ${s.ratesLabel}${s.ratesStale ? " (STALE — worth refreshing before relying on yields)" : ""}.`,
         ].join("\n");
-        return aiExplain({
+                return aiExplain({
           kind: "dashboard_status",
           title: "Summarise where this portfolio stands right now for the manager.",
           facts,
         });
       }),
+    // "Explain my holdings" on Holdings pages.
+    holdings: protectedProcedure
+      .input(
+        z.object({
+          portfolioId: z.number().int().positive(),
+          holdingsSummary: z.string().max(8000),
+        }),
+      )
+      .query(async ({ ctx, input }) => {
+        await requirePortfolio(input.portfolioId, ctx.user.id);
+        return aiExplain({
+          kind: "holdings",
+          title: "Explain the holdings the manager is viewing.",
+          facts: input.holdingsSummary,
+        });
+      }),
+    // "Explain accrual / tax" on Accrual and Tax Summary pages.
+    accrualTax: protectedProcedure
+      .input(
+        z.object({
+          portfolioId: z.number().int().positive(),
+          accrualSummary: z.string().max(8000),
+        }),
+      )
+      .query(async ({ ctx, input }) => {
+        await requirePortfolio(input.portfolioId, ctx.user.id);
+        return aiExplain({
+          kind: "accrual_tax",
+          title: "Explain the accrual and tax figures the manager is viewing.",
+          facts: input.accrualSummary,
+        });
+      }),
+    // "Explain this catalogue" on Reference Catalogue pages.
+    referenceCatalogue: protectedProcedure
+      .input(
+        z.object({
+          portfolioId: z.number().int().positive(),
+          catalogueSummary: z.string().max(8000),
+        }),
+      )
+      .query(async ({ ctx, input }) => {
+        await requirePortfolio(input.portfolioId, ctx.user.id);
+        return aiExplain({
+          kind: "reference_catalogue",
+          title: "Explain the reference catalogue entries the manager is viewing.",
+          facts: input.catalogueSummary,
+        });
+      }),
+    // "Explain scenario / allocation" on Scenarios and Allocation pages.
+    scenarioAllocation: protectedProcedure
+      .input(
+        z.object({
+          portfolioId: z.number().int().positive(),
+          scenarioSummary: z.string().max(8000),
+        }),
+      )
+      .query(async ({ ctx, input }) => {
+        await requirePortfolio(input.portfolioId, ctx.user.id);
+        return aiExplain({
+          kind: "scenario_allocation",
+          title: "Explain the scenario or allocation the manager is viewing.",
+          facts: input.scenarioSummary,
+        });
+      }),
   }),
-
   // ─── Securities ───────────────────────────────────────────────────────────────
   securities: router({
     list: protectedProcedure.input(portfolioIdInput).query(async ({ ctx, input }) => {

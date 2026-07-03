@@ -3,6 +3,7 @@ import { AppShell } from "@/components/AppShell";
 import { trpc } from "@/lib/trpc";
 import { formatKES, formatKESCompact } from "@/lib/format";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -16,11 +17,12 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { BarChart3, CheckCircle2, XCircle, Info, AlertTriangle, Lightbulb, Wallet, ClipboardList } from "lucide-react";
+import { BarChart3, CheckCircle2, XCircle, Info, AlertTriangle, Lightbulb, Wallet, ClipboardList, Sparkles } from "lucide-react";
 import { SecondaryWhatIf } from "@/components/SecondaryWhatIf";
 import { ScenarioLevers } from "@/components/ScenarioLevers";
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { cn } from "@/lib/utils";
+import { AiExplainDialog } from "@/components/AiExplainDialog";
 
 function CustomTooltip({ active, payload, label }: { active?: boolean; payload?: Array<{ value: number; name: string }>; label?: string }) {
   if (!active || !payload?.length) return null;
@@ -96,9 +98,22 @@ export default function Scenarios({ embedded = false }: { embedded?: boolean } =
 
   const everythingLoading = isLoading || projLoading || solverLoading;
 
+  const [scenExplainOpen, setScenExplainOpen] = useState(false);
+  const scenFacts = useMemo(() => {
+    const l: string[] = [`Target: ${formatKES(targetAmount)} over ${horizonMonths} months.`];
+    if (scenarioData?.scenarios?.length) l.push(`Scenarios: ${scenarioData.scenarios.length} step-up variants computed.`);
+    l.push(`Basis: ${basis}.`);
+    return l.join("\n");
+  }, [targetAmount, horizonMonths, scenarioData, basis]);
+  const scenExplainQuery = trpc.aiExplain.scenarioAllocation.useQuery(
+    { portfolioId: portfolioId!, scenarioSummary: scenFacts },
+    { enabled: scenExplainOpen && !!portfolioId, refetchOnWindowFocus: false, retry: false },
+  );
+
   return (
     <AppShell embedded={embedded}>
       <div className="p-6 lg:p-8 space-y-6">
+        <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold text-foreground" style={{ fontFamily: "'Playfair Display', serif" }}>
             Scenario Comparison
@@ -116,6 +131,16 @@ export default function Scenarios({ embedded = false }: { embedded?: boolean } =
             market-priced investments (equities, REITs, offshore funds), their value rises and falls — the <strong>goal-probability range</strong> on the
             Dashboard reflects that uncertainty, which these step-up lines deliberately do not.
           </p>
+        </div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setScenExplainOpen(true)}
+            className="h-7 gap-1.5 text-xs font-medium hover:text-violet-500 hover:border-violet-500/40 active:scale-[0.97] transition-transform"
+          >
+            <Sparkles className="w-3.5 h-3.5" />
+            Explain scenarios
+          </Button>
         </div>
 
         {/* ── Scenario basis toggle (R-Scenarios) ── */}
@@ -505,6 +530,17 @@ export default function Scenarios({ embedded = false }: { embedded?: boolean } =
           </CardContent>
         </Card>
       </div>
+      <AiExplainDialog
+        open={scenExplainOpen}
+        onOpenChange={setScenExplainOpen}
+        title="Explain Scenario Comparison"
+        description="A plain-language explanation of how scenario comparison works, what step-up amounts mean, how the basis (actual vs clean) affects projections, and how to interpret the results."
+        answer={scenExplainQuery.data?.answer}
+        isLoading={scenExplainQuery.isLoading || scenExplainQuery.isFetching}
+        isError={scenExplainQuery.isError}
+        errorMessage={scenExplainQuery.error?.message}
+        onRetry={() => scenExplainQuery.refetch()}
+      />
     </AppShell>
   );
 }

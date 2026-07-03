@@ -60,9 +60,9 @@ describe("Round 95 · AI explanations are read-only queries", () => {
   });
 
   it("implements every explanation as a query, never a mutation", () => {
-    // Three `.query(` handlers, zero `.mutation(` in the whole group.
+    // 7 `.query(` handlers (3 original + 4 from Round 101), zero `.mutation(` in the whole group.
     const queries = block.match(/\.query\(/g) ?? [];
-    expect(queries.length).toBe(3);
+    expect(queries.length).toBe(7);
     expect(block.includes(".mutation(")).toBe(false);
   });
 
@@ -86,9 +86,9 @@ describe("Round 95 · AI explanations are read-only queries", () => {
 
   it("guards ownership and delegates to the read-only explain engine", () => {
     const calls = block.match(/aiExplain\(\{/g) ?? [];
-    expect(calls.length).toBe(3);
+    expect(calls.length).toBe(7);
     const guards = block.match(/requirePortfolio\(/g) ?? [];
-    expect(guards.length).toBe(3);
+    expect(guards.length).toBe(7);
   });
 });
 

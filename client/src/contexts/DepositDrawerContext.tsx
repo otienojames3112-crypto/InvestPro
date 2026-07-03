@@ -27,6 +27,15 @@ export type DepositPrefill =
       source?: string | null;
       /** As-of date for the indicative rate. */
       asOfDate?: string | null;
+      // ── Round 99: additional catalogue terms for richer prefill ──
+      /** Withholding tax rate (%). */
+      whtRate?: number | null;
+      /** Payout frequency. */
+      payoutFrequency?: "maturity" | "monthly" | "quarterly" | "on_call" | null;
+      /** Early-withdrawal penalty (% of interest forfeited). */
+      earlyWithdrawalPenalty?: number | null;
+      /** Notice period description. */
+      noticePeriod?: string | null;
     }
   | {
       kind: "gov";
@@ -34,6 +43,41 @@ export type DepositPrefill =
       bucket: "tbill" | "ifb" | "fxd" | "zero" | "floating";
       /** T-bill tenor in days, when bucket === "tbill". */
       tbillTenorDays?: 91 | 182 | 364;
+      // ── Round 99: full CBK catalogue terms for snapshot + prefill ──
+      /** Opportunities row id for the CBK catalogue entry. */
+      opportunityId?: number | null;
+      /** Security type from catalogue. */
+      securityType?: "tbill_91" | "tbill_182" | "tbill_364" | "ifb" | "fxd" | "zero_coupon" | "floating_rate";
+      /** Issue number, e.g. "FXD1/2022/010". */
+      issueNumber?: string | null;
+      /** ISIN code. */
+      isin?: string | null;
+      /** Annual coupon rate (%). */
+      couponRate?: number | null;
+      /** Withholding tax rate (%). */
+      whtRate?: number | null;
+      /** Whether tax-exempt (IFB). */
+      taxExempt?: boolean | null;
+      /** Maturity date (ISO). */
+      maturityDate?: string | null;
+      /** Settlement date (ISO). */
+      settlementDate?: string | null;
+      /** Coupon payment dates (ISO date strings). */
+      couponPaymentDates?: string[] | null;
+      /** Clean price per KES 100 face. */
+      cleanPrice?: number | null;
+      /** Accrued interest per KES 100 face. */
+      accruedInterest?: number | null;
+      /** Dirty price per KES 100 face. */
+      dirtyPrice?: number | null;
+      /** Secondary trading lot size (KES). */
+      secondaryTradingLotSize?: number | null;
+      /** Rediscounting rule. */
+      rediscountingRule?: string | null;
+      /** Tenor in years (bonds). */
+      tenorYears?: number | null;
+      /** Yield/discount rate (%). */
+      yieldRate?: number | null;
     }
   | {
       /**

@@ -666,6 +666,8 @@ export const otherHoldings = mysqlTable("other_holdings", {
    * Default true so existing rows keep counting toward the goal as before.
    */
   includeInGoal: boolean("includeInGoal").default(true).notNull(),
+  /** Round 99: immutable snapshot of reference catalogue terms at purchase time. */
+  holdingSnapshot: json("holdingSnapshot").$type<HoldingSnapshot>(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });

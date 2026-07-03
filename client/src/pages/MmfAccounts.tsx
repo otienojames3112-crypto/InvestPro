@@ -363,6 +363,29 @@ export default function MmfAccounts({ embedded: _embedded = false }: { embedded?
                 placeholder="e.g. Emergency buffer"
               />
             </div>
+            {/* Round 99: show catalogue terms from the selected fund */}
+            {(() => {
+              const selFund = funds.find((f) => f.id === form.mmfFundId);
+              if (!selFund) return null;
+              return (
+                <div className="rounded-md border border-emerald-500/20 bg-emerald-500/5 p-2.5 space-y-1">
+                  <p className="text-[11px] font-semibold text-emerald-300">Catalogue terms (snapshotted at purchase)</p>
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 text-[11px]">
+                    <span className="text-muted-foreground">Manager</span><span className="text-foreground">{selFund.company}</span>
+                    <span className="text-muted-foreground">EAR</span><span className="text-foreground">{selFund.ear.toFixed(2)}%</span>
+                    <span className="text-muted-foreground">Gross yield</span><span className="text-foreground">{selFund.grossYield.toFixed(2)}%</span>
+                    <span className="text-muted-foreground">Fee</span><span className="text-foreground">{selFund.managementFee.toFixed(2)}%</span>
+                    <span className="text-muted-foreground">Min investment</span><span className="text-foreground">KES {selFund.minInvestment.toLocaleString()}</span>
+                    <span className="text-muted-foreground">WHT</span><span className="text-foreground">{selFund.whtRate}%</span>
+                    <span className="text-muted-foreground">Day-count</span><span className="text-foreground">{selFund.dayCountBasis}/year</span>
+                    <span className="text-muted-foreground">Crediting</span><span className="text-foreground capitalize">{selFund.creditingFrequency}</span>
+                  </div>
+                  <p className="text-[10px] text-muted-foreground/70 pt-0.5">
+                    These terms will be saved as an immutable snapshot. Catalogue updates will not rewrite them.
+                  </p>
+                </div>
+              );
+            })()}
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label>Current balance (KES)</Label>

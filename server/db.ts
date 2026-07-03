@@ -1477,6 +1477,20 @@ export async function getOpportunityByRef(ref: string): Promise<Opportunity | nu
   return { ...row, assetClass: normaliseAssetClass(row.assetClass) };
 }
 
+/** Fetch a single opportunity by its numeric id. */
+export async function getOpportunityById(id: number): Promise<Opportunity | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db
+    .select()
+    .from(opportunities)
+    .where(eq(opportunities.id, id))
+    .limit(1);
+  const row = rows[0];
+  if (!row) return null;
+  return { ...row, assetClass: normaliseAssetClass(row.assetClass) };
+}
+
 /** Count rows (used by the seed/ingestion guard). */
 export async function countOpportunities(): Promise<number> {
   const db = await getDb();

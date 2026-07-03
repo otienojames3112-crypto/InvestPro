@@ -536,6 +536,14 @@ export default function BankInstruments({ embedded = false }: { embedded?: boole
                     onClick={() => {
                       const r = drawerRow;
                       setDrawerRow(null);
+                      // Round 99: extract richer terms from extendedFields for snapshot
+                      const ext = r.extendedFields as Record<string, unknown> | null;
+                      const pfVal = (k: string): unknown => {
+                        const v = ext?.[k];
+                        if (v == null) return undefined;
+                        if (typeof v === "object" && !Array.isArray(v) && "value" in (v as Record<string, unknown>)) return (v as { value: unknown }).value;
+                        return v;
+                      };
                       openDrawer({
                         kind: "bank",
                         bankInstrumentId: r.id,
@@ -546,6 +554,11 @@ export default function BankInstruments({ embedded = false }: { embedded?: boole
                         minAmount: r.minAmount,
                         source: r.source,
                         asOfDate: typeof r.asOfDate === "string" ? r.asOfDate : r.asOfDate ? r.asOfDate.toISOString().slice(0, 10) : null,
+                        // Round 99: additional catalogue terms
+                        whtRate: (pfVal("whtRate") as number) ?? null,
+                        payoutFrequency: (pfVal("payoutFrequency") as "maturity" | "monthly" | "quarterly" | "on_call") ?? null,
+                        earlyWithdrawalPenalty: (pfVal("earlyWithdrawalPenalty") as number) ?? null,
+                        noticePeriod: (pfVal("noticePeriod") as string) ?? null,
                       });
                     }}
                   >

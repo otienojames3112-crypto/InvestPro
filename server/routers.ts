@@ -88,6 +88,7 @@ import {
   countSimSessionRecords,
   listOpportunities,
   getOpportunityByRef,
+  getOpportunityById,
   countOpportunities,
   upsertOpportunity,
   verifyOpportunityField,
@@ -5068,6 +5069,8 @@ export const appRouter = router({
         // (e.g. an off-cycle zero-coupon). When omitted, maturity is derived from
         // type + issue + tenor as before.
         maturityDate: z.string().optional(),
+        // Round 99: optional link to CBK catalogue row for snapshot + prefill
+        opportunityId: z.number().int().positive().optional(),
         amount: z.number().positive(),
         depositDate: z.string(),
         notes: z.string().optional(),
@@ -5155,6 +5158,33 @@ export const appRouter = router({
           }
           // Zero-coupon bonds carry no periodic coupon — the return IS the discount.
           if (isZeroDep) couponRate = 0;
+          // Round 99: build holdingSnapshot from CBK catalogue row when available
+          let holdingSnapshot: HoldingSnapshot | null = null;
+          if (input.opportunityId) {
+            const catRow = await getOpportunityById(input.opportunityId);
+            if (catRow) {
+              holdingSnapshot = {
+                referenceCatalogueType: "cbk",
+                referenceInstrumentId: catRow.id,
+                copiedTerms: (catRow.extendedFields as InstrumentProfile | null) ?? {
+                  catalogueType: "cbk",
+                  securityType: securityType as any,
+                  couponRate: couponRate,
+                  maturityDate: maturityStr,
+                  sourceUrl: catRow.dataSource ?? null,
+                  sourceAsOfDate: catRow.dataAsOf ? new Date(catRow.dataAsOf).toISOString().slice(0, 10) : null,
+                },
+                purchaseTerms: {
+                  faceValue: input.amount,
+                  purchasePrice: purchasePriceDep ?? input.amount,
+                  depositDate: input.depositDate,
+                },
+                snapshotAt: Date.now(),
+                sourceUrl: catRow.dataSource ?? null,
+                sourceAsOfDate: catRow.dataAsOf ? new Date(catRow.dataAsOf).toISOString().slice(0, 10) : null,
+              };
+            }
+          }
           const sec = await addSecurity({
             portfolioId: input.portfolioId,
             securityType,
@@ -5175,6 +5205,7 @@ export const appRouter = router({
             resetMonths: isFloatingDep ? (input.resetMonths ?? null) : null,
             isTaxExempt: securityType === "ifb",
             notes: `Auto-created from deposit on ${input.depositDate}`,
+            holdingSnapshot,
           });
           if (sec?.id) {
             await updateDepositEntry(entry.id, input.portfolioId, { securityId: sec.id });
@@ -6097,6 +6128,8 @@ export const appRouter = router({
         catalogRef: z.string().max(120).nullable().optional(),
         dataSource: z.string().max(200).nullable().optional(),
         dataAsOf: z.string().max(40).nullable().optional(),
+        // Round 99: optional link to Market Assets catalogue row for snapshot
+        opportunityId: z.number().int().positive().optional(),
       }))
       .mutation(async ({ ctx, input }) => {
         const p = await requirePortfolio(input.portfolioId, ctx.user.id);
@@ -6142,6 +6175,32 @@ export const appRouter = router({
         const draft = buildHoldingDraft(modelingInput);
         const amountKes = deriveAmountKes(modelingInput);
 
+        // Round 99: build holdingSnapshot from Market Assets catalogue row when available
+        let holdingSnapshot: HoldingSnapshot | null = null;
+        if (input.opportunityId) {
+          const catRow = await getOpportunityById(input.opportunityId);
+          if (catRow) {
+            holdingSnapshot = {
+              referenceCatalogueType: "market_asset",
+              referenceInstrumentId: catRow.id,
+              copiedTerms: (catRow.extendedFields as InstrumentProfile | null) ?? {
+                catalogueType: "market_asset",
+                assetType: input.assetClass as any,
+                sourceUrl: catRow.dataSource ?? null,
+                sourceAsOfDate: catRow.dataAsOf ? new Date(catRow.dataAsOf).toISOString().slice(0, 10) : null,
+              },
+              purchaseTerms: {
+                units: input.units ?? null,
+                unitPrice: input.unitPrice ?? null,
+                amountKes,
+                entryDate: entryIso,
+              },
+              snapshotAt: Date.now(),
+              sourceUrl: catRow.dataSource ?? null,
+              sourceAsOfDate: catRow.dataAsOf ? new Date(catRow.dataAsOf).toISOString().slice(0, 10) : null,
+            };
+          }
+        }
         const res = await addOtherHolding({
           portfolioId: input.portfolioId,
           assetClass: draft.registerAssetClass,
@@ -6164,6 +6223,7 @@ export const appRouter = router({
           incomeRatePct: draft.incomeRatePct != null ? String(draft.incomeRatePct) : undefined,
           dataSource: draft.dataSource ?? undefined,
           dataAsOf: draft.dataAsOf ? new Date(draft.dataAsOf) : undefined,
+          holdingSnapshot,
         });
         const newId = (res as { insertId?: number } | null)?.insertId ?? null;
 

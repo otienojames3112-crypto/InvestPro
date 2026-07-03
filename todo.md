@@ -1784,3 +1784,16 @@
 - [x] (8) Impact notes on approval: e.g. "Updating the selected primary MMF rate affects future projections from the effective date. It does not rewrite past actuals."
 - [x] (9) Tests: comparison extraction accuracy, dedup by issue number, approval path, stale detection, impact note generation
 - [x] (10) Full suite + tsc green; checkpoint + deliver
+
+## Round 99 — Holdings Inherit Reference Catalogue Details
+
+- [x] (1) Gov Securities: expand DepositPrefill 'gov' variant with full CBK catalogue terms (issueNumber, ISIN, couponRate, WHT, maturityDate, settlementDate, couponPaymentDates, cleanPrice, accruedInterest, dirtyPrice, secondaryTradingLotSize, rediscountingRule, tenorYears, securityType)
+- [x] (2) Gov Securities: expand deposits.add to accept catalogue-sourced fields (opportunityId for CBK row link) and build holdingSnapshot from CBK catalogue extendedFields at purchase time
+- [x] (3) Gov Securities: DepositDrawer gov form prefills all CBK terms from catalogue; user enters face value, actual price paid, date purchased, notes, include-in-goal
+- [x] (4) Bank Holdings: expand DepositPrefill 'bank' variant with WHT, payoutFrequency, earlyWithdrawalPenalty, negotiable, noticePeriod from catalogue
+- [x] (5) Bank Holdings: DepositDrawer bank form prefills all expanded fields; user confirms actual amount, negotiated rate, start date, maturity date, include-in-goal
+- [x] (6) MMF Accounts: expand secondaryMmfs.add and MmfAccounts add dialog to prefill EAR, gross yield, fee, minimum, WHT, day-count, crediting frequency from catalogue; user enters opening balance, contribution schedule, include-in-goal
+- [x] (7) Market Assets: expand modeling.commit to build holdingSnapshot from opportunities catalogue row (copiedTerms: asset type, ticker, issuer, currency, latest price/NAV, yield/return, source); user enters units, purchase price, current value, include-in-goal
+- [x] (8) Holding is source of truth: ensure ledger, tax summary, accrual, and reconciliation read from holding fields (not catalogue) for portfolio math; catalogue updates suggest future changes only
+- [x] (9) Tests: Round 99 regression suite — snapshot creation for all 4 types, prefill propagation, holding-as-source-of-truth for math, catalogue update does not rewrite holding
+- [x] (10) Full suite + tsc green; checkpoint + deliver

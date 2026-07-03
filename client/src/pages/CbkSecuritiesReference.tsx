@@ -94,14 +94,54 @@ function fmtDate(v: string | Date | null): string {
  */
 function govPrefill(r: Opportunity): DepositPrefill {
   const hay = `${r.name} ${r.ref} ${r.factNote ?? ""}`.toLowerCase();
+  let bucket: "tbill" | "ifb" | "fxd" | "zero" | "floating" = "fxd";
+  let tbillTenorDays: 91 | 182 | 364 | undefined;
   if (r.assetClass === "gov_discount") {
-    if (hay.includes("zero")) return { kind: "gov", bucket: "zero" };
-    const days = hay.includes("91") ? 91 : hay.includes("182") ? 182 : 364;
-    return { kind: "gov", bucket: "tbill", tbillTenorDays: days as 91 | 182 | 364 };
+    if (hay.includes("zero")) {
+      bucket = "zero";
+    } else {
+      bucket = "tbill";
+      tbillTenorDays = hay.includes("91") ? 91 : hay.includes("182") ? 182 : 364;
+    }
+  } else if (hay.includes("ifb") || hay.includes("infrastructure")) {
+    bucket = "ifb";
+  } else if (hay.includes("float")) {
+    bucket = "floating";
   }
-  if (hay.includes("ifb") || hay.includes("infrastructure")) return { kind: "gov", bucket: "ifb" };
-  if (hay.includes("float")) return { kind: "gov", bucket: "floating" };
-  return { kind: "gov", bucket: "fxd" };
+
+  // Round 99: extract rich terms from extendedFields for snapshot + prefill
+  const ext = r.extendedFields as (import("@shared/instrumentProfile").CbkSecurityProfile) | null;
+  const pf = (k: string): unknown => {
+    const v = ext?.[k as keyof typeof ext];
+    if (v == null) return undefined;
+    // ProfileField<T> is either T directly or { value: T, ... }
+    if (typeof v === "object" && !Array.isArray(v) && "value" in (v as Record<string, unknown>)) return (v as { value: unknown }).value;
+    return v;
+  };
+
+  return {
+    kind: "gov",
+    bucket,
+    ...(tbillTenorDays ? { tbillTenorDays } : {}),
+    // Round 99: full CBK catalogue terms
+    opportunityId: r.id,
+    securityType: (pf("securityType") ?? undefined) as DepositPrefill extends { kind: "gov" } ? DepositPrefill["securityType"] : never,
+    issueNumber: (pf("issueNumber") as string) ?? null,
+    isin: (pf("isin") as string) ?? null,
+    couponRate: (pf("couponRate") as number) ?? (r.yieldPct != null ? Number(r.yieldPct) : null),
+    whtRate: (pf("withholdingTaxRate") as number) ?? null,
+    taxExempt: (pf("taxExempt") as boolean) ?? null,
+    maturityDate: (pf("maturityDate") as string) ?? (r.maturityDate ? String(r.maturityDate) : null),
+    settlementDate: (pf("settlementDate") as string) ?? null,
+    couponPaymentDates: (pf("couponPaymentDates") as string[]) ?? null,
+    cleanPrice: (pf("cleanPrice") as number) ?? null,
+    accruedInterest: (pf("accruedInterestPer100") as number) ?? null,
+    dirtyPrice: (pf("dirtyPrice") as number) ?? null,
+    secondaryTradingLotSize: (pf("secondaryTradingLotSize") as number) ?? null,
+    rediscountingRule: (pf("rediscountingRule") as string) ?? null,
+    tenorYears: r.tenorYears != null ? Number(r.tenorYears) : (pf("tenorMonths") != null ? (pf("tenorMonths") as number) / 12 : null),
+    yieldRate: (pf("yieldRate") as number) ?? (r.yieldPct != null ? Number(r.yieldPct) : null),
+  };
 }
 
 export default function CbkSecuritiesReference({ embedded = false }: { embedded?: boolean } = {}) {

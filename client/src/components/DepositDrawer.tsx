@@ -263,6 +263,9 @@ export function DepositDrawer({ open, onClose, prefill }: DepositDrawerProps) {
   // which reference-catalog row seeded the form so the created holding links back
   // to it (provenance). Cleared on reset / manual bank-new selection.
   const [prefillBankInstrumentId, setPrefillBankInstrumentId] = useState<number | null>(null);
+  // Round 99: when opened from CBK Securities Reference, remember the catalogue
+  // opportunity id so the created security links back + builds a holdingSnapshot.
+  const [prefillOpportunityId, setPrefillOpportunityId] = useState<number | null>(null);
   // Round 93: when opened from MMF Market for a fund the user does NOT yet hold,
   // we can't route a deposit into it. Remember the name to show a gentle hint
   // steering them to add it as a secondary account first.
@@ -318,6 +321,21 @@ export function DepositDrawer({ open, onClose, prefill }: DepositDrawerProps) {
       if (prefill.bucket === "tbill" && prefill.tbillTenorDays) {
         setGovDetail((g) => ({ ...g, tbillTenorDays: prefill.tbillTenorDays! }));
       }
+      // Round 99: seed govDetail from CBK catalogue terms when available
+      if (prefill.tenorYears != null) {
+        setGovDetail((g) => ({ ...g, bondTenorYears: prefill.tenorYears! }));
+      }
+      if (prefill.securityType) {
+        // The form's destination already carries the bucket; the securityType
+        // is used at submit time via govSecurityType.
+      }
+      if (prefill.couponRate != null) {
+        // Coupon rate is used at submit time from prefill state
+      }
+      if (prefill.maturityDate) {
+        setGovDetail((g) => ({ ...g, zeroMaturityOverride: prefill.maturityDate! }));
+      }
+      setPrefillOpportunityId(prefill.opportunityId ?? null);
     } else if (prefill.kind === "mmf") {
       // Round 93: preselect the held MMF account (primary or a secondary) that
       // tracks this catalogue fund, if any. The drawer only routes money into an
@@ -530,6 +548,16 @@ export function DepositDrawer({ open, onClose, prefill }: DepositDrawerProps) {
       ...(isGovZero && govDetail.zeroMaturityOverride
         ? { maturityDate: govDetail.zeroMaturityOverride }
         : {}),
+      // Round 99: pass catalogue coupon rate when available from prefill
+      ...(prefill?.kind === "gov" && prefill.couponRate != null && !isGovFloating
+        ? { couponRate: prefill.couponRate }
+        : {}),
+      // Round 99: pass maturity date from catalogue for bonds (non-tbill)
+      ...(prefill?.kind === "gov" && prefill.maturityDate && !isGovZero
+        ? { maturityDate: prefill.maturityDate }
+        : {}),
+      // Round 99: link to CBK catalogue row for holdingSnapshot
+      ...(prefillOpportunityId ? { opportunityId: prefillOpportunityId } : {}),
     });
   }
 
@@ -860,6 +888,55 @@ export function DepositDrawer({ open, onClose, prefill }: DepositDrawerProps) {
                     {govBucket === "ifb" && (
                       <p className="text-[11px] text-emerald-300/80">IFB coupons are tax-exempt (subject to legislative change).</p>
                     )}
+                    {/* Round 99: show catalogue terms snapshot when opened from CBK Securities Reference */}
+                    {prefill?.kind === "gov" && prefill.opportunityId && (
+                      <div className="rounded-md border border-blue-500/20 bg-blue-500/5 p-2.5 space-y-1">
+                        <p className="text-[11px] font-semibold text-blue-300 flex items-center gap-1">
+                          <Info className="w-3 h-3" /> Catalogue terms (snapshotted at purchase)
+                        </p>
+                        <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 text-[11px]">
+                          {prefill.issueNumber && (
+                            <><span className="text-muted-foreground">Issue</span><span className="text-foreground">{prefill.issueNumber}</span></>
+                          )}
+                          {prefill.isin && (
+                            <><span className="text-muted-foreground">ISIN</span><span className="text-foreground">{prefill.isin}</span></>
+                          )}
+                          {prefill.couponRate != null && (
+                            <><span className="text-muted-foreground">Coupon</span><span className="text-foreground">{prefill.couponRate}%</span></>
+                          )}
+                          {prefill.yieldRate != null && (
+                            <><span className="text-muted-foreground">Yield</span><span className="text-foreground">{prefill.yieldRate}%</span></>
+                          )}
+                          {prefill.maturityDate && (
+                            <><span className="text-muted-foreground">Maturity</span><span className="text-foreground">{new Date(prefill.maturityDate + "T12:00:00Z").toLocaleDateString("en-KE", { day: "numeric", month: "short", year: "numeric" })}</span></>
+                          )}
+                          {prefill.settlementDate && (
+                            <><span className="text-muted-foreground">Settlement</span><span className="text-foreground">{new Date(prefill.settlementDate + "T12:00:00Z").toLocaleDateString("en-KE", { day: "numeric", month: "short", year: "numeric" })}</span></>
+                          )}
+                          {prefill.cleanPrice != null && (
+                            <><span className="text-muted-foreground">Clean price</span><span className="text-foreground">{prefill.cleanPrice.toFixed(4)}</span></>
+                          )}
+                          {prefill.accruedInterest != null && (
+                            <><span className="text-muted-foreground">Accrued int.</span><span className="text-foreground">{prefill.accruedInterest.toFixed(4)}</span></>
+                          )}
+                          {prefill.dirtyPrice != null && (
+                            <><span className="text-muted-foreground">Dirty price</span><span className="text-foreground">{prefill.dirtyPrice.toFixed(4)}</span></>
+                          )}
+                          {prefill.secondaryTradingLotSize != null && (
+                            <><span className="text-muted-foreground">Lot size</span><span className="text-foreground">KES {prefill.secondaryTradingLotSize.toLocaleString()}</span></>
+                          )}
+                          {prefill.rediscountingRule && (
+                            <><span className="text-muted-foreground">Rediscounting</span><span className="text-foreground">{prefill.rediscountingRule}</span></>
+                          )}
+                          {prefill.couponPaymentDates && prefill.couponPaymentDates.length > 0 && (
+                            <><span className="text-muted-foreground">Coupon dates</span><span className="text-foreground">{prefill.couponPaymentDates.length} scheduled</span></>
+                          )}
+                        </div>
+                        <p className="text-[10px] text-muted-foreground/70 pt-0.5">
+                          These terms will be saved as an immutable snapshot on your holding. Catalogue updates will not rewrite them.
+                        </p>
+                      </div>
+                    )}
                     {isGovDiscount && (
                       <div className="rounded-md border border-emerald-500/20 bg-emerald-500/5 p-2.5 space-y-1.5">
                         <div className="flex items-center justify-between text-xs">
@@ -1007,6 +1084,37 @@ export function DepositDrawer({ open, onClose, prefill }: DepositDrawerProps) {
                     </div>
                   )}
                   <p className="text-xs text-muted-foreground">Bank rates are indicative and usually negotiable. You can edit this deposit later on the Other Assets page.</p>
+                  {/* Round 99: show additional catalogue terms when opened from Bank Product Catalogue */}
+                  {prefill?.kind === "bank" && prefill.bankInstrumentId && (
+                    <div className="rounded-md border border-sky-500/20 bg-sky-500/5 p-2.5 space-y-1">
+                      <p className="text-[11px] font-semibold text-sky-300 flex items-center gap-1">
+                        <Info className="w-3 h-3" /> Catalogue terms (snapshotted at purchase)
+                      </p>
+                      <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 text-[11px]">
+                        {prefill.whtRate != null && (
+                          <><span className="text-muted-foreground">WHT</span><span className="text-foreground">{prefill.whtRate}%</span></>
+                        )}
+                        {prefill.payoutFrequency && (
+                          <><span className="text-muted-foreground">Payout</span><span className="text-foreground capitalize">{prefill.payoutFrequency.replace("_", " ")}</span></>
+                        )}
+                        {prefill.earlyWithdrawalPenalty != null && (
+                          <><span className="text-muted-foreground">Early w/d penalty</span><span className="text-foreground">{prefill.earlyWithdrawalPenalty}% of interest</span></>
+                        )}
+                        {prefill.noticePeriod && (
+                          <><span className="text-muted-foreground">Notice period</span><span className="text-foreground">{prefill.noticePeriod}</span></>
+                        )}
+                        {prefill.source && (
+                          <><span className="text-muted-foreground">Source</span><span className="text-foreground truncate">{prefill.source}</span></>
+                        )}
+                        {prefill.asOfDate && (
+                          <><span className="text-muted-foreground">As of</span><span className="text-foreground">{prefill.asOfDate}</span></>
+                        )}
+                      </div>
+                      <p className="text-[10px] text-muted-foreground/70 pt-0.5">
+                        These terms will be saved as an immutable snapshot on your holding. Catalogue updates will not rewrite them.
+                      </p>
+                    </div>
+                  )}
                 </div>
               )}
 

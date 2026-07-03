@@ -222,6 +222,7 @@ import {
   type CatalogueRowSnapshot,
   type PriorFindingContext,
 } from "./aiResearchService";
+import { explain as aiExplain } from "./aiExplainService";
 import { normaliseAssetClass } from "../shared/assetModel";
 import { runAdapter } from "./ingestion/runner";
 import { ADAPTERS } from "./ingestion/adapters";
@@ -4475,6 +4476,184 @@ export const appRouter = router({
       await bulkUpsertLedgerEntries(entries);
       return { success: true, count: entries.length };
     }),
+  }),
+
+  // ─── AI Explanations (Round 95) ─────────────────────────────────────────────
+  // Governed, STRICTLY READ-ONLY plain-language explanations. Every procedure is
+  // a `query` (never a mutation) and performs NO database write. It only calls
+  // `requirePortfolio` to enforce ownership, then hands a compact, PAGE-COMPUTED
+  // facts object to the explanation engine and returns prose. Because the caller
+  // passes the exact figures the surface already renders, the explanation can
+  // never diverge from what the manager sees, and the engine has no path to
+  // mutate anything. These are explanations, NOT advice or recommendations.
+  aiExplain: router({
+    // "Explain mismatch with AI" on the Reconciliation page (shown only when red).
+    reconciliationMismatch: protectedProcedure
+      .input(
+        z.object({
+          portfolioId: z.number().int().positive(),
+          sections: z
+            .array(
+              z.object({
+                label: z.string().max(120),
+                ok: z.boolean(),
+                reference: z.number(),
+                maxDiff: z.number(),
+                sources: z
+                  .array(
+                    z.object({
+                      label: z.string().max(120),
+                      value: z.number(),
+                      diff: z.number(),
+                      ok: z.boolean(),
+                    }),
+                  )
+                  .max(12),
+              }),
+            )
+            .max(8),
+          subChecks: z
+            .array(
+              z.object({
+                label: z.string().max(120),
+                ok: z.boolean(),
+                detail: z.string().max(400),
+              }),
+            )
+            .max(20),
+        }),
+      )
+      .query(async ({ ctx, input }) => {
+        await requirePortfolio(input.portfolioId, ctx.user.id);
+        const lines: string[] = [];
+        lines.push("Reconciliation sections (a red section means its sources disagree beyond the KES 5 rounding tolerance):");
+        for (const s of input.sections) {
+          lines.push(
+            `- ${s.label}: ${s.ok ? "GREEN (agrees)" : "RED (disagrees)"}; reference KES ${s.reference.toLocaleString()}, worst gap KES ${s.maxDiff.toLocaleString()}.`,
+          );
+          for (const src of s.sources) {
+            lines.push(
+              `    · ${src.label}: KES ${src.value.toLocaleString()} (${src.diff >= 0 ? "+" : ""}${src.diff.toLocaleString()} vs reference)${src.ok ? "" : "  <-- off"}`,
+            );
+          }
+        }
+        if (input.subChecks.length) {
+          lines.push("", "Sub-checks:");
+          for (const c of input.subChecks) {
+            lines.push(`- ${c.label}: ${c.ok ? "GREEN" : "RED"} — ${c.detail}`);
+          }
+        }
+        return aiExplain({
+          kind: "reconciliation_mismatch",
+          title: "A reconciliation cross-check is currently red. Explain why and where to investigate.",
+          facts: lines.join("\n"),
+        });
+      }),
+
+    // "Explain this month" on a Month Ledger row.
+    ledgerMonth: protectedProcedure
+      .input(
+        z.object({
+          portfolioId: z.number().int().positive(),
+          month: z.object({
+            monthNumber: z.number().int(),
+            isActual: z.boolean(),
+            entryDate: z.string().max(40).optional(),
+            contribution: z.number(),
+            cbkCashIn: z.number(),
+            mmfToDhow: z.number(),
+            mainAction: z.string().max(400).nullable().optional(),
+            mmfEndBalance: z.number(),
+            tbillEndBalance: z.number(),
+            ifbEndBalance: z.number(),
+            fxdEndBalance: z.number(),
+            totalEndBalance: z.number(),
+            mmfInterestNet: z.number().nullable().optional(),
+            notes: z.string().max(400).nullable().optional(),
+          }),
+        }),
+      )
+      .query(async ({ ctx, input }) => {
+        await requirePortfolio(input.portfolioId, ctx.user.id);
+        const m = input.month;
+        const facts = [
+          `Month #${m.monthNumber}${m.entryDate ? ` (${m.entryDate})` : ""} — ${m.isActual ? "ACTUAL (recorded)" : "PROJECTED"}.`,
+          `Contribution in this month: KES ${m.contribution.toLocaleString()}.`,
+          `Cash released from CBK maturities (cbkCashIn): KES ${m.cbkCashIn.toLocaleString()}.`,
+          `Amount swept out of the money-market fund into longer-dated instruments (mmfToDhow): KES ${m.mmfToDhow.toLocaleString()}.`,
+          m.mmfInterestNet != null ? `Net MMF interest earned this month (after WHT): KES ${m.mmfInterestNet.toLocaleString()}.` : "",
+          `End balances — MMF (stayed liquid): KES ${m.mmfEndBalance.toLocaleString()}; T-bills: KES ${m.tbillEndBalance.toLocaleString()}; IFB: KES ${m.ifbEndBalance.toLocaleString()}; FXD: KES ${m.fxdEndBalance.toLocaleString()}.`,
+          `Total portfolio value at month end: KES ${m.totalEndBalance.toLocaleString()}.`,
+          m.mainAction ? `Recorded action: ${m.mainAction}.` : "",
+          m.notes ? `Notes: ${m.notes}.` : "",
+        ]
+          .filter(Boolean)
+          .join("\n");
+        return aiExplain({
+          kind: "ledger_month",
+          title: `Explain what happened in month #${m.monthNumber} of the plan.`,
+          facts,
+        });
+      }),
+
+    // "Explain my status" on the Dashboard (UI shows it only in manager mode).
+    dashboardStatus: protectedProcedure
+      .input(
+        z.object({
+          portfolioId: z.number().int().positive(),
+          status: z.object({
+            onTrack: z.boolean(),
+            paceStatus: z.string().max(40),
+            shortfall: z.number(),
+            plannedThis: z.number(),
+            actualThis: z.number(),
+            nextMaturity: z
+              .object({ label: z.string().max(120), amount: z.number(), inDays: z.number().int().nullable().optional() })
+              .nullable(),
+            concentration: z
+              .array(z.object({ issuer: z.string().max(120), sharePct: z.number() }))
+              .max(20),
+            ratesStale: z.boolean(),
+            ratesLabel: z.string().max(60),
+            netWorth: z.number(),
+            target: z.number(),
+            projectedFinal: z.number(),
+          }),
+        }),
+      )
+      .query(async ({ ctx, input }) => {
+        await requirePortfolio(input.portfolioId, ctx.user.id);
+        const s = input.status;
+        const contributionLine =
+          s.plannedThis > 0 && s.actualThis <= 0
+            ? `This period's planned contribution of KES ${s.plannedThis.toLocaleString()} has NOT yet been recorded (missing contribution).`
+            : `This period: planned KES ${s.plannedThis.toLocaleString()}, recorded KES ${s.actualThis.toLocaleString()}.`;
+        const concentrationLine = s.concentration.length
+          ? `Concentration warnings (share above the single-issuer cap): ${s.concentration
+              .map((c) => `${c.issuer} at ${c.sharePct.toFixed(1)}%`)
+              .join("; ")}.`
+          : "No single-issuer concentration breach.";
+        const maturityLine = s.nextMaturity
+          ? `Next upcoming maturity: ${s.nextMaturity.label} for KES ${s.nextMaturity.amount.toLocaleString()}${
+              s.nextMaturity.inDays != null ? ` in about ${s.nextMaturity.inDays} day(s)` : ""
+            }.`
+          : "No upcoming maturity scheduled.";
+        const facts = [
+          `Plan pace: ${s.onTrack ? "ON TRACK" : "OFF TRACK"} (pace status: ${s.paceStatus}${
+            s.shortfall ? `, shortfall KES ${s.shortfall.toLocaleString()}` : ""
+          }).`,
+          `Net worth now: KES ${s.netWorth.toLocaleString()}; target: KES ${s.target.toLocaleString()}; projected value at goal date: KES ${s.projectedFinal.toLocaleString()}.`,
+          contributionLine,
+          concentrationLine,
+          maturityLine,
+          `Reference rates last updated: ${s.ratesLabel}${s.ratesStale ? " (STALE — worth refreshing before relying on yields)" : ""}.`,
+        ].join("\n");
+        return aiExplain({
+          kind: "dashboard_status",
+          title: "Summarise where this portfolio stands right now for the manager.",
+          facts,
+        });
+      }),
   }),
 
   // ─── Securities ───────────────────────────────────────────────────────────────

@@ -76,13 +76,15 @@ function ReviewDialog({
   catalogue,
   open,
   onOpenChange,
+  initialUrl,
 }: {
   catalogue: CatalogueKind;
   open: boolean;
   onOpenChange: (v: boolean) => void;
+  initialUrl?: string;
 }) {
   const copy = COPY[catalogue];
-  const attach = useSourceAttachment();
+  const attach = useSourceAttachment({ initialUrl });
   const [result, setResult] = useState<{
     answer: string;
     taskId: number;
@@ -281,20 +283,38 @@ export function CatalogueSourceReviewButton({
   catalogue,
   isManager,
   size = "sm",
+  initialUrl,
+  label,
+  variant = "outline",
+  className,
 }: {
   catalogue: CatalogueKind;
   isManager: boolean;
   size?: "sm" | "default";
+  /** Seed the URL picker (e.g. a Rate Settings source URL or a Source Registry row). */
+  initialUrl?: string;
+  /** Override the button label (row-level actions read “Review source with AI”). */
+  label?: string;
+  variant?: "outline" | "ghost";
+  className?: string;
 }) {
   const [open, setOpen] = useState(false);
   if (!isManager) return null;
   return (
     <>
-      <Button variant="outline" size={size} className="bg-background" onClick={() => setOpen(true)}>
+      <Button
+        variant={variant}
+        size={size}
+        className={className ?? "bg-background"}
+        onClick={() => setOpen(true)}
+      >
         <Sparkles className="w-4 h-4 mr-2 text-violet-500" />
-        {COPY[catalogue].button}
+        {label ?? COPY[catalogue].button}
       </Button>
-      <ReviewDialog catalogue={catalogue} open={open} onOpenChange={setOpen} />
+      {/* Remount the dialog per-open so the seeded URL is re-applied each time. */}
+      {open && (
+        <ReviewDialog catalogue={catalogue} open={open} onOpenChange={setOpen} initialUrl={initialUrl} />
+      )}
     </>
   );
 }

@@ -1727,3 +1727,18 @@
 - [x] All Approved Instruments intro replaced with the exact required sentence
 - [x] Internal names (fit.score, sortKey planFit, netYieldPerPct) left as-is; only visible labels/tooltips changed
 - [x] Tests: added server/round94PlanFitWording.test.ts (5); full suite 1633 passing; tsc clean; UI verified; checkpoint saved
+
+# Round 95 — Governed AI-assisted automation (findings/explanations only; no new pages)
+
+- [x] Traced existing "Review source with AI" (research.reviewCatalogueSource, findings-only via draftFromFinding -> pending queue -> approval) mounted on all four catalogue pages
+- [x] MMF review instruction strengthened: new funds, EAR/gross RATE, FEE, MIN, AUM, STALE rows (findings only)
+- [x] Bank review instruction strengthened: new products, RATE, TENOR, NEGOTIABLE-flag changes (findings only)
+- [x] CBK review instruction strengthened: 91/182/364 rate, issue numbers, auction/value dates, bond re-openings (findings only)
+- [x] Market review instruction strengthened: new instruments, price/NAV, yield, trailing-return (findings only)
+- [x] Reconciliation "Explain mismatch with AI" (only when red): aiExplain.reconciliationMismatch query, read-only; button in the red verdict banner
+- [x] Ledger "Explain this month" on a row: aiExplain.ledgerMonth query, read-only; Sparkles icon per row (manager)
+- [x] Dashboard "Explain my status" (manager mode): aiExplain.dashboardStatus query, read-only; button in Manager diagnostics header
+- [x] Rate Settings (UpdateRatesPanel CBK+MMF source rows) + Source Registry rows now show "Review source with AI" (seeds URL into governed per-catalogue review; findings only, no save). CatalogueSourceReviewButton extended with initialUrl/label; useSourceAttachment accepts initialUrl.
+- [x] Tests: server/round95AiGovernance.test.ts (16) — aiExplain group is queries-only & writes nothing; engine never imports db + non-advice guardrail; catalogue review = findings only (never a write/recommendation); draftFromFinding only enqueues; sole promotion is admin `review` keyed on approve; client surfaces use useQuery + enabled-gating; Rate Settings/Source Registry expose the review button
+- [x] Full suite (1649) + tsc green; UI verified earlier (Source Registry + UpdateRatesPanel review buttons, explain dialogs)
+- [ ] Deliver: full codebase ZIP + database dump

@@ -12,6 +12,8 @@ import { BookOpen, RefreshCw, Search, Info, Download, ChevronDown, MessageSquare
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { explainLedgerRow } from "@shared/ledgerExplain";
+import { AiExplainDialog } from "@/components/AiExplainDialog";
+import { Sparkles } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -166,7 +168,8 @@ function LedgerBasisCard({ recon }: { recon: LedgerReconData | undefined }) {
 }
 
 export default function Ledger({ embedded = false }: { embedded?: boolean } = {}) {
-  const { portfolioId, portfolio } = usePortfolio();
+  const { portfolioId, portfolio, userMode } = usePortfolio();
+  const isManager = userMode === "manager";
   const { data: projection, isLoading } = trpc.projection.run.useQuery(
     { portfolioId: portfolioId! },
     { enabled: !!portfolioId }
@@ -210,6 +213,35 @@ export default function Ledger({ embedded = false }: { embedded?: boolean } = {}
   }, [liquidAlloc]);
 
   const focusMonth = useFocusMonth();
+  // ── Round 95: "Explain this month" (read-only AI). We open one shared dialog
+  // and drive it from whichever row the manager clicked; the facts payload is
+  // built from the SAME row fields the table renders. Nothing here writes.
+  const [explainMonth, setExplainMonth] = useState<number | null>(null);
+  const explainRow = useMemo(
+    () => (projection ?? []).find((r) => r.monthNumber === explainMonth) ?? null,
+    [projection, explainMonth],
+  );
+  const ledgerExplainQuery = trpc.aiExplain.ledgerMonth.useQuery(
+    {
+      portfolioId: portfolioId!,
+      month: {
+        monthNumber: explainRow?.monthNumber ?? 0,
+        isActual: explainRow?.isActual ?? false,
+        entryDate: explainRow ? getMonthLabel(portfolio?.startDate ? String(portfolio.startDate).split("T")[0] : "2026-07-01", explainRow.monthNumber) : undefined,
+        contribution: explainRow?.contribution ?? 0,
+        cbkCashIn: (explainRow?.cbkCashIn ?? 0) + (explainRow?.bankCashIn ?? 0),
+        mmfToDhow: explainRow?.mmfToDhow ?? 0,
+        mainAction: explainRow?.mainAction ?? null,
+        mmfEndBalance: explainRow?.mmfEnd ?? 0,
+        tbillEndBalance: (explainRow?.tbill91End ?? 0) + (explainRow?.tbill182End ?? 0) + (explainRow?.tbill364End ?? 0),
+        ifbEndBalance: explainRow?.ifbEnd ?? 0,
+        fxdEndBalance: explainRow?.fxdEnd ?? 0,
+        totalEndBalance: explainRow?.totalEnd ?? 0,
+        mmfInterestNet: explainRow?.mmfInterestNet ?? null,
+      },
+    },
+    { enabled: explainMonth != null && !!portfolioId && !!explainRow, refetchOnWindowFocus: false, retry: false },
+  );
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
   const [highlightMonth, setHighlightMonth] = useState<number | null>(null);
@@ -666,6 +698,17 @@ export default function Ledger({ embedded = false }: { embedded?: boolean } = {}
                                   })()}
                                 </PopoverContent>
                               </Popover>
+                              {isManager && (
+                                <button
+                                  type="button"
+                                  onClick={() => setExplainMonth(r.monthNumber)}
+                                  className="mt-0.5 shrink-0 text-muted-foreground/70 hover:text-violet-500 transition-colors active:scale-[0.97]"
+                                  aria-label="Explain this month with AI"
+                                  title="Explain this month with AI"
+                                >
+                                  <Sparkles className="w-3.5 h-3.5" />
+                                </button>
+                              )}
                               {r.sweepRationale && (
                                 <TooltipProvider delayDuration={150}>
                                   <Tooltip>
@@ -912,6 +955,18 @@ export default function Ledger({ embedded = false }: { embedded?: boolean } = {}
           </Card>
         )}
       </div>
+
+      <AiExplainDialog
+        open={explainMonth != null}
+        onOpenChange={(v) => { if (!v) setExplainMonth(null); }}
+        title={explainRow ? `Explain month #${explainRow.monthNumber}` : "Explain this month"}
+        description="A plain-language read on what came in, what matured, what was swept, what stayed liquid, and the interest/tax impact for this month. It reads the figures already in this row and changes nothing."
+        answer={ledgerExplainQuery.data?.answer}
+        isLoading={ledgerExplainQuery.isLoading || ledgerExplainQuery.isFetching}
+        isError={ledgerExplainQuery.isError}
+        errorMessage={ledgerExplainQuery.error?.message}
+        onRetry={() => ledgerExplainQuery.refetch()}
+      />
       </TooltipProvider>
     </AppShell>
   );

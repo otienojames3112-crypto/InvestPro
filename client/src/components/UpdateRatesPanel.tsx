@@ -9,6 +9,8 @@ import { useState, useEffect } from "react";
 import { trpc } from "@/lib/trpc";
 import { invalidatePortfolioMoney } from "@/lib/invalidatePortfolioMoney";
 import { useSelectedFund } from "@/hooks/useSelectedFund";
+import { usePortfolio } from "@/contexts/PortfolioContext";
+import { CatalogueSourceReviewButton, type CatalogueKind } from "@/components/CatalogueSourceReview";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -58,6 +60,8 @@ interface Props {
 export function UpdateRatesPanel({ portfolioId }: Props) {
   const utils = trpc.useUtils();
   const { fundName: selectedFundName, fundLabel: selectedFundLabel, fundEar: selectedFundEar, hasFund } = useSelectedFund();
+  const { userMode } = usePortfolio();
+  const isManager = userMode === "manager";
   const { data: settings, isLoading } = trpc.settings.get.useQuery({ portfolioId });
 
   const [mmfYield, setMmfYield] = useState("");
@@ -190,19 +194,29 @@ export function UpdateRatesPanel({ portfolioId }: Props) {
               </Button>
             </div>
 
-            {[
-              { title: "CBK Treasury Bills", desc: "91-day, 182-day, 364-day auction results", url: cbkSourceUrl, setUrl: setCbkSourceUrl, placeholder: "https://www.centralbank.go.ke/..." },
-              { title: selectedFundLabel, desc: `${selectedFundName} — effective annual yield (gross, before WHT)`, url: sanlamSourceUrl, setUrl: setSanlamSourceUrl, placeholder: "https://www.sanlamallianz.co.ke/..." },
-            ].map(({ title, desc, url, setUrl, placeholder }) => (
+            {([
+              { title: "CBK Treasury Bills", desc: "91-day, 182-day, 364-day auction results", url: cbkSourceUrl, setUrl: setCbkSourceUrl, placeholder: "https://www.centralbank.go.ke/...", catalogue: "cbk" as CatalogueKind },
+              { title: selectedFundLabel, desc: `${selectedFundName} — effective annual yield (gross, before WHT)`, url: sanlamSourceUrl, setUrl: setSanlamSourceUrl, placeholder: "https://www.sanlamallianz.co.ke/...", catalogue: "mmf" as CatalogueKind },
+            ]).map(({ title, desc, url, setUrl, placeholder, catalogue }) => (
               <div key={title} className="rounded-lg border border-border/50 bg-background/40 p-3 space-y-2">
                 <div className="flex items-center justify-between gap-2">
                   <div>
                     <p className="text-sm font-medium">{title}</p>
                     <p className="text-xs text-muted-foreground">{desc}</p>
                   </div>
-                  <a href={url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
-                    <Button variant="outline" size="sm" className="h-8 gap-1 text-xs">Open <ExternalLink className="h-3 w-3" /></Button>
-                  </a>
+                  <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+                    {/* Governed: parse this source into AI proposals (findings only →
+                        review queue → approval). It never writes a rate itself. */}
+                    <CatalogueSourceReviewButton
+                      catalogue={catalogue}
+                      isManager={isManager}
+                      initialUrl={url}
+                      label="Review source with AI"
+                    />
+                    <a href={url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
+                      <Button variant="outline" size="sm" className="h-8 gap-1 text-xs">Open <ExternalLink className="h-3 w-3" /></Button>
+                    </a>
+                  </div>
                 </div>
                 {editingUrls && (
                   <Input value={url} onChange={(e) => setUrl(e.target.value)} placeholder={placeholder} className="h-8 text-xs font-mono" onClick={(e) => e.stopPropagation()} />

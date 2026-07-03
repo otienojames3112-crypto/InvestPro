@@ -541,12 +541,12 @@ export type AskSource =
  * null when nothing is attached). Reused by both the opening box and the follow-up
  * composer so every turn can carry its OWN source.
  */
-export function useSourceAttachment(opts?: { followUp?: boolean }) {
+export function useSourceAttachment(opts?: { followUp?: boolean; initialUrl?: string }) {
   const followUp = opts?.followUp ?? false;
   const upload = trpc.opportunities.aiUploadDocument.useMutation();
-  const [show, setShow] = useState(false);
+  const [show, setShow] = useState(!!opts?.initialUrl);
   const [mode, setMode] = useState<SourceMode>("url");
-  const [url, setUrl] = useState("");
+  const [url, setUrl] = useState(opts?.initialUrl ?? "");
   const [text, setText] = useState("");
   const [pdfFile, setPdfFile] = useState<File | null>(null);
   const [imageFile, setImageFile] = useState<File | null>(null);

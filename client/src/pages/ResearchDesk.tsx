@@ -53,6 +53,7 @@ import SourceConflicts from "./SourceConflicts";
 import AskAI from "./AskAI";
 import RecentlyApproved from "./RecentlyApproved";
 import { usePortfolio } from "@/contexts/PortfolioContext";
+import { CatalogueSourceReviewButton, type CatalogueKind } from "@/components/CatalogueSourceReview";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
@@ -744,8 +745,27 @@ function SourceEditor({
   );
 }
 
+/** A registry source's `feeds` tag maps onto exactly one review catalogue so the
+ *  row-level "Review source with AI" opens the right governed comparison. A
+ *  "mixed" source has no single catalogue, so we omit the shortcut there (the
+ *  manager still uses the per-catalogue buttons on each catalogue page). */
+function catalogueForFeed(feeds: string): CatalogueKind | null {
+  switch (feeds) {
+    case "mmf":
+      return "mmf";
+    case "bank":
+      return "bank";
+    case "opportunity":
+      return "cbk";
+    default:
+      return null;
+  }
+}
+
 function SourceRegistryPanel() {
   const utils = trpc.useUtils();
+  const { userMode } = usePortfolio();
+  const isManager = userMode === "manager";
   const [includeInactive, setIncludeInactive] = useState(false);
   const [editorOpen, setEditorOpen] = useState(false);
   const [editing, setEditing] = useState<SourceRow | null>(null);
@@ -856,6 +876,21 @@ function SourceRegistryPanel() {
                 </div>
               </div>
               <div className="flex items-center gap-2 flex-wrap">
+                {(() => {
+                  const cat = catalogueForFeed(s.feeds);
+                  if (!cat || !s.active) return null;
+                  // Governed shortcut: hand the registered source straight into the
+                  // per-catalogue AI review (findings only → review queue → approval).
+                  // Nothing here writes a rate or a catalogue row.
+                  return (
+                    <CatalogueSourceReviewButton
+                      catalogue={cat}
+                      isManager={isManager}
+                      initialUrl={s.url ?? undefined}
+                      label="Review source with AI"
+                    />
+                  );
+                })()}
                 {s.active && (
                   <Button
                     size="sm"

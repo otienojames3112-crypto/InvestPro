@@ -452,25 +452,25 @@ export function catalogueReviewInstruction(catalogue: ReferenceCatalogue): strin
       return [
         "You are reviewing a source (a Serrari-style benchmark table, a fund factsheet, a screenshot, a PDF or a URL) for the manager's MONEY MARKET FUND catalogue.",
         "For every MMF the source mentions, extract, verbatim with units: the published EAR (effective annual rate, net of fee) as `ear`; the gross/quoted yield as `grossYield`; the annual management fee as `managementFee`; the minimum investment (KES) as `minInvestment`; and AUM in KES millions as `aumMillions`. Keep `ear` and `grossYield` as the DIFFERENT numbers the source prints — never convert one into the other.",
-        "Compare each against the CURRENT catalogue rows below. Emit a finding when: a fund is NEW (not in the current rows), any figure CHANGED versus the current row, or the source/as-of date is newer. If a current fund is clearly absent from a comprehensive source (e.g. delisted), note it in that finding's warnings as a possible STALE row — do not invent a removal figure.",
+        "Compare each against the CURRENT catalogue rows below and propose findings for ALL of: (a) NEW funds not in the current rows; (b) EAR/gross-yield RATE changes; (c) management-FEE changes; (d) MINIMUM-investment changes; (e) AUM changes; and (f) STALE rows. When a current fund is clearly absent from a comprehensive benchmark (e.g. delisted or no longer quoted), emit an edit finding naming it and flag a possible STALE row in that finding's warnings — do NOT invent a removal figure. Only emit a finding when something is new or actually changed versus the current row, or the source/as-of date is newer.",
       ].join("\n");
     case "bank":
       return [
         "You are reviewing a source for the manager's BANK PRODUCT catalogue (call/fixed/savings deposits).",
         "For every bank product the source mentions, extract, verbatim with units: the indicative rate (% p.a.) as `indicativeRate`; the minimum amount (KES) as `minAmount`; the typical tenor / notice period as `typicalTenor`; and whether the rate is negotiable as `isNegotiable` (\"true\"/\"false\"). Capture any early-break / liquidity terms in the finding's rawExcerpt. Bank rates are INDICATIVE and usually quoted GROSS of the 15% WHT — say so in warnings when the source does.",
-        "Compare each against the CURRENT catalogue rows below. Emit a finding when a product is NEW, a rate/minimum/tenor/negotiable flag/liquidity term CHANGED, or the as-of date is newer.",
+        "Compare each against the CURRENT catalogue rows below and propose findings for ALL of: NEW products; indicative-RATE changes; TENOR / notice-period changes; and NEGOTIABLE-flag changes (plus minimum-amount or liquidity-term changes). Emit a finding only when a product is new or a value actually CHANGED versus the current row, or the as-of date is newer.",
       ].join("\n");
     case "cbk":
       return [
         "You are reviewing a CBK / Treasury source: Treasury bills on offer, weekly auction results, or a bond auction/re-opening notice.",
         "For Treasury BILLS, emit ONE finding per tenor actually present — the 91-day, 182-day and 364-day bills are SEPARATE instruments. For each, extract verbatim: the annualised rate as `yieldPct`; the previous auction average rate as `prevAvgRate` when shown; the tenor in days as `tenorDays` (91/182/364); the issue number as `issueNumber`; the auction date as `auctionDate` and the value/settlement date as `valueDate`. For BONDS, extract the coupon as `coupon`, the yield-to-maturity as `yieldPct`, and the tenor.",
-        "Name each bill finding clearly by tenor (e.g. \"91-Day Treasury Bill\"). Compare against the CURRENT rows below and emit a finding when a tenor's rate/issue/dates changed or a new issue is on offer.",
+        "Name each bill finding clearly by tenor (e.g. \"91-Day Treasury Bill\"). Compare against the CURRENT rows below and propose findings for ALL of: 91/182/364-day bill RATE updates; new ISSUE NUMBERS; AUCTION-date and VALUE-date updates; and any bond RE-OPENING. Emit a finding when a tenor's rate/issue/dates changed or a new issue is on offer.",
       ].join("\n");
     case "market_asset":
       return [
         "You are reviewing a market source for the manager's MARKET ASSETS catalogue: an NSE price board, a REIT factsheet, an ETF factsheet, or an offshore-fund factsheet.",
         "For every instrument the source mentions, extract, verbatim with units: the last price / NAV as `lastPrice`; the headline yield or distribution as `yieldPct` (and what it represents as `yieldKind`); the trailing 12-month return as `trailingReturnPct`; and the expense ratio as `expenseRatioPct` where shown. Trailing returns are PAST performance — say so in warnings.",
-        "Compare each against the CURRENT rows below and emit a finding when an instrument is NEW, a price/NAV/yield/trailing return CHANGED, or the as-of date is newer.",
+        "Compare each against the CURRENT rows below and propose findings for ALL of: NEW instruments; PRICE / NAV changes; YIELD changes; and TRAILING-RETURN changes (plus expense-ratio updates). Emit a finding only when an instrument is new or a value actually CHANGED versus the current row, or the as-of date is newer.",
       ].join("\n");
   }
 }

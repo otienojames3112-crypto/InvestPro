@@ -1,6 +1,9 @@
 import { AppShell } from "@/components/AppShell";
+import { useState } from "react";
 import { usePortfolio } from "@/contexts/PortfolioContext";
 import { trpc } from "@/lib/trpc";
+import { Button } from "@/components/ui/button";
+import { AiExplainDialog } from "@/components/AiExplainDialog";
 import {
   Card,
   CardContent,
@@ -18,7 +21,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Scale, CheckCircle2, AlertTriangle, Info, Activity, TrendingDown, TrendingUp } from "lucide-react";
+import { Scale, CheckCircle2, AlertTriangle, Info, Activity, TrendingDown, TrendingUp, Sparkles } from "lucide-react";
 import { formatKES, formatRelativeTime } from "@/lib/format";
 import { Sparkline } from "@/components/Sparkline";
 import { GlossaryTerm } from "@/components/GlossaryTerm";
@@ -83,6 +86,65 @@ export default function Reconciliation({ embedded = false }: { embedded?: boolea
     (worst, c) => (c.diff > worst.diff ? c : worst),
     { label: "Whole-portfolio sources", diff: 0 },
   );
+
+  // ── Round 95: "Explain mismatch with AI" (read-only) ──────────────────────
+  // We assemble the EXACT verdicts already rendered above into a compact facts
+  // payload and hand it to the read-only `aiExplain.reconciliationMismatch`
+  // query. It only runs when the manager opens the dialog (enabled=explainOpen)
+  // and only when the page is red. Nothing here writes.
+  const [explainOpen, setExplainOpen] = useState(false);
+  const explainInput = {
+    portfolioId: portfolioId!,
+    sections: sections.map((sec) => ({
+      label: sec.label,
+      ok: sec.ok,
+      reference: sec.reference,
+      maxDiff: sec.maxDiff,
+      sources: sec.sources.map((src) => ({
+        label: src.label,
+        value: src.value,
+        diff: src.diff,
+        ok: src.ok,
+      })),
+    })),
+    subChecks: [
+      mmf && {
+        label: "MMF accrual-base check",
+        ok: mmf.ok,
+        detail: `Accrual base KES ${mmf.accrual.toLocaleString()} vs MMF subtotal KES ${mmf.mmfSubtotal.toLocaleString()} (diff KES ${mmf.diff.toLocaleString()}).`,
+      },
+      gov && {
+        label: "Government securities check",
+        ok: gov.ok,
+        detail: `CBK register face KES ${gov.registerFaceTotal.toLocaleString()} vs linked gov-deposit total KES ${gov.linkedDepositTotal.toLocaleString()} (diff KES ${gov.diff.toLocaleString()}).`,
+      },
+      bank && {
+        label: "Bank instruments check",
+        ok: bank.ok,
+        detail: `Holding principals KES ${bank.holdingPrincipalTotal.toLocaleString()} vs net bank deposits KES ${bank.netDepositTotal.toLocaleString()} (diff KES ${bank.diff.toLocaleString()}).`,
+      },
+      govAccrual && {
+        label: "Government accrued-interest check",
+        ok: govAccrual.ok,
+        detail: `Gross diff KES ${govAccrual.grossDiff.toLocaleString()}, WHT diff KES ${govAccrual.whtDiff.toLocaleString()} vs the independent closed-form expectation.`,
+      },
+      bankAccrual && {
+        label: "Bank accrued-interest check",
+        ok: bankAccrual.ok,
+        detail: `Gross diff KES ${bankAccrual.grossDiff.toLocaleString()}, WHT diff KES ${bankAccrual.whtDiff.toLocaleString()} vs the independent closed-form expectation.`,
+      },
+      planPolicy && {
+        label: "Plan policy check",
+        ok: planPolicy.ok,
+        detail: `Committed tier "${planPolicy.committedLabel}" vs tier the projection is running "${planPolicy.activeLabel}".`,
+      },
+    ].filter(Boolean) as Array<{ label: string; ok: boolean; detail: string }>,
+  };
+  const explainQuery = trpc.aiExplain.reconciliationMismatch.useQuery(explainInput, {
+    enabled: explainOpen && !!portfolioId && !reconciled,
+    refetchOnWindowFocus: false,
+    retry: false,
+  });
 
   return (
     <AppShell embedded={embedded}>
@@ -150,9 +212,34 @@ export default function Reconciliation({ embedded = false }: { embedded?: boolea
                       </>
                     )}
                   </p>
+                  {!reconciled && (
+                    <div className="pt-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="bg-background"
+                        onClick={() => setExplainOpen(true)}
+                      >
+                        <Sparkles className="w-4 h-4 mr-2 text-violet-500" />
+                        Explain mismatch with AI
+                      </Button>
+                    </div>
+                  )}
                 </div>
               </CardContent>
             </Card>
+
+            <AiExplainDialog
+              open={explainOpen}
+              onOpenChange={setExplainOpen}
+              title="Explain this reconciliation mismatch"
+              description="A plain-language read on which cross-check is red, the likely cause, and where to look. It reads the figures already shown here and changes nothing."
+              answer={explainQuery.data?.answer}
+              isLoading={explainQuery.isLoading || explainQuery.isFetching}
+              isError={explainQuery.isError}
+              errorMessage={explainQuery.error?.message}
+              onRetry={() => explainQuery.refetch()}
+            />
 
             {/* Plan-policy check — the projection's in-force tier MUST equal the
                 committed tier on the Allocation Plan, or the Ledger and the plan

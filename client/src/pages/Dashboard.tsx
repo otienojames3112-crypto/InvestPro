@@ -61,7 +61,8 @@ import { useSelectedFund } from "@/hooks/useSelectedFund";
 import { useBlendedYield } from "@/hooks/useBlendedYield";
 import { CreatePortfolioDialog } from "@/components/PortfolioSelector";
 import { MaturityTimeline } from "@/components/MaturityTimeline";
-import { Plus, Compass, ArrowUpRight } from "lucide-react";
+import { Plus, Compass, ArrowUpRight, Sparkles } from "lucide-react";
+import { AiExplainDialog } from "@/components/AiExplainDialog";
 import { useMemo, useState, useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { rateStaleness } from "@/lib/rateStaleness";
@@ -979,6 +980,55 @@ export default function Dashboard() {
     acknowledged: breachAcknowledged,
   });
 
+  // ── Round 95: "Explain my status" (manager mode, read-only AI). We hand the
+  // explanation engine the SAME figures the command centre renders — pace,
+  // contribution gap, concentration, next maturity, rate staleness — so the
+  // summary can never diverge from the dashboard and can never mutate anything.
+  const [statusExplainOpen, setStatusExplainOpen] = useState(false);
+  const statusFacts = useMemo(() => {
+    if (!snapshot) return null;
+    const elapsed = snapshot.goal.elapsedMonths;
+    const thisPoint =
+      snapshot.contributions.points.find((p) => p.monthNumber === elapsed + 1) ??
+      snapshot.contributions.points.find((p) => p.monthNumber === elapsed) ??
+      null;
+    const plannedThis = thisPoint?.planned ?? snapshot.contributions.startingContribution;
+    const actualThis = thisPoint?.actualAllDestinations ?? thisPoint?.actual ?? 0;
+    const nextMat =
+      snapshot.liquidity
+        .filter((e) => e.kind === "maturity" && e.atMs >= snapshot.asOfMs)
+        .sort((a, b) => a.atMs - b.atMs)[0] ?? null;
+    const rs = (settings as any)?.ratesLastUpdatedAt ? rateStaleness((settings as any).ratesLastUpdatedAt) : null;
+    const conc = (concentration?.breaches ?? []).map((b: any) => ({
+      issuer: String(b.issuer),
+      sharePct: Number(b.share) * 100,
+    }));
+    return {
+      onTrack: (decision?.pace.status ?? "on_track") !== "behind",
+      paceStatus: String(decision?.pace.status ?? "on_track"),
+      shortfall: Math.round(decision?.pace.shortfall ?? 0),
+      plannedThis: Math.round(plannedThis),
+      actualThis: Math.round(actualThis),
+      nextMaturity: nextMat
+        ? {
+            label: String(nextMat.label),
+            amount: Math.round(nextMat.amount ?? 0),
+            inDays: Math.round((nextMat.atMs - snapshot.asOfMs) / 86_400_000),
+          }
+        : null,
+      concentration: conc,
+      ratesStale: !!rs?.isStale,
+      ratesLabel: rs?.label ?? "unknown",
+      netWorth: Math.round(concentration?.netWorth ?? snapshot.holdings.netWorth ?? 0),
+      target: Math.round(targetAmount),
+      projectedFinal: Math.round(decision?.range.base ?? snapshot.goal.projectedFinalValue ?? 0),
+    };
+  }, [snapshot, decision, settings, concentration, targetAmount]);
+  const statusExplainQuery = trpc.aiExplain.dashboardStatus.useQuery(
+    { portfolioId: portfolioId!, status: statusFacts! },
+    { enabled: statusExplainOpen && !!portfolioId && !!statusFacts, refetchOnWindowFocus: false, retry: false },
+  );
+
   // ── Onboarding empty state: authenticated but no portfolios yet ──────────
   if (!portfoliosLoading && portfolios.length === 0) {
     return (
@@ -1201,6 +1251,16 @@ export default function Dashboard() {
             <div className="flex items-center gap-2 text-xs font-semibold text-muted-foreground uppercase tracking-wide">
               Manager diagnostics
               <span className="h-px flex-1 bg-border" />
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setStatusExplainOpen(true)}
+                disabled={!statusFacts}
+                className="h-7 gap-1.5 text-xs font-medium hover:text-violet-500 hover:border-violet-500/40 active:scale-[0.97] transition-transform"
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                Explain my status
+              </Button>
             </div>
             <DashboardDiagnostics
               snapshot={snapshot}
@@ -1223,6 +1283,18 @@ export default function Dashboard() {
         })()}
 
       </div>
+
+      <AiExplainDialog
+        open={statusExplainOpen}
+        onOpenChange={setStatusExplainOpen}
+        title="Explain my status"
+        description="A plain-language read on whether you are on track, any missing contribution, concentration warnings, the next upcoming maturity, and whether your reference rates are stale. It summarises the figures already on this dashboard and changes nothing."
+        answer={statusExplainQuery.data?.answer}
+        isLoading={statusExplainQuery.isLoading || statusExplainQuery.isFetching}
+        isError={statusExplainQuery.isError}
+        errorMessage={statusExplainQuery.error?.message}
+        onRetry={() => statusExplainQuery.refetch()}
+      />
 
       {/* ── Change Target Dialog ─────────────────────────────────────────── */}
       <Dialog open={targetDialogOpen} onOpenChange={setTargetDialogOpen}>

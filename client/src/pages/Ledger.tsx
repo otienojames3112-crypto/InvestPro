@@ -701,6 +701,35 @@ export default function Ledger({ embedded = false }: { embedded?: boolean } = {}
                                           ))}
                                         </div>
                                         <p className="text-muted-foreground border-t border-border/50 pt-1.5 leading-snug">{ex.closing}</p>
+                                        {r.instrumentEvents && r.instrumentEvents.length > 0 && (
+                                          <div className="border-t border-border/50 pt-1.5 mt-1.5 space-y-1">
+                                            <p className="font-medium text-foreground text-[10px] uppercase tracking-wide">Cash Flow Events</p>
+                                            {r.instrumentEvents.map((ev: { description: string; amount: number }, evIdx: number) => (
+                                              <div key={evIdx} className="flex items-start justify-between gap-2">
+                                                <span className="text-muted-foreground leading-snug flex-1">{ev.description}</span>
+                                                {ev.amount > 0 && (
+                                                  <span className="tabular-nums shrink-0 font-medium text-foreground/80">
+                                                    {formatKES(ev.amount)}
+                                                  </span>
+                                                )}
+                                              </div>
+                                            ))}
+                                          </div>
+                                        )}
+                                        {r.secondaryMmfDetail && r.secondaryMmfDetail.length > 0 && (
+                                          <div className="border-t border-border/50 pt-1.5 mt-1.5 space-y-1">
+                                            <p className="font-medium text-foreground text-[10px] uppercase tracking-wide">Per-Fund MMF Detail</p>
+                                            {r.secondaryMmfDetail.map((f: { label: string; endBalance: number; netInterest: number }, fIdx: number) => (
+                                              <div key={fIdx} className="flex items-center justify-between gap-2">
+                                                <span className="text-muted-foreground">{f.label}</span>
+                                                <span className="tabular-nums text-foreground/80">
+                                                  {formatKES(f.endBalance)}
+                                                  {f.netInterest > 0 && <span className="text-emerald-500 ml-1">(+{formatKES(f.netInterest)})</span>}
+                                                </span>
+                                              </div>
+                                            ))}
+                                          </div>
+                                        )}
                                       </>
                                     );
                                   })()}

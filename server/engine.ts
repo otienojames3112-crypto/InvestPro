@@ -202,6 +202,8 @@ export interface SecurityLot {
   purchasePrice?: number;
   /** Round 42 — true for a zero-coupon bond (long-dated discount instrument). */
   isZeroCoupon?: boolean;
+  /** Round 100 — issue number from the CBK catalogue (e.g. FXD1/2022/010). */
+  issueNumber?: string | null;
 }
 
 export interface MonthlyContributionOverride {
@@ -327,10 +329,11 @@ export interface ActualSecurity {
   discountRate?: number | null;
   /** Round 42 — floating-rate bond: margin over the 91-day benchmark (%). */
   marginRate?: number | null;
-  /** Round 42 — floating-rate bond: months between coupon resets. */
+    /** Round 42 — floating-rate bond: months between coupon resets. */
   resetMonths?: number | null;
+  /** Round 100 — issue number from the CBK catalogue (e.g. FXD1/2022/010). */
+  issueNumber?: string | null;
 }
-
 /**
  * Round 61: structured per-event maturity breakdown so the Ledger can render
  * principal vs final coupon (or discount) as distinct lines, instead of parsing
@@ -351,8 +354,49 @@ export interface MaturityBreakdown {
   interest: number;
   /** Total cash returned to the MMF (KES). */
   total: number;
-  /** Tax note, e.g. "tax-exempt" or "net of 15% tax". */
+    /** Tax note, e.g. "tax-exempt" or "net of 15% tax". */
   taxNote: string;
+}
+
+/**
+ * Round 100: structured per-instrument cash-flow event for plain-language ledger.
+ * Each event describes one atomic cash movement with full context.
+ */
+export interface InstrumentEvent {
+  kind:
+    | "tbill_purchase"
+    | "tbill_maturity"
+    | "bond_coupon"
+    | "bond_maturity"
+    | "bank_placement"
+    | "bank_maturity"
+    | "bank_accrual"
+    | "mmf_interest"
+    | "mmf_deposit"
+    | "contribution"
+    | "missed_contribution"
+    | "no_sweep"
+    | "liquidity_at_goal";
+  /** Plain-language description of the event. */
+  description: string;
+  /** KES amount involved (always >= 0). */
+  amount: number;
+  /** Instrument identity (issue number, fund name, bank product name, etc.). */
+  instrument: string;
+  /** Optional structured details for rendering. */
+  details?: Record<string, string | number | null>;
+}
+
+/**
+ * Round 100: per-fund detail for secondary MMF accounts in a given month.
+ */
+export interface SecondaryMmfMonthDetail {
+  label: string;
+  deposit: number;
+  grossInterest: number;
+  wht: number;
+  netInterest: number;
+  endBalance: number;
 }
 
 export interface MonthResult {
@@ -408,6 +452,16 @@ export interface MonthResult {
    * Ledger "CBK In" maturity-detail popover.
    */
   maturityBreakdown: MaturityBreakdown[];
+  /**
+   * Round 100: structured per-instrument cash-flow events for plain-language
+   * rendering. Each event is one atomic movement with full context.
+   */
+  instrumentEvents: InstrumentEvent[];
+  /**
+   * Round 100: per-fund detail for secondary MMF accounts this month.
+   * Empty when no secondary MMFs exist.
+   */
+  secondaryMmfDetail: SecondaryMmfMonthDetail[];
 }
 
 export interface SweepRationaleCandidate {
@@ -1099,10 +1153,17 @@ export function tenorLabel(bucket: "tbill" | "ifb" | "fxd", tenorMonths: number)
     if (tenorMonths <= 6) return "182-day T-bill";
     return "364-day T-bill";
   }
-  if (bucket === "ifb") return `${tenorMonths}-month IFB`;
+    if (bucket === "ifb") return `${tenorMonths}-month IFB`;
   return `${tenorMonths}-month FXD`;
 }
-
+/**
+ * Round 100: human label for a lot — uses issue number when available,
+ * falls back to the generic tenor label.
+ */
+export function lotLabel(lot: Pick<SecurityLot, "bucket" | "tenorMonths" | "issueNumber">): string {
+  if (lot.issueNumber) return lot.issueNumber;
+  return tenorLabel(lot.bucket, lot.tenorMonths);
+}
 /** The gross T-bill rate that matches a lot's tenor (91/182/364-day). */
 export function tbillRateForTenor(
   tenorMonths: number,
@@ -1212,6 +1273,7 @@ export function runProjection(
   // current balance, using its own gross EAR (WHT applied here) and any monthly
   // contribution. Balances are folded into the portfolio total every month.
   const secondaryState = secondaryMmfs.map((s) => ({
+    label: s.label ?? "Secondary MMF",
     balance: s.currentBalance || 0,
     monthlyContribution: s.monthlyContribution || 0,
     ear: s.ear || 0,
@@ -1380,6 +1442,7 @@ export function runProjection(
       isTaxExempt: sec.isTaxExempt,
       ...(purchasePrice != null ? { purchasePrice } : {}),
       ...(isZero ? { isZeroCoupon: true } : {}),
+      ...(sec.issueNumber ? { issueNumber: sec.issueNumber } : {}),
     });
     void isFloating;
   }
@@ -1406,8 +1469,10 @@ export function runProjection(
       lastPhase = phase;
     }
 
-    const isActualMonth = hasActuals && m <= currentMonth;
-
+        const isActualMonth = hasActuals && m <= currentMonth;
+    // Round 100: structured event log for this month.
+    const instrumentEvents: InstrumentEvent[] = [];
+    const secondaryMmfDetail: SecondaryMmfMonthDetail[] = [];
     let contribution = 0;
     let whtThisMonth = 0;
     // Net MMF interest (gross − WHT) earned by the PRIMARY MMF this month — the
@@ -1430,6 +1495,27 @@ export function runProjection(
       mmf += contribution;
     }
 
+    // Round 100: emit contribution event.
+    if (contribution > 0) {
+      instrumentEvents.push({
+        kind: "contribution",
+        description: isActualMonth
+          ? `Added KES ${kesInt(contribution)} of savings to the primary MMF.`
+          : `KES ${kesInt(contribution)} of planned savings added to the primary MMF.`,
+        amount: Math.round(contribution * 100) / 100,
+        instrument: "Primary MMF",
+      });
+    } else if (!isActualMonth && getScheduledContribution(m, settings) > 0) {
+      // Projected month with zero contribution but a non-zero schedule = missed.
+      const planned = getScheduledContribution(m, settings);
+      instrumentEvents.push({
+        kind: "missed_contribution",
+        description: `No contribution recorded this month. KES ${kesInt(planned)} was planned.`,
+        amount: 0,
+        instrument: "Primary MMF",
+        details: { planned: Math.round(planned) },
+      });
+    }
     // Primary MMF compounds EVERY month — actual and forward alike (Fix #3, #5).
     // During actual months the real deposits accrue interest through the elapsed
     // period exactly as the forward projection would, so the projected balance at
@@ -1440,6 +1526,16 @@ export function runProjection(
       whtThisMonth += interestWHT;
       mmfInterestNet += interestGross - interestWHT;
       mmf = mmf * (1 + mmfMonthly);
+      // Round 100: emit primary MMF interest event.
+      if (interestGross - interestWHT > 0.5) {
+        instrumentEvents.push({
+          kind: "mmf_interest",
+          description: `Primary MMF earned KES ${kesInt(interestGross)} gross interest, KES ${kesInt(interestWHT)} WHT deducted, KES ${kesInt(interestGross - interestWHT)} net credited.`,
+          amount: Math.round((interestGross - interestWHT) * 100) / 100,
+          instrument: "Primary MMF",
+          details: { grossInterest: Math.round(interestGross), wht: Math.round(interestWHT) },
+        });
+      }
     }
 
     // ── Secondary MMF accounts ──
@@ -1456,18 +1552,50 @@ export function runProjection(
     let secondaryMmfEnd = 0;
     for (const sec of secondaryState) {
       if (sec.balance === 0 && sec.monthlyContribution === 0) continue;
+      let secDeposit = 0;
+      let secGrossInterest = 0;
+      let secWhtAmt = 0;
+      let secNetInterest = 0;
       if (!isActualMonth) {
         const secWhtPct = sec.whtRate ?? rates.withholdingTax;
         const secWht = secWhtPct / 100;
         // Add this fund's own monthly contribution.
+        secDeposit = sec.monthlyContribution;
         sec.balance += sec.monthlyContribution;
         // Compound on the fund's gross EAR, then withhold tax on the interest.
-        const grossInterest = sec.balance * monthlyRate(sec.ear);
-        const netInterest = grossInterest * (1 - secWht);
-        whtThisMonth += grossInterest * secWht;
-        sec.balance += netInterest;
+        secGrossInterest = sec.balance * monthlyRate(sec.ear);
+        secWhtAmt = secGrossInterest * secWht;
+        secNetInterest = secGrossInterest * (1 - secWht);
+        whtThisMonth += secWhtAmt;
+        sec.balance += secNetInterest;
       }
       secondaryMmfEnd += sec.balance;
+      // Round 100: per-fund detail.
+      secondaryMmfDetail.push({
+        label: sec.label,
+        deposit: Math.round(secDeposit * 100) / 100,
+        grossInterest: Math.round(secGrossInterest * 100) / 100,
+        wht: Math.round(secWhtAmt * 100) / 100,
+        netInterest: Math.round(secNetInterest * 100) / 100,
+        endBalance: Math.round(sec.balance * 100) / 100,
+      });
+      if (secDeposit > 0) {
+        instrumentEvents.push({
+          kind: "mmf_deposit",
+          description: `Deposited KES ${kesInt(secDeposit)} into ${sec.label}.`,
+          amount: Math.round(secDeposit * 100) / 100,
+          instrument: sec.label,
+        });
+      }
+      if (secNetInterest > 0) {
+        instrumentEvents.push({
+          kind: "mmf_interest",
+          description: `${sec.label} earned KES ${kesInt(secGrossInterest)} gross interest, KES ${kesInt(secWhtAmt)} WHT deducted, KES ${kesInt(secNetInterest)} net credited.`,
+          amount: Math.round(secNetInterest * 100) / 100,
+          instrument: sec.label,
+          details: { grossInterest: Math.round(secGrossInterest), wht: Math.round(secWhtAmt) },
+        });
+      }
     }
 
     // ── Bank instrument holdings (goal-directed capital) ──
@@ -1505,11 +1633,17 @@ export function runProjection(
           !b.isLiquid && b.maturityMonth != null
             ? `, maturing ${(() => { const d = new Date(startDate); d.setMonth(d.getMonth() + (b.maturityMonth - 1)); return d.toLocaleDateString("en-GB", { month: "short", year: "numeric" }); })()}`
             : "";
-        bankPlacementActions.push(
+                bankPlacementActions.push(
           `Placed KES ${Math.round(b.principal).toLocaleString()} in ${whoPlace} at ${b.interestRate}%${tenorPart}`
         );
+        instrumentEvents.push({
+          kind: "bank_placement",
+          description: `Placed KES ${kesInt(b.principal)} in ${whoPlace} at ${b.interestRate}%${tenorPart}.`,
+          amount: Math.round(b.principal * 100) / 100,
+          instrument: whoPlace,
+          details: { rate: b.interestRate, principal: Math.round(b.principal) },
+        });
       }
-
       // Accrue this month's net interest on the forward path.
       if (!isActualMonth && m >= b.startMonth) {
         const grossInterest = b.balance * (b.interestRate / 100) / 12;
@@ -1538,6 +1672,13 @@ export function runProjection(
           bankMaturityActions.push(
             `${who} matured and auto-rolled over KES ${Math.round(payout).toLocaleString()} into a fresh ${b.tenorMonths}-month term at ${b.interestRate}% (principal + KES ${Math.round(interestPortion).toLocaleString()} net interest reinvested)`
           );
+          instrumentEvents.push({
+            kind: "bank_maturity",
+            description: `${who} matured and auto-rolled over: KES ${kesInt(payout)} into a fresh ${b.tenorMonths}-month term at ${b.interestRate}% (KES ${kesInt(interestPortion)} net interest reinvested).`,
+            amount: Math.round(payout * 100) / 100,
+            instrument: who,
+            details: { principal: Math.round(b.principal), interest: Math.round(interestPortion), action: "rollover" },
+          });
           bankEnd += b.balance; // stays in the bank pocket
           continue;
         }
@@ -1549,6 +1690,13 @@ export function runProjection(
         bankMaturityActions.push(
           `${who} matured, returning KES ${Math.round(payout).toLocaleString()} to the MMF (KES ${Math.round(b.principal).toLocaleString()} principal + KES ${Math.round(interestPortion).toLocaleString()} net interest)`
         );
+        instrumentEvents.push({
+          kind: "bank_maturity",
+          description: `${who} matured: KES ${kesInt(b.principal)} principal + KES ${kesInt(interestPortion)} net interest returned to MMF. Kept in MMF${m >= horizonMonths - 2 ? " because only " + (horizonMonths - m) + " months remain to goal" : " for redeployment"}.`,
+          amount: Math.round(payout * 100) / 100,
+          instrument: who,
+          details: { principal: Math.round(b.principal), interest: Math.round(interestPortion), action: "redeploy" },
+        });
         bankMaturityBreakdown.push({
           kind: "bank",
           label: who,
@@ -1591,18 +1739,26 @@ export function runProjection(
             const netGain = lot.faceValue - lot.purchasePrice - whtAmt;
             cbkCashIn += proceeds;
             whtThisMonth += whtAmt;
+            const lbl = lotLabel(lot);
             cbkActions.push(
-              `a ${tenorLabel(lot.bucket, lot.tenorMonths)} matures at its KES ${Math.round(lot.faceValue).toLocaleString()} face value, returning KES ${Math.round(proceeds).toLocaleString()} to the MMF (KES ${Math.round(netGain).toLocaleString()} net discount earned after ${rates.withholdingTax}% tax on the discount)`
+              `${lbl} matures at its KES ${Math.round(lot.faceValue).toLocaleString()} face value, returning KES ${Math.round(proceeds).toLocaleString()} to the MMF (KES ${Math.round(netGain).toLocaleString()} net discount earned after ${rates.withholdingTax}% tax on the discount)`
             );
             maturityBreakdown.push({
               kind: "tbill",
-              label: tenorLabel(lot.bucket, lot.tenorMonths),
+              label: lbl,
               principal: Math.round(lot.purchasePrice * 100) / 100,
               finalCoupon: 0,
               discount: Math.round(netGain * 100) / 100,
               interest: 0,
               total: Math.round(proceeds * 100) / 100,
               taxNote: `net of ${rates.withholdingTax}% tax on the discount`,
+            });
+            instrumentEvents.push({
+              kind: "tbill_maturity",
+              description: `${lbl} matured: KES ${kesInt(lot.faceValue)} face value returned to MMF, KES ${kesInt(netGain)} discount interest earned, KES ${kesInt(whtAmt)} WHT deducted.`,
+              amount: Math.round(proceeds * 100) / 100,
+              instrument: lbl,
+              details: { faceValue: Math.round(lot.faceValue), purchasePrice: Math.round(lot.purchasePrice), wht: Math.round(whtAmt), netGain: Math.round(netGain) },
             });
           } else {
             // Legacy lot without a recorded price: keep the previous behaviour
@@ -1614,18 +1770,25 @@ export function runProjection(
             const netInterest = grossInterest * (1 - wht);
             whtThisMonth += grossInterest * wht;
             cbkCashIn += netInterest;
+            const lbl2 = lotLabel(lot);
             cbkActions.push(
-              `a ${tenorLabel(lot.bucket, lot.tenorMonths)} matures, returning KES ${Math.round(lot.faceValue + netInterest).toLocaleString()} to the MMF (KES ${Math.round(netInterest).toLocaleString()} net interest after ${rates.withholdingTax}% tax)`
+              `${lbl2} matures, returning KES ${Math.round(lot.faceValue + netInterest).toLocaleString()} to the MMF (KES ${Math.round(netInterest).toLocaleString()} net interest after ${rates.withholdingTax}% tax)`
             );
             maturityBreakdown.push({
               kind: "tbill",
-              label: tenorLabel(lot.bucket, lot.tenorMonths),
+              label: lbl2,
               principal: Math.round(lot.faceValue * 100) / 100,
               finalCoupon: 0,
               discount: 0,
               interest: Math.round(netInterest * 100) / 100,
               total: Math.round((lot.faceValue + netInterest) * 100) / 100,
               taxNote: `net of ${rates.withholdingTax}% tax`,
+            });
+            instrumentEvents.push({
+              kind: "tbill_maturity",
+              description: `${lbl2} matured: KES ${kesInt(lot.faceValue)} face value + KES ${kesInt(netInterest)} net interest returned to MMF.`,
+              amount: Math.round((lot.faceValue + netInterest) * 100) / 100,
+              instrument: lbl2,
             });
           }
         } else {
@@ -1646,12 +1809,13 @@ export function runProjection(
           cbkCashIn += lot.faceValue + netFinalCoupon;
           const total = lot.faceValue + netFinalCoupon;
           const taxNote = lot.isTaxExempt ? "tax-exempt" : `net of ${rates.withholdingTax}% tax`;
+          const bondLbl = lotLabel(lot);
           cbkActions.push(
-            `a ${tenorLabel(lot.bucket, lot.tenorMonths)} matures, returning KES ${Math.round(lot.faceValue).toLocaleString()} principal + KES ${Math.round(netFinalCoupon).toLocaleString()} final coupon (${taxNote}) = KES ${Math.round(total).toLocaleString()} to the MMF`
+            `${bondLbl} matures, returning KES ${Math.round(lot.faceValue).toLocaleString()} principal + KES ${Math.round(netFinalCoupon).toLocaleString()} final coupon (${taxNote}) = KES ${Math.round(total).toLocaleString()} to the MMF`
           );
           maturityBreakdown.push({
             kind: lot.bucket === "ifb" ? "ifb" : "fxd",
-            label: tenorLabel(lot.bucket, lot.tenorMonths),
+            label: bondLbl,
             principal: Math.round(lot.faceValue * 100) / 100,
             finalCoupon: Math.round(netFinalCoupon * 100) / 100,
             discount: 0,
@@ -1659,20 +1823,42 @@ export function runProjection(
             total: Math.round(total * 100) / 100,
             taxNote,
           });
+          instrumentEvents.push({
+            kind: "bond_maturity",
+            description: `${bondLbl} matured: KES ${kesInt(lot.faceValue)} principal + KES ${kesInt(netFinalCoupon)} final coupon (${taxNote}) = KES ${kesInt(total)} to the MMF.`,
+            amount: Math.round(total * 100) / 100,
+            instrument: bondLbl,
+            details: { principal: Math.round(lot.faceValue), finalCoupon: Math.round(netFinalCoupon), wht: lot.isTaxExempt ? 0 : Math.round(grossFinalCoupon * wht) },
+          });
         }
         continue;
       }
 
       if ((lot.bucket === "ifb" || lot.bucket === "fxd") && age > 0 && age % 6 === 0) {
         const grossCoupon = (lot.couponRate / 100 / 2) * lot.faceValue;
+        const couponLbl = lotLabel(lot);
         if (lot.isTaxExempt) {
           cbkCashIn += grossCoupon;
-          cbkActions.push(`an IFB pays a KES ${Math.round(grossCoupon).toLocaleString()} coupon into the MMF (tax-exempt)`);
+          cbkActions.push(`${couponLbl} pays a KES ${Math.round(grossCoupon).toLocaleString()} coupon into the MMF (tax-exempt)`);
+          instrumentEvents.push({
+            kind: "bond_coupon",
+            description: `${couponLbl} coupon paid: KES ${kesInt(grossCoupon)} gross (tax-exempt) moved to MMF.`,
+            amount: Math.round(grossCoupon * 100) / 100,
+            instrument: couponLbl,
+            details: { grossCoupon: Math.round(grossCoupon), wht: 0, netCoupon: Math.round(grossCoupon) },
+          });
         } else {
           const netCoupon = grossCoupon * (1 - wht);
           whtThisMonth += grossCoupon * wht;
           cbkCashIn += netCoupon;
-          cbkActions.push(`an FXD bond pays a KES ${Math.round(netCoupon).toLocaleString()} coupon into the MMF (after ${rates.withholdingTax}% tax)`);
+          cbkActions.push(`${couponLbl} pays a KES ${Math.round(netCoupon).toLocaleString()} coupon into the MMF (after ${rates.withholdingTax}% tax)`);
+          instrumentEvents.push({
+            kind: "bond_coupon",
+            description: `${couponLbl} coupon paid: KES ${kesInt(grossCoupon)} gross, KES ${kesInt(grossCoupon * wht)} WHT, KES ${kesInt(netCoupon)} net moved to MMF.`,
+            amount: Math.round(netCoupon * 100) / 100,
+            instrument: couponLbl,
+            details: { grossCoupon: Math.round(grossCoupon), wht: Math.round(grossCoupon * wht), netCoupon: Math.round(netCoupon) },
+          });
         }
       }
 
@@ -1873,8 +2059,21 @@ export function runProjection(
               });
             }
           }
-          sweepCount++;
-
+                    sweepCount++;
+          // Round 100: emit purchase events for each bucket swept.
+          for (const b of ["tbill", "ifb", "fxd"] as const) {
+            if (sweepBuy[b] > 0) {
+              const totalFace = sweepBuy[b] * SWEEP_LOT_SIZE;
+              const bucketName = b === "tbill" ? "T-bill" : b === "ifb" ? "IFB" : "FXD";
+              instrumentEvents.push({
+                kind: "tbill_purchase",
+                description: `Bought KES ${kesInt(totalFace)} face value of ${bucketName}${b === "tbill" ? ` (${tbillLotTenor * 30}-day)` : ""} from the MMF sweep.`,
+                amount: Math.round(totalFace * 100) / 100,
+                instrument: bucketName,
+                details: { lots: sweepBuy[b], facePerLot: SWEEP_LOT_SIZE, tenor: b === "tbill" ? tbillLotTenor : tenorFor(b, phase, isShortHorizon) },
+              });
+            }
+          }
           // SWEEP RATIONALE (Round 29): persist the net-yield ranking the
           // allocator compared so the ledger can explain WHY each instrument was
           // chosen this month.
@@ -1916,10 +2115,26 @@ export function runProjection(
             candidates,
             summary,
           };
-        }
+                }
       }
+    } else if (!isActualMonth && !guard.allowed && mmf > 0) {
+      // Round 100: no sweep because guard blocks it (too close to goal).
+      instrumentEvents.push({
+        kind: "no_sweep",
+        description: `No sweep this month because ${guard.maxTbillTenor === 0 ? "the goal date is too close for any new instrument to mature in time" : "the MMF balance stayed below the sweep threshold"}.`,
+        amount: 0,
+        instrument: "MMF",
+      });
     }
-
+    // Round 100: liquidity-at-goal event on the final month.
+    if (!isActualMonth && m === horizonMonths) {
+      instrumentEvents.push({
+        kind: "liquidity_at_goal",
+        description: `Goal month reached. All funds are liquid in MMF/cash. No instruments mature after this date.`,
+        amount: 0,
+        instrument: "Portfolio",
+      });
+    }
     let tbillEnd = 0;
     let tbill91End = 0;
     let tbill182End = 0;
@@ -2057,6 +2272,10 @@ export function runProjection(
     } else {
       mainAction = "Add this month's saving to the MMF; nothing swept into securities this month";
     }
+    // Round 100: append liquidity-at-goal explanation on the final projected month.
+    if (!isActualMonth && m === horizonMonths) {
+      mainAction += ". Goal month reached — all funds are liquid in MMF/cash, no instruments mature after this date";
+    }
     // Prepend any bank-deposit placement narration so the investor sees where a
     // newly-appearing bank balance came from (Round 35).
     if (bankPlacementActions.length > 0) {
@@ -2097,11 +2316,12 @@ export function runProjection(
       isActual: isActualMonth,
       offPlan,
       isShortHorizon,
-      sweepRationale,
+            sweepRationale,
       maturityBreakdown: [...maturityBreakdown, ...bankMaturityBreakdown],
+      instrumentEvents,
+      secondaryMmfDetail,
     });
   }
-
   return results;
 }
 

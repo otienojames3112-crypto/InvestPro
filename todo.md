@@ -1797,3 +1797,16 @@
 - [x] (8) Holding is source of truth: ensure ledger, tax summary, accrual, and reconciliation read from holding fields (not catalogue) for portfolio math; catalogue updates suggest future changes only
 - [x] (9) Tests: Round 99 regression suite — snapshot creation for all 4 types, prefill propagation, holding-as-source-of-truth for math, catalogue update does not rewrite holding
 - [x] (10) Full suite + tsc green; checkpoint + deliver
+
+## Round 100 — Plain-Language Instrument-Specific Ledger
+
+- [x] (1) Engine: add issueNumber to SecurityLot and ActualSecurity; pass from holdingSnapshot.copiedTerms.issueNumber through mapActualSecurities
+- [x] (2) Engine: add InstrumentEvent[] to MonthResult — structured per-instrument cash flow events with plain-language descriptions
+- [x] (3) Engine: upgrade mainAction to include issue numbers (e.g. "FXD1/2022/010 coupon paid") and per-MMF detail when multiple MMFs exist
+- [x] (4) Engine: add explicit "No contribution recorded this month. KES X was planned." for projected months with zero contribution; "No sweep this month because the MMF balance stayed below the sweep threshold." for projected no-sweep
+- [x] (5) Engine: add per-secondary-MMF detail (deposits, net interest, WHT, end balance) to MonthResult
+- [x] (6) Shared: upgrade ledgerExplain.ts to consume instrumentEvents and produce instrument-specific ExplainLines
+- [x] (7) UI: upgrade Ledger.tsx to render instrumentEvents as expandable detail below each month row
+- [x] (8) Engine: add liquidity-at-goal enforcement explanation — final month shows money liquid in MMF/cash, warns if any holding locked past goal date
+- [x] (9) Tests: Round 100 regression suite — instrument-specific narration, issue number propagation, per-MMF detail, liquidity-at-goal explanation
+- [x] (10) Full suite + tsc green; checkpoint + deliver

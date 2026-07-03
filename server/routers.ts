@@ -611,6 +611,8 @@ function mapActualSecurities(rows: Awaited<ReturnType<typeof getSecurities>>): A
       discountRate: num((s as { discountRate?: unknown }).discountRate),
       marginRate: num((s as { marginRate?: unknown }).marginRate),
       resetMonths: num((s as { resetMonths?: unknown }).resetMonths),
+      // Round 100 — issue number from the holding snapshot.
+      issueNumber: ((s as { holdingSnapshot?: { copiedTerms?: { issueNumber?: string } } }).holdingSnapshot?.copiedTerms?.issueNumber) ?? null,
     };
   });
 }

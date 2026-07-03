@@ -330,6 +330,23 @@ export default function BankHoldings({ embedded: _embedded = false }: { embedded
                           )}
                         </div>
                       )}
+                      {/* Round 97 — Snapshotted terms at purchase time */}
+                      {h.holdingSnapshot && typeof h.holdingSnapshot === "object" && (() => {
+                        const snap = h.holdingSnapshot as Record<string, unknown>;
+                        const entries = Object.entries(snap).filter(
+                          ([k]) => !k.startsWith("_") && k !== "catalogueType" && k !== "instrumentName" && k !== "sourceClass" && k !== "snapshotDate"
+                        );
+                        if (entries.length === 0) return null;
+                        return (
+                          <div className="mt-1.5 text-[10px] text-muted-foreground">
+                            <span className="font-medium">Terms at purchase:</span>{" "}
+                            {entries.slice(0, 4).map(([k, v], i) => (
+                              <span key={k}>{i > 0 ? " · " : ""}{k}: {String(v)}</span>
+                            ))}
+                            {entries.length > 4 && <span> +{entries.length - 4} more</span>}
+                          </div>
+                        );
+                      })()}
                     </TableCell>
                     <TableCell>
                       <Badge className="bg-sky-500/15 text-sky-300 border-sky-500/30 text-xs">

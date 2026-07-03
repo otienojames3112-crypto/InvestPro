@@ -1755,4 +1755,19 @@
 - [x] (8) aiExplain procedures remain read-only queries (confirmed; round95AiGovernance still green).
 - [x] (9) Tests: server/round96PollableReview.test.ts (11) — pollable review A/B/C, deep-link D, linkToInstrument E, ledger split F, Explore retirement G. round89 G updated to assert startReviewTask flow.
 - [x] Full suite (1660) + tsc green.
-- [ ] Deliver migration bundle: full codebase ZIP INCLUDING node_modules + full DB dump + built client for seamless off-Manus migration
+- [x] Deliver migration bundle: full codebase ZIP (143M, incl. node_modules [55,255 entries] + dist built client/server + source + tests + embedded DB dump; .git excluded) + standalone full DB dump (40 tables, schema+data, TiDB via mysqldump) + MIGRATION.md runbook. Checkpoint d4085f3f.
+
+## Round 97 — Full Instrument Profiles + Instrument-Aware AI Extraction
+
+- [x] (A1) Design shared InstrumentProfile type model: shared fields (catalogueType, instrumentName, issuer, assetClass, currency, sourceLabel, sourceUrl, sourceAsOfDate, verifiedBy, verifiedAt, verificationStatus, notes, riskNotes, liquidityNotes, taxNotes) + per-catalogue extended fields (CbkSecurityProfile, MmfProfile, BankInstrumentProfile, MarketAssetProfile)
+- [x] (A2) Add `extendedFields` JSON column to mmf_funds, bank_instruments, opportunities tables; add `holdingSnapshot` JSON column to securities, bank_instrument_holdings, portfolio_secondary_mmfs tables for purchase-time term snapshot
+- [x] (A3) Server: update db helpers + tRPC procedures to read/write extendedFields; update holding creation (deposit/security/secondary-mmf) to snapshot catalogue terms at purchase time into holdingSnapshot; later catalogue changes never mutate historical holdings
+- [x] (A4) Client: catalogue detail panels show full profile fields; holding detail shows snapshotted terms; Recently Approved links to published row
+- [x] (B1) Instrument-aware AI extraction: add source-class detection (MMF factsheet, bank product page, CBK T-bill auction, CBK bond prospectus, market asset, unknown)
+- [x] (B2) Per-catalogue extraction prompts: CBK bond prospectus extracts 20+ fields (issue number, ISIN, tenor, coupon, WHT, maturity, sale period, bid deadline, auction date, settlement date, amount on offer, purpose, non-competitive min/max, competitive min, secondary trading rule, rediscounting rule, reopening flag, liquidity eligibility, clean price table, accrued interest per 100, dirty price, coupon payment dates); multi-instrument splitting (one finding per bond)
+- [x] (B3) MMF factsheet extraction: fund composition buckets, yields, fees, AUM, crediting frequency, WHT, withdrawal notice
+- [x] (B4) Bank rate card extraction: product type, indicative rate, confirmed rate, rate type, min amount, tenor, notice period, payout/compounding frequency, early withdrawal penalty, negotiable flag, WHT
+- [x] (B5) Missing-field handling: mark as "missing from source" not zero; never invent issue number, coupon rate, maturity date, WHT, clean price, accrued interest, auction date
+- [x] (B6) Prompt discipline enforcement: AI may extract/compare/sort/explain/flag; must not recommend buying, say "best", create holdings, change portfolio, or publish without manager approval
+- [x] (C1) Tests: schema integrity (6 cols), CBK prospectus extraction → 3 findings with correct fields, NEVER_INVENT enforcement, source classification, holding snapshot exposure, prompt discipline guards, client rendering (27 tests in round97InstrumentProfile.test.ts)
+- [x] (C2) Full suite (1687 tests) + tsc green; checkpoint + deliver

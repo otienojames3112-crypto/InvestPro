@@ -60,6 +60,7 @@ import {
 } from "lucide-react";
 import { InfoHint } from "@/components/InfoHint";
 import { catalogueLabel, type ReferenceCatalogue } from "@shared/researchPipeline";
+import { SOURCE_CLASS_LABELS, isSourceClass } from "@shared/instrumentProfile";
 import { formatRelativeTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { AiPrincipleBanner } from "@/pages/AiIntake";
@@ -83,11 +84,15 @@ const CONFIDENCE_META: Record<string, { label: string; className: string }> = {
   high: { label: "high confidence", className: "bg-emerald-500/10 text-emerald-600 border-emerald-500/20" },
 };
 
-function fmtFields(fields: Record<string, unknown> | null | undefined): { key: string; value: string }[] {
+function fmtFields(fields: Record<string, unknown> | null | undefined): { key: string; value: string; missing?: boolean }[] {
   if (!fields) return [];
   return Object.entries(fields)
-    .filter(([, v]) => v !== undefined && v !== null && String(v).trim() !== "")
-    .map(([k, v]) => ({ key: k, value: String(v) }));
+    .filter(([k, v]) => k !== "_extendedFields" && v !== undefined && v !== null && String(v).trim() !== "")
+    .map(([k, v]) => ({
+      key: k,
+      value: String(v) === "missing_from_source" ? "Missing from source" : String(v),
+      missing: String(v) === "missing_from_source",
+    }));
 }
 
 /* ── Finding type (now carries Round 88 versioning fields) ──────────────────── */
@@ -529,6 +534,22 @@ export function FindingCard({ finding, onChanged }: { finding: Finding; onChange
                   {catalogueLabel(finding.targetCatalogue as ReferenceCatalogue)}
                 </Badge>
               )}
+              {(() => {
+                try {
+                  const raw = finding.extractedFields?._extendedFields;
+                  if (!raw) return null;
+                  const ext = typeof raw === "string" ? JSON.parse(raw as string) : raw;
+                  const sc = ext?.sourceClass;
+                  if (sc && isSourceClass(sc) && sc !== "unknown") {
+                    return (
+                      <Badge variant="outline" className="font-normal text-[11px] bg-violet-500/10 text-violet-600 border-violet-500/20">
+                        {SOURCE_CLASS_LABELS[sc]}
+                      </Badge>
+                    );
+                  }
+                } catch { /* ignore parse errors */ }
+                return null;
+              })()}
               <Badge variant="outline" className={`font-normal text-[11px] ${conf.className}`}>
                 {conf.label}
               </Badge>
@@ -566,7 +587,11 @@ export function FindingCard({ finding, onChanged }: { finding: Finding; onChange
             {fields.map((f) => (
               <div key={f.key} className="text-sm">
                 <span className="text-muted-foreground">{f.key}: </span>
-                <span className="font-medium tabular-nums">{f.value}</span>
+                {f.missing ? (
+                  <span className="italic text-amber-600 text-xs">Missing from source</span>
+                ) : (
+                  <span className="font-medium tabular-nums">{f.value}</span>
+                )}
               </div>
             ))}
           </div>

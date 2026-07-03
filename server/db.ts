@@ -878,6 +878,7 @@ export async function getSecondaryMmfs(portfolioId: number) {
       company: mmfFunds.company,
       ear: mmfFunds.ear,
       whtRate: mmfFunds.whtRate,
+      holdingSnapshot: portfolioSecondaryMmfs.holdingSnapshot,
     })
     .from(portfolioSecondaryMmfs)
     .innerJoin(mmfFunds, eq(portfolioSecondaryMmfs.mmfFundId, mmfFunds.id))
@@ -2577,6 +2578,12 @@ export async function reviewResearchUpdate(args: {
       source: p.source,
       isActive: true as const,
     };
+    // Round 97 — persist extendedFields from structured extraction if present.
+    const mmfExtRaw = figuresIn._extendedFields;
+    if (mmfExtRaw) {
+      const mmfExtended = typeof mmfExtRaw === "string" ? JSON.parse(mmfExtRaw) : mmfExtRaw;
+      (values as Record<string, unknown>).extendedFields = mmfExtended;
+    }
     if (existing[0]) {
       await db.update(mmfFunds).set(values).where(eq(mmfFunds.id, existing[0].id));
       promotedMmfId = existing[0].id;
@@ -2603,6 +2610,12 @@ export async function reviewResearchUpdate(args: {
       source: p.source,
       isActive: true as const,
     };
+    // Round 97 — persist extendedFields from structured extraction if present.
+    const bankExtRaw = figuresIn._extendedFields;
+    if (bankExtRaw) {
+      const bankExtended = typeof bankExtRaw === "string" ? JSON.parse(bankExtRaw) : bankExtRaw;
+      (values as Record<string, unknown>).extendedFields = bankExtended;
+    }
     if (existing[0]) {
       await db.update(bankInstruments).set(values).where(eq(bankInstruments.id, existing[0].id));
       promotedBankId = existing[0].id;
@@ -2653,6 +2666,12 @@ export async function reviewResearchUpdate(args: {
       verificationState: summariseState(prov),
       active: true as const,
     } as unknown as InsertOpportunity;
+    // Round 97 — persist extendedFields from structured extraction if present.
+    const oppExtRaw = figuresIn._extendedFields;
+    if (oppExtRaw) {
+      const oppExtended = typeof oppExtRaw === "string" ? JSON.parse(oppExtRaw) : oppExtRaw;
+      (insert as Record<string, unknown>).extendedFields = oppExtended;
+    }
     await upsertOpportunity(insert);
     promotedRef = p.ref;
   }

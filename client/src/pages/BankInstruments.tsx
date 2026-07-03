@@ -98,6 +98,7 @@ interface BankRow {
   asOfDate: string | Date | null;
   source: string | null;
   isActive: boolean;
+  extendedFields: Record<string, unknown> | null; // widened from InstrumentProfile for rendering
 }
 
 function kes(n: number): string {
@@ -407,7 +408,7 @@ export default function BankInstruments({ embedded = false }: { embedded?: boole
                           ref={refFocus.registerRow(bankRef)}
                           data-ref={bankRef}
                           className={`cursor-pointer ${refFocus.isFocused(bankRef) ? "bg-primary/5" : ""}`}
-                          onClick={() => setDrawerRow(r)}
+                          onClick={() => setDrawerRow({ ...r, extendedFields: r.extendedFields as Record<string, unknown> | null })}
                         >
                           <TableCell>
                             <div className="font-medium flex items-center gap-1.5">
@@ -498,6 +499,27 @@ export default function BankInstruments({ embedded = false }: { embedded?: boole
                   <DrawerFact label="Source" value={drawerRow.source ?? "—"} />
                   <DrawerFact label="As of" value={asOfLabel(drawerRow.asOfDate)} />
                 </div>
+
+                {/* Round 97 — Extended profile fields from structured extraction */}
+                {drawerRow.extendedFields && Object.keys(drawerRow.extendedFields).length > 0 && (
+                  <div className="border-t pt-3 space-y-2">
+                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Full profile</p>
+                    <div className="grid grid-cols-2 gap-x-4 gap-y-2">
+                      {Object.entries(drawerRow.extendedFields)
+                        .filter(([k]) => !k.startsWith("_") && k !== "catalogueType" && k !== "instrumentName" && k !== "sourceClass")
+                        .map(([k, v]) => (
+                          <div key={k} className="text-sm">
+                            <span className="text-muted-foreground text-xs">{k}: </span>
+                            {String(v) === "missing_from_source" ? (
+                              <span className="italic text-amber-600 text-xs">Missing from source</span>
+                            ) : (
+                              <span className="font-medium">{String(v)}</span>
+                            )}
+                          </div>
+                        ))}
+                    </div>
+                  </div>
+                )}
 
                 {/* Safe actions — never "invest now" / "recommended".
                     Round 93: opening a deposit now goes through the confirm-first

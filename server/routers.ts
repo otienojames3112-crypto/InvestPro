@@ -257,6 +257,7 @@ import {
   type SecondaryMmfInput,
 } from "./engine";
 import { COOKIE_NAME } from "../shared/const";
+import type { HoldingSnapshot, InstrumentProfile } from "../shared/instrumentProfile";
 import {
   reconcile,
   reconcileMmf,
@@ -5641,6 +5642,7 @@ export const appRouter = router({
         dayCountBasis: f.dayCountBasis ?? 365,
         creditingFrequency: f.creditingFrequency ?? "daily",
         whtRate: parseFloat(String(f.whtRate ?? "15")),
+        extendedFields: (f.extendedFields ?? null) as InstrumentProfile | null,
         createdAt: f.createdAt,
         updatedAt: f.updatedAt,
       }));
@@ -6226,6 +6228,7 @@ export const appRouter = router({
           fundName: r.fundName,
           company: r.company,
           ear: Number(r.ear),
+          holdingSnapshot: r.holdingSnapshot ?? null,
         }));
       }),
     /** Add a secondary MMF account. */
@@ -6240,6 +6243,34 @@ export const appRouter = router({
       }))
       .mutation(async ({ ctx, input }) => {
         await requirePortfolio(input.portfolioId, ctx.user.id);
+        // Round 97: build immutable holdingSnapshot from the MMF catalogue row
+        let holdingSnapshot: HoldingSnapshot | null = null;
+        const mmfRow = await getMmfFund(input.mmfFundId);
+        if (mmfRow) {
+          holdingSnapshot = {
+            referenceCatalogueType: "mmf",
+            referenceInstrumentId: mmfRow.id,
+            copiedTerms: (mmfRow.extendedFields as InstrumentProfile | null) ?? {
+              catalogueType: "mmf",
+              fundName: mmfRow.fundName,
+              fundManager: mmfRow.company,
+              effectiveAnnualRate: Number(mmfRow.ear),
+              grossYield: Number(mmfRow.grossYield),
+              managementFee: Number(mmfRow.managementFee),
+              minimumInvestment: Number(mmfRow.minInvestment),
+              whtRate: Number(mmfRow.whtRate ?? "15"),
+              sourceUrl: mmfRow.source ?? null,
+              sourceAsOfDate: mmfRow.asOfDate ? String(mmfRow.asOfDate) : null,
+            },
+            purchaseTerms: {
+              initialBalance: input.currentBalance,
+              monthlyContribution: input.monthlyContribution,
+            },
+            snapshotAt: Date.now(),
+            sourceUrl: mmfRow.source ?? null,
+            sourceAsOfDate: mmfRow.asOfDate ? String(mmfRow.asOfDate) : null,
+          };
+        }
         await addSecondaryMmf({
           portfolioId: input.portfolioId,
           mmfFundId: input.mmfFundId,
@@ -6247,6 +6278,7 @@ export const appRouter = router({
           currentBalance: String(input.currentBalance),
           monthlyContribution: String(input.monthlyContribution),
           notes: input.notes,
+          holdingSnapshot,
         });
         return { success: true };
       }),
@@ -6314,6 +6346,7 @@ export const appRouter = router({
           isActive: r.isActive,
           createdAt: r.createdAt,
           updatedAt: r.updatedAt,
+          holdingSnapshot: (r as { holdingSnapshot?: unknown }).holdingSnapshot ?? null,
         }));
       }),
     /**
@@ -6686,6 +6719,37 @@ export const appRouter = router({
       }))
       .mutation(async ({ ctx, input }) => {
         await requirePortfolio(input.portfolioId, ctx.user.id);
+        // Round 97: build immutable holdingSnapshot from the reference catalogue row
+        let holdingSnapshot: HoldingSnapshot | null = null;
+        if (input.bankInstrumentId) {
+          const allBanks = await getBankInstruments();
+          const catRow = allBanks.find((b) => b.id === input.bankInstrumentId);
+          if (catRow) {
+            holdingSnapshot = {
+              referenceCatalogueType: "bank",
+              referenceInstrumentId: catRow.id,
+              copiedTerms: (catRow.extendedFields as InstrumentProfile | null) ?? {
+                catalogueType: "bank",
+                bankName: catRow.bankName,
+                productType: catRow.instrumentType as any,
+                indicativeRate: catRow.indicativeRate ? Number(catRow.indicativeRate) : null,
+                minimumAmount: Number(catRow.minAmount),
+                tenor: catRow.typicalTenor ?? null,
+                negotiable: catRow.isNegotiable,
+                sourceUrl: catRow.source ?? null,
+                sourceAsOfDate: catRow.asOfDate ? String(catRow.asOfDate) : null,
+              },
+              purchaseTerms: {
+                principal: input.principal,
+                interestRate: input.interestRate,
+                tenorMonths: input.tenorMonths ?? null,
+              },
+              snapshotAt: Date.now(),
+              sourceUrl: catRow.source ?? null,
+              sourceAsOfDate: catRow.asOfDate ? String(catRow.asOfDate) : null,
+            };
+          }
+        }
         const created = await addBankInstrumentHolding({
           portfolioId: input.portfolioId,
           bankInstrumentId: input.bankInstrumentId ?? null,
@@ -6705,6 +6769,7 @@ export const appRouter = router({
           earlyBreakPenaltyPct: String(input.earlyBreakPenaltyPct),
           maturityAction: input.maturityAction,
           currentValue: String(input.principal),
+          holdingSnapshot,
         });
         await addAuditLog({
           portfolioId: input.portfolioId,
@@ -6933,6 +6998,7 @@ export const appRouter = router({
         asOfDate: r.asOfDate,
         source: r.source ?? null,
         isActive: Boolean(r.isActive),
+        extendedFields: (r.extendedFields ?? null) as InstrumentProfile | null,
       }));
     }),
     // Governed reference correction (manager-only, source required, audited).

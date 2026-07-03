@@ -39,6 +39,15 @@ import {
   checkApprovalGate,
   assetClassForCatalogue,
 } from "../shared/researchPipeline";
+import {
+  SOURCE_CLASSES,
+  type SourceClass,
+  isSourceClass,
+  SOURCE_CLASS_LABELS,
+  MISSING_FROM_SOURCE,
+  NEVER_INVENT_FIELDS,
+  CBK_BOND_REQUIRED_FIELDS,
+} from "../shared/instrumentProfile";
 
 /** The scope a manager can constrain a question to (mirrors the DB enum). */
 export type ResearchScope = "mmf" | "bank" | "cbk" | "market_asset" | "macro" | "any";
@@ -889,18 +898,40 @@ export async function runResearchQuestion(args: {
         .join("\n")
     : "";
 
-  const res = await invokeLLM({
-    messages: [
-      { role: "system", content: RESEARCH_SYSTEM_PROMPT },
-      ...priorTurns,
-      { role: "user", content: `QUESTION: ${args.question}${scopeLine}${grounding}${establishedBlock}${followUpNote}` },
-    ],
-    temperature: 0,
-    response_format: { type: "json_schema", json_schema: RESEARCH_SCHEMA },
-  });
-
-  const text = contentToText(res.choices?.[0]?.message?.content);
-  const { answer, findings } = parseResearchResponse(text);
+  // Round 97 — INSTRUMENT-AWARE EXTRACTION. When we have grounding text from a
+  // readable source and this is NOT a follow-up (no prior turns), try the structured
+  // per-catalogue extraction first. If it succeeds (source is classified and yields
+  // findings), use those instead of the generic schema. Otherwise fall through.
+  const groundingText = grounding.replace(/^\n\nGROUND YOUR FINDINGS[^:]*:\n/, "");
+  let answer: string = "";
+  let findings: ResearchFindingDraft[] = [];
+  let usedModel: string | null = null;
+  const canTryStructured = Boolean(grounding) && priorTurns.length === 0;
+  let usedStructured = false;
+  if (canTryStructured && groundingText.length > 100) {
+    const structured = await tryInstrumentAwareExtraction(groundingText, args.question);
+    if (structured && structured.findings.length > 0) {
+      answer = structured.answer;
+      findings = structured.findings;
+      usedStructured = true;
+    }
+  }
+  if (!usedStructured) {
+    const llmRes = await invokeLLM({
+      messages: [
+        { role: "system", content: RESEARCH_SYSTEM_PROMPT },
+        ...priorTurns,
+        { role: "user", content: `QUESTION: ${args.question}${scopeLine}${grounding}${establishedBlock}${followUpNote}` },
+      ],
+      temperature: 0,
+      response_format: { type: "json_schema", json_schema: RESEARCH_SCHEMA },
+    });
+    usedModel = llmRes.model ?? null;
+    const text = contentToText(llmRes.choices?.[0]?.message?.content);
+    const parsed = parseResearchResponse(text);
+    answer = parsed.answer;
+    findings = parsed.findings;
+  }
 
   // Round 90 — PROVENANCE FALLBACK. When a manager attached a real source but the
   // model forgot to echo it onto a finding, back-fill the finding's provenance from
@@ -983,7 +1014,7 @@ export async function runResearchQuestion(args: {
   // appears), the finding is kept so the change is captured for triage.
   const deduped = suppressDuplicateFindings(withWarnings, established);
 
-  return { answer, findings: deduped, model: res.model ?? null };
+  return { answer, findings: deduped, model: usedModel };
 }
 
 /** Case/space-insensitive key for matching an instrument across turns. */
@@ -1026,4 +1057,591 @@ export function suppressDuplicateFindings<T extends { instrumentName: string; ex
     // Keep only if the values are NOT an exact repeat of a prior established finding.
     return !priorSigs.has(normaliseFigures(c.extractedFields));
   });
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+ * Round 97 — INSTRUMENT-AWARE EXTRACTION ENGINE
+ *
+ * When Ask AI is given a source (PDF, URL, text, image), the pipeline now:
+ *   1. classifySource() — fast LLM call to detect the source class
+ *   2. If classified to a known catalogue → runStructuredExtraction() with a
+ *      per-catalogue JSON schema that extracts the FULL profile fields
+ *   3. If "unknown" → falls through to the generic RESEARCH_SCHEMA (current behavior)
+ *
+ * The structured extraction returns an ARRAY of instruments (multi-instrument
+ * splitting for prospectuses with multiple bonds). Each is mapped back to the
+ * standard ResearchFindingDraft shape so the rest of the pipeline (provenance
+ * fallback, kind stamp, dedup, approval gate) is unchanged.
+ *
+ * Missing-field handling: the prompt instructs the model to use "missing_from_source"
+ * for any field it cannot find. Post-processing enforces NEVER_INVENT_FIELDS.
+ * ══════════════════════════════════════════════════════════════════════════════ */
+
+/* ── Source Classification ─────────────────────────────────────────────────── */
+
+const CLASSIFICATION_SCHEMA = {
+  name: "source_classification",
+  strict: true,
+  schema: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      sourceClass: {
+        type: "string",
+        description: `One of: ${SOURCE_CLASSES.join(", ")}`,
+      },
+      reasoning: {
+        type: "string",
+        description: "One sentence explaining why this classification was chosen.",
+      },
+    },
+    required: ["sourceClass", "reasoning"],
+  },
+} as const;
+
+/**
+ * Fast LLM call to classify a source document into one of the known instrument
+ * source classes. Uses the first ~6000 chars of the source text for speed.
+ * Returns "unknown" if the model is unsure or the source doesn't match any class.
+ */
+export async function classifySource(sourceText: string): Promise<{ sourceClass: SourceClass; reasoning: string }> {
+  const snippet = sourceText.slice(0, 6000);
+  const res = await invokeLLM({
+    messages: [
+      {
+        role: "system",
+        content: `You are a document classifier for a Kenyan investment tracker. Given the beginning of a source document, classify it into exactly ONE of these categories:\n${SOURCE_CLASSES.map((c) => `- ${c}: ${SOURCE_CLASS_LABELS[c]}`).join("\n")}\n\nChoose "unknown" only if the document genuinely does not fit any other category. Be decisive.`,
+      },
+      {
+        role: "user",
+        content: `Classify this source document:\n\n${snippet}`,
+      },
+    ],
+    temperature: 0,
+    response_format: { type: "json_schema", json_schema: CLASSIFICATION_SCHEMA },
+  });
+  const text = contentToText(res.choices?.[0]?.message?.content);
+  const parsed = parseJsonLoose(text) as { sourceClass?: string; reasoning?: string } | null;
+  const sc = parsed?.sourceClass?.trim() ?? "unknown";
+  return {
+    sourceClass: isSourceClass(sc) ? sc : "unknown",
+    reasoning: parsed?.reasoning ?? "",
+  };
+}
+
+/* ── Per-Catalogue Extraction Schemas ──────────────────────────────────────── */
+
+/** The extraction prompt preamble shared by all structured extractions. */
+const STRUCTURED_EXTRACTION_PREAMBLE = `You are a financial-data extraction assistant for a Kenyan investment tracker.
+Extract ONLY what is explicitly printed in the source document. For any field you cannot find in the source, set its value to "missing_from_source" — never guess, infer, or invent.
+Do NOT recommend buying, selling, or holding. Do NOT rank instruments. Do NOT say which is "best".
+Return one entry per distinct instrument found in the source.`;
+
+/** CBK Bond Prospectus / Reopening extraction schema. */
+const CBK_BOND_EXTRACTION_SCHEMA = {
+  name: "cbk_bond_extraction",
+  strict: true,
+  schema: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      answer: { type: "string", description: "Brief summary of what the prospectus contains." },
+      sharedAuctionFields: {
+        type: "object",
+        additionalProperties: false,
+        description: "Fields that apply to ALL bonds in this prospectus (auction-level).",
+        properties: {
+          salePeriodStart: { type: ["string", "null"], description: "ISO date or descriptive string" },
+          salePeriodEnd: { type: ["string", "null"] },
+          bidSubmissionDeadline: { type: ["string", "null"] },
+          auctionDate: { type: ["string", "null"] },
+          settlementDate: { type: ["string", "null"] },
+          purpose: { type: ["string", "null"] },
+          nonCompetitiveMin: { type: ["string", "null"], description: "KES amount or 'missing_from_source'" },
+          nonCompetitiveMax: { type: ["string", "null"] },
+          competitiveMin: { type: ["string", "null"] },
+          secondaryTradingRule: { type: ["string", "null"] },
+          rediscountingRule: { type: ["string", "null"] },
+          reopeningFlag: { type: ["string", "null"], description: "'true'/'false' or 'missing_from_source'" },
+          liquidityEligibility: { type: ["string", "null"] },
+        },
+        required: ["salePeriodStart", "salePeriodEnd", "bidSubmissionDeadline", "auctionDate", "settlementDate", "purpose", "nonCompetitiveMin", "nonCompetitiveMax", "competitiveMin", "secondaryTradingRule", "rediscountingRule", "reopeningFlag", "liquidityEligibility"],
+      },
+      instruments: {
+        type: "array",
+        description: "One entry per distinct bond/security in the prospectus.",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            instrumentName: { type: "string", description: "e.g. 'FXD1/2022/010'" },
+            issueNumber: { type: ["string", "null"] },
+            securityType: { type: ["string", "null"], description: "e.g. 'fxd', 'ifb', 'zero_coupon'" },
+            isin: { type: ["string", "null"] },
+            tenorLabel: { type: ["string", "null"], description: "e.g. '10 years'" },
+            tenorMonths: { type: ["number", "null"] },
+            couponRate: { type: ["string", "null"], description: "% p.a. or 'missing_from_source'" },
+            withholdingTaxRate: { type: ["string", "null"], description: "% or 'missing_from_source'" },
+            maturityDate: { type: ["string", "null"] },
+            amountOnOffer: { type: ["string", "null"], description: "KES amount or 'missing_from_source'" },
+            cleanPrice: { type: ["string", "null"], description: "Per KES 100 face or 'missing_from_source'" },
+            accruedInterestPer100: { type: ["string", "null"] },
+            dirtyPrice: { type: ["string", "null"] },
+            couponPaymentDates: { type: ["array", "null"], items: { type: "string" }, description: "Array of date strings or null" },
+            cleanPriceTable: { type: ["array", "null"], items: { type: "object", additionalProperties: false, properties: { label: { type: "string" }, price: { type: "string" } }, required: ["label", "price"] } },
+            rawExcerpt: { type: ["string", "null"] },
+            warnings: { type: "array", items: { type: "string" } },
+            confidence: { type: ["number", "null"] },
+          },
+          required: ["instrumentName", "issueNumber", "securityType", "isin", "tenorLabel", "tenorMonths", "couponRate", "withholdingTaxRate", "maturityDate", "amountOnOffer", "cleanPrice", "accruedInterestPer100", "dirtyPrice", "couponPaymentDates", "cleanPriceTable", "rawExcerpt", "warnings", "confidence"],
+        },
+      },
+    },
+    required: ["answer", "sharedAuctionFields", "instruments"],
+  },
+} as const;
+
+/** CBK T-bill auction / result extraction schema. */
+const CBK_TBILL_EXTRACTION_SCHEMA = {
+  name: "cbk_tbill_extraction",
+  strict: true,
+  schema: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      answer: { type: "string" },
+      auctionDate: { type: ["string", "null"] },
+      valueDate: { type: ["string", "null"] },
+      instruments: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            instrumentName: { type: "string", description: "e.g. '91-Day Treasury Bill'" },
+            issueNumber: { type: ["string", "null"] },
+            tenorDays: { type: ["number", "null"], description: "91, 182, or 364" },
+            yieldPct: { type: ["string", "null"], description: "Annualised yield %" },
+            prevAvgRate: { type: ["string", "null"] },
+            amountOnOffer: { type: ["string", "null"] },
+            amountReceived: { type: ["string", "null"] },
+            amountAccepted: { type: ["string", "null"] },
+            weightedAvgRate: { type: ["string", "null"] },
+            rawExcerpt: { type: ["string", "null"] },
+            warnings: { type: "array", items: { type: "string" } },
+            confidence: { type: ["number", "null"] },
+          },
+          required: ["instrumentName", "issueNumber", "tenorDays", "yieldPct", "prevAvgRate", "amountOnOffer", "amountReceived", "amountAccepted", "weightedAvgRate", "rawExcerpt", "warnings", "confidence"],
+        },
+      },
+    },
+    required: ["answer", "auctionDate", "valueDate", "instruments"],
+  },
+} as const;
+
+/** MMF factsheet / benchmark extraction schema. */
+const MMF_EXTRACTION_SCHEMA = {
+  name: "mmf_extraction",
+  strict: true,
+  schema: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      answer: { type: "string" },
+      benchmarkDate: { type: ["string", "null"], description: "As-of date for the benchmark/factsheet" },
+      instruments: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            instrumentName: { type: "string", description: "Fund name" },
+            fundManager: { type: ["string", "null"] },
+            effectiveAnnualRate: { type: ["string", "null"], description: "EAR % net of fees" },
+            grossYield: { type: ["string", "null"], description: "Gross/quoted yield %" },
+            managementFee: { type: ["string", "null"], description: "Annual fee %" },
+            minimumInvestment: { type: ["string", "null"], description: "KES amount" },
+            aum: { type: ["string", "null"], description: "KES millions" },
+            dayCountBasis: { type: ["string", "null"] },
+            creditingFrequency: { type: ["string", "null"] },
+            whtRate: { type: ["string", "null"] },
+            withdrawalNoticePeriod: { type: ["string", "null"] },
+            rawExcerpt: { type: ["string", "null"] },
+            warnings: { type: "array", items: { type: "string" } },
+            confidence: { type: ["number", "null"] },
+          },
+          required: ["instrumentName", "fundManager", "effectiveAnnualRate", "grossYield", "managementFee", "minimumInvestment", "aum", "dayCountBasis", "creditingFrequency", "whtRate", "withdrawalNoticePeriod", "rawExcerpt", "warnings", "confidence"],
+        },
+      },
+    },
+    required: ["answer", "benchmarkDate", "instruments"],
+  },
+} as const;
+
+/** Bank product page / rate card extraction schema. */
+const BANK_EXTRACTION_SCHEMA = {
+  name: "bank_extraction",
+  strict: true,
+  schema: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      answer: { type: "string" },
+      instruments: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            instrumentName: { type: "string", description: "Bank + product name" },
+            bankName: { type: ["string", "null"] },
+            productType: { type: ["string", "null"], description: "call_deposit, fixed_deposit, ordinary_savings, target_goal_savings, tiered_high_yield_savings" },
+            indicativeRate: { type: ["string", "null"], description: "% p.a." },
+            rateType: { type: ["string", "null"], description: "indicative, negotiated, confirmed" },
+            minimumAmount: { type: ["string", "null"], description: "KES" },
+            tenor: { type: ["string", "null"] },
+            noticePeriod: { type: ["string", "null"] },
+            payoutFrequency: { type: ["string", "null"] },
+            earlyWithdrawalPenalty: { type: ["string", "null"] },
+            negotiable: { type: ["string", "null"], description: "'true' or 'false'" },
+            whtRate: { type: ["string", "null"] },
+            rawExcerpt: { type: ["string", "null"] },
+            warnings: { type: "array", items: { type: "string" } },
+            confidence: { type: ["number", "null"] },
+          },
+          required: ["instrumentName", "bankName", "productType", "indicativeRate", "rateType", "minimumAmount", "tenor", "noticePeriod", "payoutFrequency", "earlyWithdrawalPenalty", "negotiable", "whtRate", "rawExcerpt", "warnings", "confidence"],
+        },
+      },
+    },
+    required: ["answer", "instruments"],
+  },
+} as const;
+
+/** Market asset extraction schema. */
+const MARKET_ASSET_EXTRACTION_SCHEMA = {
+  name: "market_asset_extraction",
+  strict: true,
+  schema: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      answer: { type: "string" },
+      instruments: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            instrumentName: { type: "string" },
+            assetType: { type: ["string", "null"], description: "equity, reit, etf, offshore_fund, property, sacco, pension, other" },
+            ticker: { type: ["string", "null"] },
+            exchange: { type: ["string", "null"] },
+            marketPrice: { type: ["string", "null"] },
+            nav: { type: ["string", "null"] },
+            dividendYield: { type: ["string", "null"] },
+            distributionYield: { type: ["string", "null"] },
+            trailingReturn: { type: ["string", "null"] },
+            fee: { type: ["string", "null"] },
+            currency: { type: ["string", "null"] },
+            rawExcerpt: { type: ["string", "null"] },
+            warnings: { type: "array", items: { type: "string" } },
+            confidence: { type: ["number", "null"] },
+          },
+          required: ["instrumentName", "assetType", "ticker", "exchange", "marketPrice", "nav", "dividendYield", "distributionYield", "trailingReturn", "fee", "currency", "rawExcerpt", "warnings", "confidence"],
+        },
+      },
+    },
+    required: ["answer", "instruments"],
+  },
+} as const;
+
+/* ── Schema Selection ──────────────────────────────────────────────────────── */
+
+/** Map a detected source class to its extraction schema + prompt, or null for generic. */
+function extractionSchemaForClass(sc: SourceClass): { schema: object; prompt: string } | null {
+  switch (sc) {
+    case "cbk_bond_prospectus":
+    case "cbk_bond_reopening":
+      return {
+        schema: CBK_BOND_EXTRACTION_SCHEMA,
+        prompt: `${STRUCTURED_EXTRACTION_PREAMBLE}\n\nThis is a CBK BOND PROSPECTUS or REOPENING notice. Extract every distinct bond/security listed.\nFor each bond, extract: issue number, security type, ISIN, tenor, coupon rate, WHT rate, maturity date, amount on offer, clean price, accrued interest per KES 100, dirty price, coupon payment dates, and a clean price table if present.\nShared auction-level fields (sale period, bid deadline, auction date, settlement date, purpose, bid minimums, secondary trading rule, rediscounting rule, reopening flag, liquidity eligibility) apply to ALL bonds — extract them once.\n\nCRITICAL: Do NOT invent issue numbers, coupon rates, maturity dates, WHT rates, clean prices, accrued interest, or auction dates. If a field is not printed in the document, set it to "missing_from_source".`,
+      };
+    case "cbk_tbill_auction":
+    case "cbk_tbill_auction_result":
+      return {
+        schema: CBK_TBILL_EXTRACTION_SCHEMA,
+        prompt: `${STRUCTURED_EXTRACTION_PREAMBLE}\n\nThis is a CBK TREASURY BILL auction notice or result. Extract one entry per tenor (91-day, 182-day, 364-day) that appears.\nFor each, extract: issue number, tenor in days, annualised yield %, previous average rate, amount on offer/received/accepted, and weighted average rate.\n\nCRITICAL: Do NOT invent issue numbers or rates. If a field is not printed, set it to "missing_from_source".`,
+      };
+    case "mmf_factsheet":
+    case "mmf_benchmark":
+      return {
+        schema: MMF_EXTRACTION_SCHEMA,
+        prompt: `${STRUCTURED_EXTRACTION_PREAMBLE}\n\nThis is an MMF FACTSHEET or BENCHMARK table. Extract one entry per money market fund mentioned.\nFor each, extract: fund name, fund manager, effective annual rate (EAR), gross yield, management fee, minimum investment, AUM, day-count basis, crediting frequency, WHT rate, and withdrawal notice period.\nEAR and gross yield are DIFFERENT numbers — keep both as the source prints them.\n\nIf a field is not printed, set it to "missing_from_source".`,
+      };
+    case "bank_product_page":
+    case "bank_rate_card":
+      return {
+        schema: BANK_EXTRACTION_SCHEMA,
+        prompt: `${STRUCTURED_EXTRACTION_PREAMBLE}\n\nThis is a BANK PRODUCT PAGE or RATE CARD. Extract one entry per distinct product (call deposit, fixed deposit, savings account).\nFor each, extract: bank name, product type, indicative rate, rate type, minimum amount, tenor, notice period, payout frequency, early withdrawal penalty, whether negotiable, and WHT rate.\nBank rates are typically INDICATIVE and quoted GROSS of the 15% WHT — note this in warnings.\n\nIf a field is not printed, set it to "missing_from_source".`,
+      };
+    case "market_asset_factsheet":
+    case "market_asset_price":
+      return {
+        schema: MARKET_ASSET_EXTRACTION_SCHEMA,
+        prompt: `${STRUCTURED_EXTRACTION_PREAMBLE}\n\nThis is a MARKET ASSET factsheet or price board. Extract one entry per distinct instrument (equity, REIT, ETF, offshore fund).\nFor each, extract: asset type, ticker, exchange, market price, NAV, dividend yield, distribution yield, trailing 12-month return, expense ratio/fee, and currency.\n\nIf a field is not printed, set it to "missing_from_source".`,
+      };
+    case "unknown":
+      return null;
+  }
+}
+
+/* ── Structured Extraction Runner ──────────────────────────────────────────── */
+
+/**
+ * Run the per-catalogue structured extraction. Returns an answer + an array of
+ * raw instrument objects (not yet normalised to ResearchFindingDraft).
+ */
+async function runStructuredExtraction(
+  sourceClass: SourceClass,
+  sourceText: string,
+  question: string,
+): Promise<{ answer: string; rawInstruments: Record<string, unknown>[]; sharedFields?: Record<string, unknown> }> {
+  const config = extractionSchemaForClass(sourceClass);
+  if (!config) return { answer: "", rawInstruments: [] };
+
+  const res = await invokeLLM({
+    messages: [
+      { role: "system", content: config.prompt },
+      {
+        role: "user",
+        content: `MANAGER'S QUESTION: ${question}\n\nSOURCE DOCUMENT:\n${sourceText.slice(0, 40000)}`,
+      },
+    ],
+    temperature: 0,
+    response_format: { type: "json_schema", json_schema: config.schema as unknown as { name: string; schema: Record<string, unknown>; strict?: boolean } },
+  });
+
+  const text = contentToText(res.choices?.[0]?.message?.content);
+  const parsed = parseJsonLoose(text) as Record<string, unknown> | null;
+  if (!parsed) return { answer: "", rawInstruments: [] };
+
+  const answer = typeof parsed.answer === "string" ? parsed.answer : "";
+  const instruments = Array.isArray(parsed.instruments) ? parsed.instruments : [];
+
+  // Collect shared fields (CBK bond prospectus has sharedAuctionFields)
+  const sharedFields: Record<string, unknown> = {};
+  if (parsed.sharedAuctionFields && typeof parsed.sharedAuctionFields === "object") {
+    Object.assign(sharedFields, parsed.sharedAuctionFields);
+  }
+  // T-bill auction date/value date
+  if (parsed.auctionDate) sharedFields.auctionDate = parsed.auctionDate;
+  if (parsed.valueDate) sharedFields.valueDate = parsed.valueDate;
+  // MMF benchmark date
+  if (parsed.benchmarkDate) sharedFields.benchmarkDate = parsed.benchmarkDate;
+
+  return { answer, rawInstruments: instruments as Record<string, unknown>[], sharedFields };
+}
+
+/* ── Mapping Structured Results to ResearchFindingDraft ────────────────────── */
+
+/** Map a source class to the target reference catalogue. */
+function catalogueForSourceClass(sc: SourceClass): ReferenceCatalogue {
+  switch (sc) {
+    case "cbk_bond_prospectus":
+    case "cbk_bond_reopening":
+    case "cbk_tbill_auction":
+    case "cbk_tbill_auction_result":
+      return "cbk";
+    case "mmf_factsheet":
+    case "mmf_benchmark":
+      return "mmf";
+    case "bank_product_page":
+    case "bank_rate_card":
+      return "bank";
+    case "market_asset_factsheet":
+    case "market_asset_price":
+      return "market_asset";
+    case "unknown":
+      return "cbk"; // fallback, shouldn't be reached
+  }
+}
+
+/** Map a source class to a canonical AssetClass code. */
+function assetClassForSourceClass(sc: SourceClass): AssetClass {
+  switch (sc) {
+    case "cbk_bond_prospectus":
+    case "cbk_bond_reopening":
+      return "gov_coupon";
+    case "cbk_tbill_auction":
+    case "cbk_tbill_auction_result":
+      return "gov_discount";
+    case "mmf_factsheet":
+    case "mmf_benchmark":
+      return "cash_mmf";
+    case "bank_product_page":
+    case "bank_rate_card":
+      return "bank_deposit";
+    case "market_asset_factsheet":
+    case "market_asset_price":
+      return "equity";
+    case "unknown":
+      return "alt";
+  }
+}
+
+/**
+ * Convert a raw extracted instrument object into a ResearchFindingDraft.
+ * Flattens all extracted fields into the `extractedFields` string bag.
+ * Applies NEVER_INVENT_FIELDS enforcement: null/empty → MISSING_FROM_SOURCE.
+ */
+function structuredInstrumentToDraft(
+  raw: Record<string, unknown>,
+  sourceClass: SourceClass,
+  sharedFields?: Record<string, unknown>,
+): ResearchFindingDraft | null {
+  const name = typeof raw.instrumentName === "string" ? raw.instrumentName.trim() : "";
+  if (!name) return null;
+
+  const targetCatalogue = catalogueForSourceClass(sourceClass);
+  const assetClass = assetClassForSourceClass(sourceClass);
+
+  // Build extractedFields from all non-meta fields
+  const metaKeys = new Set(["instrumentName", "rawExcerpt", "warnings", "confidence"]);
+  const figures: Record<string, string> = {};
+
+  // First, add shared fields (auction-level for CBK bonds)
+  if (sharedFields) {
+    for (const [k, v] of Object.entries(sharedFields)) {
+      if (v === null || v === undefined || v === "") continue;
+      if (v === MISSING_FROM_SOURCE) {
+        figures[k] = MISSING_FROM_SOURCE;
+      } else if (typeof v === "string") {
+        figures[k] = v;
+      } else if (typeof v === "number") {
+        figures[k] = String(v);
+      }
+    }
+  }
+
+  // Then add per-instrument fields (override shared if present)
+  for (const [k, v] of Object.entries(raw)) {
+    if (metaKeys.has(k)) continue;
+    if (v === null || v === undefined) {
+      // For NEVER_INVENT_FIELDS, null means missing from source
+      if (NEVER_INVENT_FIELDS.includes(k)) {
+        figures[k] = MISSING_FROM_SOURCE;
+      }
+      continue;
+    }
+    if (v === "") {
+      if (NEVER_INVENT_FIELDS.includes(k)) {
+        figures[k] = MISSING_FROM_SOURCE;
+      }
+      continue;
+    }
+    if (v === MISSING_FROM_SOURCE) {
+      figures[k] = MISSING_FROM_SOURCE;
+      continue;
+    }
+    if (typeof v === "string") {
+      figures[k] = v;
+    } else if (typeof v === "number") {
+      figures[k] = String(v);
+    } else if (Array.isArray(v)) {
+      // Arrays (couponPaymentDates, cleanPriceTable) → JSON string
+      figures[k] = JSON.stringify(v);
+    }
+  }
+
+  // Enforce NEVER_INVENT_FIELDS: if still not present, mark as missing
+  for (const field of NEVER_INVENT_FIELDS) {
+    if (!(field in figures)) {
+      // Only mark as missing if this field is relevant to this catalogue
+      if (targetCatalogue === "cbk") {
+        figures[field] = MISSING_FROM_SOURCE;
+      }
+    }
+  }
+
+  const warnings: string[] = Array.isArray(raw.warnings)
+    ? raw.warnings.filter((w): w is string => typeof w === "string")
+    : [];
+  const confidence = clampConfidence(raw.confidence);
+  const rawExcerpt = typeof raw.rawExcerpt === "string" ? raw.rawExcerpt.trim() || null : null;
+
+  // Compute missing fields (those set to MISSING_FROM_SOURCE)
+  const missingFields = Object.entries(figures)
+    .filter(([, v]) => v === MISSING_FROM_SOURCE)
+    .map(([k]) => k);
+
+  // Build the full structured profile for the _extendedFields key.
+  // This carries the rich profile through the draft/approve pipeline into the
+  // catalogue row's extendedFields JSON column.
+  const extendedProfile: Record<string, unknown> = {
+    catalogueType: targetCatalogue === "cbk" || targetCatalogue === "market_asset" ? targetCatalogue : targetCatalogue,
+    instrumentName: name,
+    sourceClass,
+    ...figures,
+  };
+  // Attach as a hidden key that the publish path reads.
+  const extractedFields: Record<string, string> = {
+    ...figures,
+    _extendedFields: JSON.stringify(extendedProfile),
+  };
+
+  return {
+    instrumentName: name,
+    issuer: typeof raw.fundManager === "string" ? raw.fundManager : typeof raw.bankName === "string" ? raw.bankName : null,
+    assetClass,
+    targetCatalogue,
+    currency: typeof raw.currency === "string" ? raw.currency : "KES",
+    extractedFields,
+    sourceLabel: null, // filled by provenance fallback
+    sourceUrl: null,
+    sourceKind: null,
+    checkedAt: null,
+    sourceAsOf: null,
+    confidence,
+    missingFields,
+    warnings,
+    rawExcerpt,
+  };
+}
+
+/* ── Public Integration Point ──────────────────────────────────────────────── */
+
+/**
+ * The instrument-aware extraction entry point. Given source text and a question,
+ * classifies the source and runs structured extraction if applicable.
+ *
+ * Returns null if the source is "unknown" (caller should fall through to generic).
+ * Returns { answer, findings, sourceClass } if structured extraction succeeded.
+ */
+export async function tryInstrumentAwareExtraction(
+  sourceText: string,
+  question: string,
+): Promise<{ answer: string; findings: ResearchFindingDraft[]; sourceClass: SourceClass } | null> {
+  // Step 1: Classify
+  const { sourceClass } = await classifySource(sourceText);
+  if (sourceClass === "unknown") return null;
+
+  // Step 2: Check if we have a schema for this class
+  const config = extractionSchemaForClass(sourceClass);
+  if (!config) return null;
+
+  // Step 3: Run structured extraction
+  const { answer, rawInstruments, sharedFields } = await runStructuredExtraction(
+    sourceClass,
+    sourceText,
+    question,
+  );
+
+  // Step 4: Map to ResearchFindingDraft[]
+  const findings: ResearchFindingDraft[] = [];
+  for (const raw of rawInstruments) {
+    const draft = structuredInstrumentToDraft(raw, sourceClass, sharedFields);
+    if (draft) findings.push(draft);
+  }
+
+  return { answer, findings, sourceClass };
 }

@@ -512,6 +512,34 @@ export default function OpportunityDetail() {
           </CardContent>
         </Card>
 
+        {/* Round 97 — Extended profile fields from structured extraction */}
+        {r.extendedFields && typeof r.extendedFields === "object" && Object.keys(r.extendedFields).length > 0 && (
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base">Full instrument profile</CardTitle>
+              <CardDescription className="text-xs">
+                Extended fields extracted from the source document. Fields marked “Missing from source” were not found in the original.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-2 gap-x-6 gap-y-2">
+                {Object.entries(r.extendedFields as unknown as Record<string, unknown>)
+                  .filter(([k]) => !k.startsWith("_") && k !== "catalogueType" && k !== "instrumentName" && k !== "sourceClass")
+                  .map(([k, v]) => (
+                    <div key={k} className="text-sm">
+                      <span className="text-muted-foreground text-xs">{k}: </span>
+                      {String(v) === "missing_from_source" ? (
+                        <span className="italic text-amber-600 text-xs">Missing from source</span>
+                      ) : (
+                        <span className="font-medium">{String(v)}</span>
+                      )}
+                    </div>
+                  ))}
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
         {/* Single hypothetical action — respects Live/Test mode */}
         <Card>
           <CardContent className="py-4 flex items-center justify-between gap-4 flex-wrap">

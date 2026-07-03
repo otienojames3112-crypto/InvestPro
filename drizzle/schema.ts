@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import type { FieldProvenanceMap } from "../shared/provenance";
+import type { InstrumentProfile, HoldingSnapshot } from "../shared/instrumentProfile";
 import {
   int,
   mysqlEnum,
@@ -388,6 +389,11 @@ export const securities = mysqlTable("securities", {
   expectedReturnPct: decimal("expectedReturnPct", { precision: 8, scale: 4 }),
   /** Annualised volatility (%) — reserved for Part 6 (nullable now). */
   volatilityPct: decimal("volatilityPct", { precision: 8, scale: 4 }),
+  /**
+   * Round 97: immutable snapshot of catalogue terms at purchase time.
+   * Later catalogue changes never mutate this snapshot.
+   */
+  holdingSnapshot: json("holdingSnapshot").$type<HoldingSnapshot>(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
@@ -571,6 +577,11 @@ export const mmfFunds = mysqlTable("mmf_funds", {
   creditingFrequency: mysqlEnum("creditingFrequency", ["daily", "monthly"]).notNull().default("daily"),
   /** Per-fund withholding tax rate on interest (% ) — default 15 */
   whtRate: decimal("whtRate", { precision: 6, scale: 4 }).notNull().default("15.0000"),
+  /**
+   * Round 97: full instrument profile — rich per-catalogue fields stored as JSON.
+   * Nullable for existing rows; populated on new extractions/edits.
+   */
+  extendedFields: json("extendedFields").$type<InstrumentProfile>(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
@@ -702,6 +713,11 @@ export const portfolioSecondaryMmfs = mysqlTable("portfolio_secondary_mmfs", {
   monthlyContribution: decimal("monthlyContribution", { precision: 14, scale: 2 }).notNull().default("0.00"),
   /** Notes */
   notes: text("notes"),
+  /**
+   * Round 97: immutable snapshot of catalogue terms at purchase time.
+   * Later catalogue changes never mutate this snapshot.
+   */
+  holdingSnapshot: json("holdingSnapshot").$type<HoldingSnapshot>(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
@@ -785,6 +801,11 @@ export const bankInstruments = mysqlTable("bank_instruments", {
   /** Source URL */
   source: varchar("source", { length: 500 }),
   isActive: boolean("isActive").notNull().default(true),
+  /**
+   * Round 97: full instrument profile — rich per-catalogue fields stored as JSON.
+   * Nullable for existing rows; populated on new extractions/edits.
+   */
+  extendedFields: json("extendedFields").$type<InstrumentProfile>(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
@@ -866,6 +887,11 @@ export const bankInstrumentHoldings = mysqlTable("bank_instrument_holdings", {
   maturityAction: mysqlEnum("maturityAction", ["redeploy", "rollover"]).notNull().default("redeploy"),
   notes: text("notes"),
   isActive: boolean("isActive").notNull().default(true),
+  /**
+   * Round 97: immutable snapshot of catalogue terms at purchase time.
+   * Later catalogue changes never mutate this snapshot.
+   */
+  holdingSnapshot: json("holdingSnapshot").$type<HoldingSnapshot>(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
@@ -1148,6 +1174,12 @@ export const opportunities = mysqlTable("opportunities", {
 
   /** Soft-hide a row without deleting it (e.g. delisted) — neutral lifecycle, not curation. */
   active: boolean("active").notNull().default(true),
+
+  /**
+   * Round 97: full instrument profile — rich per-catalogue fields stored as JSON.
+   * Nullable for existing rows; populated on new extractions/edits.
+   */
+  extendedFields: json("extendedFields").$type<InstrumentProfile>(),
 
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { trpc } from "@/lib/trpc";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -209,6 +209,161 @@ export function SourceStatusPanel({ status }: { status: SourceStatus | null | un
       <div className="mt-1 text-muted-foreground">{status.retryHint}</div>
     </div>
   );
+}
+
+/* ── Round 96: pollable research-task flow (shared by Ask AI + Catalogue Review) ─
+ *
+ * Every AI enquiry/review runs as a SERVER task that we drive without holding one
+ * long request open:
+ *   1. start*  → persists a queued task, returns { taskId, threadId } immediately
+ *   2. process → kicks the task's read→ask→extract pipeline (may run long server-side)
+ *   3. poll getTask every ~1.4s → surface the live STAGE label until a terminal stage
+ * The staged status (queued → reading source → asking AI → extracting → done) is shown
+ * to the manager so a slow source read never looks like a hang. Terminal stages are
+ * done / needs_source_fix / failed. This mirrors the serverless-friendly contract and
+ * keeps the strict review gate (unreadable source ⇒ needs_source_fix, zero findings).
+ */
+
+export type TaskStage =
+  | "queued"
+  | "reading_source"
+  | "asking_ai"
+  | "extracting"
+  | "done"
+  | "needs_source_fix"
+  | "failed";
+
+export const STAGE_LABELS: Record<TaskStage, string> = {
+  queued: "Queued…",
+  reading_source: "Reading source…",
+  asking_ai: "Asking AI…",
+  extracting: "Extracting findings…",
+  done: "Done",
+  needs_source_fix: "Couldn’t read the source",
+  failed: "Failed",
+};
+
+const ACTIVE_STAGES: TaskStage[] = ["queued", "reading_source", "asking_ai", "extracting"];
+export function isActiveStage(stage: string | null | undefined): boolean {
+  return !!stage && (ACTIVE_STAGES as string[]).includes(stage);
+}
+
+/** A compact live progress row for an in-flight task (spinner + staged label). */
+export function TaskStageProgress({ stage }: { stage: TaskStage | null }) {
+  if (!stage || !isActiveStage(stage)) return null;
+  const order: TaskStage[] = ["queued", "reading_source", "asking_ai", "extracting"];
+  const activeIdx = order.indexOf(stage);
+  return (
+    <div className="rounded-md border border-primary/25 bg-primary/[0.04] px-3 py-2.5 text-xs">
+      <div className="flex items-center gap-2 font-medium text-foreground">
+        <Loader2 className="w-3.5 h-3.5 animate-spin text-primary" />
+        {STAGE_LABELS[stage]}
+      </div>
+      <div className="mt-2 flex items-center gap-1.5">
+        {order.map((s, i) => (
+          <div
+            key={s}
+            className={cn(
+              "h-1.5 flex-1 rounded-full transition-colors",
+              i <= activeIdx ? "bg-primary" : "bg-border",
+            )}
+            title={STAGE_LABELS[s]}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export type ResearchTaskResult = {
+  taskId: number;
+  threadId: number | null;
+  answer: string;
+  model: string | null;
+  findings: Finding[];
+  stage: TaskStage;
+  sourceStatus: SourceStatus | null;
+};
+
+/**
+ * Drive one research task from start to a terminal stage. Returns a `run(start)`
+ * callback: `start` is an async fn that creates the queued task and returns
+ * `{ taskId, threadId }` (e.g. `startResearchTask` or `startReviewTask`). The hook
+ * then calls `processResearchTask` and polls `getTask` until a terminal stage,
+ * exposing `stage` (for the live label) and the final `result`.
+ */
+export function useResearchTaskPoller() {
+  const utils = trpc.useUtils();
+  const process = trpc.research.processResearchTask.useMutation();
+  const [stage, setStage] = useState<TaskStage | null>(null);
+  const [running, setRunning] = useState(false);
+  const cancelled = useRef(false);
+
+  useEffect(() => {
+    return () => {
+      cancelled.current = true;
+    };
+  }, []);
+
+  const run = useCallback(
+    async (
+      start: () => Promise<{ taskId: number; threadId: number | null }>,
+    ): Promise<ResearchTaskResult> => {
+      cancelled.current = false;
+      setRunning(true);
+      setStage("queued");
+      try {
+        const { taskId } = await start();
+        // Kick the pipeline. This resolves when the task reaches a terminal stage;
+        // meanwhile we poll getTask so the UI shows intermediate stages promptly.
+        const processing = process.mutateAsync({ taskId });
+        let reachedTerminal = false;
+        const poll = async () => {
+          while (!cancelled.current && !reachedTerminal) {
+            await new Promise((r) => setTimeout(r, 1400));
+            if (cancelled.current) return;
+            try {
+              const snap = await utils.research.getTask.fetch({ id: taskId });
+              const st = (snap.task?.stage ?? "queued") as TaskStage;
+              setStage(st);
+              if (!isActiveStage(st)) reachedTerminal = true;
+            } catch {
+              /* transient poll error — keep polling until process resolves */
+            }
+          }
+        };
+        const polling = poll();
+        // The authoritative terminal state is whatever `processResearchTask` returns
+        // (it resolves the task to a terminal stage). The poll loop only exists to keep
+        // the live STAGE label fresh while process is in flight.
+        const done = await processing;
+        reachedTerminal = true;
+        await polling.catch(() => {});
+        const finalStage = (done.stage ?? "done") as TaskStage;
+        setStage(finalStage);
+        const result: ResearchTaskResult = {
+          taskId: done.taskId,
+          threadId: done.threadId ?? null,
+          answer: done.answer ?? "",
+          model: done.model ?? null,
+          findings: (done.findings ?? []) as unknown as Finding[],
+          stage: finalStage,
+          sourceStatus: (done.sourceStatus ?? null) as SourceStatus | null,
+        };
+        return result;
+      } finally {
+        setRunning(false);
+      }
+    },
+    [process, utils],
+  );
+
+  const reset = useCallback(() => {
+    setStage(null);
+    setRunning(false);
+  }, []);
+
+  return { run, stage, running, reset };
 }
 
 /* ── Correct-a-figure dialog: versions the finding + drafts the fix ─────────── */
@@ -791,49 +946,57 @@ function Conversation({ threadId, onExit }: { threadId: number; onExit: () => vo
   const [sourceMode, setSourceMode] = useState<"reuse_previous" | "new" | "none">("reuse_previous");
   const src = useSourceAttachment({ followUp: true });
 
-  const ask = trpc.research.ask.useMutation({
-    onSuccess: (res) => {
-      setSourceStatus((res.sourceStatus ?? null) as SourceStatus | null);
-      if ((res.stage as string | undefined) === "needs_source_fix") {
-        toast.error("I couldn\u2019t read that source. Fix it and retry, or tick \u201cAnswer without the source\u201d to proceed on general knowledge.");
-        return;
-      }
-      toast.success(
-        res.findings.length > 0
-          ? `Answered — ${res.findings.length} finding${res.findings.length === 1 ? "" : "s"} added below.`
-          : "Answered — no structured findings this time.",
-      );
-      setQuestion("");
-      src.reset();
-      utils.research.getThread.invalidate({ id: threadId });
-      utils.research.listThreads.invalidate();
-      utils.research.newFindingsCount.invalidate();
-      utils.researchPipeline.digest.invalidate();
-    },
-    onError: (err) => toast.error(err.message),
-  });
+  // Round 96 — follow-ups run as a pollable task (start → process → poll) so a slow
+  // source read shows a live stage instead of blocking one long request.
+  const startTask = trpc.research.startResearchTask.useMutation();
+  const poller = useResearchTaskPoller();
+  const [submitting, setSubmitting] = useState(false);
 
-  const busy = ask.isPending || src.uploading;
+  const busy = submitting || poller.running || src.uploading;
   const canAsk = question.trim().length >= 4 && !busy;
 
   async function submitFollowUp() {
     if (!canAsk) return;
+    setSubmitting(true);
     try {
       setSourceStatus(null);
       const { source, label } = await src.resolve();
       // A freshly attached source implies "add another source"; otherwise honour the mode.
       const mode: "reuse_previous" | "new" | "none" = source ? "new" : sourceMode;
-      ask.mutate({
-        question: question.trim(),
-        scope: (data?.thread?.scope ?? "any") as Scope,
-        threadId,
-        source: source ?? undefined,
-        sourceLabel: label ?? undefined,
-        allowUnsourced: source ? allowUnsourced : undefined,
-        sourceMode: mode,
+      const res = await poller.run(async () => {
+        const started = await startTask.mutateAsync({
+          question: question.trim(),
+          scope: (data?.thread?.scope ?? "any") as Scope,
+          threadId,
+          source: source ?? undefined,
+          sourceLabel: label ?? undefined,
+          allowUnsourced: source ? allowUnsourced : undefined,
+          sourceMode: mode,
+        });
+        return { taskId: started.taskId, threadId: started.threadId };
       });
+      setSourceStatus(res.sourceStatus);
+      if (res.stage === "needs_source_fix") {
+        toast.error("I couldn’t read that source. Fix it and retry, or tick “Answer without the source” to proceed on general knowledge.");
+      } else if (res.stage === "failed") {
+        toast.error("The enquiry failed. Please try again.");
+      } else {
+        toast.success(
+          res.findings.length > 0
+            ? `Answered — ${res.findings.length} finding${res.findings.length === 1 ? "" : "s"} added below.`
+            : "Answered — no structured findings this time.",
+        );
+        setQuestion("");
+        src.reset();
+      }
+      utils.research.getThread.invalidate({ id: threadId });
+      utils.research.listThreads.invalidate();
+      utils.research.newFindingsCount.invalidate();
+      utils.researchPipeline.digest.invalidate();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Upload failed.");
+      toast.error(err instanceof Error ? err.message : "Something went wrong.");
+    } finally {
+      setSubmitting(false);
     }
   }
 
@@ -934,6 +1097,7 @@ function Conversation({ threadId, onExit }: { threadId: number; onExit: () => vo
           {src.provided && (
             <p className="text-[11px] text-muted-foreground">Using previous context + this new source.</p>
           )}
+          {poller.running && <TaskStageProgress stage={poller.stage} />}
           {sourceStatus && <SourceStatusPanel status={sourceStatus} />}
           {src.provided && (
             <label className="flex items-start gap-2 rounded-md border border-border bg-background px-3 py-2 text-xs text-muted-foreground cursor-pointer">
@@ -955,7 +1119,7 @@ function Conversation({ threadId, onExit }: { threadId: number; onExit: () => vo
             <div className="flex-1" />
             <Button onClick={() => void submitFollowUp()} disabled={!canAsk}>
               {busy ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <Send className="w-4 h-4 mr-1.5" />}
-              {src.uploading ? "Uploading…" : ask.isPending ? "Asking…" : "Send follow-up"}
+              {src.uploading ? "Uploading…" : poller.running ? (poller.stage ? STAGE_LABELS[poller.stage] : "Asking…") : "Send follow-up"}
             </Button>
           </div>
         </CardContent>
@@ -1012,14 +1176,40 @@ function OpeningPanel({ onStarted }: { onStarted: (threadId: number) => void }) 
   const [sourceStatus, setSourceStatus] = useState<SourceStatus | null>(null);
   const src = useSourceAttachment();
 
-  const ask = trpc.research.ask.useMutation({
-    onSuccess: (res) => {
-      setSourceStatus((res.sourceStatus ?? null) as SourceStatus | null);
-      const blocked = (res.stage as string | undefined) === "needs_source_fix";
-      if (blocked) {
+  // Round 96 — the opening enquiry runs as a pollable task too, so the manager sees a
+  // live stage (reading source → asking AI → extracting) instead of one long request.
+  const startTask = trpc.research.startResearchTask.useMutation();
+  const poller = useResearchTaskPoller();
+  const [submitting, setSubmitting] = useState(false);
+
+  const busy = submitting || poller.running || src.uploading;
+  const canAsk = question.trim().length >= 4 && !busy;
+
+  async function submit() {
+    if (!canAsk) return;
+    setSubmitting(true);
+    try {
+      setSourceStatus(null);
+      const { source, label } = await src.resolve();
+      const res = await poller.run(async () => {
+        const started = await startTask.mutateAsync({
+          question: question.trim(),
+          scope,
+          source: source ?? undefined,
+          sourceLabel: label ?? undefined,
+          allowUnsourced: source ? allowUnsourced : undefined,
+        });
+        return { taskId: started.taskId, threadId: started.threadId };
+      });
+      setSourceStatus(res.sourceStatus);
+      if (res.stage === "needs_source_fix") {
         // The attached source could not be read and the manager did NOT pre-authorise
         // answering without it: no briefing, no findings. Point them at the fix.
-        toast.error("I couldn\u2019t read that source. Fix it and retry, or tick \u201cAnswer without the source\u201d to proceed on general knowledge.");
+        toast.error("I couldn’t read that source. Fix it and retry, or tick “Answer without the source” to proceed on general knowledge.");
+        return;
+      }
+      if (res.stage === "failed") {
+        toast.error("The enquiry failed. Please try again.");
         return;
       }
       toast.success(
@@ -1031,27 +1221,10 @@ function OpeningPanel({ onStarted }: { onStarted: (threadId: number) => void }) 
       utils.research.newFindingsCount.invalidate();
       utils.researchPipeline.digest.invalidate();
       if (res.threadId != null) onStarted(res.threadId);
-    },
-    onError: (err) => toast.error(err.message),
-  });
-
-  const busy = ask.isPending || src.uploading;
-  const canAsk = question.trim().length >= 4 && !busy;
-
-  async function submit() {
-    if (!canAsk) return;
-    try {
-      setSourceStatus(null);
-      const { source, label } = await src.resolve();
-      ask.mutate({
-        question: question.trim(),
-        scope,
-        source: source ?? undefined,
-        sourceLabel: label ?? undefined,
-        allowUnsourced: source ? allowUnsourced : undefined,
-      });
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Upload failed.");
+      toast.error(err instanceof Error ? err.message : "Something went wrong.");
+    } finally {
+      setSubmitting(false);
     }
   }
 
@@ -1083,6 +1256,7 @@ function OpeningPanel({ onStarted }: { onStarted: (threadId: number) => void }) 
             if ((e.metaKey || e.ctrlKey) && e.key === "Enter") void submit();
           }}
         />
+        {poller.running && <TaskStageProgress stage={poller.stage} />}
         {sourceStatus && <SourceStatusPanel status={sourceStatus} />}
         {src.provided && (
           <label className="flex items-start gap-2 rounded-md border border-border bg-background px-3 py-2 text-xs text-muted-foreground cursor-pointer">
@@ -1119,7 +1293,7 @@ function OpeningPanel({ onStarted }: { onStarted: (threadId: number) => void }) 
           <div className="flex-1" />
           <Button onClick={() => void submit()} disabled={!canAsk}>
             {busy ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <Send className="w-4 h-4 mr-1.5" />}
-            {src.uploading ? "Uploading…" : ask.isPending ? "Asking…" : "Ask"}
+            {src.uploading ? "Uploading…" : poller.running ? (poller.stage ? STAGE_LABELS[poller.stage] : "Asking…") : "Ask"}
           </Button>
         </div>
         {src.node}

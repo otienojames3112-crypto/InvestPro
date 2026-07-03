@@ -371,7 +371,12 @@ describe("Round 89 · G — the catalogue-review UI routes to the queue and show
   const dialog = read("client/src/components/CatalogueSourceReview.tsx");
 
   it("calls the shared engine and lets the manager draft each finding into the queue", () => {
-    expect(dialog).toContain("research.reviewCatalogueSource");
+    // Round 96 — the dialog now runs the review through the POLLABLE task flow
+    // (startReviewTask + shared poller) instead of the old blocking mutation, so
+    // long catalogue reviews no longer hold the request open. It still renders the
+    // identical FindingCard whose action drafts each proposal into the queue.
+    expect(dialog).toContain("research.startReviewTask");
+    expect(dialog).toContain("useResearchTaskPoller");
     // Findings render via the shared FindingCard, whose action drafts to the queue.
     expect(dialog).toContain("FindingCard");
     expect(dialog).toContain("draftFromFinding");

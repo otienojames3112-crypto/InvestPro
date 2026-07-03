@@ -1741,4 +1741,18 @@
 - [x] Rate Settings (UpdateRatesPanel CBK+MMF source rows) + Source Registry rows now show "Review source with AI" (seeds URL into governed per-catalogue review; findings only, no save). CatalogueSourceReviewButton extended with initialUrl/label; useSourceAttachment accepts initialUrl.
 - [x] Tests: server/round95AiGovernance.test.ts (16) — aiExplain group is queries-only & writes nothing; engine never imports db + non-advice guardrail; catalogue review = findings only (never a write/recommendation); draftFromFinding only enqueues; sole promotion is admin `review` keyed on approve; client surfaces use useQuery + enabled-gating; Rate Settings/Source Registry expose the review button
 - [x] Full suite (1649) + tsc green; UI verified earlier (Source Registry + UpdateRatesPanel review buttons, explain dialogs)
-- [ ] Deliver: full codebase ZIP + database dump
+- [x] Deliver: full codebase ZIP (kes5m-tracker-codebase.zip, 511 files, node_modules/.git excluded) + database dump (kes5m-tracker-db-dump.sql, 40 tables, schema+data, TiDB via mysqldump --ssl-mode=REQUIRED)
+
+# Round 96 — Audit fixes (task-based AI flow, bank identity, ledger explainer, Explore legacy) + full migration bundle
+
+- [x] (1/5) Ask AI (OpeningPanel + follow-up composer) + Catalogue Source Review switched from blocking research.ask/reviewCatalogueSource to pollable task flow. Added server `startReviewTask` (queued review task; processResearchTask rebuilds the FULL extraction question from a fresh snapshot). Client shared `useResearchTaskPoller` + `TaskStageProgress`/STAGE_LABELS; staged status (queued/reading source/asking AI/extracting/done). Old blocking procedures kept for back-compat.
+- [x] Catalogue review stays strict THROUGH the task flow: unreadable source = needs_source_fix, zero findings, LLM never called (Round 96 test B).
+- [x] (2) All Approved bank deep-link identity: catalogueHref refValue = r.targetRef (bank -> bank:<id>, exact product), never the shared bank name.
+- [x] (3) Manager tool "Link holding to reference product": server `bankHoldings.linkToInstrument` (auth+ownership gated, validates via resolveBankRef, audit-logged, null clears) + BankHoldings.tsx manager-only Link dialog + Linked/Not-linked badge.
+- [x] (4) MMF Market actions VERIFIED: Add-as-MMF-account -> /mmf?addSecondary=1&fundId= prefilled; Record deposit -> DepositDrawer for that fund; not-held -> amber "add secondary first" hint. No change needed.
+- [x] (6) Explore.tsx legacy DELETED (orphaned; fully replaced by AllApprovedInstruments). /explore redirects to research?tab=reference-catalogues (all-approved). Round 96 test G asserts the file is gone + tab renders AllApprovedInstruments.
+- [x] (7) Ledger AI explainer: ledgerMonth now takes cbkCashIn + bankCashIn separately + bankEndBalance + tbill91/182/364EndBalance + secondaryMmfEndBalance; facts emit distinct "Cash released from CBK securities" vs "...maturing bank instruments" lines + per-tenor T-bill + secondary MMF + bank deposits. Ledger.tsx wires all fields (no more cbk+bank merge).
+- [x] (8) aiExplain procedures remain read-only queries (confirmed; round95AiGovernance still green).
+- [x] (9) Tests: server/round96PollableReview.test.ts (11) — pollable review A/B/C, deep-link D, linkToInstrument E, ledger split F, Explore retirement G. round89 G updated to assert startReviewTask flow.
+- [x] Full suite (1660) + tsc green.
+- [ ] Deliver migration bundle: full codebase ZIP INCLUDING node_modules + full DB dump + built client for seamless off-Manus migration

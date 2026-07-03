@@ -65,6 +65,7 @@ import {
   addBankInstrumentHolding,
   updateBankInstrumentHolding,
   deleteBankInstrumentHolding,
+  resolveBankRef,
   getActualsSummary,
   getBenchmarkInputs,
   getInflationBenchmarkPct,
@@ -4560,13 +4561,24 @@ export const appRouter = router({
             isActual: z.boolean(),
             entryDate: z.string().max(40).optional(),
             contribution: z.number(),
+            // Round 96 — cash-in is now split by source so the explainer never
+            // conflates a Treasury maturity with a maturing bank deposit.
             cbkCashIn: z.number(),
+            bankCashIn: z.number().optional(),
             mmfToDhow: z.number(),
             mainAction: z.string().max(400).nullable().optional(),
             mmfEndBalance: z.number(),
+            // Round 96 — a second MMF sleeve (secondary provider) reported distinctly.
+            secondaryMmfEndBalance: z.number().optional(),
             tbillEndBalance: z.number(),
+            // Round 96 — optional per-tenor T-bill breakdown for a richer explanation.
+            tbill91EndBalance: z.number().optional(),
+            tbill182EndBalance: z.number().optional(),
+            tbill364EndBalance: z.number().optional(),
             ifbEndBalance: z.number(),
             fxdEndBalance: z.number(),
+            // Round 96 — money actually held at commercial banks at month end.
+            bankEndBalance: z.number().optional(),
             totalEndBalance: z.number(),
             mmfInterestNet: z.number().nullable().optional(),
             notes: z.string().max(400).nullable().optional(),
@@ -4576,14 +4588,25 @@ export const appRouter = router({
       .query(async ({ ctx, input }) => {
         await requirePortfolio(input.portfolioId, ctx.user.id);
         const m = input.month;
+        const kes = (n: number) => `KES ${Math.round(n).toLocaleString()}`;
+        // Round 96 — the two cash-in legs are now described SEPARATELY. Treasury
+        // (CBK) maturities/coupons and a maturing commercial-bank deposit are
+        // economically different events, so we never merge them into one figure.
+        const tbillBreakdown =
+          m.tbill91EndBalance != null || m.tbill182EndBalance != null || m.tbill364EndBalance != null
+            ? ` (91-day ${kes(m.tbill91EndBalance ?? 0)}, 182-day ${kes(m.tbill182EndBalance ?? 0)}, 364-day ${kes(m.tbill364EndBalance ?? 0)})`
+            : "";
         const facts = [
           `Month #${m.monthNumber}${m.entryDate ? ` (${m.entryDate})` : ""} — ${m.isActual ? "ACTUAL (recorded)" : "PROJECTED"}.`,
-          `Contribution in this month: KES ${m.contribution.toLocaleString()}.`,
-          `Cash released from CBK maturities (cbkCashIn): KES ${m.cbkCashIn.toLocaleString()}.`,
-          `Amount swept out of the money-market fund into longer-dated instruments (mmfToDhow): KES ${m.mmfToDhow.toLocaleString()}.`,
-          m.mmfInterestNet != null ? `Net MMF interest earned this month (after WHT): KES ${m.mmfInterestNet.toLocaleString()}.` : "",
-          `End balances — MMF (stayed liquid): KES ${m.mmfEndBalance.toLocaleString()}; T-bills: KES ${m.tbillEndBalance.toLocaleString()}; IFB: KES ${m.ifbEndBalance.toLocaleString()}; FXD: KES ${m.fxdEndBalance.toLocaleString()}.`,
-          `Total portfolio value at month end: KES ${m.totalEndBalance.toLocaleString()}.`,
+          `Contribution in this month: ${kes(m.contribution)}.`,
+          `Cash released from CBK securities (Treasury bill/bond maturities and coupons, net of tax): ${kes(m.cbkCashIn)}.`,
+          `Cash released from maturing bank instruments (commercial-bank term deposits): ${kes(m.bankCashIn ?? 0)}.`,
+          `Amount swept out of the money-market fund into longer-dated instruments (mmfToDhow): ${kes(m.mmfToDhow)}.`,
+          m.mmfInterestNet != null ? `Net MMF interest earned this month (after WHT): ${kes(m.mmfInterestNet)}.` : "",
+          `End balances — MMF (primary, stayed liquid): ${kes(m.mmfEndBalance)}${
+            m.secondaryMmfEndBalance != null ? `; MMF (secondary sleeve): ${kes(m.secondaryMmfEndBalance)}` : ""
+          }; T-bills: ${kes(m.tbillEndBalance)}${tbillBreakdown}; IFB: ${kes(m.ifbEndBalance)}; FXD: ${kes(m.fxdEndBalance)}; Bank deposits: ${kes(m.bankEndBalance ?? 0)}.`,
+          `Total portfolio value at month end: ${kes(m.totalEndBalance)}.`,
           m.mainAction ? `Recorded action: ${m.mainAction}.` : "",
           m.notes ? `Notes: ${m.notes}.` : "",
         ]
@@ -6748,6 +6771,49 @@ export const appRouter = router({
         await deleteBankInstrumentHolding(input.id, input.portfolioId);
         return { success: true };
       }),
+    /**
+     * Round 96 — link an EXISTING bank holding to a Bank Product Catalogue row
+     * (`bankInstruments.id`), or clear the link. Holdings recorded before Round 93
+     * carry no `bankInstrumentId`, so their rate history / catalogue provenance was
+     * orphaned. This lets a manager attach the correct reference product after the
+     * fact (or detach a wrong one) WITHOUT touching any money figures. Pass
+     * `bankInstrumentId: null` to clear. We validate the target exists so we never
+     * write a dangling id.
+     */
+    linkToInstrument: protectedProcedure
+      .input(
+        z.object({
+          id: z.number().int().positive(),
+          portfolioId: z.number().int().positive(),
+          bankInstrumentId: z.number().int().positive().nullable(),
+        }),
+      )
+      .mutation(async ({ ctx, input }) => {
+        await requirePortfolio(input.portfolioId, ctx.user.id);
+        if (input.bankInstrumentId != null) {
+          const target = await resolveBankRef(`bank:${input.bankInstrumentId}`);
+          if (!target) {
+            throw new TRPCError({ code: "NOT_FOUND", message: "That reference product no longer exists." });
+          }
+        }
+        await updateBankInstrumentHolding(input.id, input.portfolioId, {
+          bankInstrumentId: input.bankInstrumentId,
+        });
+        await addAuditLog({
+          portfolioId: input.portfolioId,
+          entity: "bank_holding",
+          action: "update",
+          field: "bankInstrumentId",
+          newValue: input.bankInstrumentId == null ? "(cleared)" : `bank:${input.bankInstrumentId}`,
+          changedByOpenId: ctx.user.openId,
+          changedByName: ctx.user.name ?? null,
+          summary:
+            input.bankInstrumentId == null
+              ? "Cleared the reference-product link on a bank holding"
+              : `Linked a bank holding to reference product bank:${input.bankInstrumentId}`,
+        });
+        return { success: true };
+      }),
   }),
 
   // ─── Round 12: MMF Composition / Strategy reference (global) ──────────────
@@ -8315,6 +8381,83 @@ export const appRouter = router({
         return { taskId, threadId, stage: "queued" as const };
       }),
 
+    // Round 96 — POLLABLE catalogue review. The blocking `reviewCatalogueSource` (kept
+    // below for backward-compatible callers/tests) held one long request open while it
+    // read the source + ran the LLM. `startReviewTask` instead persists a queued review
+    // task and returns IMMEDIATELY at stage `queued`; the client then calls
+    // `processResearchTask` and polls `getTask`, exactly like Ask AI. The review-kind
+    // task carries `reviewCatalogue` so `processResearchTask` rebuilds the full
+    // catalogue-extraction QUESTION (instruction + a FRESH current-rows snapshot) at
+    // process time — we do NOT persist a giant prompt, and the diff is always against
+    // the latest rows. Strict source gating is unchanged (kind:"review" → an unreadable
+    // source stops before the LLM with `needs_source_fix` + zero findings).
+    startReviewTask: adminProcedure
+      .input(
+        z.object({
+          catalogue: z.enum(["mmf", "bank", "cbk", "market_asset"]),
+          source: z.discriminatedUnion("kind", [
+            z.object({ kind: z.literal("url"), url: z.string().url().max(500) }),
+            z.object({ kind: z.literal("text"), text: z.string().min(1).max(40000) }),
+            z.object({ kind: z.literal("pdf"), fileKey: z.string().min(1).max(300) }),
+            z.object({ kind: z.literal("image"), fileKey: z.string().min(1).max(300) }),
+          ]),
+          sourceLabel: z.string().max(200).optional(),
+        }),
+      )
+      .mutation(async ({ ctx, input }) => {
+        const openId = ctx.user.openId ?? String(ctx.user.id);
+        const catalogue = input.catalogue as ReferenceCatalogue;
+        const scopeLabel: Record<ReferenceCatalogue, string> = {
+          mmf: "MMF Market",
+          bank: "Bank Product Catalogue",
+          cbk: "CBK Securities Reference",
+          market_asset: "Market Assets Reference",
+        };
+        // Open a review THREAD so the proposals group under one enquiry.
+        const threadId = await createResearchThread({
+          createdByOpenId: openId,
+          createdByName: ctx.user.name ?? null,
+          title: `Review ${scopeLabel[catalogue]} source with AI`,
+          scope: catalogue,
+        });
+        const pending: PendingResearchSource =
+          input.source.kind === "url"
+            ? { kind: "url", url: input.source.url }
+            : input.source.kind === "text"
+              ? { kind: "text", text: input.source.text }
+              : input.source.kind === "pdf"
+                ? { kind: "pdf", fileKey: input.source.fileKey }
+                : { kind: "image", fileKey: input.source.fileKey };
+        const taskId = await createResearchTask({
+          createdByOpenId: openId,
+          createdByName: ctx.user.name ?? null,
+          prompt: `Catalogue review: ${scopeLabel[catalogue]}${input.sourceLabel ? ` — ${input.sourceLabel}` : ""}`,
+          scope: catalogue,
+          status: "queued",
+          stage: "queued",
+          kind: "review",
+          reviewCatalogue: catalogue,
+          sourceKind: pending.kind,
+          sourceRef: pending.kind === "url" ? pending.url : pending.kind === "text" ? pending.text.slice(0, 60000) : pending.fileKey,
+          sourceLabel: input.sourceLabel ?? undefined,
+          threadId: threadId ?? undefined,
+        });
+        if (!taskId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Could not create the review." });
+        if (threadId != null) {
+          const sref =
+            pending.kind === "url" ? pending.url : pending.kind === "text" ? pending.text.slice(0, 700) : pending.fileKey;
+          await insertResearchMessage({
+            threadId,
+            role: "user",
+            content: `Review this ${scopeLabel[catalogue]} source against the current catalogue.`,
+            sourceKind: pending.kind,
+            sourceRef: sref,
+            sourceLabel: input.sourceLabel ?? undefined,
+          });
+        }
+        return { taskId, threadId, stage: "queued" as const };
+      }),
+
     // Round 91 — run a queued task to completion. Reads the persisted pending source,
     // gathers prior thread turns, and drives the same executeResearchTask pipeline. Safe
     // to call once per queued task; a task already past `queued` is returned as-is.
@@ -8358,11 +8501,23 @@ export const appRouter = router({
           // Round 92 — durable structured facts already established in this enquiry.
           priorFindings = await buildPriorFindingsContext(task.threadId);
         }
+        // Round 96 — for a REVIEW task the persisted `prompt` is only a human label
+        // ("Catalogue review: …"). Rebuild the FULL catalogue-extraction question here,
+        // against a FRESH snapshot of the current rows, so the diff is always current and
+        // the LLM receives the same instruction the blocking path used. Ask tasks pass
+        // their prompt through verbatim.
+        const kind = (task.kind as "ask" | "review") ?? "ask";
+        let question = task.prompt;
+        if (kind === "review" && task.reviewCatalogue) {
+          const cat = task.reviewCatalogue as ReferenceCatalogue;
+          const snapshot = await catalogueSnapshot(cat);
+          question = buildCatalogueReviewQuestion(cat, snapshot);
+        }
         const out = await executeResearchTask({
           taskId: task.id,
           threadId: task.threadId ?? null,
-          kind: (task.kind as "ask" | "review") ?? "ask",
-          question: task.prompt,
+          kind,
+          question,
           scope: task.scope as ResearchScope,
           source: pending,
           sourceLabel: task.sourceLabel ?? null,

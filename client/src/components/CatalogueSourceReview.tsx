@@ -24,6 +24,9 @@ import {
   FindingCard,
   useSourceAttachment,
   SourceStatusPanel,
+  useResearchTaskPoller,
+  TaskStageProgress,
+  STAGE_LABELS,
   type Finding,
   type SourceStatus,
 } from "@/pages/AskAI";
@@ -94,6 +97,14 @@ function ReviewDialog({
   } | null>(null);
   const utils = trpc.useUtils();
 
+  // Round 96 — the review runs as a POLLABLE task (start → process → poll) exactly like
+  // Ask AI, so a slow source read shows a live stage instead of holding one long
+  // request open. Strict gating is unchanged server-side (unreadable source ⇒
+  // needs_source_fix, zero findings).
+  const startReview = trpc.research.startReviewTask.useMutation();
+  const poller = useResearchTaskPoller();
+  const [submitting, setSubmitting] = useState(false);
+
   // Findings for the current review task; re-fetched after a draft/dismiss so the
   // card badges update. Only enabled once a review has produced a task.
   const findingsQuery = trpc.research.listFindings.useQuery(
@@ -101,39 +112,44 @@ function ReviewDialog({
     { enabled: result != null },
   );
 
-  const review = trpc.research.reviewCatalogueSource.useMutation({
-    onSuccess: (data) => {
-      const sourceStatus = (data.sourceStatus ?? null) as SourceStatus | null;
-      const stage = (data.stage as string | undefined) ?? "done";
-      setResult({
-        answer: data.answer,
-        taskId: data.taskId,
-        // The mutation already returns the freshly-created findings; seed the panel
-        // with them so the first render never depends on the follow-up query.
-        findings: Array.isArray(data.findings) ? (data.findings as unknown as Finding[]) : [],
-        stage,
-        sourceStatus,
-      });
-      if (stage === "needs_source_fix") {
-        // The SOURCE could not be read — this is NOT an AI failure, and NO proposals
-        // were generated. Tell the manager exactly how to fix the source and retry.
-        toast.error("I couldn\u2019t read that source, so I didn\u2019t propose any changes. Fix the source and try again.");
-      } else {
-        toast.success("Source reviewed \u2014 review each proposal below and send the ones you want to the queue.");
-      }
-      // Refresh the desk's pending/new-finding counts in the background.
-      utils.research.listFindings.invalidate();
-    },
-    onError: (err) => toast.error(err.message),
-  });
-
   async function runReview() {
     const { source, label } = await attach.resolve();
     if (!source) {
       toast.error("Attach a source first — a URL, pasted text, a PDF, or a screenshot.");
       return;
     }
-    review.mutate({ catalogue, source, sourceLabel: label ?? undefined });
+    setSubmitting(true);
+    try {
+      const res = await poller.run(async () => {
+        const started = await startReview.mutateAsync({
+          catalogue,
+          source,
+          sourceLabel: label ?? undefined,
+        });
+        return { taskId: started.taskId, threadId: started.threadId };
+      });
+      setResult({
+        answer: res.answer,
+        taskId: res.taskId,
+        findings: res.findings,
+        stage: res.stage,
+        sourceStatus: res.sourceStatus,
+      });
+      if (res.stage === "needs_source_fix") {
+        // The SOURCE could not be read — this is NOT an AI failure, and NO proposals
+        // were generated. Tell the manager exactly how to fix the source and retry.
+        toast.error("I couldn’t read that source, so I didn’t propose any changes. Fix the source and try again.");
+      } else if (res.stage === "failed") {
+        toast.error("The review failed. Please try again.");
+      } else {
+        toast.success("Source reviewed — review each proposal below and send the ones you want to the queue.");
+      }
+      utils.research.listFindings.invalidate();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Something went wrong.");
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   function close() {
@@ -146,7 +162,8 @@ function ReviewDialog({
   }
 
   const needsSourceFix = result?.stage === "needs_source_fix";
-  const busy = review.isPending || attach.uploading;
+  const busy = submitting || poller.running || attach.uploading;
+  const runningLabel = poller.stage ? STAGE_LABELS[poller.stage] : "Reviewing…";
   // `research.listFindings` returns `{ findings: [...] }`, NOT a bare array. Unwrap it
   // defensively (Array.isArray guard) and fall back to the findings the mutation
   // already returned so the result panel renders even before the query resolves.
@@ -177,6 +194,7 @@ function ReviewDialog({
         {!result && (
           <div className="space-y-3">
             {attach.node}
+            {poller.running && <TaskStageProgress stage={poller.stage} />}
             <DialogFooter>
               <Button variant="outline" className="bg-background" onClick={close} disabled={busy}>
                 Cancel
@@ -187,7 +205,7 @@ function ReviewDialog({
                 ) : (
                   <Bot className="w-4 h-4 mr-2" />
                 )}
-                {attach.uploading ? "Uploading…" : review.isPending ? "Reviewing…" : "Review source"}
+                {attach.uploading ? "Uploading…" : poller.running ? runningLabel : "Review source"}
               </Button>
             </DialogFooter>
           </div>
@@ -202,6 +220,7 @@ function ReviewDialog({
             </div>
             <div className="flex flex-col gap-3">
               {attach.node}
+              {poller.running && <TaskStageProgress stage={poller.stage} />}
               <DialogFooter className="gap-2 sm:gap-2">
                 <Button
                   variant="outline"
@@ -215,7 +234,7 @@ function ReviewDialog({
                 </Button>
                 <Button onClick={runReview} disabled={busy || !attach.provided}>
                   {busy ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Bot className="w-4 h-4 mr-2" />}
-                  {attach.uploading ? "Uploading\u2026" : review.isPending ? "Reviewing\u2026" : "Retry review"}
+                  {attach.uploading ? "Uploading…" : poller.running ? runningLabel : "Retry review"}
                 </Button>
               </DialogFooter>
             </div>

@@ -1,7 +1,9 @@
 import { useMemo, useState } from "react";
 import { Link } from "wouter";
+import { toast } from "sonner";
 import { usePortfolio } from "@/contexts/PortfolioContext";
 import { trpc } from "@/lib/trpc";
+import { useAuth } from "@/_core/hooks/useAuth";
 import { invalidatePortfolioMoney } from "@/lib/invalidatePortfolioMoney";
 import { formatKES } from "@/lib/format";
 import { earlyBreakWhatIf } from "@shared/actuals";
@@ -32,6 +34,21 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   Building2,
   PlusCircle,
   Pencil,
@@ -40,6 +57,8 @@ import {
   Landmark,
   TrendingUp,
   CalendarClock,
+  Link2,
+  Link2Off,
 } from "lucide-react";
 import { useDepositDrawer } from "@/contexts/DepositDrawerContext";
 
@@ -58,6 +77,8 @@ import { useDepositDrawer } from "@/contexts/DepositDrawerContext";
  */
 export default function BankHoldings({ embedded: _embedded = false }: { embedded?: boolean } = {}) {
   const { portfolioId } = usePortfolio();
+  const { user } = useAuth();
+  const isManager = user?.role === "admin";
   const { openDrawer } = useDepositDrawer();
   const utils = trpc.useUtils();
 
@@ -65,6 +86,13 @@ export default function BankHoldings({ embedded: _embedded = false }: { embedded
     { portfolioId: portfolioId! },
     { enabled: !!portfolioId },
   );
+
+  // Round 96 — reference-product catalogue, used only by the manager-only
+  // "Link to reference product" tool below (attaches provenance to legacy holdings).
+  const { data: refProducts = [] } = trpc.bankInstruments.list.useQuery(undefined, {
+    enabled: isManager,
+    staleTime: 60_000,
+  });
 
   const [deleteBankId, setDeleteBankId] = useState<number | null>(null);
   const deleteBank = trpc.bankHoldings.remove.useMutation({
@@ -74,6 +102,31 @@ export default function BankHoldings({ embedded: _embedded = false }: { embedded
     },
     onError: () => setDeleteBankId(null),
   });
+
+  // Round 96 — link-to-reference tool. `linkHolding` is the holding row being
+  // (re)linked; `linkChoice` is the picked catalogue id ("none" = clear the link).
+  const [linkHolding, setLinkHolding] = useState<(typeof bankHoldings)[number] | null>(null);
+  const [linkChoice, setLinkChoice] = useState<string>("none");
+  const linkMutation = trpc.bankHoldings.linkToInstrument.useMutation({
+    onSuccess: () => {
+      utils.bankHoldings.list.invalidate();
+      setLinkHolding(null);
+      toast.success("Reference-product link updated.");
+    },
+    onError: (e) => toast.error(e.message || "Could not update the link."),
+  });
+  const refProductLabel = (id: number | null | undefined): string | null => {
+    if (id == null) return null;
+    const p = refProducts.find((r) => r.id === id);
+    if (!p) return `Product #${id} (removed)`;
+    return `${p.bankName} · ${bankInstrumentLabel(p.instrumentType as BankInstrumentType)}${
+      p.indicativeRate != null ? ` · ${p.indicativeRate.toFixed(2)}%` : ""
+    }`;
+  };
+  const openLink = (h: (typeof bankHoldings)[number]) => {
+    setLinkChoice(h.bankInstrumentId != null ? String(h.bankInstrumentId) : "none");
+    setLinkHolding(h);
+  };
 
   // Derived roll-ups. Each figure reuses the shared helpers, so it matches the
   // dashboard/tax surfaces rather than introducing a second source of truth.
@@ -258,6 +311,25 @@ export default function BankHoldings({ embedded: _embedded = false }: { embedded
                         {h.bankName}
                         {h.isNegotiable ? " · negotiable" : ""}
                       </div>
+                      {isManager && (
+                        <div className="mt-1 flex items-center gap-1 text-[10px]">
+                          {h.bankInstrumentId != null ? (
+                            <Badge
+                              variant="outline"
+                              className="gap-1 px-1.5 py-0 border-emerald-500/40 text-emerald-300"
+                            >
+                              <Link2 className="w-2.5 h-2.5" /> Linked to catalogue
+                            </Badge>
+                          ) : (
+                            <Badge
+                              variant="outline"
+                              className="gap-1 px-1.5 py-0 border-white/15 text-muted-foreground"
+                            >
+                              <Link2Off className="w-2.5 h-2.5" /> Not linked
+                            </Badge>
+                          )}
+                        </div>
+                      )}
                     </TableCell>
                     <TableCell>
                       <Badge className="bg-sky-500/15 text-sky-300 border-sky-500/30 text-xs">
@@ -299,6 +371,17 @@ export default function BankHoldings({ embedded: _embedded = false }: { embedded
                     </TableCell>
                     <TableCell>
                       <div className="flex items-center gap-1">
+                        {isManager && (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                            title="Link to reference product"
+                            onClick={() => openLink(h)}
+                          >
+                            <Link2 className="w-3.5 h-3.5" />
+                          </Button>
+                        )}
                         <Button
                           variant="ghost"
                           size="icon"
@@ -357,6 +440,72 @@ export default function BankHoldings({ embedded: _embedded = false }: { embedded
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Round 96 — manager-only: link an existing holding to a Bank Product
+          Catalogue row (provenance only, no money math touched). */}
+      <Dialog open={linkHolding !== null} onOpenChange={(o) => !o && setLinkHolding(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Link to reference product</DialogTitle>
+            <DialogDescription>
+              Attach this holding to a row in the Bank Product Catalogue so its rate history and
+              provenance stay connected. This is a bookkeeping link only — it does not change any
+              principal, rate or interest figure.
+            </DialogDescription>
+          </DialogHeader>
+          {linkHolding && (
+            <div className="space-y-3">
+              <div className="rounded-lg border border-white/10 bg-white/5 p-3 text-sm">
+                <div className="font-medium text-foreground">
+                  {linkHolding.label || linkHolding.bankName}
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  {linkHolding.bankName} · {formatKES(linkHolding.principal)} ·{" "}
+                  {Number(linkHolding.interestRate).toFixed(2)}%
+                </div>
+                <div className="mt-1 text-xs text-muted-foreground">
+                  Currently:{" "}
+                  {refProductLabel(linkHolding.bankInstrumentId) ?? "not linked to any reference product"}
+                </div>
+              </div>
+              <Select value={linkChoice} onValueChange={setLinkChoice}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Choose a reference product" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">No link (clear)</SelectItem>
+                  {refProducts
+                    .filter((p) => p.isActive)
+                    .map((p) => (
+                      <SelectItem key={p.id} value={String(p.id)}>
+                        {p.bankName} · {bankInstrumentLabel(p.instrumentType as BankInstrumentType)}
+                        {p.indicativeRate != null ? ` · ${p.indicativeRate.toFixed(2)}%` : ""}
+                      </SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setLinkHolding(null)}>
+              Cancel
+            </Button>
+            <Button
+              disabled={linkMutation.isPending || !linkHolding || !portfolioId}
+              onClick={() => {
+                if (!linkHolding || !portfolioId) return;
+                linkMutation.mutate({
+                  id: linkHolding.id,
+                  portfolioId,
+                  bankInstrumentId: linkChoice === "none" ? null : Number(linkChoice),
+                });
+              }}
+            >
+              {linkMutation.isPending ? "Saving…" : "Save link"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

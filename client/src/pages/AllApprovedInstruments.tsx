@@ -125,7 +125,13 @@ function catParamFor(cat: ReferenceCatalogue): string {
 /** The deep link back into the owning catalogue tab, scrolled-to + highlighted. */
 function catalogueHref(r: ApprovedRow): string {
   const cat = r.catalogue as ReferenceCatalogue;
-  const refValue = cat === "mmf" || cat === "bank" ? r.name : r.ref;
+  // Round 96 — always deep-link by the row's stable catalogue-focus key `targetRef`,
+  // which each catalogue page registers its rows under:
+  //   mmf          → fundName        cbk / market_asset → opportunity ref
+  //   bank         → `bank:<id>`  (NEVER the shared bank name — two products at the
+  //                 same bank share a name, so linking by name highlighted the wrong
+  //                 row / filtered the page to nothing).
+  const refValue = r.targetRef;
   return `/research?tab=reference-catalogues&cat=${catParamFor(cat)}&ref=${encodeURIComponent(refValue)}`;
 }
 

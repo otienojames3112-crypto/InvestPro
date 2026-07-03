@@ -1771,3 +1771,16 @@
 - [x] (B6) Prompt discipline enforcement: AI may extract/compare/sort/explain/flag; must not recommend buying, say "best", create holdings, change portfolio, or publish without manager approval
 - [x] (C1) Tests: schema integrity (6 cols), CBK prospectus extraction → 3 findings with correct fields, NEVER_INVENT enforcement, source classification, holding snapshot exposure, prompt discipline guards, client rendering (27 tests in round97InstrumentProfile.test.ts)
 - [x] (C2) Full suite (1687 tests) + tsc green; checkpoint + deliver
+
+## Round 98 — Catalogue Review: Compare Source Against Existing Rows
+
+- [x] (1) Server: per-catalogue comparison extraction — AI compares source against existing rows and produces typed proposals (create/update/stale) with current value, proposed value, source, as-of, confidence, impact note
+- [x] (2) MMF Market: compare source yields/fees/AUM/crediting against existing mmf_funds rows; propose new fund, field changes, stale flags
+- [x] (3) Bank Product Catalogue: compare source rates/tenors/minimums/penalties against existing bank_instruments; propose new product, field changes, deactivation/stale
+- [x] (4) CBK Securities Reference: compare T-bill auctions, bond prospectuses, reopenings against existing opportunities; one row per bond; dedup by issue number (update if exists, create if new); save coupon-payment schedule + pricing-table metadata in extendedFields
+- [x] (5) Market Assets Reference: compare price/NAV/yields/fees against existing market_asset opportunities; propose updates, new rows, stale flags
+- [x] (6) Wire all proposals into Research Desk pipeline: findings → review queue → approval → catalogue update → Recently Approved audit log; no bypass
+- [x] (7) Client: upgrade each catalogue tab's Review button to show comparison proposals with current/proposed/source/confidence/impact; manager approves before any update
+- [x] (8) Impact notes on approval: e.g. "Updating the selected primary MMF rate affects future projections from the effective date. It does not rewrite past actuals."
+- [x] (9) Tests: comparison extraction accuracy, dedup by issue number, approval path, stale detection, impact note generation
+- [x] (10) Full suite + tsc green; checkpoint + deliver

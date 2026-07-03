@@ -87,12 +87,79 @@ const CONFIDENCE_META: Record<string, { label: string; className: string }> = {
 function fmtFields(fields: Record<string, unknown> | null | undefined): { key: string; value: string; missing?: boolean }[] {
   if (!fields) return [];
   return Object.entries(fields)
-    .filter(([k, v]) => k !== "_extendedFields" && v !== undefined && v !== null && String(v).trim() !== "")
+    .filter(([k, v]) => !k.startsWith("_") && v !== undefined && v !== null && String(v).trim() !== "")
     .map(([k, v]) => ({
       key: k,
       value: String(v) === "missing_from_source" ? "Missing from source" : String(v),
       missing: String(v) === "missing_from_source",
     }));
+}
+
+/* ── Round 98: Comparison Diff Table ──────────────────────────────────────── */
+
+function ComparisonDiffTable({ extractedFields }: { extractedFields: Record<string, unknown> | null | undefined }) {
+  if (!extractedFields) return null;
+  const proposalType = extractedFields._proposalType as string | undefined;
+  if (!proposalType || proposalType === "create") return null;
+
+  let changedFields: string[] = [];
+  let currentValues: { field: string; value: string }[] = [];
+  try {
+    const cf = extractedFields._changedFields;
+    changedFields = typeof cf === "string" ? JSON.parse(cf) : Array.isArray(cf) ? cf : [];
+    const cv = extractedFields._currentValues;
+    currentValues = typeof cv === "string" ? JSON.parse(cv) : Array.isArray(cv) ? cv : [];
+  } catch { /* ignore parse errors */ }
+
+  if (changedFields.length === 0) return null;
+
+  const currentMap = new Map(currentValues.map((c) => [c.field, c.value]));
+  const matchedRow = extractedFields._matchedCurrentRow as string | undefined;
+  const impactNote = extractedFields._impactNote as string | undefined;
+
+  return (
+    <div className="rounded-md border border-border bg-muted/30 p-3 space-y-2">
+      <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+        {proposalType === "stale" ? (
+          <AlertTriangle className="w-3.5 h-3.5 text-amber-500" />
+        ) : (
+          <Pencil className="w-3.5 h-3.5 text-blue-500" />
+        )}
+        <span>
+          {proposalType === "stale" ? "Stale row" : "Changes vs current"}
+          {matchedRow && <span className="text-foreground ml-1">— {matchedRow}</span>}
+        </span>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs border-collapse">
+          <thead>
+            <tr className="text-muted-foreground">
+              <th className="text-left font-medium py-1 pr-3">Field</th>
+              <th className="text-left font-medium py-1 pr-3">Current</th>
+              <th className="text-left font-medium py-1">Proposed</th>
+            </tr>
+          </thead>
+          <tbody>
+            {changedFields.map((field) => {
+              const current = currentMap.get(field) ?? "—";
+              const proposed = extractedFields[field];
+              const proposedStr = proposed === undefined || proposed === null ? "—" : String(proposed);
+              return (
+                <tr key={field} className="border-t border-border/50">
+                  <td className="py-1.5 pr-3 text-muted-foreground whitespace-nowrap">{field}</td>
+                  <td className="py-1.5 pr-3 tabular-nums text-red-600/80 line-through">{current}</td>
+                  <td className="py-1.5 tabular-nums font-medium text-emerald-600">{proposedStr}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      {impactNote && (
+        <p className="text-[11px] text-muted-foreground italic mt-1">{impactNote}</p>
+      )}
+    </div>
+  );
 }
 
 /* ── Finding type (now carries Round 88 versioning fields) ──────────────────── */
@@ -553,6 +620,27 @@ export function FindingCard({ finding, onChanged }: { finding: Finding; onChange
               <Badge variant="outline" className={`font-normal text-[11px] ${conf.className}`}>
                 {conf.label}
               </Badge>
+              {/* Round 98: Proposal type badge */}
+              {(() => {
+                const pt = finding.extractedFields?._proposalType as string | undefined;
+                if (!pt) return null;
+                if (pt === "create") return (
+                  <Badge variant="outline" className="font-normal text-[11px] bg-emerald-500/10 text-emerald-600 border-emerald-500/20">
+                    <Plus className="w-3 h-3 mr-0.5" /> New
+                  </Badge>
+                );
+                if (pt === "update") return (
+                  <Badge variant="outline" className="font-normal text-[11px] bg-blue-500/10 text-blue-600 border-blue-500/20">
+                    <Pencil className="w-3 h-3 mr-0.5" /> Update
+                  </Badge>
+                );
+                if (pt === "stale") return (
+                  <Badge variant="outline" className="font-normal text-[11px] bg-amber-500/10 text-amber-600 border-amber-500/20">
+                    <AlertTriangle className="w-3 h-3 mr-0.5" /> Stale
+                  </Badge>
+                );
+                return null;
+              })()}
               {isCorrection && (
                 <Badge variant="outline" className="font-normal text-[11px] bg-primary/10 text-primary border-primary/20">
                   <GitBranch className="w-3 h-3 mr-1" /> corrected version
@@ -582,6 +670,9 @@ export function FindingCard({ finding, onChanged }: { finding: Finding; onChange
         </div>
       </CardHeader>
       <CardContent className="space-y-3">
+        {/* Round 98: Diff table for update/stale proposals */}
+        <ComparisonDiffTable extractedFields={finding.extractedFields} />
+
         {fields.length > 0 ? (
           <div className="flex flex-wrap gap-x-6 gap-y-2">
             {fields.map((f) => (

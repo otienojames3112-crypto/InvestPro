@@ -445,7 +445,8 @@ describe("Round 97 · G — Client renders extended fields correctly", () => {
     const askAi = readFileSync(join(ROOT, "client/src/pages/AskAI.tsx"), "utf-8");
     // fmtFields should filter out _extendedFields
     expect(askAi).toContain("_extendedFields");
-    expect(askAi).toMatch(/k\s*!==\s*["']_extendedFields["']/);
+    // Round 98 broadened the filter to all _ prefixed keys
+    expect(askAi).toMatch(/k\.startsWith\(["']_["']\)|k\s*!==\s*["']_extendedFields["']/);
     // Should handle missing_from_source sentinel
     expect(askAi).toContain("missing_from_source");
   });

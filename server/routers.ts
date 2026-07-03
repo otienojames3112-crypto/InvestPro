@@ -8624,9 +8624,19 @@ export const appRouter = router({
         const currency = input.currency ?? finding.currency ?? "KES";
         const figures = input.figures ?? (finding.extractedFields as Record<string, unknown> | null) ?? {};
         const source = finding.sourceLabel ?? "Ask-AI research";
+
+        // Round 98: auto-populate changeKind/targetRef from comparison metadata
+        const ef = (finding.extractedFields ?? {}) as Record<string, string>;
+        let effectiveChangeKind = input.changeKind;
+        if (!input.changeKind || input.changeKind === "create") {
+          const pt = ef._proposalType;
+          if (pt === "update" || pt === "stale") effectiveChangeKind = "edit";
+        }
+        const effectiveTargetRef = input.targetRef ?? ef._targetRef ?? null;
+
         const v = validatePendingUpdate({
-          targetRef: input.targetRef ?? null,
-          changeKind: input.changeKind,
+          targetRef: effectiveTargetRef,
+          changeKind: effectiveChangeKind,
           name,
           assetClass,
           issuer: input.issuer ?? finding.issuer ?? null,
@@ -8637,8 +8647,8 @@ export const appRouter = router({
         });
         if (!v.ok) throw new TRPCError({ code: "BAD_REQUEST", message: v.errors.join(" ") });
         const pendingId = await enqueueResearchUpdate({
-          targetRef: input.targetRef ?? null,
-          changeKind: input.changeKind,
+          targetRef: effectiveTargetRef,
+          changeKind: effectiveChangeKind,
           name,
           assetClass,
           issuer: input.issuer ?? finding.issuer ?? null,

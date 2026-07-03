@@ -85,6 +85,74 @@ const ORIGIN_META: Record<string, { label: string; icon: typeof Bot; className: 
   scrape: { label: "Automated source", icon: RefreshCw, className: "bg-amber-500/10 text-amber-600 border-amber-500/20" },
 };
 
+/* ── Round 98: Diff table for PendingQueue ─────────────────────────────────── */
+
+function PendingDiffTable({ figures }: { figures: Record<string, unknown> | null | undefined }) {
+  if (!figures) return null;
+  const proposalType = figures._proposalType as string | undefined;
+  if (!proposalType || proposalType === "create") return null;
+
+  let changedFields: string[] = [];
+  let currentValues: { field: string; value: string }[] = [];
+  try {
+    const cf = figures._changedFields;
+    changedFields = typeof cf === "string" ? JSON.parse(cf) : Array.isArray(cf) ? cf : [];
+    const cv = figures._currentValues;
+    currentValues = typeof cv === "string" ? JSON.parse(cv) : Array.isArray(cv) ? cv : [];
+  } catch { /* ignore */ }
+
+  if (changedFields.length === 0) return null;
+
+  const currentMap = new Map(currentValues.map((c) => [c.field, c.value]));
+  const matchedRow = figures._matchedCurrentRow as string | undefined;
+  const impactNote = figures._impactNote as string | undefined;
+  const isStale = proposalType === "stale" || figures._staleFlag === "true";
+
+  return (
+    <div className="rounded-md border border-border bg-muted/30 p-3 space-y-2">
+      <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+        {isStale ? (
+          <AlertTriangle className="w-3.5 h-3.5 text-amber-500" />
+        ) : (
+          <GitCompareArrows className="w-3.5 h-3.5 text-blue-500" />
+        )}
+        <span>
+          {isStale ? "Stale row" : "Changes vs current"}
+          {matchedRow && <span className="text-foreground ml-1">— {matchedRow}</span>}
+        </span>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs border-collapse">
+          <thead>
+            <tr className="text-muted-foreground">
+              <th className="text-left font-medium py-1 pr-3">Field</th>
+              <th className="text-left font-medium py-1 pr-3">Current</th>
+              <th className="text-left font-medium py-1">Proposed</th>
+            </tr>
+          </thead>
+          <tbody>
+            {changedFields.map((field) => {
+              const current = currentMap.get(field) ?? "—";
+              const proposed = figures[field];
+              const proposedStr = proposed === undefined || proposed === null ? "—" : String(proposed);
+              return (
+                <tr key={field} className="border-t border-border/50">
+                  <td className="py-1.5 pr-3 text-muted-foreground whitespace-nowrap">{field}</td>
+                  <td className="py-1.5 pr-3 tabular-nums text-red-600/80 line-through">{current}</td>
+                  <td className="py-1.5 tabular-nums font-medium text-emerald-600">{proposedStr}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      {impactNote && (
+        <p className="text-[11px] text-muted-foreground italic mt-1">{impactNote}</p>
+      )}
+    </div>
+  );
+}
+
 function fmtFigures(figures: Record<string, unknown> | null | undefined): { key: string; label: string; value: string }[] {
   if (!figures) return [];
   const LABELS: Record<string, string> = {
@@ -104,7 +172,7 @@ function fmtFigures(figures: Record<string, unknown> | null | undefined): { key:
     instrumentType: "Product type",
   };
   return Object.entries(figures)
-    .filter(([, v]) => v !== undefined && v !== null && v !== "")
+    .filter(([k, v]) => !k.startsWith("_") && v !== undefined && v !== null && v !== "")
     .map(([k, v]) => ({ key: k, label: LABELS[k] ?? k, value: String(v) }));
 }
 
@@ -417,9 +485,26 @@ function PendingQueue() {
                     <Badge variant="outline" className={`font-normal text-[11px] ${origin.className}`}>
                       <OriginIcon className="w-3 h-3 mr-1" /> {origin.label}
                     </Badge>
-                    <Badge variant="secondary" className="font-normal text-[11px]">
-                      {u.changeKind === "edit" ? "Edits existing" : "New instrument"}
-                    </Badge>
+                    {(() => {
+                      const fig = u.figures as Record<string, unknown> | null;
+                      const pt = fig?._proposalType as string | undefined;
+                      const isStale = pt === "stale" || fig?._staleFlag === "true";
+                      if (isStale) return (
+                        <Badge variant="secondary" className="font-normal text-[11px] bg-amber-500/10 text-amber-600 border-amber-500/20">
+                          <AlertTriangle className="w-3 h-3 mr-0.5" /> Stale row
+                        </Badge>
+                      );
+                      if (pt === "update") return (
+                        <Badge variant="secondary" className="font-normal text-[11px] bg-blue-500/10 text-blue-600 border-blue-500/20">
+                          <GitCompareArrows className="w-3 h-3 mr-0.5" /> Update
+                        </Badge>
+                      );
+                      return (
+                        <Badge variant="secondary" className="font-normal text-[11px]">
+                          {u.changeKind === "edit" ? "Edits existing" : "New instrument"}
+                        </Badge>
+                      );
+                    })()}
                   </CardTitle>
                   <CardDescription className="mt-1">
                     Approving promotes this into <strong className="text-foreground">{TARGET_LABELS[target]}</strong>
@@ -429,6 +514,9 @@ function PendingQueue() {
               </div>
             </CardHeader>
             <CardContent className="space-y-4">
+              {/* Round 98: Diff table for update/stale proposals */}
+              <PendingDiffTable figures={u.figures as Record<string, unknown> | null} />
+
               {figures.length > 0 ? (
                 <div className="flex flex-wrap gap-x-6 gap-y-2">
                   {figures.map((f) => (

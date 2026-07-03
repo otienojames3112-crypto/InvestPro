@@ -146,7 +146,7 @@ describe("Round 95 · AI-sourced updates require explicit approval", () => {
   it("draftFromFinding only enqueues a pending update (admin-gated), never publishes", () => {
     const idx = routers.indexOf("draftFromFinding: adminProcedure");
     expect(idx).toBeGreaterThan(-1);
-    const body = routers.slice(idx, idx + 2200);
+    const body = routers.slice(idx, idx + 2800);
     expect(body).toContain("enqueueResearchUpdate");
     // Drafting must not itself promote to a live catalogue figure.
     expect(body.includes("reviewResearchUpdate")).toBe(false);

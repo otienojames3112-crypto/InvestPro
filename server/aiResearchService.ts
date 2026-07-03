@@ -461,25 +461,29 @@ export function catalogueReviewInstruction(catalogue: ReferenceCatalogue): strin
       return [
         "You are reviewing a source (a Serrari-style benchmark table, a fund factsheet, a screenshot, a PDF or a URL) for the manager's MONEY MARKET FUND catalogue.",
         "For every MMF the source mentions, extract, verbatim with units: the published EAR (effective annual rate, net of fee) as `ear`; the gross/quoted yield as `grossYield`; the annual management fee as `managementFee`; the minimum investment (KES) as `minInvestment`; and AUM in KES millions as `aumMillions`. Keep `ear` and `grossYield` as the DIFFERENT numbers the source prints — never convert one into the other.",
-        "Compare each against the CURRENT catalogue rows below and propose findings for ALL of: (a) NEW funds not in the current rows; (b) EAR/gross-yield RATE changes; (c) management-FEE changes; (d) MINIMUM-investment changes; (e) AUM changes; and (f) STALE rows. When a current fund is clearly absent from a comprehensive benchmark (e.g. delisted or no longer quoted), emit an edit finding naming it and flag a possible STALE row in that finding's warnings — do NOT invent a removal figure. Only emit a finding when something is new or actually changed versus the current row, or the source/as-of date is newer.",
+        "Compare each against the CURRENT catalogue rows below and propose findings for ALL of: (a) NEW funds not in the current rows; (b) EAR/gross-yield RATE changes; (c) management-FEE changes; (d) MINIMUM-investment changes; (e) AUM changes; and (f) STALE rows. When a current fund is clearly absent from a comprehensive benchmark (e.g. delisted or no longer quoted), emit a finding with proposalType='stale'. Only emit a finding when something is new or actually changed versus the current row, or the source/as-of date is newer.",
+        "For EVERY finding, set proposalType to 'create' (new fund), 'update' (existing row changed), or 'stale' (current row absent from source). For 'update' and 'stale', set matchedCurrentRow to the exact fund name from the CURRENT CATALOGUE ROWS list, list the changedFields, and provide currentValues (the OLD values from the current row). For 'create', set matchedCurrentRow to null and changedFields/currentValues to empty arrays.",
       ].join("\n");
     case "bank":
       return [
         "You are reviewing a source for the manager's BANK PRODUCT catalogue (call/fixed/savings deposits).",
         "For every bank product the source mentions, extract, verbatim with units: the indicative rate (% p.a.) as `indicativeRate`; the minimum amount (KES) as `minAmount`; the typical tenor / notice period as `typicalTenor`; and whether the rate is negotiable as `isNegotiable` (\"true\"/\"false\"). Capture any early-break / liquidity terms in the finding's rawExcerpt. Bank rates are INDICATIVE and usually quoted GROSS of the 15% WHT — say so in warnings when the source does.",
         "Compare each against the CURRENT catalogue rows below and propose findings for ALL of: NEW products; indicative-RATE changes; TENOR / notice-period changes; and NEGOTIABLE-flag changes (plus minimum-amount or liquidity-term changes). Emit a finding only when a product is new or a value actually CHANGED versus the current row, or the as-of date is newer.",
+        "For EVERY finding, set proposalType to 'create' (new product), 'update' (existing row changed), or 'stale' (current row absent from source). For 'update' and 'stale', set matchedCurrentRow to the exact product name from the CURRENT CATALOGUE ROWS list, list the changedFields, and provide currentValues (the OLD values from the current row). For 'create', set matchedCurrentRow to null and changedFields/currentValues to empty arrays.",
       ].join("\n");
     case "cbk":
       return [
         "You are reviewing a CBK / Treasury source: Treasury bills on offer, weekly auction results, or a bond auction/re-opening notice.",
         "For Treasury BILLS, emit ONE finding per tenor actually present — the 91-day, 182-day and 364-day bills are SEPARATE instruments. For each, extract verbatim: the annualised rate as `yieldPct`; the previous auction average rate as `prevAvgRate` when shown; the tenor in days as `tenorDays` (91/182/364); the issue number as `issueNumber`; the auction date as `auctionDate` and the value/settlement date as `valueDate`. For BONDS, extract the coupon as `coupon`, the yield-to-maturity as `yieldPct`, and the tenor.",
         "Name each bill finding clearly by tenor (e.g. \"91-Day Treasury Bill\"). Compare against the CURRENT rows below and propose findings for ALL of: 91/182/364-day bill RATE updates; new ISSUE NUMBERS; AUCTION-date and VALUE-date updates; and any bond RE-OPENING. Emit a finding when a tenor's rate/issue/dates changed or a new issue is on offer.",
+        "For EVERY finding, set proposalType to 'create' (new issue), 'update' (existing row changed), or 'stale' (current row absent from source). For 'update' and 'stale', set matchedCurrentRow to the exact name from the CURRENT CATALOGUE ROWS list, list the changedFields, and provide currentValues (the OLD values from the current row). For 'create', set matchedCurrentRow to null and changedFields/currentValues to empty arrays.",
       ].join("\n");
     case "market_asset":
       return [
         "You are reviewing a market source for the manager's MARKET ASSETS catalogue: an NSE price board, a REIT factsheet, an ETF factsheet, or an offshore-fund factsheet.",
         "For every instrument the source mentions, extract, verbatim with units: the last price / NAV as `lastPrice`; the headline yield or distribution as `yieldPct` (and what it represents as `yieldKind`); the trailing 12-month return as `trailingReturnPct`; and the expense ratio as `expenseRatioPct` where shown. Trailing returns are PAST performance — say so in warnings.",
         "Compare each against the CURRENT rows below and propose findings for ALL of: NEW instruments; PRICE / NAV changes; YIELD changes; and TRAILING-RETURN changes (plus expense-ratio updates). Emit a finding only when an instrument is new or a value actually CHANGED versus the current row, or the as-of date is newer.",
+        "For EVERY finding, set proposalType to 'create' (new instrument), 'update' (existing row changed), or 'stale' (current row absent from source). For 'update' and 'stale', set matchedCurrentRow to the exact name from the CURRENT CATALOGUE ROWS list, list the changedFields, and provide currentValues (the OLD values from the current row). For 'create', set matchedCurrentRow to null and changedFields/currentValues to empty arrays.",
       ].join("\n");
   }
 }
@@ -1192,8 +1196,12 @@ const CBK_BOND_EXTRACTION_SCHEMA = {
             rawExcerpt: { type: ["string", "null"] },
             warnings: { type: "array", items: { type: "string" } },
             confidence: { type: ["number", "null"] },
+            proposalType: { type: "string", description: "'create' if new, 'update' if existing row changed, 'stale' if current row not in source" },
+            matchedCurrentRow: { type: ["string", "null"], description: "Name/issue number of the matched current catalogue row, or null for new" },
+            changedFields: { type: "array", items: { type: "string" }, description: "List of field names that differ from current row" },
+            currentValues: { type: "array", items: { type: "object", additionalProperties: false, properties: { field: { type: "string" }, value: { type: "string" } }, required: ["field", "value"] }, description: "Current values for each changed field" },
           },
-          required: ["instrumentName", "issueNumber", "securityType", "isin", "tenorLabel", "tenorMonths", "couponRate", "withholdingTaxRate", "maturityDate", "amountOnOffer", "cleanPrice", "accruedInterestPer100", "dirtyPrice", "couponPaymentDates", "cleanPriceTable", "rawExcerpt", "warnings", "confidence"],
+          required: ["instrumentName", "issueNumber", "securityType", "isin", "tenorLabel", "tenorMonths", "couponRate", "withholdingTaxRate", "maturityDate", "amountOnOffer", "cleanPrice", "accruedInterestPer100", "dirtyPrice", "couponPaymentDates", "cleanPriceTable", "rawExcerpt", "warnings", "confidence", "proposalType", "matchedCurrentRow", "changedFields", "currentValues"],
         },
       },
     },
@@ -1230,8 +1238,12 @@ const CBK_TBILL_EXTRACTION_SCHEMA = {
             rawExcerpt: { type: ["string", "null"] },
             warnings: { type: "array", items: { type: "string" } },
             confidence: { type: ["number", "null"] },
+            proposalType: { type: "string", description: "'create' if new, 'update' if existing row changed, 'stale' if current row not in source" },
+            matchedCurrentRow: { type: ["string", "null"], description: "Name of the matched current catalogue row, or null for new" },
+            changedFields: { type: "array", items: { type: "string" }, description: "List of field names that differ from current row" },
+            currentValues: { type: "array", items: { type: "object", additionalProperties: false, properties: { field: { type: "string" }, value: { type: "string" } }, required: ["field", "value"] }, description: "Current values for each changed field" },
           },
-          required: ["instrumentName", "issueNumber", "tenorDays", "yieldPct", "prevAvgRate", "amountOnOffer", "amountReceived", "amountAccepted", "weightedAvgRate", "rawExcerpt", "warnings", "confidence"],
+          required: ["instrumentName", "issueNumber", "tenorDays", "yieldPct", "prevAvgRate", "amountOnOffer", "amountReceived", "amountAccepted", "weightedAvgRate", "rawExcerpt", "warnings", "confidence", "proposalType", "matchedCurrentRow", "changedFields", "currentValues"],
         },
       },
     },
@@ -1269,8 +1281,12 @@ const MMF_EXTRACTION_SCHEMA = {
             rawExcerpt: { type: ["string", "null"] },
             warnings: { type: "array", items: { type: "string" } },
             confidence: { type: ["number", "null"] },
+            proposalType: { type: "string", description: "'create' if new, 'update' if existing row changed, 'stale' if current row not in source" },
+            matchedCurrentRow: { type: ["string", "null"], description: "Name of the matched current catalogue row, or null for new" },
+            changedFields: { type: "array", items: { type: "string" }, description: "List of field names that differ from current row" },
+            currentValues: { type: "array", items: { type: "object", additionalProperties: false, properties: { field: { type: "string" }, value: { type: "string" } }, required: ["field", "value"] }, description: "Current values for each changed field" },
           },
-          required: ["instrumentName", "fundManager", "effectiveAnnualRate", "grossYield", "managementFee", "minimumInvestment", "aum", "dayCountBasis", "creditingFrequency", "whtRate", "withdrawalNoticePeriod", "rawExcerpt", "warnings", "confidence"],
+          required: ["instrumentName", "fundManager", "effectiveAnnualRate", "grossYield", "managementFee", "minimumInvestment", "aum", "dayCountBasis", "creditingFrequency", "whtRate", "withdrawalNoticePeriod", "rawExcerpt", "warnings", "confidence", "proposalType", "matchedCurrentRow", "changedFields", "currentValues"],
         },
       },
     },
@@ -1308,8 +1324,12 @@ const BANK_EXTRACTION_SCHEMA = {
             rawExcerpt: { type: ["string", "null"] },
             warnings: { type: "array", items: { type: "string" } },
             confidence: { type: ["number", "null"] },
+            proposalType: { type: "string", description: "'create' if new, 'update' if existing row changed, 'stale' if current row not in source" },
+            matchedCurrentRow: { type: ["string", "null"], description: "Name of the matched current catalogue row, or null for new" },
+            changedFields: { type: "array", items: { type: "string" }, description: "List of field names that differ from current row" },
+            currentValues: { type: "array", items: { type: "object", additionalProperties: false, properties: { field: { type: "string" }, value: { type: "string" } }, required: ["field", "value"] }, description: "Current values for each changed field" },
           },
-          required: ["instrumentName", "bankName", "productType", "indicativeRate", "rateType", "minimumAmount", "tenor", "noticePeriod", "payoutFrequency", "earlyWithdrawalPenalty", "negotiable", "whtRate", "rawExcerpt", "warnings", "confidence"],
+          required: ["instrumentName", "bankName", "productType", "indicativeRate", "rateType", "minimumAmount", "tenor", "noticePeriod", "payoutFrequency", "earlyWithdrawalPenalty", "negotiable", "whtRate", "rawExcerpt", "warnings", "confidence", "proposalType", "matchedCurrentRow", "changedFields", "currentValues"],
         },
       },
     },
@@ -1346,8 +1366,12 @@ const MARKET_ASSET_EXTRACTION_SCHEMA = {
             rawExcerpt: { type: ["string", "null"] },
             warnings: { type: "array", items: { type: "string" } },
             confidence: { type: ["number", "null"] },
+            proposalType: { type: "string", description: "'create' if new, 'update' if existing row changed, 'stale' if current row not in source" },
+            matchedCurrentRow: { type: ["string", "null"], description: "Name of the matched current catalogue row, or null for new" },
+            changedFields: { type: "array", items: { type: "string" }, description: "List of field names that differ from current row" },
+            currentValues: { type: "array", items: { type: "object", additionalProperties: false, properties: { field: { type: "string" }, value: { type: "string" } }, required: ["field", "value"] }, description: "Current values for each changed field" },
           },
-          required: ["instrumentName", "assetType", "ticker", "exchange", "marketPrice", "nav", "dividendYield", "distributionYield", "trailingReturn", "fee", "currency", "rawExcerpt", "warnings", "confidence"],
+          required: ["instrumentName", "assetType", "ticker", "exchange", "marketPrice", "nav", "dividendYield", "distributionYield", "trailingReturn", "fee", "currency", "rawExcerpt", "warnings", "confidence", "proposalType", "matchedCurrentRow", "changedFields", "currentValues"],
         },
       },
     },
@@ -1494,7 +1518,7 @@ function assetClassForSourceClass(sc: SourceClass): AssetClass {
  * Flattens all extracted fields into the `extractedFields` string bag.
  * Applies NEVER_INVENT_FIELDS enforcement: null/empty → MISSING_FROM_SOURCE.
  */
-function structuredInstrumentToDraft(
+export function structuredInstrumentToDraft(
   raw: Record<string, unknown>,
   sourceClass: SourceClass,
   sharedFields?: Record<string, unknown>,
@@ -1506,7 +1530,7 @@ function structuredInstrumentToDraft(
   const assetClass = assetClassForSourceClass(sourceClass);
 
   // Build extractedFields from all non-meta fields
-  const metaKeys = new Set(["instrumentName", "rawExcerpt", "warnings", "confidence"]);
+  const metaKeys = new Set(["instrumentName", "rawExcerpt", "warnings", "confidence", "proposalType", "matchedCurrentRow", "changedFields", "currentValues"]);
   const figures: Record<string, string> = {};
 
   // First, add shared fields (auction-level for CBK bonds)
@@ -1588,6 +1612,40 @@ function structuredInstrumentToDraft(
     ...figures,
     _extendedFields: JSON.stringify(extendedProfile),
   };
+
+  // ── Round 98: Inject comparison metadata ──────────────────────────────────
+  const proposalType = typeof raw.proposalType === "string" ? raw.proposalType.trim().toLowerCase() : "create";
+  extractedFields._proposalType = proposalType; // 'create' | 'update' | 'stale'
+
+  if (raw.matchedCurrentRow && typeof raw.matchedCurrentRow === "string") {
+    extractedFields._matchedCurrentRow = raw.matchedCurrentRow.trim();
+  }
+
+  if (Array.isArray(raw.changedFields) && raw.changedFields.length > 0) {
+    extractedFields._changedFields = JSON.stringify(raw.changedFields);
+  }
+
+  if (Array.isArray(raw.currentValues) && raw.currentValues.length > 0) {
+    extractedFields._currentValues = JSON.stringify(raw.currentValues);
+  }
+
+  if (proposalType === "stale") {
+    extractedFields._staleFlag = "true";
+  }
+
+  // _targetRef: for update/stale, set to matched row name (used by draftFromFinding to auto-populate targetRef)
+  if ((proposalType === "update" || proposalType === "stale") && extractedFields._matchedCurrentRow) {
+    extractedFields._targetRef = extractedFields._matchedCurrentRow;
+  }
+
+  // _impactNote: human-readable summary of what this proposal does
+  if (proposalType === "create") {
+    extractedFields._impactNote = `New ${targetCatalogue} instrument: ${name}`;
+  } else if (proposalType === "update" && Array.isArray(raw.changedFields)) {
+    extractedFields._impactNote = `Updates ${(raw.changedFields as string[]).length} field(s) on existing row: ${extractedFields._matchedCurrentRow || name}`;
+  } else if (proposalType === "stale") {
+    extractedFields._impactNote = `Row may be stale (absent from source): ${extractedFields._matchedCurrentRow || name}`;
+  }
 
   return {
     instrumentName: name,

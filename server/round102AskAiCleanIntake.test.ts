@@ -25,7 +25,7 @@ describe("Round 102 — Source-class detection panel", () => {
     const src = fs.readFileSync(path.resolve(__dirname, "aiResearchService.ts"), "utf8");
     // Must derive sourceClass from the first finding's _extendedFields
     expect(src).toContain("detectedSourceClass");
-    expect(src).toContain("return { answer, findings: deduped, model: usedModel, sourceClass: detectedSourceClass }");
+    expect(src).toContain("return { answer, findings: deduped, model: usedModel, sourceClass: detectedSourceClass, extractionDiagnostic: extractionDiag }");
   });
 
   it("ExecuteResearchTaskResult includes sourceClass", () => {
@@ -95,9 +95,9 @@ describe("Round 102 — Intake mode and follow-up extraction gate", () => {
 
   it("canTryStructured allows extraction on follow-ups when intakeMode is extract", () => {
     const src = fs.readFileSync(path.resolve(__dirname, "aiResearchService.ts"), "utf8");
-    expect(src).toContain(
-      'const canTryStructured = Boolean(grounding) && (priorTurns.length === 0 || args.intakeMode === "extract")',
-    );
+    // Round 103 refactored to multi-line with hasReadableSource + intentForced
+    expect(src).toContain('const canTryStructured = hasReadableSource && (');
+    expect(src).toContain('args.intakeMode === "extract"');
   });
 
   it("runResearchQuestion accepts intakeMode argument", () => {
@@ -281,8 +281,8 @@ describe("Round 102 — Governance: intakeMode does not bypass guardrails", () =
 
   it("extract mode does not bypass source-read gating", () => {
     const src = fs.readFileSync(path.resolve(__dirname, "aiResearchService.ts"), "utf8");
-    // canTryStructured still requires Boolean(grounding) — no grounding = no extraction
-    expect(src).toContain("const canTryStructured = Boolean(grounding)");
+    // canTryStructured still requires hasReadableSource — no source = no extraction
+    expect(src).toContain("const canTryStructured = hasReadableSource");
   });
 
   it("extract mode does not skip deduplication or warning generation", () => {

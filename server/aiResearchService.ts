@@ -105,12 +105,109 @@ export interface PriorFindingContext {
 }
 
 /** The full result of one Ask-AI question. */
+/** Round 103 — extraction diagnostic returned when extraction was expected but produced
+ * zero findings, so the UI can show a clear reason instead of silently leaving old findings. */
+export interface ExtractionDiagnostic {
+  /** Whether extraction was attempted. */
+  attempted: boolean;
+  /** Why it produced zero findings (null when findings > 0). */
+  reason: string | null;
+  /** The source class detected (null when classification failed). */
+  sourceClass: SourceClass | null;
+  /** Characters read from the source (0 when unreadable). */
+  charsRead: number;
+  /** Whether extraction was forced by intent detection. */
+  forcedByIntent: boolean;
+}
+
 export interface ResearchAnswer {
   answer: string;
   findings: ResearchFindingDraft[];
   model: string | null;
   /** Round 102 — the detected source class (null when generic/no structured extraction). */
   sourceClass?: SourceClass | null;
+  /** Round 103 — diagnostic when extraction was expected but produced nothing. */
+  extractionDiagnostic?: ExtractionDiagnostic | null;
+}
+
+/* ── Round 103 — Server-side extraction-intent detection ─────────────────── */
+
+/**
+ * Detect whether the user's question implies they want structured extraction,
+ * regardless of the UI mode selector. Returns true when a readable source is
+ * available (or reused) AND the question contains extraction-intent language.
+ */
+const EXTRACTION_INTENT_PATTERNS: RegExp[] = [
+  /\bextract\b/i,
+  /\badd\s+(to|these|them|the)\s+(the\s+)?(findings|catalogue|catalog)/i,
+  /\buse\s+(this|the|previous|that)\s+source/i,
+  /\breview\s+(this|the)\s+source/i,
+  /\bcompare\s+(this|with|against)/i,
+  /\bupdate\s+the\s+rates/i,
+  /\bidentify\s+(changed|new|missing)/i,
+  /\blist\s+the\s+instruments/i,
+  /\bdraft\s+findings/i,
+  /\bpopulate\s+the\s+(reference\s+)?catalogue/i,
+  /\badd\s+(any\s+)?missing\s+(funds|instruments|rows)/i,
+  /\buse\s+it\s+to\s+add/i,
+  /\badd\s+to\s+the\s+findings/i,
+  /\bextract\s+(all|the|every)/i,
+];
+
+export function shouldForceExtraction(
+  question: string,
+  hasReadableSource: boolean,
+): boolean {
+  if (!hasReadableSource) return false;
+  return EXTRACTION_INTENT_PATTERNS.some((p) => p.test(question));
+}
+
+/* ── Round 103 — Field normalization (extraction schema → catalogue canonical) ── */
+
+/** Map extraction-schema field names to catalogue-canonical field names.
+ * The extraction schemas use descriptive names (effectiveAnnualRate, minimumInvestment)
+ * while the catalogue approval gate expects short canonical keys (ear, minInvestment).
+ * This normalizer runs AFTER structuredInstrumentToDraft builds the figures bag. */
+const FIELD_NORMALIZATION_MAP: Record<string, Record<string, string>> = {
+  mmf: {
+    effectiveAnnualRate: "ear",
+    minimumInvestment: "minInvestment",
+    aum: "aumMillions",
+    grossYield: "yieldPct",
+  },
+  bank: {
+    minimumAmount: "minAmount",
+    negotiable: "isNegotiable",
+  },
+  cbk: {
+    couponRate: "coupon",
+    withholdingTaxRate: "whtRate",
+  },
+  market_asset: {
+    marketPrice: "lastPrice",
+    nav: "navPerUnit",
+  },
+};
+
+/** Normalize extraction field names to catalogue canonical names for a given catalogue. */
+export function normaliseExtractionFields(
+  figures: Record<string, string>,
+  catalogue: string,
+): Record<string, string> {
+  const map = FIELD_NORMALIZATION_MAP[catalogue];
+  if (!map) return figures;
+  const result: Record<string, string> = {};
+  for (const [k, v] of Object.entries(figures)) {
+    const canonical = map[k];
+    if (canonical) {
+      // Add both the canonical AND the original (so profile preview still works)
+      result[canonical] = v;
+      if (!(k in result)) result[k] = v; // keep original for display
+    } else {
+      result[k] = v;
+    }
+  }
+  return result;
 }
 
 /* ── Prompt + schema ──────────────────────────────────────────────────────── */
@@ -919,18 +1016,55 @@ export async function runResearchQuestion(args: {
   let answer: string = "";
   let findings: ResearchFindingDraft[] = [];
   let usedModel: string | null = null;
-  // Round 102 — allow structured extraction on follow-ups when intakeMode is "extract"
-  // and a new source is attached (grounding exists). The original gate only allowed
-  // structured extraction on the opening turn (priorTurns.length === 0).
-  const canTryStructured = Boolean(grounding) && (priorTurns.length === 0 || args.intakeMode === "extract");
+  // Round 103 — EXTRACTION INTENT DETECTION. Server-side detection of extraction
+  // intent from the question text, independent of the UI mode selector. This ensures
+  // that follow-ups like "Use this source to add to the findings" trigger extraction
+  // even when the UI is in "Ask" mode or the source is reused.
+  const hasReadableSource = Boolean(grounding) && groundingText.length > 100;
+  const intentForced = shouldForceExtraction(args.question, hasReadableSource);
+  const canTryStructured = hasReadableSource && (
+    priorTurns.length === 0 ||
+    args.intakeMode === "extract" ||
+    intentForced
+  );
   let usedStructured = false;
-  if (canTryStructured && groundingText.length > 100) {
+  let extractionDiag: ExtractionDiagnostic | null = null;
+  if (canTryStructured) {
     const structured = await tryInstrumentAwareExtraction(groundingText, args.question);
     if (structured && structured.findings.length > 0) {
       answer = structured.answer;
       findings = structured.findings;
       usedStructured = true;
+    } else if (intentForced || args.intakeMode === "extract") {
+      // Extraction was expected but produced nothing — build diagnostic
+      const detectedClass = structured?.sourceClass ?? null;
+      let reason: string;
+      if (!structured) {
+        reason = "Source could not be classified into any known instrument category.";
+      } else if (structured.findings.length === 0) {
+        reason = detectedClass
+          ? `Source was classified as ${SOURCE_CLASS_LABELS[detectedClass] ?? detectedClass}, but no instrument rows could be extracted from the text.`
+          : "Source was read but did not match any extraction schema.";
+      } else {
+        reason = "Unknown extraction failure.";
+      }
+      extractionDiag = {
+        attempted: true,
+        reason,
+        sourceClass: detectedClass,
+        charsRead: groundingText.length,
+        forcedByIntent: intentForced,
+      };
     }
+  } else if (intentForced && !hasReadableSource) {
+    // Intent detected but no readable source
+    extractionDiag = {
+      attempted: false,
+      reason: "Extraction intent detected but no readable source was available.",
+      sourceClass: null,
+      charsRead: 0,
+      forcedByIntent: true,
+    };
   }
   if (!usedStructured) {
     const llmRes = await invokeLLM({
@@ -1023,16 +1157,32 @@ export async function runResearchQuestion(args: {
     ? kindStamped.map((f) => ({ ...f, warnings: [...f.warnings, ...groundingWarnings] }))
     : kindStamped;
 
+  // Round 103 — UNSOURCED FINDING RESTRICTION. When no readable source was attached
+  // and the answer came from general knowledge, findings should not be one-click
+  // draftable. Mark them as low-trust hints so the UI can warn before drafting.
+  const trustTagged = grounded
+    ? withWarnings
+    : withWarnings.map((f) => ({
+        ...f,
+        confidence: Math.min(f.confidence, 0.3),
+        warnings: [
+          ...f.warnings,
+          "This finding is based on general knowledge (no source attached). Verify with a primary source before drafting to the catalogue.",
+        ],
+        extractedFields: { ...f.extractedFields, _unsourced: "true" },
+      }));
+
   // Round 92 — DUPLICATE SUPPRESSION. A follow-up must not spawn a fresh finding that
   // merely restates something already established in this enquiry with the SAME values.
   // We only drop a candidate when an earlier (non-dismissed) finding for the same
   // instrument carries an identical figures bag; if ANY value differs (or a new figure
   // appears), the finding is kept so the change is captured for triage.
-  const deduped = suppressDuplicateFindings(withWarnings, established);
+  const deduped = suppressDuplicateFindings(trustTagged, established);
 
-  // Round 102 — surface the detected sourceClass so the frontend can show the panel.
-  let detectedSourceClass: SourceClass | null = null;
-  if (usedStructured && grounding) {
+  // Round 103 — surface the detected sourceClass so the frontend can show the panel.
+  // Also surface it from the diagnostic when extraction was attempted but yielded nothing.
+  let detectedSourceClass: SourceClass | null = extractionDiag?.sourceClass ?? null;
+  if (usedStructured && grounding && !detectedSourceClass) {
     // The structured path already classified; re-derive from the first finding's _extendedFields.
     try {
       const ext = deduped[0]?.extractedFields?._extendedFields;
@@ -1044,7 +1194,7 @@ export async function runResearchQuestion(args: {
       }
     } catch { /* ignore */ }
   }
-  return { answer, findings: deduped, model: usedModel, sourceClass: detectedSourceClass };
+  return { answer, findings: deduped, model: usedModel, sourceClass: detectedSourceClass, extractionDiagnostic: extractionDiag };
 }
 
 /** Case/space-insensitive key for matching an instrument across turns. */
@@ -1426,7 +1576,7 @@ function extractionSchemaForClass(sc: SourceClass): { schema: object; prompt: st
     case "mmf_benchmark":
       return {
         schema: MMF_EXTRACTION_SCHEMA,
-        prompt: `${STRUCTURED_EXTRACTION_PREAMBLE}\n\nThis is an MMF FACTSHEET or BENCHMARK table. Extract one entry per money market fund mentioned.\nFor each, extract: fund name, fund manager, effective annual rate (EAR), gross yield, management fee, minimum investment, AUM, day-count basis, crediting frequency, WHT rate, and withdrawal notice period.\nEAR and gross yield are DIFFERENT numbers — keep both as the source prints them.\n\nIf a field is not printed, set it to "missing_from_source".`,
+        prompt: `${STRUCTURED_EXTRACTION_PREAMBLE}\n\nThis is an MMF FACTSHEET or BENCHMARK table. Extract ONE ENTRY PER MONEY MARKET FUND mentioned — extract ALL funds in the source, up to 50 entries. Do NOT stop at a few; if the source lists 30 funds, return 30 entries.\nFor each, extract: fund name, fund manager, effective annual rate (EAR), gross yield, management fee, minimum investment, AUM, day-count basis, crediting frequency, WHT rate, and withdrawal notice period.\nEAR and gross yield are DIFFERENT numbers — keep both as the source prints them.\nFor benchmark tables: preserve the fund name exactly as printed (including the manager’s name if part of the fund name). If the table has a date header, use it as benchmarkDate.\n\nIf a field is not printed, set it to "missing_from_source".`,
       };
     case "bank_product_page":
     case "bank_rate_card":
@@ -1613,13 +1763,23 @@ export function structuredInstrumentToDraft(
     }
   }
 
+  // Round 103 — FIELD NORMALIZATION. Map extraction-schema names to catalogue
+  // canonical names so the approval gate recognizes them (e.g. effectiveAnnualRate → ear).
+  const normalised = normaliseExtractionFields(figures, targetCatalogue);
+  // Merge normalized keys back into figures (canonical keys added alongside originals)
+  for (const [k, v] of Object.entries(normalised)) {
+    if (!(k in figures)) figures[k] = v;
+  }
+
   const warnings: string[] = Array.isArray(raw.warnings)
     ? raw.warnings.filter((w): w is string => typeof w === "string")
     : [];
   const confidence = clampConfidence(raw.confidence);
   const rawExcerpt = typeof raw.rawExcerpt === "string" ? raw.rawExcerpt.trim() || null : null;
 
-  // Compute missing fields (those set to MISSING_FROM_SOURCE)
+  // Compute missing fields: those explicitly set to MISSING_FROM_SOURCE in the figures bag.
+  // Note: the approval gate (missingFieldsForFinding) may report ADDITIONAL missing fields
+  // beyond these; this list is for the finding card's immediate display.
   const missingFields = Object.entries(figures)
     .filter(([, v]) => v === MISSING_FROM_SOURCE)
     .map(([k]) => k);

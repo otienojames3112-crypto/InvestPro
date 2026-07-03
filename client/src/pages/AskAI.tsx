@@ -57,6 +57,7 @@ import {
   Plus,
   FileCheck2,
   FileWarning,
+  FileSearch,
 } from "lucide-react";
 import { InfoHint } from "@/components/InfoHint";
 import { catalogueLabel, type ReferenceCatalogue } from "@shared/researchPipeline";
@@ -357,6 +358,15 @@ export function TaskStageProgress({ stage }: { stage: TaskStage | null }) {
   );
 }
 
+/** Round 103 — extraction diagnostic when extraction was expected but produced nothing. */
+export type ExtractionDiagnostic = {
+  attempted: boolean;
+  reason: string | null;
+  sourceClass: string | null;
+  charsRead: number;
+  forcedByIntent: boolean;
+};
+
 export type ResearchTaskResult = {
   taskId: number;
   threadId: number | null;
@@ -367,6 +377,8 @@ export type ResearchTaskResult = {
   sourceStatus: SourceStatus | null;
   /** Round 102 — detected source class when structured extraction ran. */
   sourceClass?: string | null;
+  /** Round 103 — extraction diagnostic when extraction was expected but produced nothing. */
+  extractionDiagnostic?: ExtractionDiagnostic | null;
 };
 
 /**
@@ -436,6 +448,7 @@ export function useResearchTaskPoller() {
           stage: finalStage,
           sourceStatus: (done.sourceStatus ?? null) as SourceStatus | null,
           sourceClass: (done as Record<string, unknown>).sourceClass as string | null | undefined,
+          extractionDiagnostic: (done as Record<string, unknown>).extractionDiagnostic as ExtractionDiagnostic | null | undefined,
         };
         return result;
       } finally {
@@ -783,15 +796,31 @@ export function FindingCard({ finding, onChanged }: { finding: Finding; onChange
           {finding.sourceAsOf && <span>· as of {new Date(finding.sourceAsOf).toLocaleDateString()}</span>}
         </div>
 
+        {/* Round 103 — unsourced finding warning */}
+        {finding.extractedFields?._unsourced === "true" && (
+          <div className="rounded-md border border-amber-500/30 bg-amber-500/[0.06] px-3 py-2 text-xs flex items-start gap-2">
+            <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0 mt-0.5" />
+            <span className="text-amber-700 dark:text-amber-300">
+              <span className="font-medium">Not grounded in a source.</span> This finding is based on general knowledge and should be verified with a primary source before drafting.
+            </span>
+          </div>
+        )}
+
         {!isDrafted && !isDismissed && !isSuperseded && (
           <div className="flex items-center gap-2 pt-1 flex-wrap">
-            <Button size="sm" onClick={() => draft.mutate({ findingId: finding.id })} disabled={busy}>
+            <Button
+              size="sm"
+              onClick={() => draft.mutate({ findingId: finding.id })}
+              disabled={busy}
+              variant={finding.extractedFields?._unsourced === "true" ? "outline" : "default"}
+              className={finding.extractedFields?._unsourced === "true" ? "bg-background" : ""}
+            >
               {draft.isPending ? (
                 <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
               ) : (
                 <ArrowRight className="w-3.5 h-3.5 mr-1.5" />
               )}
-              Draft into review queue
+              {finding.extractedFields?._unsourced === "true" ? "Draft anyway (unverified)" : "Draft into review queue"}
             </Button>
             <Button
               size="sm"
@@ -1101,6 +1130,9 @@ function Conversation({ threadId, onExit }: { threadId: number; onExit: () => vo
   const [sourceMode, setSourceMode] = useState<"reuse_previous" | "new" | "none">("reuse_previous");
   // Round 102 — intake mode for follow-ups ("extract" forces structured extraction on new source).
   const [intakeMode, setIntakeMode] = useState<"ask" | "extract">("ask");
+  // Round 103 — follow-up source-class detection and extraction diagnostic.
+  const [followUpSourceClass, setFollowUpSourceClass] = useState<string | null>(null);
+  const [extractionDiag, setExtractionDiag] = useState<ExtractionDiagnostic | null>(null);
   const src = useSourceAttachment({ followUp: true });
 
   // Round 96 — follow-ups run as a pollable task (start → process → poll) so a slow
@@ -1136,15 +1168,25 @@ function Conversation({ threadId, onExit }: { threadId: number; onExit: () => vo
         return { taskId: started.taskId, threadId: started.threadId };
       }, { intakeMode: effectiveIntakeMode });
       setSourceStatus(res.sourceStatus);
+      setFollowUpSourceClass(res.sourceClass ?? null);
+      setExtractionDiag(res.extractionDiagnostic ?? null);
       if (res.stage === "needs_source_fix") {
-        toast.error("I couldn’t read that source. Fix it and retry, or tick “Answer without the source” to proceed on general knowledge.");
+        toast.error("I couldn\u2019t read that source. Fix it and retry, or tick \u201cAnswer without the source\u201d to proceed on general knowledge.");
       } else if (res.stage === "failed") {
         toast.error("The enquiry failed. Please try again.");
+      } else if (res.extractionDiagnostic?.attempted && res.findings.length === 0) {
+        // Round 103 — extraction was expected but produced nothing: show diagnostic toast.
+        toast.warning(
+          res.extractionDiagnostic.reason ?? "Extraction produced no findings from this source.",
+          { duration: 8000 },
+        );
+        setQuestion("");
+        src.reset();
       } else {
         toast.success(
           res.findings.length > 0
-            ? `Answered — ${res.findings.length} finding${res.findings.length === 1 ? "" : "s"} added below.`
-            : "Answered — no structured findings this time.",
+            ? `Answered \u2014 ${res.findings.length} finding${res.findings.length === 1 ? "" : "s"} added below.`
+            : "Answered \u2014 no structured findings this time.",
         );
         setQuestion("");
         src.reset();
@@ -1259,6 +1301,34 @@ function Conversation({ threadId, onExit }: { threadId: number; onExit: () => vo
           )}
           {poller.running && <TaskStageProgress stage={poller.stage} />}
           {sourceStatus && <SourceStatusPanel status={sourceStatus} />}
+          {/* Round 103 — follow-up source-class detection panel */}
+          {followUpSourceClass && !poller.running && (
+            <div className="rounded-md border border-primary/20 bg-primary/5 px-3 py-2 text-xs flex items-center gap-2">
+              <FileSearch className="w-3.5 h-3.5 text-primary shrink-0" />
+              <span>
+                <span className="font-medium">Detected:</span>{" "}
+                {SOURCE_CLASS_LABELS[followUpSourceClass as keyof typeof SOURCE_CLASS_LABELS] ?? followUpSourceClass}
+                {" "}→{" "}
+                <span className="text-muted-foreground">{catalogueLabelForSourceClass(followUpSourceClass)}</span>
+              </span>
+            </div>
+          )}
+          {/* Round 103 — extraction diagnostic panel */}
+          {extractionDiag?.attempted && extractionDiag.reason && !poller.running && (
+            <div className="rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs flex items-start gap-2">
+              <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0 mt-0.5" />
+              <div>
+                <p className="font-medium text-amber-800 dark:text-amber-300">Extraction produced no findings</p>
+                <p className="text-muted-foreground mt-0.5">{extractionDiag.reason}</p>
+                {extractionDiag.charsRead > 0 && (
+                  <p className="text-muted-foreground mt-0.5">
+                    Source read: {extractionDiag.charsRead.toLocaleString()} chars
+                    {extractionDiag.forcedByIntent && " (intent-detected)"}
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
           {src.provided && (
             <label className="flex items-start gap-2 rounded-md border border-border bg-background px-3 py-2 text-xs text-muted-foreground cursor-pointer">
               <input

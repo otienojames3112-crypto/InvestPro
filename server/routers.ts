@@ -1071,6 +1071,8 @@ export interface ExecuteResearchTaskResult {
   sourceStatus: ReturnType<typeof sourceStatusJson> | null;
   /** Round 102 — the detected source class when structured extraction ran. */
   sourceClass?: string | null;
+  /** Round 103 — extraction diagnostic when extraction was expected but produced nothing. */
+  extractionDiagnostic?: { attempted: boolean; reason: string | null; sourceClass: string | null; charsRead: number; forcedByIntent: boolean } | null;
 }
 
 /**
@@ -1200,6 +1202,7 @@ async function executeResearchTask(opts: {
       stage: "done",
       sourceStatus: statusJson,
       sourceClass: res.sourceClass ?? null,
+      extractionDiagnostic: res.extractionDiagnostic ?? null,
     };
   } catch (err) {
     const message = (err instanceof Error ? err.message : String(err)).slice(0, 500);
@@ -8432,6 +8435,7 @@ export const appRouter = router({
             threadId,
             role: "user",
             content: input.question,
+            taskId,
             sourceKind: effectiveSource?.kind ?? undefined,
             sourceRef: sref ?? undefined,
             sourceLabel: effectiveSourceLabel ?? undefined,
@@ -8568,10 +8572,13 @@ export const appRouter = router({
         if (threadId != null) {
           const sref =
             pending?.kind === "url" ? pending.url : pending?.kind === "text" ? pending.text.slice(0, 700) : pending?.fileKey ?? null;
+          // Round 103 — tag the user message with taskId so processResearchTask can
+          // correctly exclude it from priorMessages (it is the CURRENT turn, not prior).
           await insertResearchMessage({
             threadId,
             role: "user",
             content: input.question,
+            taskId,
             sourceKind: pending?.kind ?? undefined,
             sourceRef: sref ?? undefined,
             sourceLabel: pendingLabel ?? undefined,

@@ -1836,3 +1836,17 @@
 - [x] (8) CBK bond required-fields coverage test (all CBK_BOND_REQUIRED_FIELDS appear in InstrumentProfilePreview groups)
 - [x] (9) Acceptance tests: 38-test Round 102 regression suite (source-class panel, follow-up extraction, profile preview, missing fields, governance)
 - [x] (10) Full suite + tsc green; checkpoint + deliver (1879 tests passing)
+
+## Round 103 — Ask AI: Intelligent Research Assistant Fix
+
+- [x] (1) Create shouldForceExtraction(question, hasReadableSource) helper with intent keyword detection
+- [x] (2) Wire shouldForceExtraction into the extraction gate so it overrides UI mode when extraction intent is detected
+- [x] (3) Fix follow-up extraction with reused sources: server-side detection, not just frontend source state
+- [x] (4) Fix taskId tagging: insert user research message with taskId so processResearchTask excludes it from priorMessages
+- [x] (5) Show detected source class for follow-ups in Conversation component (not just OpeningPanel)
+- [x] (6) Zero-findings diagnostic: when extraction was expected but produced nothing, return ExtractionDiagnostic with reason
+- [x] (7) Field normalization via normaliseExtractionFields: maps all 4 catalogue types (MMF, Bank, CBK, Market Asset)
+- [x] (8) Bulk MMF benchmark extraction: enhanced prompt for up to 50 funds per source
+- [x] (9) Restrict unsourced findings: capped to "low" confidence, tagged _unsourced, warning added, UI shows "Not grounded" banner
+- [x] (10) Behavioral tests: 31-test Round 103 regression suite (intent detection, normalization, unsourced, diagnostic, follow-up, taskId, governance)
+- [x] (11) Full suite + tsc green; checkpoint + deliver (1910 tests passing)

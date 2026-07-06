@@ -10,9 +10,10 @@
  *      through; an empty paste, an unreadable URL, a thin (JS-rendered) page under the
  *      review policy, and an empty/failed transcription each return a TYPED ok:false
  *      with an actionable retryHint — never a bare "failed to fetch".
- *   B. readSource SUCCESS carries grounding text + provenance + non-fatal caveats: a
- *      thin URL under the Ask policy is ok:true (thin:true, warned), and a PDF/image
- *      read is ok:true with the "transcribed by AI — confirm" caveat.
+ *   B. readSource SUCCESS carries grounding text + provenance + non-fatal caveats: a thin
+ *      URL under the Ask policy is ok:true (thin:true, warned); a PDF read is ok:true via
+ *      deterministic server-side extraction, and an image read via AI transcription — each
+ *      carrying a "confirm against the original" caveat.
  *   C. REVIEW is source-gated: an unreadable source stops BEFORE the LLM (invokeLLM is
  *      never called), produces ZERO findings, lands the task in stage needs_source_fix,
  *      and returns the actionable message. Review never falls back to general knowledge.
@@ -34,6 +35,17 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { readSource } from "./aiResearchService";
 import { appRouter } from "./routers";
 import type { TrpcContext } from "./_core/context";
+
+// Stage 1b: PDFs are now read by DETERMINISTIC server-side text extraction (unpdf), not
+// an AI transcription (stock OpenAI's inline-PDF read proved unreliable). Mock unpdf so
+// the pure PDF-read test below is deterministic without a real PDF fixture.
+vi.mock("unpdf", () => ({
+  getDocumentProxy: vi.fn(async () => ({})),
+  extractText: vi.fn(async () => ({
+    totalPages: 1,
+    text: "CIC MMF effective annual rate 16.10% as at June 2026.",
+  })),
+}));
 
 type AuthedUser = NonNullable<TrpcContext["user"]>;
 function ctxFor(role: "admin" | "user"): TrpcContext {
@@ -136,21 +148,19 @@ describe("Round 91 · B — a readable source carries grounding text, provenance
     }
   });
 
-  it("a PDF read is ok:true with the AI-transcription caveat", async () => {
-    // readSource → transcribeSourceToText → invokeLLM. We mock the intercept-able
-    // invokeLLM (a PDF transcription needs no vision model) so the transcript is
-    // deterministic without a network/model call.
-    const llm = await import("./_core/llm");
-    vi.spyOn(llm, "invokeLLM").mockResolvedValue({
-      model: "transcribe-test",
-      choices: [{ message: { content: "CIC MMF effective annual rate 16.10% as at June 2026." } }],
-    } as never);
-    const r = await readSource({ kind: "pdf", fileUrl: "https://files.example/factsheet.pdf" }, { label: "CIC fact sheet" });
+  it("a PDF read is ok:true with a deterministic server-side extraction caveat", async () => {
+    // readSource → transcribeSourceToText → extractPdfText (unpdf, mocked above). No LLM
+    // call. A base64 data: URI is the storage-free upload the app now produces for a PDF.
+    const r = await readSource(
+      { kind: "pdf", fileUrl: "data:application/pdf;base64,JVBERi0xLjQK" },
+      { label: "CIC fact sheet" },
+    );
     expect(r.ok).toBe(true);
     if (r.ok) {
       expect(r.kind).toBe("pdf");
       expect(r.label).toBe("CIC fact sheet");
-      expect(r.warnings.join(" ")).toMatch(/transcribed by AI/i);
+      expect(r.text).toMatch(/16\.10%/);
+      expect(r.warnings.join(" ")).toMatch(/read directly from the uploaded PDF/i);
     }
   });
 });

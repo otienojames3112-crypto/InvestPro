@@ -218,6 +218,7 @@ import {
   readSource,
   findingsToRows,
   buildCatalogueReviewQuestion,
+  extractPdfText,
   type ResearchScope,
   type ResearchSource,
   type SourceReadResult,
@@ -1873,12 +1874,21 @@ export const appRouter = router({
             }
             llmSource = { kind: "text", text };
           } else if (input.source.kind === "pdf") {
-            // PDF: hand the file to the model. A base64 data: URI (storage-free path) goes
-            // straight to OpenAI as an inline `file` part; a legacy key resolves to a signed URL.
-            const fileUrl = input.source.fileKey.startsWith("data:")
-              ? input.source.fileKey
-              : await storageGetSignedUrl(input.source.fileKey);
-            llmSource = { kind: "pdf", fileUrl };
+            // PDF: read the embedded text server-side (deterministic) and hand it to the
+            // model as text. Stock OpenAI's inline-PDF reading is unreliable (it leaks the
+            // base64 back as text), so we never send a PDF to the model directly.
+            const pdfText = input.source.fileKey.startsWith("data:")
+              ? await extractPdfText(input.source.fileKey)
+              : "";
+            if (pdfText.trim() === "") {
+              throw new TRPCError({
+                code: "BAD_REQUEST",
+                message:
+                  "I couldn't read any text from this PDF — it may be scanned or image-only. Upload a screenshot of the page instead.",
+              });
+            }
+            audit.inputChars = pdfText.length;
+            llmSource = { kind: "text", text: pdfText };
           } else {
             // IMAGE: hand the screenshot to a vision-capable model. A data: URI goes straight
             // to OpenAI; aiExtractInstrument resolves a vision model and FAILS LOUDLY if none.

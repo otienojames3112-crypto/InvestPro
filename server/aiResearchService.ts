@@ -24,6 +24,7 @@
  */
 
 import { invokeLLM } from "./_core/llm";
+import { extractText, getDocumentProxy } from "unpdf";
 import { stripVerdictFields } from "../shared/aiIntake";
 import {
   contentToText,
@@ -765,7 +766,7 @@ export async function readSource(
     return { ok: true, kind: "url", text, label: label ?? hostLabel, url: source.url, warnings, thin };
   }
 
-  // pdf | image → OCR-transcribe via the model.
+  // pdf → text extracted server-side (deterministic); image → OCR-transcribed by a vision model.
   const isPdf = source.kind === "pdf";
   const displayLabel = label ?? (isPdf ? "Uploaded PDF" : "Uploaded screenshot");
   let transcript: { text: string; model: string | null };
@@ -800,48 +801,66 @@ export async function readSource(
     text,
     label: displayLabel,
     warnings: [
-      `Figures were transcribed by AI from an ${isPdf ? "uploaded PDF" : "uploaded screenshot"} — confirm each against the original before acting.`,
+      isPdf
+        ? "Text was read directly from the uploaded PDF — confirm each figure against the original before acting."
+        : "Figures were transcribed by AI from an uploaded screenshot — confirm each against the original before acting.",
     ],
     thin: false,
   };
 }
 
 /**
- * Transcribe a PDF or screenshot into plain text the briefing prompt can ground on.
- * The model is instructed to transcribe ONLY what is printed (no inference), mirroring
- * the librarian's OCR-grade faithfulness. Returns the transcript (possibly empty).
- * FAILS LOUDLY for an image when no vision-capable model is available, so a manager is
- * told to paste the text instead of silently getting nothing.
+ * Extract a PDF's embedded text SERVER-SIDE from a base64 `data:` URI (the storage-free
+ * upload path) or raw base64. Deterministic and free — no LLM/vision round-trip. Stock
+ * OpenAI's inline-PDF (`file`) reading proved unreliable (it leaked the base64 back as
+ * text), so we read the text ourselves. Returns "" for a scanned/image-only PDF that has
+ * no embedded text; the caller then reports it as unreadable (upload a screenshot instead).
+ */
+export async function extractPdfText(fileUrlOrDataUri: string): Promise<string> {
+  // A non-data reference (e.g. a legacy signed URL) can't be decoded here; treat as empty.
+  if (!fileUrlOrDataUri.startsWith("data:") && /^https?:\/\//i.test(fileUrlOrDataUri)) {
+    return "";
+  }
+  const base64 = fileUrlOrDataUri.startsWith("data:")
+    ? fileUrlOrDataUri.slice(fileUrlOrDataUri.indexOf(",") + 1)
+    : fileUrlOrDataUri;
+  const bytes = Buffer.from(base64, "base64");
+  const pdf = await getDocumentProxy(new Uint8Array(bytes));
+  const { text } = await extractText(pdf, { mergePages: true });
+  const merged = Array.isArray(text) ? text.join("\n") : text;
+  return (merged ?? "").trim();
+}
+
+/**
+ * Read a PDF or screenshot into plain grounding text. A PDF is read deterministically via
+ * server-side text extraction (no model call); an image is OCR-transcribed by a vision
+ * model, transcribing ONLY what is printed (no inference). FAILS LOUDLY for an image when
+ * no vision-capable model is available, so a manager is told to paste the text instead.
  */
 export async function transcribeSourceToText(
   source: { kind: "pdf"; fileUrl: string } | { kind: "image"; imageUrl: string },
 ): Promise<{ text: string; model: string | null }> {
-  let modelOverride: string | undefined;
-  if (source.kind === "image") {
-    const visionModel = await resolveVisionModel();
-    if (!visionModel) {
-      throw new Error(
-        "The current AI model can't read images. Use 'Paste text' instead and type the figures you can see.",
-      );
-    }
-    modelOverride = visionModel;
+  // PDF: read the embedded text ourselves (deterministic, storage-free, no LLM call).
+  if (source.kind === "pdf") {
+    const text = await extractPdfText(source.fileUrl);
+    return { text, model: null };
+  }
+
+  // IMAGE: OCR-transcribe via a vision-capable model (FAIL LOUDLY if none is available).
+  const visionModel = await resolveVisionModel();
+  if (!visionModel) {
+    throw new Error(
+      "The current AI model can't read images. Use 'Paste text' instead and type the figures you can see.",
+    );
   }
 
   const instruction =
-    source.kind === "pdf"
-      ? "Transcribe the readable text and figures from the attached PDF document. Preserve numbers, labels, dates and units verbatim. Do not summarise, infer, or add anything not printed in the document."
-      : "Transcribe ONLY the text and figures visibly printed in the attached image (a screenshot or photo of a quote board, fact sheet, or notice). Preserve numbers, labels, dates and units verbatim. Never infer a value that is not shown.";
+    "Transcribe ONLY the text and figures visibly printed in the attached image (a screenshot or photo of a quote board, fact sheet, or notice). Preserve numbers, labels, dates and units verbatim. Never infer a value that is not shown.";
 
-  const userContent =
-    source.kind === "pdf"
-      ? ([
-          { type: "text", text: instruction },
-          { type: "file_url", file_url: { url: source.fileUrl, mime_type: "application/pdf" as const } },
-        ] as const)
-      : ([
-          { type: "text", text: instruction },
-          { type: "image_url", image_url: { url: source.imageUrl, detail: "high" as const } },
-        ] as const);
+  const userContent = [
+    { type: "text", text: instruction },
+    { type: "image_url", image_url: { url: source.imageUrl, detail: "high" as const } },
+  ] as const;
 
   const res = await invokeLLM({
     messages: [
@@ -853,7 +872,7 @@ export async function transcribeSourceToText(
       // Cast: invokeLLM accepts multimodal content arrays at runtime.
       { role: "user", content: userContent as unknown as string },
     ],
-    ...(modelOverride ? { model: modelOverride } : {}),
+    model: visionModel,
     temperature: 0,
   });
   return { text: contentToText(res.choices?.[0]?.message?.content).trim(), model: res.model ?? null };

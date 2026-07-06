@@ -180,7 +180,7 @@ import {
   type GoalNature,
   type ActualBucketValues,
 } from "../shared/allocationModel";
-import { storagePut, storageGetSignedUrl } from "./storage";
+import { storageGetSignedUrl } from "./storage";
 import { stripVerdictFields } from "../shared/aiIntake";
 import {
   FIELD_KEYS,
@@ -915,10 +915,20 @@ async function resolveResearchSource(src: PendingResearchSource): Promise<Resear
       return { kind: "url", url: src.url };
     case "text":
       return { kind: "text", text: src.text };
-    case "pdf":
-      return { kind: "pdf", fileUrl: await storageGetSignedUrl(src.fileKey) };
-    case "image":
-      return { kind: "image", imageUrl: await storageGetSignedUrl(src.fileKey) };
+    case "pdf": {
+      // Storage-free path: the fileKey is a base64 data: URI handed straight to OpenAI.
+      // A legacy (non-data) key falls back to the old signed-URL resolver.
+      const fileUrl = src.fileKey.startsWith("data:")
+        ? src.fileKey
+        : await storageGetSignedUrl(src.fileKey);
+      return { kind: "pdf", fileUrl };
+    }
+    case "image": {
+      const imageUrl = src.fileKey.startsWith("data:")
+        ? src.fileKey
+        : await storageGetSignedUrl(src.fileKey);
+      return { kind: "image", imageUrl };
+    }
   }
 }
 
@@ -1795,10 +1805,10 @@ export const appRouter = router({
           source: z.discriminatedUnion("kind", [
             z.object({ kind: z.literal("text"), text: z.string().min(20).max(40000) }),
             z.object({ kind: z.literal("url"), url: z.string().url().max(500) }),
-            z.object({ kind: z.literal("pdf"), fileKey: z.string().min(1).max(300) }),
+            z.object({ kind: z.literal("pdf"), fileKey: z.string().min(1).max(30_000_000) }),
             // An uploaded screenshot/photo of a quote board, fact-sheet table, or notice.
             // Read by a vision-capable model (OCR-grade transcription, no inference).
-            z.object({ kind: z.literal("image"), fileKey: z.string().min(1).max(300) }),
+            z.object({ kind: z.literal("image"), fileKey: z.string().min(1).max(30_000_000) }),
           ]),
           // The cited source document label (for the confirm-against-source UI).
           sourceLabel: z.string().min(1).max(200),
@@ -1863,18 +1873,25 @@ export const appRouter = router({
             }
             llmSource = { kind: "text", text };
           } else if (input.source.kind === "pdf") {
-            // PDF: hand the stored file to the model directly via a signed URL.
-            const signed = await storageGetSignedUrl(input.source.fileKey);
-            llmSource = { kind: "pdf", fileUrl: signed };
+            // PDF: hand the file to the model. A base64 data: URI (storage-free path) goes
+            // straight to OpenAI as an inline `file` part; a legacy key resolves to a signed URL.
+            const fileUrl = input.source.fileKey.startsWith("data:")
+              ? input.source.fileKey
+              : await storageGetSignedUrl(input.source.fileKey);
+            llmSource = { kind: "pdf", fileUrl };
           } else {
-            // IMAGE: hand the stored screenshot to a vision-capable model via a signed URL.
-            // aiExtractInstrument resolves a vision model and FAILS LOUDLY if none exists.
-            const signed = await storageGetSignedUrl(input.source.fileKey);
-            llmSource = { kind: "image", imageUrl: signed };
+            // IMAGE: hand the screenshot to a vision-capable model. A data: URI goes straight
+            // to OpenAI; aiExtractInstrument resolves a vision model and FAILS LOUDLY if none.
+            const isDataUri = input.source.fileKey.startsWith("data:");
+            const imageUrl = isDataUri
+              ? input.source.fileKey
+              : await storageGetSignedUrl(input.source.fileKey);
+            llmSource = { kind: "image", imageUrl };
             const day = new Date(Date.now()).toISOString().slice(0, 10);
             imageProvenanceLabel = `read from an uploaded screenshot of ${input.sourceLabel}, ${day}`;
-            // Remember the storage key so we can render a thumbnail in the review queue.
-            imageSourceKey = input.source.fileKey;
+            // Legacy stored keys can render a review thumbnail via /manus-storage; a storage-free
+            // data URI cannot, so leave the key null (no thumbnail) rather than a broken link.
+            imageSourceKey = isDataUri ? null : input.source.fileKey;
           }
 
           const { extraction, model } = await aiExtractInstrument({
@@ -2066,10 +2083,12 @@ export const appRouter = router({
             message: isPdf ? "PDF exceeds 15MB." : "Image exceeds 10MB.",
           });
         }
-        const fallbackName = isPdf ? "document.pdf" : "screenshot.png";
-        const safe = input.fileName.replace(/[^a-zA-Z0-9._-]+/g, "_").slice(0, 120) || fallbackName;
-        const { key } = await storagePut(`ai-intake/${ctx.user.id}/${safe}`, bytes, input.mimeType);
-        return { fileKey: key, kind: isPdf ? ("pdf" as const) : ("image" as const) };
+        // Storage-free path (Manus is gone): return the file inline as a base64 data
+        // URI. Ask AI hands this straight to OpenAI — image_url for screenshots, an inline
+        // `file` part for PDFs — so uploads need no object storage. `bytes` above is used
+        // only to validate size/emptiness; the data URI carries the original base64.
+        const dataUri = `data:${input.mimeType};base64,${input.base64}`;
+        return { fileKey: dataUri, kind: isPdf ? ("pdf" as const) : ("image" as const) };
       }),
 
     // ── Part 8: universe discovery (suggestions only) ────────────────────────
@@ -8301,8 +8320,8 @@ export const appRouter = router({
             .discriminatedUnion("kind", [
               z.object({ kind: z.literal("url"), url: z.string().url().max(500) }),
               z.object({ kind: z.literal("text"), text: z.string().min(1).max(40000) }),
-              z.object({ kind: z.literal("pdf"), fileKey: z.string().min(1).max(300) }),
-              z.object({ kind: z.literal("image"), fileKey: z.string().min(1).max(300) }),
+              z.object({ kind: z.literal("pdf"), fileKey: z.string().min(1).max(30_000_000) }),
+              z.object({ kind: z.literal("image"), fileKey: z.string().min(1).max(30_000_000) }),
             ])
             .optional(),
           sourceLabel: z.string().max(200).optional(),
@@ -8485,8 +8504,8 @@ export const appRouter = router({
             .discriminatedUnion("kind", [
               z.object({ kind: z.literal("url"), url: z.string().url().max(500) }),
               z.object({ kind: z.literal("text"), text: z.string().min(1).max(40000) }),
-              z.object({ kind: z.literal("pdf"), fileKey: z.string().min(1).max(300) }),
-              z.object({ kind: z.literal("image"), fileKey: z.string().min(1).max(300) }),
+              z.object({ kind: z.literal("pdf"), fileKey: z.string().min(1).max(30_000_000) }),
+              z.object({ kind: z.literal("image"), fileKey: z.string().min(1).max(30_000_000) }),
             ])
             .optional(),
           sourceLabel: z.string().max(200).optional(),
@@ -8604,8 +8623,8 @@ export const appRouter = router({
           source: z.discriminatedUnion("kind", [
             z.object({ kind: z.literal("url"), url: z.string().url().max(500) }),
             z.object({ kind: z.literal("text"), text: z.string().min(1).max(40000) }),
-            z.object({ kind: z.literal("pdf"), fileKey: z.string().min(1).max(300) }),
-            z.object({ kind: z.literal("image"), fileKey: z.string().min(1).max(300) }),
+            z.object({ kind: z.literal("pdf"), fileKey: z.string().min(1).max(30_000_000) }),
+            z.object({ kind: z.literal("image"), fileKey: z.string().min(1).max(30_000_000) }),
           ]),
           sourceLabel: z.string().max(200).optional(),
         }),
@@ -8870,8 +8889,8 @@ export const appRouter = router({
           source: z.discriminatedUnion("kind", [
             z.object({ kind: z.literal("url"), url: z.string().url().max(500) }),
             z.object({ kind: z.literal("text"), text: z.string().min(1).max(40000) }),
-            z.object({ kind: z.literal("pdf"), fileKey: z.string().min(1).max(300) }),
-            z.object({ kind: z.literal("image"), fileKey: z.string().min(1).max(300) }),
+            z.object({ kind: z.literal("pdf"), fileKey: z.string().min(1).max(30_000_000) }),
+            z.object({ kind: z.literal("image"), fileKey: z.string().min(1).max(30_000_000) }),
           ]),
           sourceLabel: z.string().max(200).optional(),
         }),

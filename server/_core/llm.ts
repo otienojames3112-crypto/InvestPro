@@ -23,6 +23,20 @@ export type FileContent = {
   };
 };
 
+/**
+ * OpenAI-native inline file part. Stock OpenAI cannot fetch a URL for a PDF — it reads
+ * the bytes inline as base64 via a `file` part. We translate a `file_url` whose url is a
+ * `data:` URI into this shape (see normalizeContentPart), so an uploaded PDF is read
+ * with no object storage. The old `file_url` form was a Manus forge-gateway extension.
+ */
+export type FileDataContent = {
+  type: "file";
+  file: {
+    filename: string;
+    file_data: string;
+  };
+};
+
 export type MessageContent = string | TextContent | ImageContent | FileContent;
 
 export type Message = {
@@ -120,7 +134,7 @@ const ensureArray = (
 
 const normalizeContentPart = (
   part: MessageContent
-): TextContent | ImageContent | FileContent => {
+): TextContent | ImageContent | FileContent | FileDataContent => {
   if (typeof part === "string") {
     return { type: "text", text: part };
   }
@@ -134,6 +148,15 @@ const normalizeContentPart = (
   }
 
   if (part.type === "file_url") {
+    // A file supplied inline as a base64 data: URI (the storage-free upload path) is
+    // sent to OpenAI as a `file` part; stock OpenAI can't fetch a URL for a document.
+    // A plain http(s) url is left as-is for the legacy forge gateway.
+    const url = part.file_url.url;
+    if (url.startsWith("data:")) {
+      const filename =
+        part.file_url.mime_type === "application/pdf" ? "document.pdf" : "upload";
+      return { type: "file", file: { filename, file_data: url } };
+    }
     return part;
   }
 

@@ -213,14 +213,37 @@ const normalizeToolChoice = (
   return toolChoice;
 };
 
-const resolveApiUrl = () =>
-  ENV.forgeApiUrl && ENV.forgeApiUrl.trim().length > 0
-    ? `${ENV.forgeApiUrl.replace(/\/$/, "")}/v1/chat/completions`
-    : "https://forge.manus.im/v1/chat/completions";
+/**
+ * Resolve the OpenAI-compatible endpoint the model calls. A dedicated OPENAI_API_KEY
+ * takes the MODEL off the shared Manus forge gateway without touching storage/maps/
+ * voice/image (which still use BUILT_IN_FORGE_*). Key and base URL move together: if
+ * OPENAI_API_KEY is set we use it with OPENAI_BASE_URL (default https://api.openai.com);
+ * otherwise we fall back to the forge config exactly as before, so behaviour is
+ * unchanged until an OpenAI key is provided. `baseUrl` is host-root (no /v1); callers
+ * append the path (matching the BUILT_IN_FORGE_API_URL convention).
+ */
+type LlmEndpoint = { apiKey: string; baseUrl: string };
 
-const assertApiKey = () => {
-  if (!ENV.forgeApiKey) {
-    throw new Error("OPENAI_API_KEY is not configured");
+const resolveLlmEndpoint = (): LlmEndpoint => {
+  if (ENV.openaiApiKey && ENV.openaiApiKey.trim().length > 0) {
+    const base =
+      ENV.openaiBaseUrl && ENV.openaiBaseUrl.trim().length > 0
+        ? ENV.openaiBaseUrl.trim()
+        : "https://api.openai.com";
+    return { apiKey: ENV.openaiApiKey.trim(), baseUrl: base.replace(/\/$/, "") };
+  }
+  const forgeBase =
+    ENV.forgeApiUrl && ENV.forgeApiUrl.trim().length > 0
+      ? ENV.forgeApiUrl.trim()
+      : "https://forge.manus.im";
+  return { apiKey: ENV.forgeApiKey, baseUrl: forgeBase.replace(/\/$/, "") };
+};
+
+const assertApiKey = (apiKey: string) => {
+  if (!apiKey) {
+    throw new Error(
+      "No LLM API key is configured. Set OPENAI_API_KEY (recommended) or BUILT_IN_FORGE_API_KEY.",
+    );
   }
 };
 
@@ -341,7 +364,8 @@ const fetchWithBackoff = async (
 };
 
 export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
-  assertApiKey();
+  const endpoint = resolveLlmEndpoint();
+  assertApiKey(endpoint.apiKey);
 
   const {
     messages,
@@ -407,11 +431,11 @@ export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
     payload.response_format = normalizedResponseFormat;
   }
 
-  const response = await fetchWithBackoff(resolveApiUrl(), {
+  const response = await fetchWithBackoff(`${endpoint.baseUrl}/v1/chat/completions`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
-      authorization: `Bearer ${ENV.forgeApiKey}`,
+      authorization: `Bearer ${endpoint.apiKey}`,
     },
     body: JSON.stringify(payload),
   });
@@ -439,14 +463,13 @@ export type ModelsResponse = {
 };
 
 export async function listLLMModels(): Promise<ModelsResponse> {
-  assertApiKey();
+  const endpoint = resolveLlmEndpoint();
+  assertApiKey(endpoint.apiKey);
 
-  const url = ENV.forgeApiUrl && ENV.forgeApiUrl.trim().length > 0
-    ? `${ENV.forgeApiUrl.replace(/\/$/, "")}/v1/models`
-    : "https://forge.manus.im/v1/models";
+  const url = `${endpoint.baseUrl}/v1/models`;
 
   const response = await fetchWithBackoff(url, {
-    headers: { authorization: `Bearer ${ENV.forgeApiKey}` },
+    headers: { authorization: `Bearer ${endpoint.apiKey}` },
   });
 
   if (!response.ok) {

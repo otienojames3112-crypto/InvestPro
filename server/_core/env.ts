@@ -13,6 +13,12 @@ export const ENV = {
   isProduction: process.env.NODE_ENV === "production",
   forgeApiUrl: process.env.BUILT_IN_FORGE_API_URL ?? "",
   forgeApiKey: process.env.BUILT_IN_FORGE_API_KEY ?? "",
+  // Dedicated LLM endpoint (the app's own OpenAI account). When OPENAI_API_KEY is set,
+  // invokeLLM uses it (and OPENAI_BASE_URL, defaulting to https://api.openai.com) for
+  // the MODEL ONLY — storage/maps/voice/image still use the BUILT_IN_FORGE_* vars above.
+  // When unset, invokeLLM falls back to the forge config, so today's behaviour is unchanged.
+  openaiApiKey: process.env.OPENAI_API_KEY ?? "",
+  openaiBaseUrl: process.env.OPENAI_BASE_URL ?? "",
   googleClientId: process.env.GOOGLE_CLIENT_ID ?? "",
   googleClientSecret: process.env.GOOGLE_CLIENT_SECRET ?? "",
   adminEmails: ADMIN_EMAILS,

@@ -19,6 +19,10 @@ export const ENV = {
   // When unset, invokeLLM falls back to the forge config, so today's behaviour is unchanged.
   openaiApiKey: process.env.OPENAI_API_KEY ?? "",
   openaiBaseUrl: process.env.OPENAI_BASE_URL ?? "",
+  // Which model the app asks OpenAI to use. Stock OpenAI requires an explicit model on
+  // every request (the Manus forge gateway picked one for us). Defaults to gpt-4o in
+  // llm.ts when this is blank; set OPENAI_MODEL to override without a code change.
+  openaiModel: process.env.OPENAI_MODEL ?? "",
   googleClientId: process.env.GOOGLE_CLIENT_ID ?? "",
   googleClientSecret: process.env.GOOGLE_CLIENT_SECRET ?? "",
   adminEmails: ADMIN_EMAILS,

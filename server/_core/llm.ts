@@ -222,7 +222,11 @@ const normalizeToolChoice = (
  * unchanged until an OpenAI key is provided. `baseUrl` is host-root (no /v1); callers
  * append the path (matching the BUILT_IN_FORGE_API_URL convention).
  */
-type LlmEndpoint = { apiKey: string; baseUrl: string };
+type LlmEndpoint = { apiKey: string; baseUrl: string; defaultModel: string };
+
+/** Fallback model when OPENAI_API_KEY is set but OPENAI_MODEL is not. Structured-output
+ *  (JSON schema) and vision capable, so Ask AI extraction and image reading both work. */
+const DEFAULT_OPENAI_MODEL = "gpt-4o";
 
 const resolveLlmEndpoint = (): LlmEndpoint => {
   if (ENV.openaiApiKey && ENV.openaiApiKey.trim().length > 0) {
@@ -230,13 +234,19 @@ const resolveLlmEndpoint = (): LlmEndpoint => {
       ENV.openaiBaseUrl && ENV.openaiBaseUrl.trim().length > 0
         ? ENV.openaiBaseUrl.trim()
         : "https://api.openai.com";
-    return { apiKey: ENV.openaiApiKey.trim(), baseUrl: base.replace(/\/$/, "") };
+    // Stock OpenAI rejects any request that doesn't name a model, so we always send one.
+    const defaultModel =
+      ENV.openaiModel && ENV.openaiModel.trim().length > 0
+        ? ENV.openaiModel.trim()
+        : DEFAULT_OPENAI_MODEL;
+    return { apiKey: ENV.openaiApiKey.trim(), baseUrl: base.replace(/\/$/, ""), defaultModel };
   }
   const forgeBase =
     ENV.forgeApiUrl && ENV.forgeApiUrl.trim().length > 0
       ? ENV.forgeApiUrl.trim()
       : "https://forge.manus.im";
-  return { apiKey: ENV.forgeApiKey, baseUrl: forgeBase.replace(/\/$/, "") };
+  // Forge selects a model server-side, so we leave defaultModel empty (legacy behaviour).
+  return { apiKey: ENV.forgeApiKey, baseUrl: forgeBase.replace(/\/$/, ""), defaultModel: "" };
 };
 
 const assertApiKey = (apiKey: string) => {
@@ -388,8 +398,11 @@ export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
     messages: messages.map(normalizeMessage),
   };
 
-  if (model) {
-    payload.model = model;
+  // An explicit per-call model wins; otherwise use the endpoint's default (set for
+  // OpenAI, empty for forge which picks its own). Sending no model to stock OpenAI 400s.
+  const effectiveModel = model || endpoint.defaultModel;
+  if (effectiveModel) {
+    payload.model = effectiveModel;
   }
 
   if (tools && tools.length > 0) {

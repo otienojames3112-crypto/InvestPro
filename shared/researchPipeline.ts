@@ -21,7 +21,7 @@
  *     FACT, not a recommendation.
  */
 
-import { type AssetClass, ASSET_CLASSES } from "./assetModel";
+import { type AssetClass, ASSET_CLASSES, type BankInstrumentType } from "./assetModel";
 
 /** Which live catalogue an approved update writes into. */
 export type PromotionTarget = "mmf" | "bank" | "opportunity";
@@ -185,7 +185,7 @@ export interface MmfPromotion {
 }
 export interface BankPromotion {
   bankName: string;
-  instrumentType: string | null;
+  instrumentType: BankInstrumentType | null;
   minAmount: number | null;
   typicalTenor: string | null;
   indicativeRate: number | null;
@@ -225,6 +225,42 @@ export function slugRef(prefix: string, name: string): string {
     .replace(/^-+|-+$/g, "")
     .slice(0, 40);
   return `${prefix}-${base || "item"}`;
+}
+
+/**
+ * Stage 3b.1 — canonicalize a bank product's type into the catalogue's actual
+ * enum values ("call_deposit" | "fixed_deposit" | "ordinary_savings" |
+ * "target_savings" | "tiered_savings"). Two problems this fixes:
+ *
+ *   1. The structured bank-extraction schema writes the field as `productType`,
+ *      not `instrumentType` — buildPromotionPlan previously read ONLY
+ *      `figures.instrumentType`, which is never populated by that path, so
+ *      every structured extraction silently promoted as "fixed_deposit".
+ *   2. That schema's own vocabulary ("target_goal_savings",
+ *      "tiered_high_yield_savings") is LONGER than the catalogue's actual enum
+ *      ("target_savings", "tiered_savings") — bankInstruments.instrumentType is
+ *      a strict MySQL enum, so writing the raw long form verbatim risked an
+ *      insert failure.
+ *
+ * Returns null for anything missing or unrecognised — callers supply their own
+ * explicit fallback rather than this function inventing one, so an unknown
+ * value is never silently written as a DIFFERENT valid enum value.
+ */
+const BANK_INSTRUMENT_TYPE_ALIASES: Record<string, BankInstrumentType> = {
+  call_deposit: "call_deposit",
+  fixed_deposit: "fixed_deposit",
+  ordinary_savings: "ordinary_savings",
+  target_savings: "target_savings",
+  tiered_savings: "tiered_savings",
+  // Long-form vocabulary the structured bank-extraction schema actually emits.
+  target_goal_savings: "target_savings",
+  tiered_high_yield_savings: "tiered_savings",
+};
+
+export function canonicalizeBankInstrumentType(value: unknown): BankInstrumentType | null {
+  if (typeof value !== "string") return null;
+  const key = value.trim().toLowerCase().replace(/[\s-]+/g, "_");
+  return BANK_INSTRUMENT_TYPE_ALIASES[key] ?? null;
 }
 
 /**
@@ -270,7 +306,13 @@ export function buildPromotionPlan(update: {
       target: "bank",
       payload: {
         bankName: str(update.issuer) ?? name,
-        instrumentType: str(f.instrumentType) ?? "fixed_deposit",
+        // Stage 3b.1 — figures.instrumentType (generic/manual origin) OR
+        // figures.productType (the structured extraction schema's field name),
+        // canonicalized to the catalogue's real enum. Falls back to
+        // "fixed_deposit" only when NEITHER is a recognised value — the SAME
+        // default this already had, now reached deliberately, not by omission.
+        instrumentType:
+          canonicalizeBankInstrumentType(f.instrumentType ?? f.productType) ?? "fixed_deposit",
         minAmount: num(f.minAmount ?? f.minInvestment),
         typicalTenor: str(f.typicalTenor ?? f.tenor),
         indicativeRate: num(f.indicativeRate ?? f.yieldPct ?? f.rate),

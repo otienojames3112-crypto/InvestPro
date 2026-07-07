@@ -219,6 +219,7 @@ import {
   findingsToRows,
   buildCatalogueReviewQuestion,
   extractPdfText,
+  looksLikeRawBlob,
   type ResearchScope,
   type ResearchSource,
   type SourceReadResult,
@@ -8295,7 +8296,33 @@ export const appRouter = router({
         if (!thread) throw new TRPCError({ code: "NOT_FOUND", message: "Enquiry thread not found." });
         const messages = await listResearchMessages(input.id);
         const findings = await listResearchFindings({ threadId: input.id });
-        return { thread, messages, findings };
+        // Never ship a base64/data-URI blob to the browser. An uploaded pdf/image source is
+        // stored in a message's sourceRef as a data: URI (kept in the DB for server-side
+        // "reuse previous source"), and an earlier build could have persisted a blob into a
+        // message's content or a finding. Strip all of that from the CLIENT payload so it can
+        // never render as scrambled base64.
+        const isBlob = (s: unknown): boolean =>
+          typeof s === "string" && (s.startsWith("data:") || looksLikeRawBlob(s));
+        const scrubFields = (ef: unknown) => {
+          if (!ef || typeof ef !== "object") return ef;
+          const out: Record<string, unknown> = {};
+          for (const [k, v] of Object.entries(ef as Record<string, unknown>)) {
+            out[k] = isBlob(v) ? "" : v;
+          }
+          return out;
+        };
+        const safeMessages = messages.map((m) => ({
+          ...m,
+          content: isBlob(m.content) ? "(attached source — not shown here)" : m.content,
+          sourceRef: isBlob(m.sourceRef) ? null : m.sourceRef,
+        }));
+        const safeFindings = findings.map((f) => ({
+          ...f,
+          rawExcerpt: isBlob(f.rawExcerpt) ? null : f.rawExcerpt,
+          sourceUrl: isBlob(f.sourceUrl) ? null : f.sourceUrl,
+          extractedFields: scrubFields(f.extractedFields) as typeof f.extractedFields,
+        }));
+        return { thread, messages: safeMessages, findings: safeFindings };
       }),
 
     // Round 88 — archive/unarchive a thread (hides it from the default enquiry list).

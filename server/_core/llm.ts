@@ -365,7 +365,12 @@ const fetchWithBackoff = async (
   for (let attempt = 0; attempt <= RETRY_MAX_RETRIES; attempt++) {
     try {
       const response = await fetch(url, init);
-      if (response.ok || attempt === RETRY_MAX_RETRIES) {
+      // A 4xx (except 429 rate-limit) is a client error — the request itself is bad, so
+      // retrying it just wastes time and repeats the same failure. Return it immediately so
+      // the caller surfaces the real error fast. Retry only 429 and 5xx (and network errors).
+      const isRetriableStatus =
+        response.status === 429 || response.status >= 500;
+      if (response.ok || !isRetriableStatus || attempt === RETRY_MAX_RETRIES) {
         return response;
       }
 

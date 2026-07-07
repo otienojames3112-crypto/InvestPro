@@ -31,7 +31,6 @@ import {
   parseJsonLoose,
   fetchDocumentText,
   isThinFetch,
-  resolveVisionModel,
 } from "./aiIntakeService";
 import { normaliseAssetClass, type AssetClass } from "../shared/assetModel";
 import {
@@ -871,9 +870,8 @@ export function looksLikeRawBlob(s: string): boolean {
 
 /**
  * Read a PDF or screenshot into plain grounding text. A PDF is read deterministically via
- * server-side text extraction (no model call); an image is OCR-transcribed by a vision
- * model, transcribing ONLY what is printed (no inference). FAILS LOUDLY for an image when
- * no vision-capable model is available, so a manager is told to paste the text instead.
+ * server-side text extraction (no model call); an image is OCR-transcribed by the default
+ * model (gpt-4o is vision-capable), transcribing ONLY what is printed (no inference).
  */
 export async function transcribeSourceToText(
   source: { kind: "pdf"; fileUrl: string } | { kind: "image"; imageUrl: string },
@@ -884,14 +882,9 @@ export async function transcribeSourceToText(
     return { text, model: null };
   }
 
-  // IMAGE: OCR-transcribe via a vision-capable model (FAIL LOUDLY if none is available).
-  const visionModel = await resolveVisionModel();
-  if (!visionModel) {
-    throw new Error(
-      "The current AI model can't read images. Use 'Paste text' instead and type the figures you can see.",
-    );
-  }
-
+  // IMAGE: OCR-transcribe with the DEFAULT model. We do NOT pick a model from the provider's
+  // catalogue — that risked selecting one that rejects image input in chat-completions (a
+  // 400). invokeLLM's default (OPENAI_MODEL / gpt-4o) is vision-capable and reads a data URI.
   const instruction =
     "Transcribe ONLY the text and figures visibly printed in the attached image (a screenshot or photo of a quote board, fact sheet, or notice). Preserve numbers, labels, dates and units verbatim. Never infer a value that is not shown.";
 
@@ -910,7 +903,6 @@ export async function transcribeSourceToText(
       // Cast: invokeLLM accepts multimodal content arrays at runtime.
       { role: "user", content: userContent as unknown as string },
     ],
-    model: visionModel,
     temperature: 0,
   });
   return { text: contentToText(res.choices?.[0]?.message?.content).trim(), model: res.model ?? null };

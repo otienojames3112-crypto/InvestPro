@@ -83,24 +83,27 @@ describe("Part 8.1 — aiExtractInstrument (image source)", () => {
   beforeEach(() => vi.restoreAllMocks());
   afterEach(() => vi.restoreAllMocks());
 
-  it("fails loudly when no vision-capable model is available", async () => {
+  it("sends an image WITHOUT pre-resolving a vision model (relies on the default)", async () => {
+    // The image path no longer queries the provider catalogue for a "vision model" (which
+    // could pick one that rejects image input, a 400). It sends the image to the default
+    // model (gpt-4o is vision-capable), so no listLLMModels lookup happens and no model
+    // override is set on the call.
     const llm = await import("./_core/llm");
-    vi.spyOn(llm, "listLLMModels").mockResolvedValue({
-      data: [{ id: "gpt-3.5-turbo" }],
+    const listSpy = vi.spyOn(llm, "listLLMModels");
+    const invoke = vi.spyOn(llm, "invokeLLM").mockResolvedValue({
+      model: "gpt-4o",
+      choices: [
+        { message: { content: JSON.stringify({ name: "CIC MMF", issuer: null, assetClass: null, currency: null, market: null, notes: null, figures: [{ field: "yield", value: "9.25", quote: "Net yield 9.25%", asOf: null }] }) } },
+      ],
     } as never);
-    const invoke = vi.spyOn(llm, "invokeLLM");
-    await expect(
-      aiExtractInstrument({ source: { kind: "image", imageUrl: "https://x/y.png" } }),
-    ).rejects.toThrow(/can't read images/i);
-    // The guard short-circuits before any (billable) LLM call is made.
-    expect(invoke).not.toHaveBeenCalled();
+    await aiExtractInstrument({ source: { kind: "image", imageUrl: "https://x/y.png" } });
+    expect(listSpy).not.toHaveBeenCalled();
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect((invoke.mock.calls[0][0] as { model?: string }).model).toBeUndefined();
   });
 
-  it("sends the image to a resolved vision model and parses fields (nulls over guesses)", async () => {
+  it("sends the image to the default model and parses fields (nulls over guesses)", async () => {
     const llm = await import("./_core/llm");
-    vi.spyOn(llm, "listLLMModels").mockResolvedValue({
-      data: [{ id: "gpt-4o" }],
-    } as never);
     const invoke = vi.spyOn(llm, "invokeLLM").mockResolvedValue({
       model: "gpt-4o",
       choices: [
@@ -133,13 +136,13 @@ describe("Part 8.1 — aiExtractInstrument (image source)", () => {
     // Price was absent → it is simply not present (null/omitted), never fabricated.
     expect(extraction!.figures.find((f) => f.field === "price")).toBeUndefined();
 
-    // It actually used the resolved vision model and sent an image_url content block.
+    // It sent an image_url content block, with NO model override (uses the default).
     const call = invoke.mock.calls[0][0] as {
       model?: string;
       temperature?: number;
       messages: Array<{ role: string; content: unknown }>;
     };
-    expect(call.model).toBe("gpt-4o");
+    expect(call.model).toBeUndefined();
     expect(call.temperature).toBe(0); // accuracy-first
     const userMsg = call.messages.find((m) => m.role === "user")!;
     const blocks = userMsg.content as Array<{ type: string; image_url?: { url: string } }>;

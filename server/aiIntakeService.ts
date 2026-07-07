@@ -359,19 +359,9 @@ export async function aiExtractInstrument(args: {
 }): Promise<{ extraction: AiInstrumentExtraction | null; model: string | null }> {
   const hint = args.hintName ? `The document is about: ${args.hintName}\n\n` : "";
 
-  // The image path needs a vision-capable model. Resolve one up front and FAIL LOUDLY if
-  // none is available, rather than sending an image to a text-only model and getting an
-  // empty result back (which would silently look like "nothing found").
-  let modelOverride: string | undefined;
-  if (args.source.kind === "image") {
-    const visionModel = await resolveVisionModel();
-    if (!visionModel) {
-      throw new Error(
-        "The current AI model can't read images. Use 'Paste text' instead and type the figures you can see.",
-      );
-    }
-    modelOverride = visionModel;
-  }
+  // Images are read by the DEFAULT model (gpt-4o is vision-capable). We do NOT pick a model
+  // from the provider's catalogue — that risked selecting one that rejects image input in
+  // chat-completions (a 400). invokeLLM's default handles both text and vision.
 
   const systemContent =
     args.source.kind === "image"
@@ -401,7 +391,6 @@ export async function aiExtractInstrument(args: {
       { role: "system", content: systemContent },
       { role: "user", content: userContent },
     ],
-    ...(modelOverride ? { model: modelOverride } : {}),
     temperature: 0,
     response_format: { type: "json_schema", json_schema: EXTRACTION_SCHEMA },
   });

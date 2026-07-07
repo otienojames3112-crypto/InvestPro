@@ -8926,6 +8926,13 @@ export const appRouter = router({
           field: z.string().min(1).max(48),
           newValue: z.string().min(1).max(300),
           reason: z.string().min(3).max(600),
+          // A manager-cited source for THIS corrected value — first-class alongside an
+          // AI-found one. Optional when the original finding already has a source (the
+          // correction then reuses it); required by the server when it does not.
+          sourceLabel: z.string().min(1).max(300).optional(),
+          sourceUrl: z.string().url().max(500).optional(),
+          // ISO date (yyyy-mm-dd) the manager's value is as-of.
+          sourceAsOf: z.string().max(10).optional(),
         }),
       )
       .mutation(async ({ ctx, input }) => {
@@ -8938,6 +8945,9 @@ export const appRouter = router({
           reason: input.reason,
           by,
           byName,
+          sourceLabel: input.sourceLabel ?? null,
+          sourceUrl: input.sourceUrl ?? null,
+          sourceAsOf: input.sourceAsOf ?? null,
         });
         if ("error" in result) {
           throw new TRPCError({ code: "BAD_REQUEST", message: result.error });

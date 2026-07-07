@@ -484,20 +484,38 @@ function CorrectFigureDialog({
   const [newValue, setNewValue] = useState<string>("");
   const [reason, setReason] = useState<string>("");
 
+  // Round 2 — a manager-cited source for THIS corrected value, first-class alongside an
+  // AI-found one. The original finding's source (if any) is reused by default; a manager
+  // supplies their own only when the value comes from somewhere else. When the original
+  // has NO source at all, one is mandatory here (every field must carry a source + as-of).
+  const hasOriginalSource = Boolean(finding.sourceLabel || finding.sourceUrl);
+  const [useOwnSource, setUseOwnSource] = useState<boolean>(!hasOriginalSource);
+  const [sourceLabel, setSourceLabel] = useState<string>("");
+  const [sourceUrl, setSourceUrl] = useState<string>("");
+  const [sourceAsOf, setSourceAsOf] = useState<string>(() => new Date().toISOString().slice(0, 10));
+
   const correct = trpc.research.correctFinding.useMutation({
     onSuccess: () => {
       toast.success("Correction recorded and drafted into the review queue — approve it there to update the catalogue.");
       onOpenChange(false);
       setNewValue("");
       setReason("");
+      setUseOwnSource(!hasOriginalSource);
+      setSourceLabel("");
+      setSourceUrl("");
       onDone();
     },
     onError: (err) => toast.error(err.message),
   });
 
   const oldValue = fields.find((f) => f.key === field)?.value ?? "—";
+  const sourceRequired = useOwnSource || !hasOriginalSource;
   const canSubmit =
-    field.trim() !== "" && newValue.trim() !== "" && reason.trim().length >= 3 && !correct.isPending;
+    field.trim() !== "" &&
+    newValue.trim() !== "" &&
+    reason.trim().length >= 3 &&
+    (!sourceRequired || sourceLabel.trim() !== "") &&
+    !correct.isPending;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -566,6 +584,70 @@ function CorrectFigureDialog({
               rows={3}
             />
           </div>
+
+          {/* Round 2 — source for the corrected value. Every field, AI-found or
+              manager-entered, carries its own source + as-of date. */}
+          <div className="space-y-2 rounded-md border border-border p-3">
+            {hasOriginalSource ? (
+              <>
+                <div className="flex items-center justify-between gap-2">
+                  <Label className="text-xs text-muted-foreground">Source for this value</Label>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-6 px-2 text-[11px]"
+                    onClick={() => setUseOwnSource((v) => !v)}
+                  >
+                    {useOwnSource ? "Use the original source instead" : "I have a different source"}
+                  </Button>
+                </div>
+                {!useOwnSource && (
+                  <p className="text-xs text-muted-foreground">
+                    Reusing the finding's original source: <span className="font-medium">{finding.sourceLabel ?? finding.sourceUrl}</span>
+                    {finding.sourceAsOf ? ` (as of ${new Date(finding.sourceAsOf).toISOString().slice(0, 10)})` : ""}.
+                  </p>
+                )}
+              </>
+            ) : (
+              <p className="text-xs text-amber-600 dark:text-amber-500">
+                This finding has no source. Provide one for your corrected value below — every figure must carry a source.
+              </p>
+            )}
+            {sourceRequired && (
+              <div className="space-y-2 pt-1">
+                <div className="space-y-1">
+                  <Label className="text-xs text-muted-foreground">Source label (e.g. publication, document, or bank statement)</Label>
+                  <Input
+                    value={sourceLabel}
+                    onChange={(e) => setSourceLabel(e.target.value)}
+                    placeholder="e.g. CIC MMF fact sheet, June 2026"
+                    className="bg-background"
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="space-y-1">
+                    <Label className="text-xs text-muted-foreground">Source URL (optional)</Label>
+                    <Input
+                      value={sourceUrl}
+                      onChange={(e) => setSourceUrl(e.target.value)}
+                      placeholder="https://…"
+                      className="bg-background"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs text-muted-foreground">As of date</Label>
+                    <Input
+                      type="date"
+                      value={sourceAsOf}
+                      onChange={(e) => setSourceAsOf(e.target.value)}
+                      className="bg-background"
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
 
         <DialogFooter>
@@ -574,7 +656,19 @@ function CorrectFigureDialog({
           </Button>
           <Button
             onClick={() =>
-              correct.mutate({ findingId: finding.id, field: field.trim(), newValue: newValue.trim(), reason: reason.trim() })
+              correct.mutate({
+                findingId: finding.id,
+                field: field.trim(),
+                newValue: newValue.trim(),
+                reason: reason.trim(),
+                ...(sourceRequired
+                  ? {
+                      sourceLabel: sourceLabel.trim(),
+                      ...(sourceUrl.trim() !== "" ? { sourceUrl: sourceUrl.trim() } : {}),
+                      ...(sourceAsOf.trim() !== "" ? { sourceAsOf: sourceAsOf.trim() } : {}),
+                    }
+                  : {}),
+              })
             }
             disabled={!canSubmit}
           >

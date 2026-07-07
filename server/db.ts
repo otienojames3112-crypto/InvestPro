@@ -3166,6 +3166,17 @@ export async function correctResearchFinding(args: {
   reason: string;
   by: string;
   byName?: string | null;
+  /**
+   * A manager-cited source for THIS corrected value, first-class alongside an AI-found
+   * one (never inherited silently when supplied). When omitted, the correction reuses
+   * the original finding's source — the "same document, mis-read figure" case. When the
+   * original finding has NO source, one of these must be supplied (enforced below), so
+   * every field — AI-found or manager-entered — always carries a source + as-of.
+   */
+  sourceLabel?: string | null;
+  sourceUrl?: string | null;
+  /** ISO date (yyyy-mm-dd) the manager's value is as-of. */
+  sourceAsOf?: string | null;
 }): Promise<{ newFindingId: number | null; updateId: number | null } | { error: string }> {
   const db = await getDb();
   if (!db) return { newFindingId: null, updateId: null };
@@ -3181,6 +3192,26 @@ export async function correctResearchFinding(args: {
   if (field === "") return { error: "A field to correct is required." };
   if (newValue === "") return { error: "A corrected value is required." };
   if (reason === "") return { error: "A plain-English reason for the correction is required." };
+
+  // A manager-cited source for THIS value, if supplied.
+  const managerSourceLabel = args.sourceLabel?.trim() || null;
+  const managerSourceUrl = args.sourceUrl?.trim() || null;
+  const managerAsOfMs =
+    args.sourceAsOf && Number.isFinite(Date.parse(args.sourceAsOf)) ? Date.parse(args.sourceAsOf) : null;
+
+  const hadOriginalSource = Boolean(original.sourceLabel || original.sourceUrl);
+  if (!hadOriginalSource && !managerSourceLabel && !managerSourceUrl) {
+    return {
+      error:
+        "The original finding has no source. Provide a source for your corrected value — every figure, AI-found or manager-entered, must carry one.",
+    };
+  }
+
+  // Resolved provenance for the corrected value: the manager's own source when supplied,
+  // else the original's (same source, a mis-read figure).
+  const resolvedSourceLabel = managerSourceLabel ?? original.sourceLabel;
+  const resolvedSourceUrl = managerSourceUrl ?? original.sourceUrl;
+  const resolvedAsOf = managerAsOfMs ?? original.sourceAsOf ?? null;
 
   const oldFigures = (original.extractedFields ?? {}) as Record<string, unknown>;
   const oldValueRaw = oldFigures[field];
@@ -3200,9 +3231,9 @@ export async function correctResearchFinding(args: {
     targetCatalogue: original.targetCatalogue,
     currency: original.currency,
     extractedFields: nextFigures,
-    sourceLabel: original.sourceLabel,
-    sourceUrl: original.sourceUrl,
-    sourceAsOf: original.sourceAsOf,
+    sourceLabel: resolvedSourceLabel,
+    sourceUrl: resolvedSourceUrl,
+    sourceAsOf: resolvedAsOf,
     checkedAt: now,
     // A manager-vouched correction is at least as certain as the original.
     confidence: original.confidence,
@@ -3226,9 +3257,9 @@ export async function correctResearchFinding(args: {
 
   // 3) Draft a governed PENDING update so the correction goes through review with
   //    old → new + reason + source. This is an EDIT to the target catalogue row.
-  //    Source of record for the correction: the manager, citing the finding's
-  //    original source plus their stated reason.
-  const source = (original.sourceLabel ?? "Manager correction").slice(0, 300);
+  //    Source of record: the manager's own citation when supplied, else the finding's
+  //    original source — matching what was just written onto the corrected finding row.
+  const source = (resolvedSourceLabel ?? "Manager correction").slice(0, 300);
   let updateId: number | null = null;
   try {
     updateId = await enqueueResearchUpdate({
@@ -3240,8 +3271,8 @@ export async function correctResearchFinding(args: {
       currency: original.currency,
       figures: { [field]: newValue },
       source,
-      sourceUrl: original.sourceUrl,
-      asOf: original.sourceAsOf ?? null,
+      sourceUrl: resolvedSourceUrl,
+      asOf: resolvedAsOf,
       origin: "manual",
       findingId: newFindingId,
       field,

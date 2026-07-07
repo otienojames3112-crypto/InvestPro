@@ -148,6 +148,13 @@ describe("A. catalogue-specific approval gate (create)", () => {
         whtRule: "15%",
         taxExempt: false,
         maturityRule: "at maturity",
+        // Round 3 — the name "FXD1/2024/10" is detected as an FXD sub-type, which
+        // also requires its own issue number / coupon rate / maturity date; supply
+        // them so this test isolates its ORIGINAL intent (a false boolean still
+        // counts as present) rather than tripping the new sub-type requirements.
+        issueNumber: "FXD1/2024/10",
+        couponRate: "14",
+        maturityDate: "2034-06-20",
       },
     });
     expect(r.ok).toBe(true);

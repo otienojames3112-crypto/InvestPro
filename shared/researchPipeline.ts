@@ -488,6 +488,69 @@ export const CATALOGUE_FIELD_RULES: Record<ReferenceCatalogue, CatalogueFieldRul
   ],
 };
 
+/* ── Round 3 — CBK Securities sub-type tightening ────────────────────────────
+ * `CATALOGUE_FIELD_RULES.cbk` above is the BASELINE every CBK security must meet
+ * (security type, tenor, a rate, WHT rule, tax-exempt flag, maturity rule, source,
+ * as-of). Treasury bills, FXD bonds and infrastructure bonds are meaningfully
+ * different instruments, so each also carries its OWN required fields on top of
+ * that baseline. This is ADDITIVE and only fires when the sub-type is confidently
+ * detected — an undetectable sub-type ("unknown") gets no extra requirements, so
+ * behaviour for anything we can't classify is unchanged from before this rule.
+ */
+
+/** A Treasury bill (discount, no coupon), an FXD (taxed coupon bond), or an
+ *  infrastructure bond (tax-exempt coupon bond). */
+export type CbkSubtype = "tbill" | "fxd" | "ifb";
+
+/**
+ * Detect a CBK security's sub-type from its figures bag + name. Two extraction
+ * paths write `securityType` with DIFFERENT vocabularies — the structured-extraction
+ * path writes "fxd" / "ifb" / "zero_coupon" (etc.), the deterministic rule-fill path
+ * (`applyCbkRuleFill`) writes "treasury_bill" / "infrastructure_bond" /
+ * "treasury_bond" — so this tolerates both, plus a name-based fallback for a finding
+ * where the model never populated `securityType` at all. Returns `null` (not a
+ * subtype) when nothing is confidently detected — callers must NOT tighten
+ * requirements for an undetected instrument.
+ */
+export function detectCbkSubtype(
+  figures: Record<string, unknown> | null | undefined,
+  instrumentName?: string | null,
+): CbkSubtype | null {
+  const f = figures ?? {};
+  const tenorDays = Number(f.tenorDays);
+  if (Number.isFinite(tenorDays) && [91, 182, 364].includes(tenorDays)) return "tbill";
+
+  const st = String(f.securityType ?? "").toLowerCase();
+  if (/ifb|infrastructure/.test(st)) return "ifb";
+  if (/tbill|treasury_bill|zero_coupon/.test(st)) return "tbill";
+  if (/fxd|treasury_bond|floating/.test(st)) return "fxd";
+
+  const name = (instrumentName ?? "").toLowerCase();
+  if (/ifb|infrastructure/.test(name)) return "ifb";
+  if (/t-?bill|treasury bill/.test(name)) return "tbill";
+  if (/fxd|treasury bond|\bbond\b/.test(name)) return "fxd";
+
+  return null;
+}
+
+/** The ADDITIONAL fields each CBK sub-type requires, on top of the cbk baseline. */
+export const CBK_SUBTYPE_FIELD_RULES: Record<CbkSubtype, CatalogueFieldRule[]> = {
+  tbill: [
+    { key: "auctionDate", label: "auction date", source: "figures" },
+    { key: "valueDate", label: "value / settlement date", source: "figures" },
+  ],
+  fxd: [
+    { key: "issueNumber", label: "issue number", source: "figures" },
+    { key: "couponRate", label: "coupon rate", source: "figures" },
+    { key: "maturityDate", label: "maturity date", source: "figures" },
+  ],
+  ifb: [
+    { key: "issueNumber", label: "issue number", source: "figures" },
+    { key: "couponRate", label: "coupon rate", source: "figures" },
+    { key: "maturityDate", label: "maturity date", source: "figures" },
+  ],
+};
+
 /**
  * Back-compat: the minimal figure keys per catalogue (used by tests + the
  * portfolio-impact primary-figure lookup). Kept as the projection-relevant subset
@@ -529,6 +592,12 @@ function figurePresent(figures: Record<string, unknown> | null | undefined, key:
     taxExempt: ["taxExempt", "taxExemptFlag", "isTaxExempt"],
     maturityRule: ["maturityRule", "maturityDate", "maturity"],
     market: ["market", "segment", "exchange"],
+    // CBK sub-type fields (Round 3 — tbill/fxd/ifb-specific requirements below).
+    issueNumber: ["issueNumber", "issueNo", "issue_number"],
+    couponRate: ["couponRate", "coupon"],
+    maturityDate: ["maturityDate", "maturity"],
+    auctionDate: ["auctionDate", "auction_date"],
+    valueDate: ["valueDate", "value_date", "settlementDate", "settlement_date"],
   };
   const keys = aliases[key] ?? [key];
   return keys.some((k) => {
@@ -546,6 +615,10 @@ export interface ApprovalGateResult {
   missing: string[];
   /** Plain-language reason when blocked. */
   reason?: string;
+  /** The detected CBK sub-type (tbill/fxd/ifb), when the catalogue is "cbk" and it
+   *  was confidently detected. Null for every other catalogue, an edit, or an
+   *  undetected CBK sub-type — callers should not tighten requirements on null. */
+  cbkSubtype?: CbkSubtype | null;
 }
 
 /**
@@ -614,12 +687,36 @@ export function checkApprovalGate(args: {
     if (!present) missing.push(rule.label);
   }
 
-  if (missing.length === 0) return { ok: true, catalogue, missing: [] };
+  // Round 3 — CBK sub-type tightening. Additive on top of the baseline cbk rules
+  // above: a T-bill/FXD/IFB carries its OWN required fields when confidently
+  // detected. An undetected sub-type adds nothing, so behaviour is unchanged for
+  // anything we can't classify.
+  let cbkSubtype: CbkSubtype | null = null;
+  if (catalogue === "cbk") {
+    cbkSubtype = detectCbkSubtype(figures, args.name);
+    if (cbkSubtype) {
+      for (const rule of CBK_SUBTYPE_FIELD_RULES[cbkSubtype]) {
+        if (!figurePresent(figures, rule.key)) missing.push(rule.label);
+      }
+      // An infrastructure bond's whole point is its 0% WHT — the baseline only checks
+      // that SOME taxExempt value was recorded, not that it is actually true. Catch a
+      // row that recorded taxExempt=false (or "false") on an IFB, which would otherwise
+      // silently pass the baseline check.
+      if (cbkSubtype === "ifb") {
+        const te = figures.taxExempt;
+        const isTrue = te === true || String(te).trim().toLowerCase() === "true";
+        if (!isTrue) missing.push("tax-exempt flag must be TRUE for an infrastructure bond");
+      }
+    }
+  }
+
+  if (missing.length === 0) return { ok: true, catalogue, missing: [], cbkSubtype };
   return {
     ok: false,
     catalogue,
     missing,
     reason: `${catalogueLabel(catalogue)} entries need ${missing.join(", ")} before they can be published. Add the field(s), mark them unavailable, or approve with a manager-vouched value.`,
+    cbkSubtype,
   };
 }
 

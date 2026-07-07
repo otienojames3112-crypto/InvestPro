@@ -119,7 +119,13 @@ describe("Round 90 · B — normaliseFinding rule-fills then agrees with checkAp
       instrumentName: "91-Day Treasury Bill",
       assetClass: "treasury bill",
       currency: "KES",
-      figures: [{ key: "tenorDays", value: "91" }],
+      // Round 3 — a T-bill also requires its own auctionDate/valueDate; supply them
+      // so this test isolates its original intent (only the rate is missing).
+      figures: [
+        { key: "tenorDays", value: "91" },
+        { key: "auctionDate", value: "2026-06-18" },
+        { key: "valueDate", value: "2026-06-20" },
+      ],
       sourceLabel: "CBK weekly auction results",
       sourceAsOf: "2026-06-20",
       confidence: 0.8,
@@ -136,7 +142,11 @@ describe("Round 90 · B — normaliseFinding rule-fills then agrees with checkAp
   });
 
   it("the card's missingFields are exactly what checkApprovalGate would report", () => {
-    const figures = { tenorDays: "182" };
+    // Round 3 — a T-bill also requires its own auctionDate/valueDate (on top of the
+    // baseline rule-filled fields), so this fixture supplies them — matching what a
+    // real CBK weekly notice always carries alongside the tenor — to isolate the
+    // ONE remaining gap this test is about: the rate.
+    const figures = { tenorDays: "182", auctionDate: "2026-06-18", valueDate: "2026-06-20" };
     const filled = applyCbkRuleFill({ ...figures });
     const gateMissing = checkApprovalGate({
       assetClass: assetClassForCatalogue("cbk"),
@@ -155,8 +165,13 @@ describe("Round 90 · B — normaliseFinding rule-fills then agrees with checkAp
     expect(cardMissing).toEqual(["rate / coupon / previous average rate"]);
   });
 
-  it("supplying the rate clears the CBK gate entirely", () => {
-    const filled = applyCbkRuleFill({ tenorDays: "364", yieldPct: "16.75" });
+  it("supplying the rate AND the T-bill's auction/value dates clears the CBK gate entirely", () => {
+    const filled = applyCbkRuleFill({
+      tenorDays: "364",
+      yieldPct: "16.75",
+      auctionDate: "2026-06-18",
+      valueDate: "2026-06-20",
+    });
     const gate = checkApprovalGate({
       assetClass: assetClassForCatalogue("cbk"),
       changeKind: "create",
@@ -167,6 +182,20 @@ describe("Round 90 · B — normaliseFinding rule-fills then agrees with checkAp
     });
     expect(gate.ok).toBe(true);
     expect(gate.missing).toEqual([]);
+  });
+
+  it("Round 3 — a T-bill WITHOUT its auction/value dates is blocked even with the rate present", () => {
+    const filled = applyCbkRuleFill({ tenorDays: "364", yieldPct: "16.75" });
+    const gate = checkApprovalGate({
+      assetClass: assetClassForCatalogue("cbk"),
+      changeKind: "create",
+      figures: filled,
+      name: "364-Day Treasury Bill",
+      source: "CBK weekly auction results",
+      asOf: Date.UTC(2026, 5, 20),
+    });
+    expect(gate.ok).toBe(false);
+    expect(gate.missing).toEqual(["auction date", "value / settlement date"]);
   });
 });
 

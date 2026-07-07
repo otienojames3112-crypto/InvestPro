@@ -934,6 +934,29 @@ async function resolveResearchSource(src: PendingResearchSource): Promise<Resear
   }
 }
 
+/**
+ * Materialize an UPLOADED source (pdf/image) into plain TEXT at INGESTION, so the raw
+ * ~280KB base64 data-URI is NEVER persisted. This is essential: research_tasks.source_ref
+ * is a TEXT column and research_messages.source_ref is varchar(700) — a whole PDF cannot
+ * fit, so storing the fileKey there truncates or (in strict mode) errors the insert, which
+ * is why the PDF path never ran. Reading the source once here (extractPdfText for a PDF,
+ * OCR for an image) yields small text that fits and is safe to store/ship. url/text pass
+ * through unchanged. On an unreadable upload: return null when the caller allows an
+ * unsourced answer, else throw a clean BAD_REQUEST.
+ */
+async function materializeUploadSource(
+  src: PendingResearchSource | null,
+  label: string | null,
+  allowUnsourced: boolean,
+): Promise<PendingResearchSource | null> {
+  if (!src || src.kind === "url" || src.kind === "text") return src;
+  const resolved = await resolveResearchSource(src); // pdf/image fileKey → ResearchSource
+  const read = await readSource(resolved, { label });
+  if (read.ok) return { kind: "text", text: read.text };
+  if (allowUnsourced) return null;
+  throw new TRPCError({ code: "BAD_REQUEST", message: `${read.message} ${read.retryHint}` });
+}
+
 /** A compact, human label for a pending source, for provenance + the message log. */
 function defaultSourceLabel(src: PendingResearchSource, explicit?: string | null): string {
   if (explicit && explicit.trim() !== "") return explicit.trim();
@@ -8460,6 +8483,14 @@ export const appRouter = router({
           sourceModeUsed = "none";
         }
 
+        // Read an uploaded pdf/image to TEXT now (see materializeUploadSource) so the raw
+        // base64 is never stored in the small source_ref column and the file is read once.
+        effectiveSource = await materializeUploadSource(
+          effectiveSource,
+          effectiveSourceLabel,
+          input.allowUnsourced ?? false,
+        );
+
         const taskId = await createResearchTask({
           createdByOpenId: openId,
           createdByName: ctx.user.name ?? null,
@@ -8610,6 +8641,9 @@ export const appRouter = router({
           pending = null;
           pendingLabel = null;
         }
+        // Read an uploaded pdf/image to TEXT now (materializeUploadSource) so the raw base64
+        // is never stored in the small source_ref column and the file is read exactly once.
+        pending = await materializeUploadSource(pending, pendingLabel, input.allowUnsourced ?? false);
         const taskId = await createResearchTask({
           createdByOpenId: openId,
           createdByName: ctx.user.name ?? null,
@@ -8682,7 +8716,7 @@ export const appRouter = router({
           title: `Review ${scopeLabel[catalogue]} source with AI`,
           scope: catalogue,
         });
-        const pending: PendingResearchSource =
+        let pending: PendingResearchSource =
           input.source.kind === "url"
             ? { kind: "url", url: input.source.url }
             : input.source.kind === "text"
@@ -8690,6 +8724,9 @@ export const appRouter = router({
               : input.source.kind === "pdf"
                 ? { kind: "pdf", fileKey: input.source.fileKey }
                 : { kind: "image", fileKey: input.source.fileKey };
+        // Read an uploaded pdf/image to TEXT now so the raw base64 is never stored in the
+        // small source_ref column. Review requires a readable source (throws if unreadable).
+        pending = (await materializeUploadSource(pending, input.sourceLabel ?? null, false)) as PendingResearchSource;
         const taskId = await createResearchTask({
           createdByOpenId: openId,
           createdByName: ctx.user.name ?? null,

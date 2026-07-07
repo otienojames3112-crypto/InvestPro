@@ -784,7 +784,15 @@ export async function readSource(
     };
   }
   const text = transcript.text.trim();
-  if (text === "") {
+  // Refuse an empty read OR a read that is really an un-decoded base64/data blob — the
+  // latter is what surfaced as scrambled base64 in the answer. Base64 must NEVER become
+  // grounding text handed to the model.
+  if (text === "" || looksLikeRawBlob(text)) {
+    if (text !== "") {
+      console.error(
+        `[readSource] ${source.kind} transcript looks like a raw blob (len=${text.length}) — refusing to ground on it`,
+      );
+    }
     return {
       ok: false,
       kind: source.kind,
@@ -817,18 +825,48 @@ export async function readSource(
  * no embedded text; the caller then reports it as unreadable (upload a screenshot instead).
  */
 export async function extractPdfText(fileUrlOrDataUri: string): Promise<string> {
+  console.log(
+    `[pdf] extractPdfText in: len=${fileUrlOrDataUri.length} prefix=${JSON.stringify(fileUrlOrDataUri.slice(0, 24))}`,
+  );
   // A non-data reference (e.g. a legacy signed URL) can't be decoded here; treat as empty.
   if (!fileUrlOrDataUri.startsWith("data:") && /^https?:\/\//i.test(fileUrlOrDataUri)) {
+    console.log("[pdf] non-data reference — returning empty");
     return "";
   }
   const base64 = fileUrlOrDataUri.startsWith("data:")
     ? fileUrlOrDataUri.slice(fileUrlOrDataUri.indexOf(",") + 1)
     : fileUrlOrDataUri;
-  const bytes = Buffer.from(base64, "base64");
-  const pdf = await getDocumentProxy(new Uint8Array(bytes));
-  const { text } = await extractText(pdf, { mergePages: true });
-  const merged = Array.isArray(text) ? text.join("\n") : text;
-  return (merged ?? "").trim();
+  try {
+    const bytes = Buffer.from(base64, "base64");
+    const pdf = await getDocumentProxy(new Uint8Array(bytes));
+    const { text } = await extractText(pdf, { mergePages: true });
+    const merged = Array.isArray(text) ? text.join("\n") : text;
+    const out = (merged ?? "").trim();
+    console.log(`[pdf] extracted chars=${out.length} sample=${JSON.stringify(out.slice(0, 80))}`);
+    // Never let an un-decoded blob masquerade as extracted text.
+    return looksLikeRawBlob(out) ? "" : out;
+  } catch (err) {
+    console.error("[pdf] extraction FAILED:", err instanceof Error ? err.message : String(err));
+    // Return empty (not a throw) so readSource reports a clean "unreadable" message
+    // rather than surfacing an error that might echo the raw bytes.
+    return "";
+  }
+}
+
+/**
+ * Defensive guard: true when a string is (almost) entirely a base64/data blob rather than
+ * real prose. Used so a PDF/image whose bytes could not be decoded can NEVER be sent to the
+ * model as "grounding text" (which is what surfaced as scrambled base64 in the answer).
+ * Real document text is full of spaces/newlines; a base64 blob is a long unbroken run.
+ */
+export function looksLikeRawBlob(s: string): boolean {
+  const t = s.trim();
+  if (t.startsWith("data:")) return true;
+  if (t.length < 200) return false;
+  const sample = t.slice(0, 2000);
+  const whitespace = (sample.match(/\s/g) ?? []).length;
+  const b64chars = (sample.match(/[A-Za-z0-9+/=]/g) ?? []).length;
+  return whitespace / sample.length < 0.02 && b64chars / sample.length > 0.9;
 }
 
 /**

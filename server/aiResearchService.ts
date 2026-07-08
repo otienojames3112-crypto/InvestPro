@@ -1587,6 +1587,12 @@ const MARKET_ASSET_EXTRACTION_SCHEMA = {
             distributionYield: { type: ["string", "null"] },
             trailingReturn: { type: ["string", "null"] },
             fee: { type: ["string", "null"] },
+            shareCapitalDividendRate: { type: ["string", "null"], description: "SACCO share-capital dividend rate, % p.a." },
+            depositRebateRate: { type: ["string", "null"], description: "SACCO deposit rebate / deposit interest rate, % p.a." },
+            minimumShareCapital: { type: ["string", "null"], description: "Minimum SACCO share capital amount, usually KES" },
+            minimumMonthlyDeposit: { type: ["string", "null"], description: "Minimum SACCO monthly deposit / contribution amount, usually KES" },
+            regulatoryStatus: { type: ["string", "null"], description: "SASRA-regulated / regulatory status, verbatim from source" },
+            withdrawalTerms: { type: ["string", "null"], description: "SACCO withdrawal, exit, or liquidity terms" },
             currency: { type: ["string", "null"] },
             rawExcerpt: { type: ["string", "null"] },
             warnings: { type: "array", items: { type: "string" } },
@@ -1596,7 +1602,7 @@ const MARKET_ASSET_EXTRACTION_SCHEMA = {
             changedFields: { type: "array", items: { type: "string" }, description: "List of field names that differ from current row" },
             currentValues: { type: "array", items: { type: "object", additionalProperties: false, properties: { field: { type: "string" }, value: { type: "string" } }, required: ["field", "value"] }, description: "Current values for each changed field" },
           },
-          required: ["instrumentName", "assetType", "ticker", "exchange", "marketPrice", "nav", "dividendYield", "distributionYield", "trailingReturn", "fee", "currency", "rawExcerpt", "warnings", "confidence", "proposalType", "matchedCurrentRow", "changedFields", "currentValues"],
+          required: ["instrumentName", "assetType", "ticker", "exchange", "marketPrice", "nav", "dividendYield", "distributionYield", "trailingReturn", "fee", "shareCapitalDividendRate", "depositRebateRate", "minimumShareCapital", "minimumMonthlyDeposit", "regulatoryStatus", "withdrawalTerms", "currency", "rawExcerpt", "warnings", "confidence", "proposalType", "matchedCurrentRow", "changedFields", "currentValues"],
         },
       },
     },
@@ -1637,7 +1643,7 @@ function extractionSchemaForClass(sc: SourceClass): { schema: object; prompt: st
     case "market_asset_price":
       return {
         schema: MARKET_ASSET_EXTRACTION_SCHEMA,
-        prompt: `${STRUCTURED_EXTRACTION_PREAMBLE}\n\nThis is a MARKET ASSET factsheet or price board. Extract one entry per distinct instrument (equity, REIT, ETF, offshore fund).\nFor each, extract: asset type, ticker, exchange, market price, NAV, dividend yield, distribution yield, trailing 12-month return, expense ratio/fee, and currency.\n\nIf a field is not printed, set it to "missing_from_source".`,
+        prompt: `${STRUCTURED_EXTRACTION_PREAMBLE}\n\nThis is a MARKET ASSET factsheet or price board. Extract one entry per distinct instrument (equity, REIT, ETF, offshore fund, SACCO).\nFor each, extract: asset type, ticker, exchange, market price, NAV, dividend yield, distribution yield, trailing 12-month return, expense ratio/fee, and currency. For SACCO entries, also extract the share-capital dividend rate, deposit rebate / deposit interest rate, minimum share capital, minimum monthly deposit / contribution, SASRA-regulated or other regulatory status, and withdrawal / liquidity terms.\n\nIf a field is not printed, set it to "missing_from_source".`,
       };
     case "unknown":
       return null;

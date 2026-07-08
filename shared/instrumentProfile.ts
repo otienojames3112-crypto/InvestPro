@@ -285,6 +285,18 @@ export interface MarketAssetProfile extends SharedProfileFields {
   trailingReturn?: ProfileField<number>;
   /** Expense ratio / fee (%). */
   fee?: ProfileField<number>;
+  /** SACCO share-capital dividend rate (% p.a.). */
+  shareCapitalDividendRate?: ProfileField<number>;
+  /** SACCO deposit rebate / deposit interest rate (% p.a.). */
+  depositRebateRate?: ProfileField<number>;
+  /** SACCO minimum share capital amount, usually KES. */
+  minimumShareCapital?: ProfileField<number>;
+  /** SACCO minimum monthly deposit / contribution amount, usually KES. */
+  minimumMonthlyDeposit?: ProfileField<number>;
+  /** SASRA-regulated / other regulatory status. */
+  regulatoryStatus?: ProfileField<string>;
+  /** Withdrawal, exit, or liquidity terms. */
+  withdrawalTerms?: ProfileField<string>;
   /** Whether there is FX risk. */
   fxRisk?: ProfileField<boolean>;
   /** Liquidity descriptor. */

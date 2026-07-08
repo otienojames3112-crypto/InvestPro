@@ -237,6 +237,8 @@ export interface BankInstrumentProfile extends SharedProfileFields {
   >;
   /** Indicative rate (% p.a.). */
   indicativeRate?: ProfileField<number>;
+  /** Tiered savings rate schedule / balance bands, verbatim from source. */
+  rateSchedule?: ProfileField<string>;
   /** Confirmed / negotiated rate (% p.a.). */
   confirmedRate?: ProfileField<number>;
   /** Rate type. */

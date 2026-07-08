@@ -38,6 +38,7 @@ import {
   type ReferenceCatalogue,
   checkApprovalGate,
   assetClassForCatalogue,
+  canonicalizeBankInstrumentType,
 } from "../shared/researchPipeline";
 import {
   SOURCE_CLASSES,
@@ -208,6 +209,45 @@ export function normaliseExtractionFields(
     }
   }
   return result;
+}
+
+export const TIERED_SAVINGS_RATE_SCHEDULE_WARNING =
+  "Tiered savings product has no rate schedule / balance bands in the source; verify tiers before relying on the headline rate.";
+
+function hasRealExtractedValue(value: unknown): boolean {
+  if (value === undefined || value === null) return false;
+  const text = String(value).trim();
+  if (text === "") return false;
+  const key = text.toLowerCase().replace(/[\s-]+/g, "_");
+  return ![
+    MISSING_FROM_SOURCE,
+    "unavailable",
+    "not_available",
+    "n/a",
+    "na",
+    "none",
+    "unknown",
+    "not_applicable",
+    "not_published",
+    "unpublished",
+    "not_disclosed",
+    "not_reported",
+    "not_stated",
+    "not_provided",
+    "not_specified",
+  ].includes(key);
+}
+
+export function isTieredSavingsProduct(figures: Record<string, unknown> | null | undefined): boolean {
+  if (!figures) return false;
+  return (
+    canonicalizeBankInstrumentType(figures.instrumentType) === "tiered_savings" ||
+    canonicalizeBankInstrumentType(figures.productType) === "tiered_savings"
+  );
+}
+
+function needsTieredSavingsRateScheduleNudge(figures: Record<string, unknown>): boolean {
+  return isTieredSavingsProduct(figures) && !hasRealExtractedValue(figures.rateSchedule);
 }
 
 /* ── Prompt + schema ──────────────────────────────────────────────────────── */
@@ -1549,6 +1589,7 @@ const BANK_EXTRACTION_SCHEMA = {
             earlyWithdrawalPenalty: { type: ["string", "null"] },
             negotiable: { type: ["string", "null"], description: "'true' or 'false'" },
             whtRate: { type: ["string", "null"] },
+            rateSchedule: { type: ["string", "null"], description: "Verbatim tiered savings balance-band/rate schedule, or 'missing_from_source'" },
             rawExcerpt: { type: ["string", "null"] },
             warnings: { type: "array", items: { type: "string" } },
             confidence: { type: ["number", "null"] },
@@ -1557,7 +1598,7 @@ const BANK_EXTRACTION_SCHEMA = {
             changedFields: { type: "array", items: { type: "string" }, description: "List of field names that differ from current row" },
             currentValues: { type: "array", items: { type: "object", additionalProperties: false, properties: { field: { type: "string" }, value: { type: "string" } }, required: ["field", "value"] }, description: "Current values for each changed field" },
           },
-          required: ["instrumentName", "bankName", "productType", "indicativeRate", "rateType", "minimumAmount", "tenor", "noticePeriod", "payoutFrequency", "earlyWithdrawalPenalty", "negotiable", "whtRate", "rawExcerpt", "warnings", "confidence", "proposalType", "matchedCurrentRow", "changedFields", "currentValues"],
+          required: ["instrumentName", "bankName", "productType", "indicativeRate", "rateType", "minimumAmount", "tenor", "noticePeriod", "payoutFrequency", "earlyWithdrawalPenalty", "negotiable", "whtRate", "rateSchedule", "rawExcerpt", "warnings", "confidence", "proposalType", "matchedCurrentRow", "changedFields", "currentValues"],
         },
       },
     },
@@ -1640,7 +1681,7 @@ function extractionSchemaForClass(sc: SourceClass): { schema: object; prompt: st
     case "bank_rate_card":
       return {
         schema: BANK_EXTRACTION_SCHEMA,
-        prompt: `${STRUCTURED_EXTRACTION_PREAMBLE}\n\nThis is a BANK PRODUCT PAGE or RATE CARD. Extract one entry per distinct product (call deposit, fixed deposit, savings account).\nFor each, extract: bank name, product type, indicative rate, rate type, minimum amount, tenor, notice period, payout frequency, early withdrawal penalty, whether negotiable, and WHT rate.\nBank rates are typically INDICATIVE and quoted GROSS of the 15% WHT — note this in warnings.\n\nIf a field is not printed, set it to "missing_from_source".`,
+        prompt: `${STRUCTURED_EXTRACTION_PREAMBLE}\n\nThis is a BANK PRODUCT PAGE or RATE CARD. Extract one entry per distinct product (call deposit, fixed deposit, savings account).\nFor each, extract: bank name, product type, indicative rate, rate type, minimum amount, tenor, notice period, payout frequency, early withdrawal penalty, whether negotiable, and WHT rate. For tiered savings products, also extract the full rate schedule / balance bands verbatim.\nBank rates are typically INDICATIVE and quoted GROSS of the 15% WHT — note this in warnings.\n\nIf a field is not printed, set it to "missing_from_source".`,
       };
     case "market_asset_factsheet":
     case "market_asset_price":
@@ -1881,6 +1922,13 @@ export function structuredInstrumentToDraft(
   const warnings: string[] = Array.isArray(raw.warnings)
     ? raw.warnings.filter((w): w is string => typeof w === "string")
     : [];
+  if (
+    targetCatalogue === "bank" &&
+    needsTieredSavingsRateScheduleNudge(figures) &&
+    !warnings.includes(TIERED_SAVINGS_RATE_SCHEDULE_WARNING)
+  ) {
+    warnings.push(TIERED_SAVINGS_RATE_SCHEDULE_WARNING);
+  }
   const confidence = clampConfidence(raw.confidence);
   const rawExcerpt = typeof raw.rawExcerpt === "string" ? raw.rawExcerpt.trim() || null : null;
 

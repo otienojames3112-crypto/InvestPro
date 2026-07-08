@@ -610,6 +610,118 @@ export const MARKET_ASSET_SUBTYPE_FIELD_RULES: Record<"reit" | "offshore_fund", 
   offshore_fund: [{ key: "expenseRatioPct", label: "expense ratio / fee", source: "figures" }],
 };
 
+/* -- Stage 3b.4b - SACCO market-asset replacement gate ---------------------
+ * SACCOs still use the conservative AssetClass "alt", shared with ETFs,
+ * property, pension and other alternatives. The detector therefore reads the
+ * preserved extraction facts, never the class alone. When detected, SACCO uses a
+ * replacement market-asset gate because exchange/price/NAV requirements do not
+ * describe member share-capital and deposit terms.
+ */
+
+const KNOWN_NON_SACCO_MARKET_ASSET_TYPES = new Set([
+  "equity",
+  "reit",
+  "offshore_fund",
+  "etf",
+  "property",
+  "pension",
+  "other",
+]);
+
+const SACCO_SPECIFIC_VALUE_KEYS = [
+  "shareCapitalDividendRate",
+  "depositRebateRate",
+  "minimumShareCapital",
+  "minimumMonthlyDeposit",
+  "regulatoryStatus",
+  "withdrawalTerms",
+] as const;
+
+const SACCO_FIELD_ALIASES: Record<(typeof SACCO_SPECIFIC_VALUE_KEYS)[number], string[]> = {
+  shareCapitalDividendRate: ["shareCapitalDividendRate", "dividendRate"],
+  depositRebateRate: ["depositRebateRate", "depositInterestRate"],
+  minimumShareCapital: ["minimumShareCapital"],
+  minimumMonthlyDeposit: ["minimumMonthlyDeposit", "minimumMonthlyContribution"],
+  regulatoryStatus: ["regulatoryStatus"],
+  withdrawalTerms: ["withdrawalTerms", "liquidity"],
+};
+
+export const SACCO_MARKET_ASSET_FIELD_RULES: CatalogueFieldRule[] = [
+  { key: "name", label: "name", source: "name" },
+  { key: "issuer", label: "issuer / manager", source: "issuer" },
+  { key: "currency", label: "currency", source: "currency" },
+  { key: "minimumShareCapital", label: "minimum share capital", source: "figures" },
+  { key: "minimumMonthlyDeposit", label: "minimum monthly deposit / contribution", source: "figures" },
+  { key: "regulatoryStatus", label: "SASRA / regulatory status", source: "figures" },
+  { key: "withdrawalTerms", label: "withdrawal / liquidity terms", source: "figures" },
+  { key: "source", label: "source", source: "provenanceSource" },
+  { key: "asOf", label: "as-of date", source: "asOf" },
+];
+
+function normaliseMarketAssetType(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const key = value.trim().toLowerCase().replace(/[\s-]+/g, "_");
+  return key === "" ? null : key;
+}
+
+function isRealSourceValue(value: unknown): boolean {
+  if (value === undefined || value === null) return false;
+  if (typeof value === "boolean") return true;
+  const text = String(value).trim();
+  if (text === "") return false;
+  const key = text.toLowerCase().replace(/[\s-]+/g, "_");
+  return ![
+    "missing_from_source",
+    "unavailable",
+    "not_available",
+    "n/a",
+    "na",
+    "none",
+    "unknown",
+    "not_applicable",
+    "not_published",
+    "unpublished",
+    "not_disclosed",
+    "not_reported",
+    "not_stated",
+    "not_provided",
+    "not_specified",
+  ].includes(key);
+}
+
+function saccoFigurePresent(figures: Record<string, unknown> | null | undefined, key: string): boolean {
+  if (!figures) return false;
+  const aliases = SACCO_FIELD_ALIASES[key as keyof typeof SACCO_FIELD_ALIASES] ?? [key];
+  return aliases.some((alias) => isRealSourceValue(figures[alias]));
+}
+
+export function detectMarketAssetSacco(args: {
+  catalogue: ReferenceCatalogue;
+  assetClass: AssetClass;
+  figures?: Record<string, unknown> | null;
+  name?: string | null;
+  issuer?: string | null;
+}): boolean {
+  if (args.catalogue !== "market_asset") return false;
+  const figures = args.figures ?? {};
+  const assetType = normaliseMarketAssetType(figures.assetType);
+
+  if (assetType === "sacco") return true;
+  if (assetType && KNOWN_NON_SACCO_MARKET_ASSET_TYPES.has(assetType)) return false;
+  if (args.assetClass !== "alt") return false;
+
+  const regulatoryStatus = isRealSourceValue(figures.regulatoryStatus) ? String(figures.regulatoryStatus) : "";
+  if (/\bsacco\b|\bsasra\b/i.test(regulatoryStatus)) return true;
+
+  const hasQuotedMarketSignal = figurePresent(figures, "market") || figurePresent(figures, "lastPrice");
+  if (hasQuotedMarketSignal) return false;
+
+  const nameIssuerText = `${args.name ?? ""} ${args.issuer ?? ""}`;
+  if (/\bsacco\b|\bsasra\b/i.test(nameIssuerText)) return true;
+
+  return SACCO_SPECIFIC_VALUE_KEYS.some((key) => saccoFigurePresent(figures, key));
+}
+
 /**
  * Back-compat: the minimal figure keys per catalogue (used by tests + the
  * portfolio-impact primary-figure lookup). Kept as the projection-relevant subset
@@ -721,11 +833,11 @@ export function checkApprovalGate(args: {
   const nonEmpty = (v: unknown) => v !== undefined && v !== null && String(v).trim() !== "";
 
   const missing: string[] = [];
-  for (const rule of CATALOGUE_FIELD_RULES[catalogue]) {
+  const addMissingForRule = (rule: CatalogueFieldRule) => {
     // A manager-vouched override always satisfies the catalogue's PRIMARY figure.
-    if (hasOverride && rule.source === "figures" && rule.key === primaryKey) continue;
+    if (hasOverride && rule.source === "figures" && rule.key === primaryKey) return;
     // An explicit "unavailable" flag satisfies an escapable field.
-    if (rule.escapable && rule.escapeFlag && figures[rule.escapeFlag] === true) continue;
+    if (rule.escapable && rule.escapeFlag && figures[rule.escapeFlag] === true) return;
 
     let present = false;
     switch (rule.source) {
@@ -749,6 +861,42 @@ export function checkApprovalGate(args: {
         break;
     }
     if (!present) missing.push(rule.label);
+  };
+
+  const isSacco = detectMarketAssetSacco({
+    catalogue,
+    assetClass: args.assetClass,
+    figures,
+    name: args.name,
+    issuer: args.issuer,
+  });
+
+  if (isSacco) {
+    for (const rule of SACCO_MARKET_ASSET_FIELD_RULES) {
+      if (rule.source === "figures") {
+        if (!saccoFigurePresent(figures, rule.key)) missing.push(rule.label);
+      } else {
+        addMissingForRule(rule);
+      }
+    }
+    if (
+      !saccoFigurePresent(figures, "shareCapitalDividendRate") &&
+      !saccoFigurePresent(figures, "depositRebateRate")
+    ) {
+      missing.push("share-capital dividend rate or deposit rebate / interest rate");
+    }
+    if (missing.length === 0) return { ok: true, catalogue, missing: [], cbkSubtype: null };
+    return {
+      ok: false,
+      catalogue,
+      missing,
+      reason: `${catalogueLabel(catalogue)} entries need ${missing.join(", ")} before they can be published. Add the field(s), mark them unavailable, or approve with a manager-vouched value.`,
+      cbkSubtype: null,
+    };
+  }
+
+  for (const rule of CATALOGUE_FIELD_RULES[catalogue]) {
+    addMissingForRule(rule);
   }
 
   // Round 3 — CBK sub-type tightening. Additive on top of the baseline cbk rules

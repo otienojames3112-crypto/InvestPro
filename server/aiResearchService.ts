@@ -346,10 +346,11 @@ export function missingFieldsForFinding(
     currency?: string | null;
     source?: string | null;
     asOf?: number | null;
+    assetClass?: AssetClass | null;
   },
 ): string[] {
   const gate = checkApprovalGate({
-    assetClass: assetClassForCatalogue(targetCatalogue),
+    assetClass: envelope?.assetClass ?? assetClassForCatalogue(targetCatalogue),
     changeKind: "create",
     figures,
     name: envelope?.name ?? null,
@@ -459,6 +460,7 @@ export function normaliseFinding(raw: unknown): ResearchFindingDraft | null {
     currency: cleanStr(o.currency),
     source: sourceLabel ?? sourceUrl,
     asOf: asOfMs,
+    assetClass,
   });
 
   // A finding with no source is inherently uncertain — force its warnings to say so.
@@ -1186,6 +1188,7 @@ export async function runResearchQuestion(args: {
         currency: f.currency,
         source: sourceLabel ?? sourceUrl,
         asOf: asOfMs,
+        assetClass: f.assetClass,
       }),
     };
   });

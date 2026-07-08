@@ -1715,8 +1715,57 @@ function catalogueForSourceClass(sc: SourceClass): ReferenceCatalogue {
   }
 }
 
-/** Map a source class to a canonical AssetClass code. */
-function assetClassForSourceClass(sc: SourceClass): AssetClass {
+/**
+ * Stage 3b.2 — map a market asset's raw extracted `assetType` (equity, reit, etf,
+ * offshore_fund, property, sacco, pension, other — per MARKET_ASSET_EXTRACTION_SCHEMA;
+ * a free string, not a hard enum, so the model's wording can vary) to the CANONICAL
+ * AssetClass taxonomy. Only "equity", "reit" and "offshore_fund" have a DEDICATED
+ * class today, and those three are mapped directly ONLY when the source stated them
+ * unambiguously — never guessed onto a lookalike:
+ *   - etf and property BOTH fall to "alt", NOT to offshore_fund/reit, because those
+ *     classes actively DRIVE downstream behaviour that would be actively WRONG for a
+ *     mismatched instrument, not merely imprecise:
+ *       · offshore_fund is fxExposed:true, which assetGuardIssues() (enforced at
+ *         holding-creation time, shared/modeling.ts → server/routers.ts) REJECTS
+ *         unless the currency is non-KES with a positive FX rate — a locally-listed,
+ *         KES-denominated ETF would be blocked or forced to fabricate FX data.
+ *       · reit's distribution tax path (shared/assetTax.ts taxFor()) cites Kenya's
+ *         SPECIFIC REIT trust-level exemption (ITA s.20) — applying that citation to
+ *         a property product that isn't legally a registered REIT is a wrong tax/
+ *         legal claim, not just an imprecise label.
+ *   - sacco, pension, other → alt (no dedicated class; the SAME fallback the
+ *     GENERIC/non-structured extraction path already uses via normaliseAssetClass).
+ * "alt" makes NO claim (no tax citation, no FX requirement, no assumed liquidity),
+ * so it is the conservative choice whenever the source's own instrument type isn't
+ * one of the three classes this app actually models distinctly.
+ * Falls back to "equity" — the PRE-EXISTING default — for anything missing, the
+ * "missing_from_source" sentinel, or genuinely unrecognised, so behaviour for an
+ * ambiguous instrument is unchanged from before this fix.
+ */
+function assetClassForMarketAssetType(assetType: unknown): AssetClass {
+  if (typeof assetType !== "string") return "equity";
+  switch (assetType.trim().toLowerCase()) {
+    case "equity":
+      return "equity";
+    case "reit":
+      return "reit";
+    case "offshore_fund":
+      return "offshore_fund";
+    case "etf":
+    case "property":
+    case "sacco":
+    case "pension":
+    case "other":
+      return "alt";
+    default:
+      return "equity";
+  }
+}
+
+/** Map a source class to a canonical AssetClass code. `marketAssetType` is the raw
+ *  `assetType` figure a market-asset extraction produced (ignored for every other
+ *  source class), so a REIT/offshore-fund/sacco is no longer flattened to "equity". */
+function assetClassForSourceClass(sc: SourceClass, marketAssetType?: unknown): AssetClass {
   switch (sc) {
     case "cbk_bond_prospectus":
     case "cbk_bond_reopening":
@@ -1732,7 +1781,7 @@ function assetClassForSourceClass(sc: SourceClass): AssetClass {
       return "bank_deposit";
     case "market_asset_factsheet":
     case "market_asset_price":
-      return "equity";
+      return assetClassForMarketAssetType(marketAssetType);
     case "unknown":
       return "alt";
   }
@@ -1752,7 +1801,7 @@ export function structuredInstrumentToDraft(
   if (!name) return null;
 
   const targetCatalogue = catalogueForSourceClass(sourceClass);
-  const assetClass = assetClassForSourceClass(sourceClass);
+  const assetClass = assetClassForSourceClass(sourceClass, raw.assetType);
 
   // Build extractedFields from all non-meta fields
   const metaKeys = new Set(["instrumentName", "rawExcerpt", "warnings", "confidence", "proposalType", "matchedCurrentRow", "changedFields", "currentValues"]);

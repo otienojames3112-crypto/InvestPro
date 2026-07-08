@@ -593,6 +593,23 @@ export const CBK_SUBTYPE_FIELD_RULES: Record<CbkSubtype, CatalogueFieldRule[]> =
   ],
 };
 
+/* ── Stage 3b.3 — Market-asset sub-type tightening (REIT / offshore fund) ────
+ * `CATALOGUE_FIELD_RULES.market_asset` above is the BASELINE every market asset
+ * must meet. Unlike CBK, NO separate sub-type detector is needed here: since
+ * Stage 3b.2, `assetClass` itself reliably distinguishes "reit" and
+ * "offshore_fund" from "equity"/"alt" whenever the source stated the type
+ * unambiguously, so checkApprovalGate branches directly on the assetClass it
+ * already receives. Hard-required (no escape flag) — a manager can still push a
+ * genuinely data-scarce entry through with the existing full gate override.
+ */
+
+/** The ADDITIONAL fields REIT and offshore-fund market assets require, on top of
+ *  the market_asset baseline. Equity and "alt" are unaffected. */
+export const MARKET_ASSET_SUBTYPE_FIELD_RULES: Record<"reit" | "offshore_fund", CatalogueFieldRule[]> = {
+  reit: [{ key: "distributionYield", label: "distribution yield", source: "figures" }],
+  offshore_fund: [{ key: "expenseRatioPct", label: "expense ratio / fee", source: "figures" }],
+};
+
 /**
  * Back-compat: the minimal figure keys per catalogue (used by tests + the
  * portfolio-impact primary-figure lookup). Kept as the projection-relevant subset
@@ -620,8 +637,13 @@ function figurePresent(figures: Record<string, unknown> | null | undefined, key:
     ear: ["ear", "netYield", "yieldPct", "yield", "grossYield"],
     indicativeRate: ["indicativeRate", "rate", "yieldPct"],
     yieldPct: ["yieldPct", "yield", "coupon", "rate", "previousAvgRate"],
-    lastPrice: ["lastPrice", "price", "nav", "yieldPct", "yield", "trailingReturnPct", "trailingReturn"],
+    lastPrice: ["lastPrice", "price", "nav", "yieldPct", "yield", "trailingReturnPct", "trailingReturn", "distributionYield"],
     managementFee: ["managementFee", "expenseRatioPct", "fee"],
+    // Stage 3b.3 — market-asset sub-type fields. The extraction schema's own field
+    // name is `fee`; `expenseRatioPct` is the canonical key the offshore-fund rule
+    // checks against.
+    expenseRatioPct: ["expenseRatioPct", "fee"],
+    distributionYield: ["distributionYield"],
     minInvestment: ["minInvestment", "minAmount"],
     minAmount: ["minAmount", "minInvestment"],
     instrumentType: ["instrumentType", "productType", "type"],
@@ -748,6 +770,31 @@ export function checkApprovalGate(args: {
         const te = figures.taxExempt;
         const isTrue = te === true || String(te).trim().toLowerCase() === "true";
         if (!isTrue) missing.push("tax-exempt flag must be TRUE for an infrastructure bond");
+      }
+    }
+  }
+
+  // Stage 3b.3 — market-asset sub-type tightening. Additive on top of the
+  // baseline market_asset rules above. Since 3b.2, `args.assetClass` itself is
+  // the sub-type signal for "reit"/"offshore_fund" — no separate detector is
+  // needed the way CBK required one. Equity and "alt" get no extra requirements.
+  if (catalogue === "market_asset") {
+    if (args.assetClass === "reit" || args.assetClass === "offshore_fund") {
+      for (const rule of MARKET_ASSET_SUBTYPE_FIELD_RULES[args.assetClass]) {
+        if (!figurePresent(figures, rule.key)) missing.push(rule.label);
+      }
+    }
+    if (args.assetClass === "offshore_fund") {
+      // An offshore fund's whole point is FX exposure — a currency of literally
+      // "KES" is inconsistent with that classification. NOTE: currency defaults
+      // to "KES" upstream (structuredInstrumentToDraft) whenever the source did
+      // not state one at all, so this ALSO catches "currency was never actually
+      // confirmed" as well as a genuine mismatch — both cases warrant the same
+      // remedy: the manager states/confirms the real currency before this
+      // publishes. This gate never requires an FX RATE — that is a Holdings-
+      // creation concern (assetGuardIssues), not a catalogue-completeness one.
+      if ((args.currency ?? "").trim().toUpperCase() === "KES") {
+        missing.push("currency must not be KES for an offshore fund");
       }
     }
   }

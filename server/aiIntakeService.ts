@@ -11,6 +11,7 @@
  */
 
 import { parse as parseHtml } from "node-html-parser";
+import { extractText, getDocumentProxy } from "unpdf";
 import { invokeLLM } from "./_core/llm";
 import {
   AI_EXTRACTABLE_FIELDS,
@@ -53,16 +54,98 @@ export function isThinFetch(text: string): boolean {
 }
 
 /**
+ * Defensive guard: true when a string is (almost) entirely a base64/data blob rather than
+ * real prose. Used so a PDF/image whose bytes could not be decoded can NEVER be sent to the
+ * model as "grounding text" (which is what surfaced as scrambled base64 in the answer).
+ * Real document text is full of spaces/newlines; a base64 blob is a long unbroken run.
+ */
+export function looksLikeRawBlob(s: string): boolean {
+  const t = s.trim();
+  if (t.startsWith("data:")) return true;
+  if (t.length < 200) return false;
+  const sample = t.slice(0, 2000);
+  const whitespace = (sample.match(/\s/g) ?? []).length;
+  const b64chars = (sample.match(/[A-Za-z0-9+/=]/g) ?? []).length;
+  return whitespace / sample.length < 0.02 && b64chars / sample.length > 0.9;
+}
+
+/**
+ * Extract a PDF's embedded text SERVER-SIDE from a base64 `data:` URI (the storage-free
+ * upload path) or raw base64. Deterministic and free — no LLM/vision round-trip. Stock
+ * OpenAI's inline-PDF (`file`) reading proved unreliable (it leaked the base64 back as
+ * text), so we read the text ourselves. Returns "" for a scanned/image-only PDF that has
+ * no embedded text; the caller then reports it as unreadable (upload a screenshot instead).
+ */
+export async function extractPdfText(fileUrlOrDataUri: string): Promise<string> {
+  console.log(
+    `[pdf] extractPdfText in: len=${fileUrlOrDataUri.length} prefix=${JSON.stringify(fileUrlOrDataUri.slice(0, 24))}`,
+  );
+  // A non-data reference (e.g. a legacy signed URL) can't be decoded here; treat as empty.
+  if (!fileUrlOrDataUri.startsWith("data:") && /^https?:\/\//i.test(fileUrlOrDataUri)) {
+    console.log("[pdf] non-data reference — returning empty");
+    return "";
+  }
+  const base64 = fileUrlOrDataUri.startsWith("data:")
+    ? fileUrlOrDataUri.slice(fileUrlOrDataUri.indexOf(",") + 1)
+    : fileUrlOrDataUri;
+  try {
+    const bytes = Buffer.from(base64, "base64");
+    const pdf = await getDocumentProxy(new Uint8Array(bytes));
+    const { text } = await extractText(pdf, { mergePages: true });
+    const merged = Array.isArray(text) ? text.join("\n") : text;
+    const out = (merged ?? "").trim();
+    console.log(`[pdf] extracted chars=${out.length} sample=${JSON.stringify(out.slice(0, 80))}`);
+    // Never let an un-decoded blob masquerade as extracted text.
+    return looksLikeRawBlob(out) ? "" : out;
+  } catch (err) {
+    console.error("[pdf] extraction FAILED:", err instanceof Error ? err.message : String(err));
+    // Return empty (not a throw) so callers report a clean "unreadable" message rather
+    // than surfacing an error that might echo the raw bytes.
+    return "";
+  }
+}
+
+/**
+ * Stage 4.2b-i — is this fetched response a PDF? Trusts an explicit `application/pdf`
+ * content-type outright. Trusts a `.pdf` URL extension ONLY when the content-type did
+ * NOT explicitly say something else non-PDF (html is the one type this function actively
+ * parses, so an explicit html content-type always wins even if the URL contains ".pdf" —
+ * e.g. an article ABOUT a PDF). This covers a server that serves a real PDF with a
+ * missing/generic/incorrect content-type (common for government/bank sites) without
+ * misrouting a genuine HTML page whose URL happens to mention "pdf".
+ */
+export function looksLikePdfResponse(contentType: string, url: string): boolean {
+  const ctype = contentType.toLowerCase();
+  if (ctype.includes("application/pdf")) return true;
+  if (ctype.includes("html")) return false;
+  try {
+    return /\.pdf$/i.test(new URL(url).pathname);
+  } catch {
+    return /\.pdf(\?|#|$)/i.test(url);
+  }
+}
+
+/**
  * Politely fetch a URL server-side and return its text content. Caps the body so a
  * huge page cannot blow the request budget. Throws a friendly error on failure so the
  * procedure can surface it. Note: a successful fetch may still be "thin" (JS-rendered) —
  * callers should run `isThinFetch` and nudge the user rather than extract from nothing.
+ *
+ * Stage 4.2b-i — a response that is (or looks like) a PDF is routed to the same
+ * deterministic `extractPdfText` (unpdf) already used for uploaded PDFs, rather than
+ * decoding its raw bytes as text — which would produce unreadable binary "gibberish"
+ * (the exact bug already fixed once for the upload path). Benefits BOTH a manually
+ * pasted PDF link and a future search-derived PDF citation, since both funnel through
+ * this one function.
  */
 export async function fetchDocumentText(url: string, maxChars = 40000): Promise<string> {
   let res: Response;
   try {
     res = await fetch(url, {
-      headers: { Accept: "text/html,text/plain", "User-Agent": "kes5m-tracker/ai-intake (contact: owner)" },
+      headers: {
+        Accept: "text/html,text/plain,application/pdf",
+        "User-Agent": "kes5m-tracker/ai-intake (contact: owner)",
+      },
       redirect: "follow",
     });
   } catch (err) {
@@ -70,6 +153,16 @@ export async function fetchDocumentText(url: string, maxChars = 40000): Promise<
   }
   if (!res.ok) throw new Error(`The source URL returned HTTP ${res.status}.`);
   const ctype = res.headers.get("content-type") ?? "";
+
+  if (looksLikePdfResponse(ctype, url)) {
+    const bytes = await res.arrayBuffer();
+    const base64 = Buffer.from(bytes).toString("base64");
+    const text = await extractPdfText(`data:application/pdf;base64,${base64}`);
+    const trimmed = text.trim();
+    if (trimmed.length === 0) throw new Error("The fetched PDF had no readable text to extract from.");
+    return trimmed.slice(0, maxChars);
+  }
+
   const body = await res.text();
   const text = ctype.includes("html") ? htmlToText(body) : body;
   const trimmed = text.trim();

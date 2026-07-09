@@ -24,13 +24,14 @@
  */
 
 import { invokeLLM } from "./_core/llm";
-import { extractText, getDocumentProxy } from "unpdf";
 import { stripVerdictFields } from "../shared/aiIntake";
 import {
   contentToText,
   parseJsonLoose,
   fetchDocumentText,
   isThinFetch,
+  extractPdfText,
+  looksLikeRawBlob,
 } from "./aiIntakeService";
 import { normaliseAssetClass, type AssetClass } from "../shared/assetModel";
 import {
@@ -49,6 +50,12 @@ import {
   NEVER_INVENT_FIELDS,
   CBK_BOND_REQUIRED_FIELDS,
 } from "../shared/instrumentProfile";
+
+// Stage 4.2b-i — extractPdfText/looksLikeRawBlob now live in aiIntakeService.ts (so
+// fetchDocumentText there can reuse them for a directly-fetched PDF URL without a
+// circular import back into this file). Re-exported here so existing importers of
+// these two names FROM this module (e.g. routers.ts) keep working unchanged.
+export { extractPdfText, looksLikeRawBlob };
 
 /** The scope a manager can constrain a question to (mirrors the DB enum). */
 export type ResearchScope = "mmf" | "bank" | "cbk" | "market_asset" | "macro" | "any";
@@ -856,58 +863,6 @@ export async function readSource(
     ],
     thin: false,
   };
-}
-
-/**
- * Extract a PDF's embedded text SERVER-SIDE from a base64 `data:` URI (the storage-free
- * upload path) or raw base64. Deterministic and free — no LLM/vision round-trip. Stock
- * OpenAI's inline-PDF (`file`) reading proved unreliable (it leaked the base64 back as
- * text), so we read the text ourselves. Returns "" for a scanned/image-only PDF that has
- * no embedded text; the caller then reports it as unreadable (upload a screenshot instead).
- */
-export async function extractPdfText(fileUrlOrDataUri: string): Promise<string> {
-  console.log(
-    `[pdf] extractPdfText in: len=${fileUrlOrDataUri.length} prefix=${JSON.stringify(fileUrlOrDataUri.slice(0, 24))}`,
-  );
-  // A non-data reference (e.g. a legacy signed URL) can't be decoded here; treat as empty.
-  if (!fileUrlOrDataUri.startsWith("data:") && /^https?:\/\//i.test(fileUrlOrDataUri)) {
-    console.log("[pdf] non-data reference — returning empty");
-    return "";
-  }
-  const base64 = fileUrlOrDataUri.startsWith("data:")
-    ? fileUrlOrDataUri.slice(fileUrlOrDataUri.indexOf(",") + 1)
-    : fileUrlOrDataUri;
-  try {
-    const bytes = Buffer.from(base64, "base64");
-    const pdf = await getDocumentProxy(new Uint8Array(bytes));
-    const { text } = await extractText(pdf, { mergePages: true });
-    const merged = Array.isArray(text) ? text.join("\n") : text;
-    const out = (merged ?? "").trim();
-    console.log(`[pdf] extracted chars=${out.length} sample=${JSON.stringify(out.slice(0, 80))}`);
-    // Never let an un-decoded blob masquerade as extracted text.
-    return looksLikeRawBlob(out) ? "" : out;
-  } catch (err) {
-    console.error("[pdf] extraction FAILED:", err instanceof Error ? err.message : String(err));
-    // Return empty (not a throw) so readSource reports a clean "unreadable" message
-    // rather than surfacing an error that might echo the raw bytes.
-    return "";
-  }
-}
-
-/**
- * Defensive guard: true when a string is (almost) entirely a base64/data blob rather than
- * real prose. Used so a PDF/image whose bytes could not be decoded can NEVER be sent to the
- * model as "grounding text" (which is what surfaced as scrambled base64 in the answer).
- * Real document text is full of spaces/newlines; a base64 blob is a long unbroken run.
- */
-export function looksLikeRawBlob(s: string): boolean {
-  const t = s.trim();
-  if (t.startsWith("data:")) return true;
-  if (t.length < 200) return false;
-  const sample = t.slice(0, 2000);
-  const whitespace = (sample.match(/\s/g) ?? []).length;
-  const b64chars = (sample.match(/[A-Za-z0-9+/=]/g) ?? []).length;
-  return whitespace / sample.length < 0.02 && b64chars / sample.length > 0.9;
 }
 
 /**

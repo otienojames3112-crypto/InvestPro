@@ -73,10 +73,11 @@ describe("Round 85 · A — unified Ask-AI source union", () => {
     const askIdx = routers.indexOf("ask: adminProcedure");
     expect(askIdx).toBeGreaterThan(-1);
     // Round 88/92 grew the ask procedure (thread resolution + message persistence +
-    // per-follow-up source-mode resolution), and Stage 1b added getThread payload
-    // scrubbing within this span, so widen the window to still reach the delegation +
-    // source-resolution + engine call below.
-    const seg = routers.slice(askIdx, askIdx + 15000);
+    // per-follow-up source-mode resolution), Stage 1b added getThread payload
+    // scrubbing, and Stage 4.2b-ii added the allowSearch resolution block, all within
+    // this span — widen the window to still reach the delegation + source-resolution
+    // + engine call below.
+    const seg = routers.slice(askIdx, askIdx + 16000);
     // The union lists every kind, and each is resolved into a ResearchSource.
     for (const kind of ["url", "text", "pdf", "image"]) {
       expect(seg).toContain(`z.literal("${kind}")`);

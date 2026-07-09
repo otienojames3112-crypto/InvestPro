@@ -220,6 +220,8 @@ import {
   buildCatalogueReviewQuestion,
   extractPdfText,
   looksLikeRawBlob,
+  shouldAttemptSearch,
+  resolveSearchSource,
   type ResearchScope,
   type ResearchSource,
   type SourceReadResult,
@@ -8389,6 +8391,10 @@ export const appRouter = router({
           // an attached source cannot be read. Defaults false: a failed read on Ask AI
           // then resolves to `needs_source_fix` instead of silently guessing.
           allowUnsourced: z.boolean().optional(),
+          // Step 4.2b-ii — explicit manager opt-in to search an authoritative source
+          // when nothing is manually attached. CBK scope only for this first slice;
+          // ignored (never consulted) when a manual `source` is provided.
+          allowSearch: z.boolean().optional(),
           // Round 88 — continue an existing enquiry THREAD (a follow-up) when supplied.
           // Omit to open a NEW thread from this question.
           threadId: z.number().int().positive().optional(),
@@ -8491,6 +8497,28 @@ export const appRouter = router({
           input.allowUnsourced ?? false,
         );
 
+        // Step 4.2b-ii — AI search (CBK only), attempted ONLY when nothing was
+        // manually attached and the manager explicitly opted in. A found citation
+        // becomes an ordinary url source and flows through the UNCHANGED read/
+        // extract pipeline below — search only ever finds a source, never answers
+        // on its own. See aiResearchService.ts's Step 4.2b-ii block for the rules.
+        if (shouldAttemptSearch({ hasManualSource: Boolean(effectiveSource), allowSearch: input.allowSearch ?? false })) {
+          const resolution = await resolveSearchSource({
+            scope: input.scope as ResearchScope,
+            question: input.question,
+            allowUnsourced: input.allowUnsourced ?? false,
+          });
+          if (resolution.outcome === "found") {
+            effectiveSource = resolution.source;
+            effectiveSourceLabel = resolution.label;
+            sourceModeUsed = "new";
+          } else if (resolution.outcome === "unsupported_scope" || resolution.outcome === "search_failed_blocked") {
+            throw new TRPCError({ code: "BAD_REQUEST", message: resolution.message });
+          }
+          // "search_failed_unsourced" → fall through with effectiveSource still null,
+          // exactly like any other unsourced Ask AI question (manager pre-authorised it).
+        }
+
         const taskId = await createResearchTask({
           createdByOpenId: openId,
           createdByName: ctx.user.name ?? null,
@@ -8578,6 +8606,9 @@ export const appRouter = router({
             .optional(),
           sourceLabel: z.string().max(200).optional(),
           allowUnsourced: z.boolean().optional(),
+          // Step 4.2b-ii — explicit manager opt-in to search an authoritative source
+          // when nothing is manually attached (see `ask`).
+          allowSearch: z.boolean().optional(),
           threadId: z.number().int().positive().optional(),
           // Round 92 — explicit per-follow-up source behaviour (see `ask`).
           sourceMode: z.enum(["reuse_previous", "new", "none"]).optional(),
@@ -8644,6 +8675,23 @@ export const appRouter = router({
         // Read an uploaded pdf/image to TEXT now (materializeUploadSource) so the raw base64
         // is never stored in the small source_ref column and the file is read exactly once.
         pending = await materializeUploadSource(pending, pendingLabel, input.allowUnsourced ?? false);
+
+        // Step 4.2b-ii — AI search (CBK only); identical rule to `ask` above.
+        if (shouldAttemptSearch({ hasManualSource: Boolean(pending), allowSearch: input.allowSearch ?? false })) {
+          const resolution = await resolveSearchSource({
+            scope: input.scope as ResearchScope,
+            question: input.question,
+            allowUnsourced: input.allowUnsourced ?? false,
+          });
+          if (resolution.outcome === "found") {
+            pending = resolution.source;
+            pendingLabel = resolution.label;
+          } else if (resolution.outcome === "unsupported_scope" || resolution.outcome === "search_failed_blocked") {
+            throw new TRPCError({ code: "BAD_REQUEST", message: resolution.message });
+          }
+          // "search_failed_unsourced" → fall through with pending still null.
+        }
+
         const taskId = await createResearchTask({
           createdByOpenId: openId,
           createdByName: ctx.user.name ?? null,

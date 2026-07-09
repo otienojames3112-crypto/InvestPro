@@ -50,6 +50,7 @@ import {
   NEVER_INVENT_FIELDS,
   CBK_BOND_REQUIRED_FIELDS,
 } from "../shared/instrumentProfile";
+import { searchAuthoritativeSource, type SearchSourceResult } from "./_core/webSearch";
 
 // Stage 4.2b-i — extractPdfText/looksLikeRawBlob now live in aiIntakeService.ts (so
 // fetchDocumentText there can reuse them for a directly-fetched PDF URL without a
@@ -903,6 +904,98 @@ export async function transcribeSourceToText(
     temperature: 0,
   });
   return { text: contentToText(res.choices?.[0]?.message?.content).trim(), model: res.model ?? null };
+}
+
+/* ── Stage 4, Step 4.2b-ii — AI SEARCH source resolution (CBK only) ──────────
+ *
+ * When a manager asks a question with NO manual source attached and opts into
+ * `allowSearch`, the caller (routers.ts) looks up an authoritative source via
+ * `searchAuthoritativeSource()` (Step 4.2a) instead of answering from memory. A
+ * found citation becomes an ORDINARY `url` source, handed to the EXACT SAME
+ * `readSource()` / `runResearchQuestion` pipeline a manually-pasted URL would use
+ * (including the Step 4.2b-i PDF-URL fix) — search only ever FINDS a source, it
+ * never becomes the answer by itself.
+ *
+ * Deliberately scoped to CBK only for this first slice (Step 4.1's routing table
+ * also covers mmf/bank/market_asset, but those stay off until this is proven live).
+ *
+ * A search-found citation is stamped with `sourceKind: "url"` — NOT a new "search"
+ * kind — because `source_kind` is a fixed-value MySQL ENUM on three tables
+ * (research_tasks, research_messages, research_findings), and widening it would be
+ * a schema migration this slice deliberately avoids. The "found by AI search"
+ * provenance is instead carried in the existing free-text `sourceLabel` (see
+ * `searchFoundLabel`), so it is visible on the task, the message, and every
+ * finding, with zero schema change.
+ */
+
+/** Manual source always wins: search is only ever attempted when nothing was
+ *  manually attached AND the manager explicitly opted in. */
+export function shouldAttemptSearch(args: { hasManualSource: boolean; allowSearch: boolean }): boolean {
+  return !args.hasManualSource && Boolean(args.allowSearch);
+}
+
+/** Human message for a search that failed to produce a grounded citation. */
+export function searchFailureMessage(result: Extract<SearchSourceResult, { ok: false }>): string {
+  switch (result.reason) {
+    case "no_route":
+      return "AI search has no authoritative source registered for this scope yet.";
+    case "no_citations":
+      return "AI search did not find a source it could cite, so there is nothing to ground an answer in.";
+    case "search_failed":
+      return `AI search could not complete (${result.message}).`;
+  }
+}
+
+/** Human message when `allowSearch` was requested outside the one scope it supports. */
+export const UNSUPPORTED_SEARCH_SCOPE_MESSAGE =
+  'AI search is only available for the CBK scope right now. Switch Focus to "CBK", or attach a source manually.';
+
+/** A display label that makes a search-found source visibly distinct from a
+ *  manually-attached one, without inventing a new persisted source kind. */
+export function searchFoundLabel(args: { sourceLabel: string; citationTitle: string }): string {
+  const title = args.citationTitle.trim();
+  const combined = title && title !== args.sourceLabel ? `${args.sourceLabel} — ${title}` : args.sourceLabel;
+  return `AI search: ${combined}`.slice(0, 200);
+}
+
+/** The outcome of trying to resolve an `allowSearch` opt-in into a usable source. */
+export type SearchSourceResolution =
+  | { outcome: "found"; source: { kind: "url"; url: string }; label: string }
+  | { outcome: "unsupported_scope"; message: string }
+  /** Search failed and the manager did NOT pre-authorise an unsourced answer — the
+   *  caller must stop, never silently fall back to general model memory. */
+  | { outcome: "search_failed_blocked"; message: string }
+  /** Search failed but the manager pre-authorised an unsourced answer — the caller
+   *  proceeds exactly as it already does for "no source attached at all". */
+  | { outcome: "search_failed_unsourced" };
+
+/**
+ * Resolve an `allowSearch` opt-in into a source, CBK-only. Callers should only
+ * invoke this after confirming `shouldAttemptSearch(...)` — this function does not
+ * re-check for a manual source, only the CBK-only scope restriction.
+ */
+export async function resolveSearchSource(args: {
+  scope: ResearchScope;
+  question: string;
+  allowUnsourced: boolean;
+  /** Injected for tests — defaults to the real Step 4.2a wrapper. */
+  searchImpl?: typeof searchAuthoritativeSource;
+}): Promise<SearchSourceResolution> {
+  if (args.scope !== "cbk") {
+    return { outcome: "unsupported_scope", message: UNSUPPORTED_SEARCH_SCOPE_MESSAGE };
+  }
+  const search = args.searchImpl ?? searchAuthoritativeSource;
+  const result = await search({ catalogue: "cbk", question: args.question });
+  if (!result.ok) {
+    if (args.allowUnsourced) return { outcome: "search_failed_unsourced" };
+    return { outcome: "search_failed_blocked", message: searchFailureMessage(result) };
+  }
+  const citation = result.citations[0];
+  return {
+    outcome: "found",
+    source: { kind: "url", url: citation.url },
+    label: searchFoundLabel({ sourceLabel: result.sourceLabel, citationTitle: citation.title }),
+  };
 }
 
 export async function runResearchQuestion(args: {

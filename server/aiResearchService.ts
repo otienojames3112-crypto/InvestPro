@@ -411,6 +411,38 @@ export function missingFieldsForFinding(
 }
 
 /**
+ * Stage 5 — sibling of `missingFieldsForFinding` that surfaces the STRUCTURED
+ * missing rules (key + label) instead of just labels, for the follow-up-question
+ * generator. Computed fresh from the SAME gate call each time it's read — never
+ * persisted (research_findings.missingFields stays label-only on disk, exactly as
+ * before; no schema migration). Same inputs, same gate, only the output differs.
+ */
+export function missingRulesForFinding(
+  targetCatalogue: ReferenceCatalogue,
+  figures: Record<string, string>,
+  envelope?: {
+    name?: string | null;
+    issuer?: string | null;
+    currency?: string | null;
+    source?: string | null;
+    asOf?: number | null;
+    assetClass?: AssetClass | null;
+  },
+): { key: string; label: string }[] {
+  const gate = checkApprovalGate({
+    assetClass: envelope?.assetClass ?? assetClassForCatalogue(targetCatalogue),
+    changeKind: "create",
+    figures,
+    name: envelope?.name ?? null,
+    issuer: envelope?.issuer ?? null,
+    currency: envelope?.currency ?? null,
+    source: envelope?.source ?? null,
+    asOf: envelope?.asOf ?? null,
+  });
+  return gate.missingRules ?? [];
+}
+
+/**
  * Round 90 — deterministic CBK rule-fill. For a Treasury finding whose TENOR/type the
  * source already stated, back-fill the CONVENTIONAL, non-numeric regulatory fields the
  * approval gate needs (security type, tenor-in-days, WHT rule, tax-exempt flag,

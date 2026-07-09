@@ -223,6 +223,7 @@ import {
   looksLikeRawBlob,
   shouldAttemptSearch,
   resolveSearchSource,
+  missingRulesForFinding,
   type ResearchScope,
   type ResearchSource,
   type SourceReadResult,
@@ -8371,6 +8372,25 @@ export const appRouter = router({
           rawExcerpt: isBlob(f.rawExcerpt) ? null : f.rawExcerpt,
           sourceUrl: isBlob(f.sourceUrl) ? null : f.sourceUrl,
           extractedFields: scrubFields(f.extractedFields) as typeof f.extractedFields,
+          // Stage 5 — structured missing-field rules (key + label), computed fresh from
+          // the SAME approval gate as the persisted `missingFields` labels (using the
+          // RAW, pre-scrub figures so the two lists can never disagree), so the
+          // follow-up-question generator can work from real keys. Never persisted —
+          // research_findings.missingFields stays label-only on disk.
+          missingRules: f.targetCatalogue
+            ? missingRulesForFinding(
+                f.targetCatalogue as ReferenceCatalogue,
+                (f.extractedFields ?? {}) as Record<string, string>,
+                {
+                  name: f.instrumentName,
+                  issuer: f.issuer,
+                  currency: f.currency,
+                  source: f.sourceLabel ?? f.sourceUrl,
+                  asOf: f.sourceAsOf,
+                  assetClass: f.assetClass as AssetClass | null,
+                },
+              )
+            : [],
         }));
         return { thread, messages: safeMessages, findings: safeFindings };
       }),

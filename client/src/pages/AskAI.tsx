@@ -61,7 +61,7 @@ import {
   Search,
 } from "lucide-react";
 import { InfoHint } from "@/components/InfoHint";
-import { catalogueLabel, type ReferenceCatalogue } from "@shared/researchPipeline";
+import { catalogueLabel, suggestFollowUpQuestions, type ReferenceCatalogue } from "@shared/researchPipeline";
 import { SOURCE_CLASS_LABELS, isSourceClass } from "@shared/instrumentProfile";
 import { formatRelativeTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -196,6 +196,10 @@ export type Finding = {
   sourceAsOf: number | null;
   confidence: string;
   missingFields: string[] | null;
+  /** Stage 5 — the SAME missing fields as missingFields, structured as {key, label}
+   *  pairs (computed fresh server-side; never persisted). Drives the follow-up
+   *  question suggestions on the finding card. */
+  missingRules: { key: string; label: string }[] | null;
   warnings: string[] | null;
   rawExcerpt: string | null;
   status: string;
@@ -701,7 +705,19 @@ function CorrectFigureDialog({
 
 /* ── A single finding card (draft / dismiss / correct) ──────────────────────── */
 
-export function FindingCard({ finding, onChanged }: { finding: Finding; onChanged: () => void }) {
+export function FindingCard({
+  finding,
+  onChanged,
+  onSuggestQuestion,
+}: {
+  finding: Finding;
+  onChanged: () => void;
+  /** Stage 5 — populates the enclosing follow-up composer with a suggested question
+   *  and sets its source mode to "reuse previous". Optional: other FindingCard call
+   *  sites (catalogue review, superseded findings) have no composer to fill, and the
+   *  suggestion chips simply don't render when this is omitted. */
+  onSuggestQuestion?: (text: string) => void;
+}) {
   const [correctOpen, setCorrectOpen] = useState(false);
   const draft = trpc.research.draftFromFinding.useMutation({
     onSuccess: () => {
@@ -721,6 +737,9 @@ export function FindingCard({ finding, onChanged }: { finding: Finding; onChange
   const conf = CONFIDENCE_META[finding.confidence] ?? CONFIDENCE_META.low;
   const fields = fmtFields(finding.extractedFields);
   const missing = finding.missingFields ?? [];
+  // Stage 5 — deterministic, template-based follow-up questions for each missing
+  // gate field (pure, no LLM). Never implies a value was found — only asks.
+  const suggestedFollowUps = suggestFollowUpQuestions(finding.missingRules ?? [], finding.instrumentName);
   const warnings = finding.warnings ?? [];
   const isDrafted = finding.status === "drafted";
   const isDismissed = finding.status === "dismissed";
@@ -877,6 +896,24 @@ export function FindingCard({ finding, onChanged }: { finding: Finding; onChange
             <p className="text-[11px] text-amber-600/80 mt-1.5 ml-5.5 pl-0.5">
               You can still draft it and vouch a value at approval.
             </p>
+            {/* Stage 5 — suggested follow-up questions. Only rendered when a composer
+                is available to receive them (onSuggestQuestion is optional). Clicking
+                only fills the composer below — it never sends, never auto-fills a
+                field, and never drafts or approves anything on its own. */}
+            {onSuggestQuestion && suggestedFollowUps.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 mt-2 ml-5.5 pl-0.5">
+                {suggestedFollowUps.map((s) => (
+                  <button
+                    key={s.key}
+                    type="button"
+                    onClick={() => onSuggestQuestion(s.question)}
+                    className="inline-flex items-center gap-1 rounded-full border border-amber-500/30 bg-background px-2.5 py-1 text-[11px] text-amber-700 hover:bg-amber-500/10 transition-colors"
+                  >
+                    <MessageSquarePlus className="w-3 h-3" /> Ask: {s.label}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
@@ -1407,6 +1444,16 @@ function Conversation({ threadId, onExit }: { threadId: number; onExit: () => vo
     }
   }
 
+  // Stage 5 — a suggested follow-up chip fills the composer and switches to
+  // "reuse previous source" (the whole point is re-reading the SAME source), but
+  // never sends anything itself. The manager reviews/edits the text and presses
+  // Send follow-up manually, exactly like any other turn.
+  function onSuggestQuestion(text: string) {
+    setQuestion(text);
+    setSourceMode("reuse_previous");
+    toast.success("Follow-up question added below — review and send when ready.");
+  }
+
   if (isLoading) {
     return (
       <div className="space-y-3">
@@ -1601,7 +1648,7 @@ function Conversation({ threadId, onExit }: { threadId: number; onExit: () => vo
         ) : (
           <div className="space-y-3">
             {liveFindings.map((f) => (
-              <FindingCard key={f.id} finding={f} onChanged={refetch} />
+              <FindingCard key={f.id} finding={f} onChanged={refetch} onSuggestQuestion={onSuggestQuestion} />
             ))}
           </div>
         )}

@@ -789,6 +789,17 @@ export interface ApprovalGateResult {
   catalogue: ReferenceCatalogue;
   /** Human labels of the required fields that are missing (empty when ok/edit). */
   missing: string[];
+  /**
+   * Stage 5 — the SAME missing fields as `missing`, but structured as {key, label}
+   * pairs instead of label strings, so a caller (the follow-up-question generator)
+   * can work from real field keys rather than parsing label text. Purely additive:
+   * `missing` is unchanged and every existing caller keeps working untouched. A
+   * compound "A or B" rule (e.g. SACCO's dividend/rebate rate) uses a pipe-joined
+   * key ("shareCapitalDividendRate|depositRebateRate") since no single field backs
+   * it. A value-assertion rule (e.g. "tax-exempt flag must be TRUE...") reuses the
+   * real field's key even though the check is "wrong value", not "absent".
+   */
+  missingRules?: { key: string; label: string }[];
   /** Plain-language reason when blocked. */
   reason?: string;
   /** The detected CBK sub-type (tbill/fxd/ifb), when the catalogue is "cbk" and it
@@ -824,7 +835,7 @@ export function checkApprovalGate(args: {
 }): ApprovalGateResult {
   const catalogue = catalogueForAssetClass(args.assetClass);
   if (args.changeKind === "edit") {
-    return { ok: true, catalogue, missing: [] };
+    return { ok: true, catalogue, missing: [], missingRules: [] };
   }
   const figures = args.figures ?? {};
   const hasOverride =
@@ -833,6 +844,11 @@ export function checkApprovalGate(args: {
   const nonEmpty = (v: unknown) => v !== undefined && v !== null && String(v).trim() !== "";
 
   const missing: string[] = [];
+  // Stage 5 — parallel structured list (key + label) alongside `missing` (labels
+  // only), so a caller can generate a targeted follow-up question from a real field
+  // key instead of parsing label text. Every push into `missing` below has a
+  // matching push here.
+  const missingRules: { key: string; label: string }[] = [];
   const addMissingForRule = (rule: CatalogueFieldRule) => {
     // A manager-vouched override always satisfies the catalogue's PRIMARY figure.
     if (hasOverride && rule.source === "figures" && rule.key === primaryKey) return;
@@ -860,7 +876,10 @@ export function checkApprovalGate(args: {
         present = args.asOf !== undefined && args.asOf !== null && Number(args.asOf) > 0;
         break;
     }
-    if (!present) missing.push(rule.label);
+    if (!present) {
+      missing.push(rule.label);
+      missingRules.push({ key: rule.key, label: rule.label });
+    }
   };
 
   const isSacco = detectMarketAssetSacco({
@@ -874,7 +893,10 @@ export function checkApprovalGate(args: {
   if (isSacco) {
     for (const rule of SACCO_MARKET_ASSET_FIELD_RULES) {
       if (rule.source === "figures") {
-        if (!saccoFigurePresent(figures, rule.key)) missing.push(rule.label);
+        if (!saccoFigurePresent(figures, rule.key)) {
+          missing.push(rule.label);
+          missingRules.push({ key: rule.key, label: rule.label });
+        }
       } else {
         addMissingForRule(rule);
       }
@@ -883,13 +905,18 @@ export function checkApprovalGate(args: {
       !saccoFigurePresent(figures, "shareCapitalDividendRate") &&
       !saccoFigurePresent(figures, "depositRebateRate")
     ) {
-      missing.push("share-capital dividend rate or deposit rebate / interest rate");
+      const label = "share-capital dividend rate or deposit rebate / interest rate";
+      missing.push(label);
+      // No single field backs this OR-condition — a pipe-joined compound key so a
+      // caller can still recognise it as "not one field" without a third shape.
+      missingRules.push({ key: "shareCapitalDividendRate|depositRebateRate", label });
     }
-    if (missing.length === 0) return { ok: true, catalogue, missing: [], cbkSubtype: null };
+    if (missing.length === 0) return { ok: true, catalogue, missing: [], missingRules: [], cbkSubtype: null };
     return {
       ok: false,
       catalogue,
       missing,
+      missingRules,
       reason: `${catalogueLabel(catalogue)} entries need ${missing.join(", ")} before they can be published. Add the field(s), mark them unavailable, or approve with a manager-vouched value.`,
       cbkSubtype: null,
     };
@@ -908,7 +935,10 @@ export function checkApprovalGate(args: {
     cbkSubtype = detectCbkSubtype(figures, args.name);
     if (cbkSubtype) {
       for (const rule of CBK_SUBTYPE_FIELD_RULES[cbkSubtype]) {
-        if (!figurePresent(figures, rule.key)) missing.push(rule.label);
+        if (!figurePresent(figures, rule.key)) {
+          missing.push(rule.label);
+          missingRules.push({ key: rule.key, label: rule.label });
+        }
       }
       // An infrastructure bond's whole point is its 0% WHT — the baseline only checks
       // that SOME taxExempt value was recorded, not that it is actually true. Catch a
@@ -917,7 +947,12 @@ export function checkApprovalGate(args: {
       if (cbkSubtype === "ifb") {
         const te = figures.taxExempt;
         const isTrue = te === true || String(te).trim().toLowerCase() === "true";
-        if (!isTrue) missing.push("tax-exempt flag must be TRUE for an infrastructure bond");
+        if (!isTrue) {
+          const label = "tax-exempt flag must be TRUE for an infrastructure bond";
+          missing.push(label);
+          // A real key (taxExempt) — the check is "wrong value", not "absent".
+          missingRules.push({ key: "taxExempt", label });
+        }
       }
     }
   }
@@ -929,7 +964,10 @@ export function checkApprovalGate(args: {
   if (catalogue === "market_asset") {
     if (args.assetClass === "reit" || args.assetClass === "offshore_fund") {
       for (const rule of MARKET_ASSET_SUBTYPE_FIELD_RULES[args.assetClass]) {
-        if (!figurePresent(figures, rule.key)) missing.push(rule.label);
+        if (!figurePresent(figures, rule.key)) {
+          missing.push(rule.label);
+          missingRules.push({ key: rule.key, label: rule.label });
+        }
       }
     }
     if (args.assetClass === "offshore_fund") {
@@ -942,19 +980,57 @@ export function checkApprovalGate(args: {
       // publishes. This gate never requires an FX RATE — that is a Holdings-
       // creation concern (assetGuardIssues), not a catalogue-completeness one.
       if ((args.currency ?? "").trim().toUpperCase() === "KES") {
-        missing.push("currency must not be KES for an offshore fund");
+        const label = "currency must not be KES for an offshore fund";
+        missing.push(label);
+        // A real key (currency) — the check is "wrong value", not "absent".
+        missingRules.push({ key: "currency", label });
       }
     }
   }
 
-  if (missing.length === 0) return { ok: true, catalogue, missing: [], cbkSubtype };
+  if (missing.length === 0) return { ok: true, catalogue, missing: [], missingRules: [], cbkSubtype };
   return {
     ok: false,
     catalogue,
     missing,
+    missingRules,
     reason: `${catalogueLabel(catalogue)} entries need ${missing.join(", ")} before they can be published. Add the field(s), mark them unavailable, or approve with a manager-vouched value.`,
     cbkSubtype,
   };
+}
+
+/** A deterministic, template-based follow-up question for one missing gate field. */
+export interface SuggestedFollowUp {
+  key: string;
+  label: string;
+  question: string;
+}
+
+/**
+ * Stage 5 — turn `checkApprovalGate`'s structured `missingRules` into deterministic
+ * follow-up questions a manager can send back into the SAME enquiry (reusing the
+ * previous source). Pure, no LLM, no field guessing: every question ASKS about a
+ * gap, it never asserts or implies a value was found. This is a template layer only
+ * — the actual answer still comes from the existing Ask AI pipeline re-reading the
+ * source, so nothing here can silently fill a field.
+ *
+ * Deliberately does NOT special-case the compound "A|B" key (SACCO's dividend/
+ * rebate rate) — its label already reads naturally as one question ("...for the
+ * share-capital dividend rate or deposit rebate / interest rate for..."). It DOES
+ * special-case a value-assertion rule (label containing "must be"/"must not"),
+ * since those read as a wrong-value confirmation, not a blank lookup.
+ */
+export function suggestFollowUpQuestions(
+  missingRules: { key: string; label: string }[],
+  instrumentName: string,
+): SuggestedFollowUp[] {
+  return missingRules.map((rule) => ({
+    key: rule.key,
+    label: rule.label,
+    question: /\bmust (be|not)\b/i.test(rule.label)
+      ? `The source doesn't clearly confirm: ${rule.label}. Can you check ${instrumentName} again and confirm?`
+      : `Can you check the source again for the ${rule.label} for this ${instrumentName}?`,
+  }));
 }
 
 /**

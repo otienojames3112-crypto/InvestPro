@@ -1219,6 +1219,11 @@ function Conversation({ threadId, onExit }: { threadId: number; onExit: () => vo
   const { data, isLoading } = trpc.research.getThread.useQuery({ id: threadId });
   const [question, setQuestion] = useState("");
   const [allowUnsourced, setAllowUnsourced] = useState(false);
+  // Step 4.2b-iii — explicit opt-in to search authoritative CBK sources when no
+  // manual source is attached (see OpeningPanel). The thread's scope is fixed, so
+  // there is no Focus selector here to reset this on — the checkbox is simply
+  // disabled outside a CBK-scoped enquiry.
+  const [allowSearch, setAllowSearch] = useState(false);
   const [sourceStatus, setSourceStatus] = useState<SourceStatus | null>(null);
   // Round 92 — explicit per-follow-up source behaviour.
   const [sourceMode, setSourceMode] = useState<"reuse_previous" | "new" | "none">("reuse_previous");
@@ -1256,6 +1261,7 @@ function Conversation({ threadId, onExit }: { threadId: number; onExit: () => vo
           source: source ?? undefined,
           sourceLabel: label ?? undefined,
           allowUnsourced: source ? allowUnsourced : undefined,
+          allowSearch: !source && data?.thread?.scope === "cbk" ? allowSearch : undefined,
           sourceMode: mode,
           intakeMode: effectiveIntakeMode,
         });
@@ -1390,6 +1396,32 @@ function Conversation({ threadId, onExit }: { threadId: number; onExit: () => vo
               </p>
             </div>
           )}
+          {/* Step 4.2b-iii — search opt-in, offered only when no manual source is
+              attached this turn (manual source always wins). CBK-only for now. */}
+          {!src.provided && (
+            <label
+              className={cn(
+                "flex items-start gap-2 rounded-md border border-border bg-background px-3 py-2 text-xs cursor-pointer",
+                thread?.scope === "cbk" ? "text-muted-foreground" : "text-muted-foreground/60 cursor-not-allowed",
+              )}
+            >
+              <input
+                type="checkbox"
+                className="mt-0.5 accent-primary"
+                checked={allowSearch}
+                disabled={thread?.scope !== "cbk"}
+                onChange={(e) => setAllowSearch(e.target.checked)}
+              />
+              <span>
+                <span className={cn("font-medium", thread?.scope === "cbk" ? "text-foreground" : "text-muted-foreground")}>
+                  Search authoritative CBK sources if I don&rsquo;t attach a source.
+                </span>{" "}
+                {thread?.scope === "cbk"
+                  ? "The AI looks up a current, cited CBK source — never from its own memory — and grounds the answer in it, exactly as if you’d pasted the link yourself."
+                  : "Only available for enquiries focused on “CBK securities.”"}
+              </span>
+            </label>
+          )}
           {src.provided && (
             <p className="text-[11px] text-muted-foreground">Using previous context + this new source.</p>
           )}
@@ -1497,6 +1529,10 @@ function OpeningPanel({ onStarted }: { onStarted: (threadId: number) => void }) 
   const [question, setQuestion] = useState("");
   const [scope, setScope] = useState<Scope>("any");
   const [allowUnsourced, setAllowUnsourced] = useState(false);
+  // Step 4.2b-iii — explicit opt-in to search authoritative CBK sources when no
+  // manual source is attached. CBK-only; reset whenever Focus leaves "cbk" so a
+  // stale checked-but-disabled checkbox never lingers.
+  const [allowSearch, setAllowSearch] = useState(false);
   const [sourceStatus, setSourceStatus] = useState<SourceStatus | null>(null);
   // Round 102 — intake mode: "ask" (default conversational) or "extract" (force structured extraction).
   const [intakeMode, setIntakeMode] = useState<"ask" | "extract">("ask");
@@ -1525,6 +1561,7 @@ function OpeningPanel({ onStarted }: { onStarted: (threadId: number) => void }) 
           source: source ?? undefined,
           sourceLabel: label ?? undefined,
           allowUnsourced: source ? allowUnsourced : undefined,
+          allowSearch: !source && scope === "cbk" ? allowSearch : undefined,
           intakeMode,
         });
         return { taskId: started.taskId, threadId: started.threadId };
@@ -1603,10 +1640,42 @@ function OpeningPanel({ onStarted }: { onStarted: (threadId: number) => void }) 
             </span>
           </label>
         )}
+        {/* Step 4.2b-iii — search opt-in, offered only when no manual source is attached
+            (manual source always wins). CBK-only for this first slice. */}
+        {!src.provided && (
+          <label
+            className={cn(
+              "flex items-start gap-2 rounded-md border border-border bg-background px-3 py-2 text-xs cursor-pointer",
+              scope === "cbk" ? "text-muted-foreground" : "text-muted-foreground/60 cursor-not-allowed",
+            )}
+          >
+            <input
+              type="checkbox"
+              className="mt-0.5 accent-primary"
+              checked={allowSearch}
+              disabled={scope !== "cbk"}
+              onChange={(e) => setAllowSearch(e.target.checked)}
+            />
+            <span>
+              <span className={cn("font-medium", scope === "cbk" ? "text-foreground" : "text-muted-foreground")}>
+                Search authoritative CBK sources if I don&rsquo;t attach a source.
+              </span>{" "}
+              {scope === "cbk"
+                ? "The AI looks up a current, cited CBK source — never from its own memory — and grounds the answer in it, exactly as if you’d pasted the link yourself."
+                : "Only available when Focus (below) is set to “CBK securities.”"}
+            </span>
+          </label>
+        )}
         <div className="flex items-end gap-3 flex-wrap">
           <div className="space-y-1">
             <Label className="text-xs text-muted-foreground">Focus</Label>
-            <Select value={scope} onValueChange={(v) => setScope(v as Scope)}>
+            <Select
+              value={scope}
+              onValueChange={(v) => {
+                setScope(v as Scope);
+                if (v !== "cbk") setAllowSearch(false);
+              }}
+            >
               <SelectTrigger className="w-[180px] bg-background">
                 <SelectValue />
               </SelectTrigger>

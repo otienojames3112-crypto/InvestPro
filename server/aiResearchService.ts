@@ -1959,6 +1959,19 @@ export function structuredInstrumentToDraft(
     }
   }
 
+  // Stage 4 follow-up — the structured-extraction path (this function) skipped the
+  // same deterministic CBK rule-fill `normaliseFinding` already applies (security
+  // type, tenor, WHT rule, tax-exempt flag, maturity rule, derived from the tenor the
+  // source stated). That gap made a genuinely-grounded CBK T-bill/bond finding fail
+  // the approval gate on fields that are conventional, not extractable facts. Apply
+  // the SAME helper here — it only fills a field that is still empty, so it never
+  // overwrites a value the model actually extracted (e.g. a bond's real securityType).
+  if (targetCatalogue === "cbk") {
+    const ruleFilled = applyCbkRuleFill({ ...figures, name });
+    delete (ruleFilled as Record<string, string>).name; // `name` was only a rule-fill signal
+    Object.assign(figures, ruleFilled);
+  }
+
   // Round 103 — FIELD NORMALIZATION. Map extraction-schema names to catalogue
   // canonical names so the approval gate recognizes them (e.g. effectiveAnnualRate → ear).
   const normalised = normaliseExtractionFields(figures, targetCatalogue);
@@ -2036,6 +2049,20 @@ export function structuredInstrumentToDraft(
     extractedFields._impactNote = `Row may be stale (absent from source): ${extractedFields._matchedCurrentRow || name}`;
   }
 
+  // Stage 4 follow-up — for a CBK T-BILL AUCTION RESULT, the auction date is the
+  // as-of date for the rate/weighted-average figures this finding reports (the
+  // provenance fallback in runResearchQuestion never bridges this — it only
+  // back-fills sourceLabel/sourceUrl). Deliberately narrow to the T-bill auction
+  // classes: settlement/value date is a DIFFERENT field (already carried separately
+  // in `figures.valueDate`) and must never be conflated with as-of here.
+  const sourceAsOf =
+    (sourceClass === "cbk_tbill_auction" || sourceClass === "cbk_tbill_auction_result") &&
+    typeof sharedFields?.auctionDate === "string" &&
+    sharedFields.auctionDate.trim() !== "" &&
+    sharedFields.auctionDate !== MISSING_FROM_SOURCE
+      ? sharedFields.auctionDate.trim()
+      : null;
+
   return {
     instrumentName: name,
     issuer: typeof raw.fundManager === "string" ? raw.fundManager : typeof raw.bankName === "string" ? raw.bankName : null,
@@ -2047,7 +2074,7 @@ export function structuredInstrumentToDraft(
     sourceUrl: null,
     sourceKind: null,
     checkedAt: null,
-    sourceAsOf: null,
+    sourceAsOf,
     confidence,
     missingFields,
     warnings,

@@ -70,14 +70,24 @@ describe("Round 85 · A — unified Ask-AI source union", () => {
   });
 
   it("routers.ts wires the unified union into research.ask (all four kinds resolved)", () => {
-    const askIdx = routers.indexOf("ask: adminProcedure");
+    // A plain indexOf("ask: adminProcedure") is NOT a safe anchor — it also matches
+    // INSIDE "getTask: adminProcedure" (and would match startResearchTask/
+    // startReviewTask/processResearchTask too), since they all end in "ask:
+    // adminProcedure". Stage 4's sources-used panel work added a few lines ahead of
+    // `ask` in the file, which shifted that accidental getTask match just far enough
+    // to blow the old fixed-width window — the window was never really sized for the
+    // real `ask` procedure, it happened to be wide enough to reach past getTask's
+    // body into ask's by luck. Anchor on a non-identifier character immediately
+    // before "ask:" so this can never again match a longer identifier's suffix.
+    const askMatch = routers.search(/(?<![A-Za-z])ask: adminProcedure/);
+    const askIdx = askMatch;
     expect(askIdx).toBeGreaterThan(-1);
     // Round 88/92 grew the ask procedure (thread resolution + message persistence +
     // per-follow-up source-mode resolution), Stage 1b added getThread payload
     // scrubbing, and Stage 4.2b-ii added the allowSearch resolution block, all within
     // this span — widen the window to still reach the delegation + source-resolution
     // + engine call below.
-    const seg = routers.slice(askIdx, askIdx + 16000);
+    const seg = routers.slice(askIdx, askIdx + 12000);
     // The union lists every kind, and each is resolved into a ResearchSource.
     for (const kind of ["url", "text", "pdf", "image"]) {
       expect(seg).toContain(`z.literal("${kind}")`);

@@ -58,6 +58,7 @@ import {
   FileCheck2,
   FileWarning,
   FileSearch,
+  Search,
 } from "lucide-react";
 import { InfoHint } from "@/components/InfoHint";
 import { catalogueLabel, type ReferenceCatalogue } from "@shared/researchPipeline";
@@ -185,6 +186,13 @@ export type Finding = {
   extractedFields: Record<string, unknown> | null;
   sourceLabel: string | null;
   sourceUrl: string | null;
+  /** The task this finding was produced by — used to borrow its as-of date for the
+   *  sources-used panel on the paired assistant turn (findings carry as-of; messages don't). */
+  taskId: number | null;
+  /** Round 91 — already present on the payload; typed here so the sources-used panel
+   *  can read it without a server change. */
+  sourceKind: "url" | "text" | "pdf" | "image" | null;
+  checkedAt: number | null;
   sourceAsOf: number | null;
   confidence: string;
   missingFields: string[] | null;
@@ -210,6 +218,11 @@ type Message = {
   sourceLabel: string | null;
   taskId: number | null;
   createdAt: string | Date | null;
+  /** Stage 4 · sources-used panel — the task's ACTUAL source-read outcome (not just
+   *  whether a source was attached): true = read succeeded, false = attached but
+   *  failed to read, null = no source was attached for this turn. Shared by the user
+   *  and assistant message of a turn (they carry the same taskId). */
+  sourceGrounded: boolean | null;
 };
 
 /* ── Round 91: source-read status (mirror of server SourceReadResult) ───────── */
@@ -238,11 +251,16 @@ export type SourceStatus =
       retryHint: string;
     };
 
-function sourceKindIcon(kind: "url" | "text" | "pdf" | "image") {
-  if (kind === "url") return <Link2 className="w-3.5 h-3.5" />;
-  if (kind === "pdf") return <FileText className="w-3.5 h-3.5" />;
-  if (kind === "image") return <ImageIcon className="w-3.5 h-3.5" />;
-  return <TypeIcon className="w-3.5 h-3.5" />;
+/** Shared source-kind icon (url/pdf/image/text). `className` lets call sites match
+ *  their own sizing — the compact Transcript badges use a smaller icon than the
+ *  full-width SourceStatusPanel. Consolidates what used to be two near-duplicate
+ *  helpers (this one, and Transcript's SOURCE_KIND_ICON). */
+function sourceKindIcon(kind: string | null, className = "w-3.5 h-3.5") {
+  if (kind === "url") return <Link2 className={className} />;
+  if (kind === "pdf") return <FileText className={className} />;
+  if (kind === "image") return <ImageIcon className={className} />;
+  if (kind === "text") return <TypeIcon className={className} />;
+  return null;
 }
 
 /**
@@ -1140,14 +1158,6 @@ export function useSourceAttachment(opts?: { followUp?: boolean; initialUrl?: st
 
 /* ── Conversation transcript (thread turns) ─────────────────────────────────── */
 
-function SOURCE_KIND_ICON(kind: string | null) {
-  if (kind === "url") return <Link2 className="w-3 h-3" />;
-  if (kind === "pdf") return <FileText className="w-3 h-3" />;
-  if (kind === "image") return <ImageIcon className="w-3 h-3" />;
-  if (kind === "text") return <TypeIcon className="w-3 h-3" />;
-  return null;
-}
-
 /** What context did a given assistant answer draw on? Derived from message order:
  *  a non-first turn had the earlier conversation to lean on, and the paired user
  *  turn's sourceKind tells us whether a fresh source was attached to that turn. */
@@ -1170,7 +1180,86 @@ function contextNote(messages: Message[], index: number): string | null {
   return null;
 }
 
-function Transcript({ messages }: { messages: Message[] }) {
+/** The user turn a given assistant answer responds to (nearest preceding user message). */
+function pairedUserMessage(messages: Message[], assistantIndex: number): Message | null {
+  for (let i = assistantIndex - 1; i >= 0; i--) {
+    if (messages[i].role === "user") return messages[i];
+  }
+  return null;
+}
+
+/**
+ * Stage 4 · sources-used panel — a compact, per-answer summary of what grounded
+ * THIS turn. Distinct from `SourceStatusPanel` above (which shows the live read
+ * outcome of the enquiry currently being submitted, and disappears once the turn is
+ * folded into history): this renders for every historical turn in the transcript,
+ * from data already on the paired user message (`sourceKind`/`sourceRef`/
+ * `sourceLabel` — what was ATTACHED) plus the task's actual read outcome
+ * (`grounded` — whether it was successfully READ), so a failed or unattempted read
+ * is never shown as if the answer were grounded. Visibility only — reads existing
+ * fields, writes nothing, changes no extraction/search/approval behaviour.
+ */
+function SourcesUsedPanel({
+  sourceKind,
+  sourceLabel,
+  sourceRef,
+  asOf,
+  grounded,
+}: {
+  sourceKind: string | null;
+  sourceLabel: string | null;
+  sourceRef: string | null;
+  asOf: number | null;
+  grounded: boolean | null;
+}) {
+  if (!sourceKind) {
+    return (
+      <p className="mt-1.5 flex items-center gap-1.5 text-[11px] text-amber-600">
+        <AlertTriangle className="w-3 h-3 shrink-0" />
+        No source — general knowledge.
+      </p>
+    );
+  }
+  if (grounded !== true) {
+    // Attached but the read failed (or the read outcome is unknown) — never claim
+    // grounding without positive confirmation from the task's sourceStatus.
+    return (
+      <p className="mt-1.5 flex items-center gap-1.5 text-[11px] text-amber-600">
+        <AlertTriangle className="w-3 h-3 shrink-0" />
+        Source attached but not read; answer may be ungrounded.
+      </p>
+    );
+  }
+  const isAiSearch = (sourceLabel ?? "").startsWith("AI search:");
+  const openUrl = sourceKind === "url" ? sourceRef : null;
+  return (
+    <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
+      {sourceKindIcon(sourceKind, "w-3 h-3")}
+      <span className="text-foreground">{sourceLabel ?? sourceKind}</span>
+      {isAiSearch && (
+        <Badge
+          variant="outline"
+          className="font-normal text-[10px] px-1 py-0 gap-0.5 bg-violet-500/10 text-violet-600 border-violet-500/20"
+        >
+          <Search className="w-2.5 h-2.5 mr-0.5" /> AI search
+        </Badge>
+      )}
+      {openUrl && (
+        <a
+          href={openUrl}
+          target="_blank"
+          rel="noreferrer"
+          className="inline-flex items-center gap-0.5 text-primary hover:underline"
+        >
+          open <ExternalLink className="w-2.5 h-2.5" />
+        </a>
+      )}
+      {asOf != null && <span>· as of {new Date(asOf).toLocaleDateString()}</span>}
+    </div>
+  );
+}
+
+function Transcript({ messages, findings }: { messages: Message[]; findings: Finding[] }) {
   return (
     <div className="space-y-4">
       {messages.map((m, idx) =>
@@ -1183,7 +1272,7 @@ function Transcript({ messages }: { messages: Message[] }) {
               <p className="text-sm whitespace-pre-wrap">{m.content}</p>
               {m.sourceKind && (
                 <div className="mt-1 inline-flex items-center gap-1.5 rounded-md border border-border bg-muted/40 px-2 py-0.5 text-[11px] text-muted-foreground">
-                  {SOURCE_KIND_ICON(m.sourceKind)}
+                  {sourceKindIcon(m.sourceKind, "w-3 h-3")}
                   <span>{m.sourceLabel ?? m.sourceKind}</span>
                 </div>
               )}
@@ -1204,6 +1293,22 @@ function Transcript({ messages }: { messages: Message[] }) {
                   {contextNote(messages, idx)}
                 </p>
               )}
+              {(() => {
+                const paired = pairedUserMessage(messages, idx);
+                const asOf =
+                  m.taskId != null
+                    ? findings.find((f) => f.taskId === m.taskId && f.sourceAsOf != null)?.sourceAsOf ?? null
+                    : null;
+                return (
+                  <SourcesUsedPanel
+                    sourceKind={paired?.sourceKind ?? null}
+                    sourceLabel={paired?.sourceLabel ?? null}
+                    sourceRef={paired?.sourceRef ?? null}
+                    asOf={asOf}
+                    grounded={m.sourceGrounded}
+                  />
+                );
+              })()}
             </div>
           </div>
         ),
@@ -1346,7 +1451,7 @@ function Conversation({ threadId, onExit }: { threadId: number; onExit: () => vo
 
       <Card>
         <CardContent className="pt-5">
-          <Transcript messages={messages} />
+          <Transcript messages={messages} findings={findings} />
         </CardContent>
       </Card>
 

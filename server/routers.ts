@@ -120,6 +120,7 @@ import {
   setResearchTaskStage,
   getResearchTask,
   listResearchTasks,
+  getResearchTasksSourceStatus,
   insertResearchFindings,
   getResearchFinding,
   listResearchFindings,
@@ -1076,6 +1077,19 @@ async function buildPriorFindingsContext(threadId: number): Promise<PriorFinding
       correction,
     } satisfies PriorFindingContext;
   });
+}
+
+/**
+ * Stage 4 · sources-used panel — derive whether a task's source was actually READ
+ * (not merely attached) from its persisted `research_tasks.sourceStatus` JSON (built
+ * by `sourceStatusJson` below). Pure and exported so it's testable without a DB.
+ * `null` means "no source was attached" or "outcome unknown" (e.g. a legacy row) —
+ * callers must treat null the same as false (never claim grounding without positive
+ * confirmation), never the same as true.
+ */
+export function deriveSourceGrounded(raw: unknown): boolean | null {
+  if (!raw || typeof raw !== "object" || !("ok" in raw)) return null;
+  return Boolean((raw as { ok: unknown }).ok);
 }
 
 /** JSON shape persisted to research_tasks.source_status and surfaced in the UI. */
@@ -8321,6 +8335,16 @@ export const appRouter = router({
         if (!thread) throw new TRPCError({ code: "NOT_FOUND", message: "Enquiry thread not found." });
         const messages = await listResearchMessages(input.id);
         const findings = await listResearchFindings({ threadId: input.id });
+        // Stage 4 · sources-used panel — a message's sourceKind/sourceRef/sourceLabel
+        // records only what was ATTACHED, never whether it was actually READ. Batch-fetch
+        // each turn's task.sourceStatus (read-only; no schema change — the column has
+        // existed since Round 91) so the client can distinguish "grounded" from "a source
+        // was attached but failed to read", instead of assuming success from attachment
+        // alone. A user and its paired assistant message share the same taskId.
+        const taskIds = Array.from(new Set(messages.map((m) => m.taskId).filter((id): id is number => id != null)));
+        const statusByTask = await getResearchTasksSourceStatus(taskIds);
+        const sourceGroundedFor = (taskId: number | null): boolean | null =>
+          taskId == null ? null : deriveSourceGrounded(statusByTask.get(taskId));
         // Never ship a base64/data-URI blob to the browser. An uploaded pdf/image source is
         // stored in a message's sourceRef as a data: URI (kept in the DB for server-side
         // "reuse previous source"), and an earlier build could have persisted a blob into a
@@ -8340,6 +8364,7 @@ export const appRouter = router({
           ...m,
           content: isBlob(m.content) ? "(attached source — not shown here)" : m.content,
           sourceRef: isBlob(m.sourceRef) ? null : m.sourceRef,
+          sourceGrounded: sourceGroundedFor(m.taskId),
         }));
         const safeFindings = findings.map((f) => ({
           ...f,

@@ -3025,6 +3025,22 @@ export async function listResearchTasks(limit = 50): Promise<ResearchTask[]> {
   return db.select().from(researchTasks).orderBy(desc(researchTasks.createdAt)).limit(limit);
 }
 
+/**
+ * Batch-fetch just the `sourceStatus` column for a set of task ids — the read-only
+ * lookup the Ask AI "sources used" panel needs so `getThread` can tell a manager
+ * whether a source was actually READ (not merely attached) without a schema change
+ * or a per-message round trip. Read-only; never called from a mutation path.
+ */
+export async function getResearchTasksSourceStatus(taskIds: number[]): Promise<Map<number, unknown>> {
+  const db = await getDb();
+  if (!db || taskIds.length === 0) return new Map();
+  const rows = await db
+    .select({ id: researchTasks.id, sourceStatus: researchTasks.sourceStatus })
+    .from(researchTasks)
+    .where(inArray(researchTasks.id, taskIds));
+  return new Map(rows.map((r) => [r.id, r.sourceStatus]));
+}
+
 /* ── Research findings (AI draft facts awaiting manager triage) ─────────────── */
 
 /** Insert a batch of findings (from findingsToRows). No-op on empty. */

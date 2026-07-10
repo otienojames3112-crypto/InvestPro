@@ -1967,6 +1967,20 @@ function parseAsOfDate(asOf: string | null | undefined): Date | null {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
+/**
+ * Stage 6a — convert a research_updates.asOf epoch-ms value (bigint/number column)
+ * into the Date object mmfFunds.asOfDate/bankInstruments.asOfDate (both `date`
+ * columns) expect — the same conversion the manual mmfFunds.update/add mutations
+ * already use for their own asOfDate input (`new Date(input.asOfDate)`), just
+ * starting from an epoch-ms number instead of an ISO string. Returns null (never a
+ * fabricated "now") when there is no positive as-of value to preserve, so a caller
+ * can safely skip the column rather than write a false freshness date. Pure —
+ * exported so it's unit-testable without a DB.
+ */
+export function asOfDateFromEpochMs(asOf: number | null | undefined): Date | null {
+  return asOf && Number(asOf) > 0 ? new Date(Number(asOf)) : null;
+}
+
 /** Coerce a stored JSON weights blob into a clean AllocationWeights (numbers per bucket). */
 function coerceWeights(raw: unknown): AllocationWeights {
   const src = (raw ?? {}) as Record<string, unknown>;
@@ -2573,6 +2587,13 @@ export async function reviewResearchUpdate(args: {
   let promotedMmfId: number | null = null;
   let promotedBankId: number | null = null;
   const effectiveAt = current.asOf && Number(current.asOf) > 0 ? Number(current.asOf) : now;
+  // Stage 6a — preserve the approved update's as-of date on mmfFunds/bankInstruments,
+  // exactly like the manual mmfFunds.update/add mutations already do. Null (not "now")
+  // when the update never carried one, so a missing as-of is never fabricated — the
+  // row's asOfDate then simply stays whatever it already was (update) or unset
+  // (insert), exactly as before this change. opportunities' promotionProvenance()
+  // already threads current.asOf through separately and is untouched here.
+  const promotedAsOfDate = asOfDateFromEpochMs(current.asOf);
 
   if (plan.target === "mmf") {
     const p = plan.payload;
@@ -2590,6 +2611,8 @@ export async function reviewResearchUpdate(args: {
       ...(p.managementFee != null ? { managementFee: String(p.managementFee) } : {}),
       ...(p.minInvestment != null ? { minInvestment: String(p.minInvestment) } : {}),
       source: p.source,
+      // Stage 6a — preserve the approved update's as-of date, same as manual edits.
+      ...(promotedAsOfDate ? { asOfDate: promotedAsOfDate } : {}),
       isActive: true as const,
     };
     // Round 97 — persist extendedFields from structured extraction if present.
@@ -2622,6 +2645,8 @@ export async function reviewResearchUpdate(args: {
       isNegotiable: p.isNegotiable,
       notes: p.notes,
       source: p.source,
+      // Stage 6a — preserve the approved update's as-of date, same as manual edits.
+      ...(promotedAsOfDate ? { asOfDate: promotedAsOfDate } : {}),
       isActive: true as const,
     };
     // Round 97 — persist extendedFields from structured extraction if present.

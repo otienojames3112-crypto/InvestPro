@@ -178,3 +178,20 @@ export function formatLocalYmd(input: number | string | Date | null | undefined)
   const day = String(d.getDate()).padStart(2, "0");
   return `${y}-${m}-${day}`;
 }
+
+/**
+ * Stage 6b — a compact "Source: X · as of Y" provenance line for a Holdings row,
+ * shared across MMF/Government/Bank so wording and date formatting can never drift
+ * between tabs (mirrors the pattern OtherAssets.tsx originated). Never returns a
+ * blank source — falls back to `fallbackSource` (e.g. "manual entry" or "No source
+ * on record") when there is none, so a figure never reads as sourced when it isn't.
+ */
+export function formatSourceProvenance(
+  source: string | null | undefined,
+  asOf: string | number | Date | null | undefined,
+  fallbackSource = "No source on record",
+): string {
+  const src = source && String(source).trim() !== "" ? String(source).trim() : fallbackSource;
+  const asOfLabel = asOf ? new Date(asOf).toLocaleDateString() : null;
+  return asOfLabel ? `Source: ${src} · as of ${asOfLabel}` : `Source: ${src}`;
+}

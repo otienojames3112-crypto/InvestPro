@@ -5,7 +5,7 @@ import { usePortfolio } from "@/contexts/PortfolioContext";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { invalidatePortfolioMoney } from "@/lib/invalidatePortfolioMoney";
-import { formatKES } from "@/lib/format";
+import { formatKES, formatSourceProvenance } from "@/lib/format";
 import { earlyBreakWhatIf } from "@shared/actuals";
 import {
   isTermBankInstrument,
@@ -347,6 +347,14 @@ export default function BankHoldings({ embedded: _embedded = false }: { embedded
                           </div>
                         );
                       })()}
+                      {/* Stage 6b — compact source/as-of provenance line */}
+                      <p className="mt-1 text-[10px] text-muted-foreground">
+                        {formatSourceProvenance(
+                          (h.holdingSnapshot as { sourceUrl?: string | null } | null)?.sourceUrl,
+                          (h.holdingSnapshot as { sourceAsOfDate?: string | null } | null)?.sourceAsOfDate ?? h.rateAsOfDate,
+                          "manual entry",
+                        )}
+                      </p>
                     </TableCell>
                     <TableCell>
                       <Badge className="bg-sky-500/15 text-sky-300 border-sky-500/30 text-xs">

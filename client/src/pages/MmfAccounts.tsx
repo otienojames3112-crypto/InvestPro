@@ -4,7 +4,7 @@ import { usePortfolio } from "@/contexts/PortfolioContext";
 import { useSelectedFund } from "@/hooks/useSelectedFund";
 import { trpc } from "@/lib/trpc";
 import { invalidatePortfolioMoney } from "@/lib/invalidatePortfolioMoney";
-import { formatKES } from "@/lib/format";
+import { formatKES, formatSourceProvenance } from "@/lib/format";
 import { dashboardHref } from "@shared/navigation";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -61,7 +61,7 @@ import { toast } from "sonner";
  */
 export default function MmfAccounts({ embedded: _embedded = false }: { embedded?: boolean } = {}) {
   const { portfolioId } = usePortfolio();
-  const { fundName, fundCompany, fundEar, hasFund } = useSelectedFund();
+  const { fundName, fundCompany, fundEar, hasFund, fundId } = useSelectedFund();
   const utils = trpc.useUtils();
 
   const { data: summary } = trpc.deposits.summary.useQuery(
@@ -162,6 +162,12 @@ export default function MmfAccounts({ embedded: _embedded = false }: { embedded?
 
   const totalMmf = useMemo(() => primaryBalance + secondaryBalance, [primaryBalance, secondaryBalance]);
 
+  // Stage 6b — the primary fund's source/as-of live on the catalogue row (funds is
+  // already fetched for the "switch fund" dropdown); cross-reference by id rather
+  // than adding a new query.
+  const primaryFund = funds.find((f) => f.id === fundId) ?? null;
+  const primaryProvenance = formatSourceProvenance(primaryFund?.source, primaryFund?.asOfDate);
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -238,6 +244,7 @@ export default function MmfAccounts({ embedded: _embedded = false }: { embedded?
                 <p className="text-xs text-muted-foreground">
                   {fundCompany} · {fundEar.toFixed(2)}% EAR (gross) · {formatKES(primaryBalance)} held
                 </p>
+                <p className="text-[11px] text-muted-foreground">{primaryProvenance}</p>
               </>
             ) : (
               <p className="text-sm text-muted-foreground">
@@ -291,6 +298,9 @@ export default function MmfAccounts({ embedded: _embedded = false }: { embedded?
                     {Number(s.monthlyContribution) > 0
                       ? ` · +${formatKES(s.monthlyContribution)}/mo`
                       : ""}
+                  </p>
+                  <p className="text-[11px] text-muted-foreground truncate">
+                    {formatSourceProvenance(s.holdingSnapshot?.sourceUrl, s.holdingSnapshot?.sourceAsOfDate)}
                   </p>
                 </div>
                 <p className="text-sm font-mono font-semibold text-foreground tabular-nums">

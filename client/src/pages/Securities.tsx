@@ -3,7 +3,7 @@ import { useSimulatedNow } from "@/hooks/useSimulatedNow";
 import { AppShell } from "@/components/AppShell";
 import { trpc } from "@/lib/trpc";
 import { invalidatePortfolioMoney } from "@/lib/invalidatePortfolioMoney";
-import { formatKES, formatPct, getSecurityLabel } from "@/lib/format";
+import { formatKES, formatPct, getSecurityLabel, formatSourceProvenance } from "@/lib/format";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -928,6 +928,16 @@ export default function Securities({ embedded = false }: { embedded?: boolean } 
                       };
                       const currentValue = currentSecurityValue(cvLot, new Date(effectiveNowMs));
                       const progress = accretionProgress(cvLot, new Date(effectiveNowMs));
+                      // Stage 6b — source/provenance tooltip, distinct from the header's
+                      // simulation "Valued as of" badge (that's a computed-value date, this
+                      // is where the FIGURES came from). Prefer dataSource/dataAsOf (live
+                      // columns), fall back to the frozen holdingSnapshot, else "manual entry".
+                      const snapProv = s.holdingSnapshot as { sourceUrl?: string | null; sourceAsOfDate?: string | null } | null;
+                      const provenanceLabel = formatSourceProvenance(
+                        s.dataSource ?? snapProv?.sourceUrl,
+                        s.dataAsOf ?? snapProv?.sourceAsOfDate,
+                        "manual entry",
+                      );
                       // For discount lots the meaningful gain is current − purchase price
                       // (it accretes UP toward face); for coupon bonds it's the accrued
                       // coupon above par (current − face).
@@ -947,6 +957,9 @@ export default function Securities({ embedded = false }: { embedded?: boolean } 
                                   <Link2 className="w-3 h-3 text-primary/70" />
                                 </span>
                               )}
+                              <span title={provenanceLabel} aria-label={provenanceLabel}>
+                                <Info className="w-3 h-3 text-muted-foreground/60" />
+                              </span>
                             </div>
                           </td>
                           <td className="px-4 py-3 text-right font-semibold text-foreground kes-amount">

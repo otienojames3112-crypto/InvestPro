@@ -27,10 +27,19 @@ describe("Stage 5 · FindingCard suggestion chips", () => {
   });
 
   it("computes suggestions from finding.missingRules via the shared pure generator", () => {
-    expect(findingCard).toContain("suggestFollowUpQuestions(finding.missingRules ?? [], finding.instrumentName)");
+    // Stage 7c — now also passes parsed candidate-phrase hints as a 3rd argument;
+    // the underlying missingRules/instrumentName wiring is otherwise unchanged.
+    expect(findingCard).toContain(
+      "suggestFollowUpQuestions(finding.missingRules ?? [], finding.instrumentName, candidatePhrases)",
+    );
     expect(askAi).toContain(
       'import { catalogueLabel, suggestFollowUpQuestions, type ReferenceCatalogue } from "@shared/researchPipeline";',
     );
+  });
+
+  it("Stage 7c — parses finding.extractedFields._candidatePhrases safely via the shared parser", () => {
+    expect(findingCard).toContain("parseCandidatePhrases(finding.extractedFields?._candidatePhrases)");
+    expect(askAi).toContain('import { parseCandidatePhrases } from "@shared/candidatePhrases";');
   });
 
   it("chips render ONLY when a composer is available AND there are suggestions", () => {

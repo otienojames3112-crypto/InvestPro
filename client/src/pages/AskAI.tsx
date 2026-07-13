@@ -62,6 +62,7 @@ import {
 } from "lucide-react";
 import { InfoHint } from "@/components/InfoHint";
 import { catalogueLabel, suggestFollowUpQuestions, type ReferenceCatalogue } from "@shared/researchPipeline";
+import { parseCandidatePhrases } from "@shared/candidatePhrases";
 import { SOURCE_CLASS_LABELS, isSourceClass } from "@shared/instrumentProfile";
 import { formatRelativeTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -738,8 +739,12 @@ export function FindingCard({
   const fields = fmtFields(finding.extractedFields);
   const missing = finding.missingFields ?? [];
   // Stage 5 — deterministic, template-based follow-up questions for each missing
-  // gate field (pure, no LLM). Never implies a value was found — only asks.
-  const suggestedFollowUps = suggestFollowUpQuestions(finding.missingRules ?? [], finding.instrumentName);
+  // gate field (pure, no LLM). Never implies a value was found — only asks. Stage
+  // 7c sharpens the wording when Stage 7b's extraction already found a candidate
+  // phrase for that field (parsed safely — malformed/absent JSON just yields no
+  // candidates, falling back to the exact same generic questions as before).
+  const candidatePhrases = parseCandidatePhrases(finding.extractedFields?._candidatePhrases);
+  const suggestedFollowUps = suggestFollowUpQuestions(finding.missingRules ?? [], finding.instrumentName, candidatePhrases);
   const warnings = finding.warnings ?? [];
   const isDrafted = finding.status === "drafted";
   const isDismissed = finding.status === "dismissed";

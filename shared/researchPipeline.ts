@@ -1007,6 +1007,20 @@ export interface SuggestedFollowUp {
 }
 
 /**
+ * Stage 7c — a candidate phrase Stage 7b's structured-extraction wiring found in the
+ * source text for a still-missing field (see shared/candidatePhrases.ts). Deliberately
+ * a minimal STRUCTURAL shape (not an import of `CandidateMatch`) — `candidatePhrases.ts`
+ * already imports `ReferenceCatalogue` from this file, so importing back would create a
+ * cycle. A `CandidateMatch[]` from that module satisfies this shape without any
+ * explicit conversion.
+ */
+export interface FollowUpCandidateHint {
+  key: string;
+  phrase: string;
+  value: string | null;
+}
+
+/**
  * Stage 5 — turn `checkApprovalGate`'s structured `missingRules` into deterministic
  * follow-up questions a manager can send back into the SAME enquiry (reusing the
  * previous source). Pure, no LLM, no field guessing: every question ASKS about a
@@ -1019,18 +1033,31 @@ export interface SuggestedFollowUp {
  * share-capital dividend rate or deposit rebate / interest rate for..."). It DOES
  * special-case a value-assertion rule (label containing "must be"/"must not"),
  * since those read as a wrong-value confirmation, not a blank lookup.
+ *
+ * Stage 7c — an optional `candidates` list (keyed by rule.key) sharpens the question
+ * when Stage 7b found a synonym phrase for that field: it names the exact phrase/
+ * value seen and asks the manager to CONFIRM it, never states it as fact and never
+ * implies the field is now satisfied. A rule with no matching candidate (or when
+ * `candidates` is omitted entirely) gets the exact same generic question as before —
+ * this is purely additive, never a behaviour change for the no-candidate case.
  */
 export function suggestFollowUpQuestions(
   missingRules: { key: string; label: string }[],
   instrumentName: string,
+  candidates?: FollowUpCandidateHint[],
 ): SuggestedFollowUp[] {
-  return missingRules.map((rule) => ({
-    key: rule.key,
-    label: rule.label,
-    question: /\bmust (be|not)\b/i.test(rule.label)
-      ? `The source doesn't clearly confirm: ${rule.label}. Can you check ${instrumentName} again and confirm?`
-      : `Can you check the source again for the ${rule.label} for this ${instrumentName}?`,
-  }));
+  const candidateByKey = new Map((candidates ?? []).map((c) => [c.key, c]));
+  return missingRules.map((rule) => {
+    const candidate = candidateByKey.get(rule.key);
+    const question = candidate
+      ? candidate.value
+        ? `I found '${candidate.phrase}: ${candidate.value}' in the source. Should this be used as the ${rule.label} for this ${instrumentName}?`
+        : `I found '${candidate.phrase}' in the source, near where the ${rule.label} would be. Can you check whether this is the ${rule.label} for this ${instrumentName}?`
+      : /\bmust (be|not)\b/i.test(rule.label)
+        ? `The source doesn't clearly confirm: ${rule.label}. Can you check ${instrumentName} again and confirm?`
+        : `Can you check the source again for the ${rule.label} for this ${instrumentName}?`;
+    return { key: rule.key, label: rule.label, question };
+  });
 }
 
 /**

@@ -203,3 +203,33 @@ export function findCandidatePhrases(
   }
   return results;
 }
+
+/**
+ * Stage 7c — safely parse a finding's hidden `extractedFields._candidatePhrases`
+ * JSON string back into `CandidateMatch[]`. NEVER throws: absent, malformed JSON,
+ * a non-array payload, or an array containing anything not shaped like a
+ * `CandidateMatch` all fall back to an empty array rather than propagating an
+ * error to the caller (a UI render path). Structural validation only — this does
+ * not re-verify the phrase actually exists in any source text (that already
+ * happened once, at extraction time, in findCandidatePhrases above).
+ */
+export function parseCandidatePhrases(raw: unknown): CandidateMatch[] {
+  if (typeof raw !== "string" || raw.trim() === "") return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parsed)) return [];
+  return parsed.filter((c): c is CandidateMatch => {
+    if (!c || typeof c !== "object") return false;
+    const o = c as Record<string, unknown>;
+    return (
+      typeof o.key === "string" &&
+      typeof o.label === "string" &&
+      typeof o.phrase === "string" &&
+      (o.value === null || typeof o.value === "string")
+    );
+  });
+}

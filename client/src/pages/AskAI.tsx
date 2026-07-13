@@ -91,6 +91,26 @@ const SCOPE_OPTIONS: { value: string; label: string }[] = [
 
 type Scope = "any" | "mmf" | "bank" | "cbk" | "market_asset" | "macro";
 
+/**
+ * Market-asset search design (2026-07-13) — the "Asset type" selector shown only
+ * when Focus = "Market assets". Deliberately limited to the four subtypes that
+ * already have a registered route in `authoritativeSourcesFor("market_asset", ...)`
+ * (shared/authoritativeSources.ts) — ETF/property/pension/other have NO route there
+ * and are intentionally excluded, not just deferred by omission. Subtype is set
+ * ONLY by explicit manager selection here — never inferred from the question text.
+ * This foundation slice only collects the value; it is not yet sent to the server
+ * or consulted by search (that wiring is later, staged per-subtype: REIT, then
+ * equity, then offshore fund, then SACCO).
+ */
+type MarketAssetSubtype = "equity" | "reit" | "offshore_fund" | "sacco";
+
+const MARKET_ASSET_SUBTYPE_OPTIONS: { value: MarketAssetSubtype; label: string }[] = [
+  { value: "equity", label: "Equity" },
+  { value: "reit", label: "REIT" },
+  { value: "offshore_fund", label: "Offshore fund" },
+  { value: "sacco", label: "SACCO" },
+];
+
 const CONFIDENCE_META: Record<string, { label: string; className: string }> = {
   low: { label: "low confidence", className: "bg-rose-500/10 text-rose-600 border-rose-500/20" },
   medium: { label: "medium confidence", className: "bg-amber-500/10 text-amber-600 border-amber-500/20" },
@@ -1707,6 +1727,11 @@ function OpeningPanel({ onStarted }: { onStarted: (threadId: number) => void }) 
   // manual source is attached. CBK-only; reset whenever Focus leaves "cbk" so a
   // stale checked-but-disabled checkbox never lingers.
   const [allowSearch, setAllowSearch] = useState(false);
+  // Market-asset search design (2026-07-13) — explicit subtype, required before a
+  // future market-asset search can be enabled. Reset whenever Focus leaves
+  // "market_asset" (see the Focus onValueChange below) so a stale selection never
+  // lingers. NOT yet sent to the server and NOT consulted by search in this slice.
+  const [marketAssetSubtype, setMarketAssetSubtype] = useState<MarketAssetSubtype | "">("");
   const [sourceStatus, setSourceStatus] = useState<SourceStatus | null>(null);
   // Round 102 — intake mode: "ask" (default conversational) or "extract" (force structured extraction).
   const [intakeMode, setIntakeMode] = useState<"ask" | "extract">("ask");
@@ -1863,6 +1888,7 @@ function OpeningPanel({ onStarted }: { onStarted: (threadId: number) => void }) 
               onValueChange={(v) => {
                 setScope(v as Scope);
                 if (v !== "cbk" && v !== "mmf" && v !== "bank") setAllowSearch(false);
+                if (v !== "market_asset") setMarketAssetSubtype("");
               }}
             >
               <SelectTrigger className="w-[180px] bg-background">
@@ -1877,6 +1903,32 @@ function OpeningPanel({ onStarted }: { onStarted: (threadId: number) => void }) 
               </SelectContent>
             </Select>
           </div>
+          {/* Market-asset search design (2026-07-13) — explicit "Asset type" selector,
+              shown only for Focus = "Market assets". Limited to the four subtypes that
+              have a registered authoritative-source route (equity/REIT/offshore fund/
+              SACCO) — ETF/property/pension/other are deliberately excluded, not just
+              deferred. Foundation-only: this value is not yet sent to the server and
+              market-asset search remains disabled/not actionable regardless of it. */}
+          {scope === "market_asset" && (
+            <div className="space-y-1">
+              <Label className="text-xs text-muted-foreground">Asset type</Label>
+              <Select value={marketAssetSubtype} onValueChange={(v) => setMarketAssetSubtype(v as MarketAssetSubtype)}>
+                <SelectTrigger className="w-[180px] bg-background">
+                  <SelectValue placeholder="Select asset type…" />
+                </SelectTrigger>
+                <SelectContent>
+                  {MARKET_ASSET_SUBTYPE_OPTIONS.map((o) => (
+                    <SelectItem key={o.value} value={o.value}>
+                      {o.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-[11px] text-muted-foreground max-w-[180px]">
+                Required before AI search for market assets can be enabled (coming soon).
+              </p>
+            </div>
+          )}
           {/* Round 102 — intake mode selector */}
           <div className="space-y-1">
             <Label className="text-xs text-muted-foreground">Mode</Label>

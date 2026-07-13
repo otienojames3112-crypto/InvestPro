@@ -1408,7 +1408,7 @@ function Conversation({ threadId, onExit }: { threadId: number; onExit: () => vo
           source: source ?? undefined,
           sourceLabel: label ?? undefined,
           allowUnsourced: source ? allowUnsourced : undefined,
-          allowSearch: !source && data?.thread?.scope === "cbk" ? allowSearch : undefined,
+          allowSearch: !source && (data?.thread?.scope === "cbk" || data?.thread?.scope === "mmf") ? allowSearch : undefined,
           sourceMode: mode,
           intakeMode: effectiveIntakeMode,
         });
@@ -1554,28 +1554,39 @@ function Conversation({ threadId, onExit }: { threadId: number; onExit: () => vo
             </div>
           )}
           {/* Step 4.2b-iii — search opt-in, offered only when no manual source is
-              attached this turn (manual source always wins). CBK-only for now. */}
+              attached this turn (manual source always wins). CBK and MMF (Stage 7e). */}
           {!src.provided && (
             <label
               className={cn(
                 "flex items-start gap-2 rounded-md border border-border bg-background px-3 py-2 text-xs cursor-pointer",
-                thread?.scope === "cbk" ? "text-muted-foreground" : "text-muted-foreground/60 cursor-not-allowed",
+                thread?.scope === "cbk" || thread?.scope === "mmf"
+                  ? "text-muted-foreground"
+                  : "text-muted-foreground/60 cursor-not-allowed",
               )}
             >
               <input
                 type="checkbox"
                 className="mt-0.5 accent-primary"
                 checked={allowSearch}
-                disabled={thread?.scope !== "cbk"}
+                disabled={thread?.scope !== "cbk" && thread?.scope !== "mmf"}
                 onChange={(e) => setAllowSearch(e.target.checked)}
               />
               <span>
-                <span className={cn("font-medium", thread?.scope === "cbk" ? "text-foreground" : "text-muted-foreground")}>
-                  Search authoritative CBK sources if I don&rsquo;t attach a source.
+                <span
+                  className={cn(
+                    "font-medium",
+                    thread?.scope === "cbk" || thread?.scope === "mmf" ? "text-foreground" : "text-muted-foreground",
+                  )}
+                >
+                  {thread?.scope === "mmf"
+                    ? "Search for a cited fund-manager source if I don’t attach a source."
+                    : "Search authoritative CBK sources if I don’t attach a source."}
                 </span>{" "}
                 {thread?.scope === "cbk"
                   ? "The AI looks up a current, cited CBK source — never from its own memory — and grounds the answer in it, exactly as if you’d pasted the link yourself."
-                  : "Only available for enquiries focused on “CBK securities.”"}
+                  : thread?.scope === "mmf"
+                    ? "The AI searches for a current, cited fund-manager factsheet (or CMA data as a cross-check) — never from its own memory. MMF sources vary by fund manager, so please verify the cited source before relying on it."
+                    : "Only available for enquiries focused on “CBK securities” or “MMF market.”"}
               </span>
             </label>
           )}
@@ -1718,7 +1729,7 @@ function OpeningPanel({ onStarted }: { onStarted: (threadId: number) => void }) 
           source: source ?? undefined,
           sourceLabel: label ?? undefined,
           allowUnsourced: source ? allowUnsourced : undefined,
-          allowSearch: !source && scope === "cbk" ? allowSearch : undefined,
+          allowSearch: !source && (scope === "cbk" || scope === "mmf") ? allowSearch : undefined,
           intakeMode,
         });
         return { taskId: started.taskId, threadId: started.threadId };
@@ -1798,28 +1809,37 @@ function OpeningPanel({ onStarted }: { onStarted: (threadId: number) => void }) 
           </label>
         )}
         {/* Step 4.2b-iii — search opt-in, offered only when no manual source is attached
-            (manual source always wins). CBK-only for this first slice. */}
+            (manual source always wins). CBK and MMF (Stage 7e). */}
         {!src.provided && (
           <label
             className={cn(
               "flex items-start gap-2 rounded-md border border-border bg-background px-3 py-2 text-xs cursor-pointer",
-              scope === "cbk" ? "text-muted-foreground" : "text-muted-foreground/60 cursor-not-allowed",
+              scope === "cbk" || scope === "mmf" ? "text-muted-foreground" : "text-muted-foreground/60 cursor-not-allowed",
             )}
           >
             <input
               type="checkbox"
               className="mt-0.5 accent-primary"
               checked={allowSearch}
-              disabled={scope !== "cbk"}
+              disabled={scope !== "cbk" && scope !== "mmf"}
               onChange={(e) => setAllowSearch(e.target.checked)}
             />
             <span>
-              <span className={cn("font-medium", scope === "cbk" ? "text-foreground" : "text-muted-foreground")}>
-                Search authoritative CBK sources if I don&rsquo;t attach a source.
+              <span
+                className={cn(
+                  "font-medium",
+                  scope === "cbk" || scope === "mmf" ? "text-foreground" : "text-muted-foreground",
+                )}
+              >
+                {scope === "mmf"
+                  ? "Search for a cited fund-manager source if I don’t attach a source."
+                  : "Search authoritative CBK sources if I don’t attach a source."}
               </span>{" "}
               {scope === "cbk"
                 ? "The AI looks up a current, cited CBK source — never from its own memory — and grounds the answer in it, exactly as if you’d pasted the link yourself."
-                : "Only available when Focus (below) is set to “CBK securities.”"}
+                : scope === "mmf"
+                  ? "The AI searches for a current, cited fund-manager factsheet (or CMA data as a cross-check) — never from its own memory. MMF sources vary by fund manager, so please verify the cited source before relying on it."
+                  : "Only available when Focus (below) is set to “CBK securities” or “MMF market.”"}
             </span>
           </label>
         )}
@@ -1830,7 +1850,7 @@ function OpeningPanel({ onStarted }: { onStarted: (threadId: number) => void }) 
               value={scope}
               onValueChange={(v) => {
                 setScope(v as Scope);
-                if (v !== "cbk") setAllowSearch(false);
+                if (v !== "cbk" && v !== "mmf") setAllowSearch(false);
               }}
             >
               <SelectTrigger className="w-[180px] bg-background">

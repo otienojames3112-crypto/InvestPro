@@ -8542,8 +8542,8 @@ export const appRouter = router({
           input.allowUnsourced ?? false,
         );
 
-        // Step 4.2b-ii — AI search (CBK only), attempted ONLY when nothing was
-        // manually attached and the manager explicitly opted in. A found citation
+        // Step 4.2b-ii — AI search (CBK, MMF — Stage 7e), attempted ONLY when nothing
+        // was manually attached and the manager explicitly opted in. A found citation
         // becomes an ordinary url source and flows through the UNCHANGED read/
         // extract pipeline below — search only ever finds a source, never answers
         // on its own. See aiResearchService.ts's Step 4.2b-ii block for the rules.
@@ -8721,7 +8721,7 @@ export const appRouter = router({
         // is never stored in the small source_ref column and the file is read exactly once.
         pending = await materializeUploadSource(pending, pendingLabel, input.allowUnsourced ?? false);
 
-        // Step 4.2b-ii — AI search (CBK only); identical rule to `ask` above.
+        // Step 4.2b-ii — AI search (CBK, MMF — Stage 7e); identical rule to `ask` above.
         if (shouldAttemptSearch({ hasManualSource: Boolean(pending), allowSearch: input.allowSearch ?? false })) {
           const resolution = await resolveSearchSource({
             scope: input.scope as ResearchScope,

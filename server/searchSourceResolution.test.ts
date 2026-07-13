@@ -1,6 +1,6 @@
 /**
  * Stage 4, Step 4.2b-ii — wiring searchAuthoritativeSource() into the research flow
- * (CBK only), behind an explicit `allowSearch` opt-in.
+ * (CBK, and MMF as of Stage 7e), behind an explicit `allowSearch` opt-in.
  *
  * These tests exercise `shouldAttemptSearch`, `resolveSearchSource`, and
  * `searchFoundLabel` directly from aiResearchService.ts — the pure/injectable layer
@@ -35,6 +35,20 @@ function okResult(overrides?: Partial<Extract<SearchSourceResult, { ok: true }>>
   };
 }
 
+function okMmfResult(overrides?: Partial<Extract<SearchSourceResult, { ok: true }>>): SearchSourceResult {
+  return {
+    ok: true,
+    kind: "search",
+    text: "Example MMF's EAR is 11.85% as of 2026-07-10.",
+    citations: [{ url: "https://www.example-am.co.ke/mmf/factsheet.pdf", title: "Example MMF Factsheet" }],
+    sourceLabel: "The fund manager's own factsheet",
+    catalogue: "mmf",
+    subtype: null,
+    searchedAt: Date.now(),
+    ...overrides,
+  };
+}
+
 describe("Stage 4.2b-ii · shouldAttemptSearch (pure)", () => {
   it("1. CBK + no manual source + allowSearch:true → true (the only case that fires)", () => {
     expect(shouldAttemptSearch({ hasManualSource: false, allowSearch: true })).toBe(true);
@@ -51,17 +65,34 @@ describe("Stage 4.2b-ii · shouldAttemptSearch (pure)", () => {
 });
 
 describe("Stage 4.2b-ii · resolveSearchSource", () => {
-  it("3. a non-CBK scope returns a clear unsupported-scope result and never calls the search impl", async () => {
+  it("3. an unsupported scope (bank) returns a clear unsupported-scope result and never calls the search impl", async () => {
     const searchImpl = vi.fn();
     const resolution = await resolveSearchSource({
-      scope: "mmf",
-      question: "What is the top MMF yield?",
+      scope: "bank",
+      question: "What is the top bank fixed deposit rate?",
       allowUnsourced: false,
       searchImpl: searchImpl as unknown as typeof import("./_core/webSearch").searchAuthoritativeSource,
     });
     expect(resolution.outcome).toBe("unsupported_scope");
     if (resolution.outcome === "unsupported_scope") expect(resolution.message).toBe(UNSUPPORTED_SEARCH_SCOPE_MESSAGE);
     expect(searchImpl).not.toHaveBeenCalled();
+  });
+
+  it("3b. market_asset is also unsupported (Stage 7e only enables cbk + mmf)", async () => {
+    const searchImpl = vi.fn();
+    const resolution = await resolveSearchSource({
+      scope: "market_asset",
+      question: "What is the NSE price of this REIT?",
+      allowUnsourced: false,
+      searchImpl: searchImpl as unknown as typeof import("./_core/webSearch").searchAuthoritativeSource,
+    });
+    expect(resolution.outcome).toBe("unsupported_scope");
+    expect(searchImpl).not.toHaveBeenCalled();
+  });
+
+  it("3c. the unsupported-scope message mentions both supported scopes (CBK and MMF)", () => {
+    expect(UNSUPPORTED_SEARCH_SCOPE_MESSAGE).toMatch(/CBK/);
+    expect(UNSUPPORTED_SEARCH_SCOPE_MESSAGE).toMatch(/MMF/);
   });
 
   it("4. a successful CBK search resolves to a url source with the real citation URL and a label carrying the title + 'AI search' wording", async () => {
@@ -83,6 +114,30 @@ describe("Stage 4.2b-ii · resolveSearchSource", () => {
       expect(resolution.label).toContain("CBK Weekly Bulletin");
     }
     expect(searchImpl).toHaveBeenCalledWith(expect.objectContaining({ catalogue: "cbk" }));
+  });
+
+  it("4b. Stage 7e — a successful MMF search resolves to a url source, calling searchImpl with catalogue mmf", async () => {
+    const searchImpl = vi.fn().mockResolvedValue(okMmfResult());
+    const resolution = await resolveSearchSource({
+      scope: "mmf",
+      question: "What is the top MMF EAR right now?",
+      allowUnsourced: false,
+      searchImpl,
+    });
+    expect(resolution.outcome).toBe("found");
+    if (resolution.outcome === "found") {
+      expect(resolution.source).toEqual({
+        kind: "url",
+        url: "https://www.example-am.co.ke/mmf/factsheet.pdf",
+      });
+      expect(resolution.label).toMatch(/^AI search:/);
+      expect(resolution.label).toContain("Example MMF Factsheet");
+    }
+    expect(searchImpl).toHaveBeenCalledWith(expect.objectContaining({ catalogue: "mmf" }));
+  });
+
+  it("4c. Stage 7e — a manual source prevents MMF search from ever being attempted (shouldAttemptSearch gate, scope-agnostic)", () => {
+    expect(shouldAttemptSearch({ hasManualSource: true, allowSearch: true })).toBe(false);
   });
 
   it("5a. a search failure with allowUnsourced:false blocks — never a silent fallback to general model memory", async () => {
@@ -112,6 +167,36 @@ describe("Stage 4.2b-ii · resolveSearchSource", () => {
     const resolution = await resolveSearchSource({
       scope: "cbk",
       question: "What is the current 91-day T-bill rate?",
+      allowUnsourced: true,
+      searchImpl,
+    });
+    expect(resolution.outcome).toBe("search_failed_unsourced");
+  });
+
+  it("5c. Stage 7e — an MMF search failure with allowUnsourced:false blocks, same rule as CBK", async () => {
+    const searchImpl = vi.fn().mockResolvedValue({
+      ok: false,
+      reason: "no_citations",
+      message: "The search returned no real URL citations.",
+    } satisfies SearchSourceResult);
+    const resolution = await resolveSearchSource({
+      scope: "mmf",
+      question: "What is the top MMF EAR right now?",
+      allowUnsourced: false,
+      searchImpl,
+    });
+    expect(resolution.outcome).toBe("search_failed_blocked");
+  });
+
+  it("5d. Stage 7e — the SAME MMF search failure with allowUnsourced:true does not block", async () => {
+    const searchImpl = vi.fn().mockResolvedValue({
+      ok: false,
+      reason: "no_citations",
+      message: "The search returned no real URL citations.",
+    } satisfies SearchSourceResult);
+    const resolution = await resolveSearchSource({
+      scope: "mmf",
+      question: "What is the top MMF EAR right now?",
       allowUnsourced: true,
       searchImpl,
     });

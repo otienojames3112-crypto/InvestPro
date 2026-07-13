@@ -939,7 +939,7 @@ export async function transcribeSourceToText(
   return { text: contentToText(res.choices?.[0]?.message?.content).trim(), model: res.model ?? null };
 }
 
-/* ── Stage 4, Step 4.2b-ii — AI SEARCH source resolution (CBK only) ──────────
+/* ── Stage 4, Step 4.2b-ii — AI SEARCH source resolution (CBK, MMF) ──────────
  *
  * When a manager asks a question with NO manual source attached and opts into
  * `allowSearch`, the caller (routers.ts) looks up an authoritative source via
@@ -949,8 +949,16 @@ export async function transcribeSourceToText(
  * (including the Step 4.2b-i PDF-URL fix) — search only ever FINDS a source, it
  * never becomes the answer by itself.
  *
- * Deliberately scoped to CBK only for this first slice (Step 4.1's routing table
- * also covers mmf/bank/market_asset, but those stay off until this is proven live).
+ * Deliberately scoped to CBK and MMF only (Stage 7e). Step 4.1's routing table also
+ * covers bank/market_asset, but those stay off until each is separately proven live
+ * (bank is Stage 7f). Unlike CBK's fixed CBK/DhowCSD domains, MMF has NO fixed
+ * allowed domain — `authoritativeSourcesFor("mmf")` deliberately leaves `domains: []`
+ * on its primary source because the real source varies per fund manager (CIC,
+ * Sanlam, Britam, Cytonn, ...). A found MMF citation is real and grounded (the
+ * `no_citations` guardrail in webSearch.ts still applies — an uncited answer is
+ * never treated as a source), but it is NOT guaranteed to come from one known,
+ * pre-vetted domain the way a CBK citation is. The UI copy for MMF must stay honest
+ * about that difference — see AskAI.tsx's Step 4.2b-iii block.
  *
  * A search-found citation is stamped with `sourceKind: "url"` — NOT a new "search"
  * kind — because `source_kind` is a fixed-value MySQL ENUM on three tables
@@ -979,9 +987,9 @@ export function searchFailureMessage(result: Extract<SearchSourceResult, { ok: f
   }
 }
 
-/** Human message when `allowSearch` was requested outside the one scope it supports. */
+/** Human message when `allowSearch` was requested outside the scopes it supports. */
 export const UNSUPPORTED_SEARCH_SCOPE_MESSAGE =
-  'AI search is only available for the CBK scope right now. Switch Focus to "CBK", or attach a source manually.';
+  'AI search is only available for the CBK and MMF scopes right now. Switch Focus to "CBK" or "MMF", or attach a source manually.';
 
 /** A display label that makes a search-found source visibly distinct from a
  *  manually-attached one, without inventing a new persisted source kind. */
@@ -1003,9 +1011,9 @@ export type SearchSourceResolution =
   | { outcome: "search_failed_unsourced" };
 
 /**
- * Resolve an `allowSearch` opt-in into a source, CBK-only. Callers should only
- * invoke this after confirming `shouldAttemptSearch(...)` — this function does not
- * re-check for a manual source, only the CBK-only scope restriction.
+ * Resolve an `allowSearch` opt-in into a source — CBK and MMF only (Stage 7e).
+ * Callers should only invoke this after confirming `shouldAttemptSearch(...)` — this
+ * function does not re-check for a manual source, only the scope restriction.
  */
 export async function resolveSearchSource(args: {
   scope: ResearchScope;
@@ -1014,11 +1022,11 @@ export async function resolveSearchSource(args: {
   /** Injected for tests — defaults to the real Step 4.2a wrapper. */
   searchImpl?: typeof searchAuthoritativeSource;
 }): Promise<SearchSourceResolution> {
-  if (args.scope !== "cbk") {
+  if (args.scope !== "cbk" && args.scope !== "mmf") {
     return { outcome: "unsupported_scope", message: UNSUPPORTED_SEARCH_SCOPE_MESSAGE };
   }
   const search = args.searchImpl ?? searchAuthoritativeSource;
-  const result = await search({ catalogue: "cbk", question: args.question });
+  const result = await search({ catalogue: args.scope, question: args.question });
   if (!result.ok) {
     if (args.allowUnsourced) return { outcome: "search_failed_unsourced" };
     return { outcome: "search_failed_blocked", message: searchFailureMessage(result) };

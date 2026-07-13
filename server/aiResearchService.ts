@@ -2047,12 +2047,52 @@ export function structuredInstrumentToDraft(
     candidatePhrases = findCandidatePhrases(sourceText, [...gateMissing, ...extraTargets], "cbk");
   }
 
+  // Stage 7d — MMF-only: the benchmark/factsheet date the extraction schema captured
+  // (MMF_EXTRACTION_SCHEMA.benchmarkDate), mirroring the CBK auctionDate→sourceAsOf
+  // bridge further below. Narrow and defensive: only a non-empty, non-sentinel string,
+  // only for the mmf catalogue, and only ever a CANDIDATE for `sourceAsOf` — never
+  // invented. `??` at the final sourceAsOf computation means this never overwrites a
+  // stronger sourceAsOf if one is ever added for mmf elsewhere in this function (there
+  // isn't one today).
+  const mmfBenchmarkAsOf =
+    targetCatalogue === "mmf" &&
+    typeof sharedFields?.benchmarkDate === "string" &&
+    sharedFields.benchmarkDate.trim() !== "" &&
+    sharedFields.benchmarkDate !== MISSING_FROM_SOURCE
+      ? sharedFields.benchmarkDate.trim()
+      : null;
+  const mmfBenchmarkAsOfMs =
+    mmfBenchmarkAsOf && Number.isFinite(Date.parse(mmfBenchmarkAsOf)) ? Date.parse(mmfBenchmarkAsOf) : null;
+
   // Round 103 — FIELD NORMALIZATION. Map extraction-schema names to catalogue
   // canonical names so the approval gate recognizes them (e.g. effectiveAnnualRate → ear).
   const normalised = normaliseExtractionFields(figures, targetCatalogue);
   // Merge normalized keys back into figures (canonical keys added alongside originals)
   for (const [k, v] of Object.entries(normalised)) {
     if (!(k in figures)) figures[k] = v;
+  }
+
+  // Stage 7d — MMF-only candidate-phrase detection (pure, no LLM call), same
+  // established pattern as Stage 7b's CBK block above. Runs AFTER normalisation so
+  // `figures` already carries the CANONICAL mmf keys (ear/minInvestment/yieldPct) the
+  // gate and the MMF synonym dictionary both key off — scanning the pre-normalisation
+  // raw schema names (effectiveAnnualRate/minimumInvestment) would wrongly report an
+  // already-extracted field as missing. Unlike CBK, mmf figures are never sentinel-
+  // filled by the NEVER_INVENT_FIELDS loop above (that loop only fires for
+  // targetCatalogue === "cbk"), so there is no known gap between the gate's own
+  // missingRules and what's genuinely still needed — no separate widened scan list is
+  // required here, unlike the CBK block's extraTargets. Passing the resolved
+  // `mmfBenchmarkAsOfMs` means a benchmark date already bridged to `sourceAsOf` (below)
+  // correctly reads as PRESENT here, so it never also produces a redundant "as-of"
+  // candidate for the very date that's already being used.
+  if (targetCatalogue === "mmf" && sourceText) {
+    const gateMissing = missingRulesForFinding("mmf", figures, {
+      name,
+      assetClass,
+      currency: typeof raw.currency === "string" ? raw.currency : "KES",
+      asOf: mmfBenchmarkAsOfMs,
+    });
+    candidatePhrases = findCandidatePhrases(sourceText, gateMissing, "mmf");
   }
 
   const warnings: string[] = Array.isArray(raw.warnings)
@@ -2137,13 +2177,16 @@ export function structuredInstrumentToDraft(
   // back-fills sourceLabel/sourceUrl). Deliberately narrow to the T-bill auction
   // classes: settlement/value date is a DIFFERENT field (already carried separately
   // in `figures.valueDate`) and must never be conflated with as-of here.
+  // Stage 7d adds the MMF equivalent as a fallback: `mmfBenchmarkAsOf` is only ever
+  // non-null for the mmf catalogue (computed above), so the two conditions can never
+  // both apply to the same draft.
   const sourceAsOf =
     (sourceClass === "cbk_tbill_auction" || sourceClass === "cbk_tbill_auction_result") &&
     typeof sharedFields?.auctionDate === "string" &&
     sharedFields.auctionDate.trim() !== "" &&
     sharedFields.auctionDate !== MISSING_FROM_SOURCE
       ? sharedFields.auctionDate.trim()
-      : null;
+      : mmfBenchmarkAsOf;
 
   return {
     instrumentName: name,

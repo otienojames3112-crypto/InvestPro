@@ -78,7 +78,11 @@ const CBK_SYNONYMS: FieldSynonyms[] = [
 ];
 
 const MMF_SYNONYMS: FieldSynonyms[] = [
-  { key: "ear", label: "gross yield or EAR", synonyms: ["effective annual rate", "effective yield", "net yield"] },
+  {
+    key: "ear",
+    label: "gross yield or EAR",
+    synonyms: ["effective annual rate", "effective yield", "net yield", "gross yield", "daily yield"],
+  },
   { key: "managementFee", label: "management fee", synonyms: ["annual management fee", "management fee"] },
   {
     key: "minInvestment",

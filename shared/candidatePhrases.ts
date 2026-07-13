@@ -74,6 +74,7 @@ const CBK_SYNONYMS: FieldSynonyms[] = [
   { key: "couponRate", label: "coupon rate", synonyms: ["coupon rate", "interest rate"] },
   { key: "auctionDate", label: "auction date", synonyms: ["auction date", "sale date"] },
   { key: "issueNumber", label: "issue number", synonyms: ["issue number", "issue no.", "issue no"] },
+  { key: "cleanPrice", label: "clean price", synonyms: ["price per kshs 100", "price per 100", "clean price"] },
 ];
 
 const MMF_SYNONYMS: FieldSynonyms[] = [
@@ -126,6 +127,16 @@ function synonymsForCatalogue(catalogue: ReferenceCatalogue): FieldSynonyms[] {
     case "market_asset":
       return MARKET_ASSET_SYNONYMS;
   }
+}
+
+/**
+ * The {key, label} pairs registered for a catalogue's synonym dictionary — lets a
+ * caller (e.g. a candidate-detection call site) know which field keys THIS module
+ * can recognise synonyms for, without needing to know the dictionary's contents or
+ * duplicate it. Read-only lookup data, not gate/approval logic.
+ */
+export function registeredFieldsForCatalogue(catalogue: ReferenceCatalogue): { key: string; label: string }[] {
+  return synonymsForCatalogue(catalogue).map((d) => ({ key: d.key, label: d.label }));
 }
 
 /** Escape a string for safe literal use inside a RegExp. */

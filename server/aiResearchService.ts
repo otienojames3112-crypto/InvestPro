@@ -51,6 +51,7 @@ import {
   CBK_BOND_REQUIRED_FIELDS,
 } from "../shared/instrumentProfile";
 import { searchAuthoritativeSource, type SearchSourceResult } from "./_core/webSearch";
+import { findCandidatePhrases, registeredFieldsForCatalogue, type CandidateMatch } from "../shared/candidatePhrases";
 
 // Stage 4.2b-i — extractPdfText/looksLikeRawBlob now live in aiIntakeService.ts (so
 // fetchDocumentText there can reuse them for a directly-fetched PDF URL without a
@@ -1926,6 +1927,10 @@ export function structuredInstrumentToDraft(
   raw: Record<string, unknown>,
   sourceClass: SourceClass,
   sharedFields?: Record<string, unknown>,
+  /** Stage 7b — the full source text this instrument was extracted from, already
+   *  loaded in memory for this request. Optional and additive: omitting it simply
+   *  skips candidate-phrase detection (existing callers/tests are unaffected). */
+  sourceText?: string,
 ): ResearchFindingDraft | null {
   const name = typeof raw.instrumentName === "string" ? raw.instrumentName.trim() : "";
   if (!name) return null;
@@ -2004,6 +2009,44 @@ export function structuredInstrumentToDraft(
     Object.assign(figures, ruleFilled);
   }
 
+  // Stage 7b — CBK-only candidate-phrase detection (pure, no LLM call). Runs AFTER
+  // the rule-fill above so it only looks for what's STILL missing post-rule-fill,
+  // scanning the source text already loaded in memory for this request — never a
+  // new fetch, never an inferred value (see shared/candidatePhrases.ts's own
+  // guardrails). Computed here, not later in getThread like Stage 5's missingRules,
+  // because this source text is never persisted — it's only available during THIS
+  // extraction call. A candidate is purely informational: it never fills a figure,
+  // never affects the approval gate, never auto-drafts anything. missingRules /
+  // checkApprovalGate themselves are NOT touched by this block — this only builds a
+  // WIDER, separate scan list for candidate detection.
+  let candidatePhrases: CandidateMatch[] = [];
+  if (targetCatalogue === "cbk" && sourceText) {
+    const gateMissing = missingRulesForFinding("cbk", figures, {
+      name,
+      assetClass,
+      currency: typeof raw.currency === "string" ? raw.currency : "KES",
+    });
+    // ALSO scan every CBK-registered synonym key that's genuinely unfilled in
+    // `figures` itself, checked DIRECTLY rather than through the gate's alias-
+    // tolerant figurePresent(). Two reasons the gate's own missingRules understates
+    // what's actually still needed, neither of which this block changes or fixes:
+    //   1. cleanPrice (and others) have no CatalogueFieldRule at all, so they can
+    //      never appear in gateMissing regardless of whether they're filled.
+    //   2. A field's OWN key can be genuinely absent while one of its GATE ALIASES
+    //      (e.g. valueDate's alias "settlementDate") is a NEVER_INVENT_FIELDS key
+    //      that got sentinel-filled to "missing_from_source" — the gate's alias
+    //      tolerance then treats that non-empty sentinel STRING as satisfying the
+    //      field, so it never shows as missing there either. Checking figures[key]
+    //      directly (not the alias list) sidesteps this without touching the gate.
+    const gateKeys = new Set(gateMissing.map((r) => r.key));
+    const extraTargets = registeredFieldsForCatalogue("cbk").filter(({ key }) => {
+      if (gateKeys.has(key)) return false;
+      const v = figures[key];
+      return v === undefined || v === null || String(v).trim() === "" || v === MISSING_FROM_SOURCE;
+    });
+    candidatePhrases = findCandidatePhrases(sourceText, [...gateMissing, ...extraTargets], "cbk");
+  }
+
   // Round 103 — FIELD NORMALIZATION. Map extraction-schema names to catalogue
   // canonical names so the approval gate recognizes them (e.g. effectiveAnnualRate → ear).
   const normalised = normaliseExtractionFields(figures, targetCatalogue);
@@ -2046,6 +2089,13 @@ export function structuredInstrumentToDraft(
     ...figures,
     _extendedFields: JSON.stringify(extendedProfile),
   };
+
+  // Stage 7b — hidden candidate-phrase key, same established pattern as
+  // _proposalType/_extendedFields below. Never read by the approval gate or
+  // promotion path; only a future UI surface (Stage 7c) reads it.
+  if (candidatePhrases.length > 0) {
+    extractedFields._candidatePhrases = JSON.stringify(candidatePhrases);
+  }
 
   // ── Round 98: Inject comparison metadata ──────────────────────────────────
   const proposalType = typeof raw.proposalType === "string" ? raw.proposalType.trim().toLowerCase() : "create";
@@ -2145,7 +2195,7 @@ export async function tryInstrumentAwareExtraction(
   // Step 4: Map to ResearchFindingDraft[]
   const findings: ResearchFindingDraft[] = [];
   for (const raw of rawInstruments) {
-    const draft = structuredInstrumentToDraft(raw, sourceClass, sharedFields);
+    const draft = structuredInstrumentToDraft(raw, sourceClass, sharedFields, sourceText);
     if (draft) findings.push(draft);
   }
 

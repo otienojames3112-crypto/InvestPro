@@ -1,6 +1,7 @@
 /**
  * Stage 4, Step 4.2b-ii — wiring searchAuthoritativeSource() into the research flow
- * (CBK, and MMF as of Stage 7e), behind an explicit `allowSearch` opt-in.
+ * (CBK; MMF as of Stage 7e; bank as of Stage 7f), behind an explicit `allowSearch`
+ * opt-in.
  *
  * These tests exercise `shouldAttemptSearch`, `resolveSearchSource`, and
  * `searchFoundLabel` directly from aiResearchService.ts — the pure/injectable layer
@@ -49,6 +50,20 @@ function okMmfResult(overrides?: Partial<Extract<SearchSourceResult, { ok: true 
   };
 }
 
+function okBankResult(overrides?: Partial<Extract<SearchSourceResult, { ok: true }>>): SearchSourceResult {
+  return {
+    ok: true,
+    kind: "search",
+    text: "Example Bank's 12-month fixed deposit indicative rate is 12.5% as of 2026-07-10.",
+    citations: [{ url: "https://www.example-bank.co.ke/rates/fixed-deposit", title: "Example Bank Fixed Deposit Rates" }],
+    sourceLabel: "The bank's own official rates / product page",
+    catalogue: "bank",
+    subtype: null,
+    searchedAt: Date.now(),
+    ...overrides,
+  };
+}
+
 describe("Stage 4.2b-ii · shouldAttemptSearch (pure)", () => {
   it("1. CBK + no manual source + allowSearch:true → true (the only case that fires)", () => {
     expect(shouldAttemptSearch({ hasManualSource: false, allowSearch: true })).toBe(true);
@@ -65,11 +80,11 @@ describe("Stage 4.2b-ii · shouldAttemptSearch (pure)", () => {
 });
 
 describe("Stage 4.2b-ii · resolveSearchSource", () => {
-  it("3. an unsupported scope (bank) returns a clear unsupported-scope result and never calls the search impl", async () => {
+  it("3. an unsupported scope (macro) returns a clear unsupported-scope result and never calls the search impl", async () => {
     const searchImpl = vi.fn();
     const resolution = await resolveSearchSource({
-      scope: "bank",
-      question: "What is the top bank fixed deposit rate?",
+      scope: "macro",
+      question: "What is the current inflation rate?",
       allowUnsourced: false,
       searchImpl: searchImpl as unknown as typeof import("./_core/webSearch").searchAuthoritativeSource,
     });
@@ -78,7 +93,7 @@ describe("Stage 4.2b-ii · resolveSearchSource", () => {
     expect(searchImpl).not.toHaveBeenCalled();
   });
 
-  it("3b. market_asset is also unsupported (Stage 7e only enables cbk + mmf)", async () => {
+  it("3b. market_asset is also unsupported (Stage 7f only enables cbk + mmf + bank)", async () => {
     const searchImpl = vi.fn();
     const resolution = await resolveSearchSource({
       scope: "market_asset",
@@ -90,9 +105,10 @@ describe("Stage 4.2b-ii · resolveSearchSource", () => {
     expect(searchImpl).not.toHaveBeenCalled();
   });
 
-  it("3c. the unsupported-scope message mentions both supported scopes (CBK and MMF)", () => {
+  it("3c. the unsupported-scope message mentions all three supported scopes (CBK, MMF, bank)", () => {
     expect(UNSUPPORTED_SEARCH_SCOPE_MESSAGE).toMatch(/CBK/);
-    expect(UNSUPPORTED_SEARCH_SCOPE_MESSAGE).toMatch(/MMF/);
+    expect(UNSUPPORTED_SEARCH_SCOPE_MESSAGE).toMatch(/MMF/i);
+    expect(UNSUPPORTED_SEARCH_SCOPE_MESSAGE).toMatch(/bank/i);
   });
 
   it("4. a successful CBK search resolves to a url source with the real citation URL and a label carrying the title + 'AI search' wording", async () => {
@@ -137,6 +153,30 @@ describe("Stage 4.2b-ii · resolveSearchSource", () => {
   });
 
   it("4c. Stage 7e — a manual source prevents MMF search from ever being attempted (shouldAttemptSearch gate, scope-agnostic)", () => {
+    expect(shouldAttemptSearch({ hasManualSource: true, allowSearch: true })).toBe(false);
+  });
+
+  it("4d. Stage 7f — a successful bank search resolves to a url source, calling searchImpl with catalogue bank", async () => {
+    const searchImpl = vi.fn().mockResolvedValue(okBankResult());
+    const resolution = await resolveSearchSource({
+      scope: "bank",
+      question: "What is the top 12-month fixed deposit rate right now?",
+      allowUnsourced: false,
+      searchImpl,
+    });
+    expect(resolution.outcome).toBe("found");
+    if (resolution.outcome === "found") {
+      expect(resolution.source).toEqual({
+        kind: "url",
+        url: "https://www.example-bank.co.ke/rates/fixed-deposit",
+      });
+      expect(resolution.label).toMatch(/^AI search:/);
+      expect(resolution.label).toContain("Example Bank Fixed Deposit Rates");
+    }
+    expect(searchImpl).toHaveBeenCalledWith(expect.objectContaining({ catalogue: "bank" }));
+  });
+
+  it("4e. Stage 7f — a manual source prevents bank search from ever being attempted (shouldAttemptSearch gate, scope-agnostic)", () => {
     expect(shouldAttemptSearch({ hasManualSource: true, allowSearch: true })).toBe(false);
   });
 
@@ -197,6 +237,36 @@ describe("Stage 4.2b-ii · resolveSearchSource", () => {
     const resolution = await resolveSearchSource({
       scope: "mmf",
       question: "What is the top MMF EAR right now?",
+      allowUnsourced: true,
+      searchImpl,
+    });
+    expect(resolution.outcome).toBe("search_failed_unsourced");
+  });
+
+  it("5e. Stage 7f — a bank search failure with allowUnsourced:false blocks, same rule as CBK/MMF", async () => {
+    const searchImpl = vi.fn().mockResolvedValue({
+      ok: false,
+      reason: "no_citations",
+      message: "The search returned no real URL citations.",
+    } satisfies SearchSourceResult);
+    const resolution = await resolveSearchSource({
+      scope: "bank",
+      question: "What is the top 12-month fixed deposit rate right now?",
+      allowUnsourced: false,
+      searchImpl,
+    });
+    expect(resolution.outcome).toBe("search_failed_blocked");
+  });
+
+  it("5f. Stage 7f — the SAME bank search failure with allowUnsourced:true does not block", async () => {
+    const searchImpl = vi.fn().mockResolvedValue({
+      ok: false,
+      reason: "no_citations",
+      message: "The search returned no real URL citations.",
+    } satisfies SearchSourceResult);
+    const resolution = await resolveSearchSource({
+      scope: "bank",
+      question: "What is the top 12-month fixed deposit rate right now?",
       allowUnsourced: true,
       searchImpl,
     });

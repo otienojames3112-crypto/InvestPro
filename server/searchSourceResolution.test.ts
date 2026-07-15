@@ -79,6 +79,20 @@ function okReitResult(overrides?: Partial<Extract<SearchSourceResult, { ok: true
   };
 }
 
+function okEquityResult(overrides?: Partial<Extract<SearchSourceResult, { ok: true }>>): SearchSourceResult {
+  return {
+    ok: true,
+    kind: "search",
+    text: "Example Equity Co.'s last traded price is KES 42.50 as of 2026-07-10.",
+    citations: [{ url: "https://www.nse.co.ke/equities/example-equity-co", title: "Example Equity Co. — NSE Listing" }],
+    sourceLabel: "Nairobi Securities Exchange (NSE)",
+    catalogue: "market_asset",
+    subtype: "equity",
+    searchedAt: Date.now(),
+    ...overrides,
+  };
+}
+
 describe("Stage 4.2b-ii · shouldAttemptSearch (pure)", () => {
   it("1. CBK + no manual source + allowSearch:true → true (the only case that fires)", () => {
     expect(shouldAttemptSearch({ hasManualSource: false, allowSearch: true })).toBe(true);
@@ -124,15 +138,16 @@ describe("Stage 4.2b-ii · resolveSearchSource", () => {
     expect(searchImpl).not.toHaveBeenCalled();
   });
 
-  it("3c. the unsupported-scope message mentions the three fully-supported scopes (CBK, MMF, bank) plus market assets/REIT", () => {
+  it("3c. the unsupported-scope message mentions the three fully-supported scopes (CBK, MMF, bank) plus market assets/REIT/Equity", () => {
     expect(UNSUPPORTED_SEARCH_SCOPE_MESSAGE).toMatch(/CBK/);
     expect(UNSUPPORTED_SEARCH_SCOPE_MESSAGE).toMatch(/MMF/i);
     expect(UNSUPPORTED_SEARCH_SCOPE_MESSAGE).toMatch(/bank/i);
     expect(UNSUPPORTED_SEARCH_SCOPE_MESSAGE).toMatch(/REIT/i);
+    expect(UNSUPPORTED_SEARCH_SCOPE_MESSAGE).toMatch(/Equity/i);
   });
 
-  it("3d. market_asset with subtype equity/offshore_fund/sacco is blocked in this slice — only reit is enabled", async () => {
-    for (const subtype of ["equity", "offshore_fund", "sacco"] as const) {
+  it("3d. market_asset with subtype offshore_fund/sacco is blocked in this slice — only reit and equity are enabled", async () => {
+    for (const subtype of ["offshore_fund", "sacco"] as const) {
       const searchImpl = vi.fn();
       const resolution = await resolveSearchSource({
         scope: "market_asset",
@@ -258,6 +273,33 @@ describe("Stage 4.2b-ii · resolveSearchSource", () => {
     expect(shouldAttemptSearch({ hasManualSource: true, allowSearch: true })).toBe(false);
   });
 
+  it("4h. market-asset search design (equity slice) — a successful equity search resolves to a url source, calling searchImpl with catalogue market_asset + subtype equity", async () => {
+    const searchImpl = vi.fn().mockResolvedValue(okEquityResult());
+    const resolution = await resolveSearchSource({
+      scope: "market_asset",
+      question: "What is the current NSE price of this equity?",
+      allowUnsourced: false,
+      marketAssetSubtype: "equity",
+      searchImpl,
+    });
+    expect(resolution.outcome).toBe("found");
+    if (resolution.outcome === "found") {
+      expect(resolution.source).toEqual({
+        kind: "url",
+        url: "https://www.nse.co.ke/equities/example-equity-co",
+      });
+      expect(resolution.label).toMatch(/^AI search:/);
+      expect(resolution.label).toContain("Example Equity Co. — NSE Listing");
+    }
+    expect(searchImpl).toHaveBeenCalledWith(
+      expect.objectContaining({ catalogue: "market_asset", subtype: "equity" }),
+    );
+  });
+
+  it("4i. market-asset search design (equity slice) — a manual source prevents equity search from ever being attempted (shouldAttemptSearch gate, scope-agnostic)", () => {
+    expect(shouldAttemptSearch({ hasManualSource: true, allowSearch: true })).toBe(false);
+  });
+
   it("5a. a search failure with allowUnsourced:false blocks — never a silent fallback to general model memory", async () => {
     const searchImpl = vi.fn().mockResolvedValue({
       ok: false,
@@ -378,6 +420,38 @@ describe("Stage 4.2b-ii · resolveSearchSource", () => {
       question: "What is the current distribution yield for this REIT?",
       allowUnsourced: true,
       marketAssetSubtype: "reit",
+      searchImpl,
+    });
+    expect(resolution.outcome).toBe("search_failed_unsourced");
+  });
+
+  it("5i. market-asset search design (equity slice) — an equity search failure with allowUnsourced:false blocks, same rule as CBK/MMF/bank/REIT", async () => {
+    const searchImpl = vi.fn().mockResolvedValue({
+      ok: false,
+      reason: "no_citations",
+      message: "The search returned no real URL citations.",
+    } satisfies SearchSourceResult);
+    const resolution = await resolveSearchSource({
+      scope: "market_asset",
+      question: "What is the current NSE price of this equity?",
+      allowUnsourced: false,
+      marketAssetSubtype: "equity",
+      searchImpl,
+    });
+    expect(resolution.outcome).toBe("search_failed_blocked");
+  });
+
+  it("5j. market-asset search design (equity slice) — the SAME equity search failure with allowUnsourced:true does not block", async () => {
+    const searchImpl = vi.fn().mockResolvedValue({
+      ok: false,
+      reason: "no_citations",
+      message: "The search returned no real URL citations.",
+    } satisfies SearchSourceResult);
+    const resolution = await resolveSearchSource({
+      scope: "market_asset",
+      question: "What is the current NSE price of this equity?",
+      allowUnsourced: true,
+      marketAssetSubtype: "equity",
       searchImpl,
     });
     expect(resolution.outcome).toBe("search_failed_unsourced");

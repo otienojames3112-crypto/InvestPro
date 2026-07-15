@@ -1746,10 +1746,12 @@ function OpeningPanel({ onStarted }: { onStarted: (threadId: number) => void }) 
 
   const busy = submitting || poller.running || src.uploading;
   const canAsk = question.trim().length >= 4 && !busy;
-  // Market-asset search design (2026-07-13) — REIT slice. Market-asset search is
-  // enabled ONLY when Focus = "Market assets" AND the manager explicitly selected
-  // Asset type = REIT — equity/offshore fund/SACCO stay unsearchable in this slice.
-  const marketAssetSearchReady = scope === "market_asset" && marketAssetSubtype === "reit";
+  // Market-asset search design (2026-07-13) — REIT + equity slices. Market-asset
+  // search is enabled ONLY when Focus = "Market assets" AND the manager explicitly
+  // selected Asset type = REIT or Equity — offshore fund/SACCO stay unsearchable in
+  // this pass.
+  const marketAssetSearchReady =
+    scope === "market_asset" && (marketAssetSubtype === "reit" || marketAssetSubtype === "equity");
 
   async function submit() {
     if (!canAsk) return;
@@ -1849,7 +1851,7 @@ function OpeningPanel({ onStarted }: { onStarted: (threadId: number) => void }) 
         )}
         {/* Step 4.2b-iii — search opt-in, offered only when no manual source is attached
             (manual source always wins). CBK, MMF, and bank (Stage 7f); market_asset +
-            REIT only (Market-asset search design, 2026-07-13). */}
+            REIT or Equity (Market-asset search design, 2026-07-13). */}
         {!src.provided && (
           <label
             className={cn(
@@ -1880,7 +1882,9 @@ function OpeningPanel({ onStarted }: { onStarted: (threadId: number) => void }) 
                   : scope === "bank"
                     ? "Search for a cited bank product page if I don’t attach a source."
                     : scope === "market_asset"
-                      ? "Search for a cited NSE/REIT source if I don’t attach a source."
+                      ? marketAssetSubtype === "equity"
+                        ? "Search for a cited NSE/equity source if I don’t attach a source."
+                        : "Search for a cited NSE/REIT source if I don’t attach a source."
                       : "Search authoritative CBK sources if I don’t attach a source."}
               </span>{" "}
               {scope === "cbk"
@@ -1890,10 +1894,12 @@ function OpeningPanel({ onStarted }: { onStarted: (threadId: number) => void }) 
                   : scope === "bank"
                     ? "The AI searches for a current, cited bank rates/product page — never from its own memory. Bank sources vary by bank, so please verify the cited source before relying on it."
                     : marketAssetSearchReady
-                      ? "The AI searches for a current, cited NSE listing or REIT source — never from its own memory. Please verify the cited source before relying on it."
+                      ? marketAssetSubtype === "equity"
+                        ? "The AI searches for a current, cited NSE listing or equity source — never from its own memory. Please verify the cited source before relying on it."
+                        : "The AI searches for a current, cited NSE listing or REIT source — never from its own memory. Please verify the cited source before relying on it."
                       : scope === "market_asset"
-                        ? "Select “REIT” as the Asset type above to enable search for this Focus. Equity, Offshore fund, and SACCO search aren’t available yet."
-                        : "Only available when Focus (below) is set to “CBK securities,” “MMF market,” “Bank products,” or “Market assets” with Asset type = REIT."}
+                        ? "Select “REIT” or “Equity” as the Asset type above to enable search for this Focus. Offshore fund and SACCO search aren’t available yet."
+                        : "Only available when Focus (below) is set to “CBK securities,” “MMF market,” “Bank products,” or “Market assets” with Asset type = REIT or Equity."}
             </span>
           </label>
         )}
@@ -1924,10 +1930,11 @@ function OpeningPanel({ onStarted }: { onStarted: (threadId: number) => void }) 
               shown only for Focus = "Market assets". Limited to the four subtypes that
               have a registered authoritative-source route (equity/REIT/offshore fund/
               SACCO) — ETF/property/pension/other are deliberately excluded, not just
-              deferred. REIT slice: search is now enabled ONLY when this is "reit";
-              equity/offshore fund/SACCO remain unsearchable in this pass. Changing
-              away from "reit" resets the search checkbox so a stale checked-but-about-
-              to-be-disabled state never lingers, same pattern as the Focus reset below. */}
+              deferred. REIT + equity slices: search is now enabled when this is "reit"
+              or "equity"; offshore fund/SACCO remain unsearchable in this pass.
+              Changing away from both resets the search checkbox so a stale checked-
+              but-about-to-be-disabled state never lingers, same pattern as the Focus
+              reset below. */}
           {scope === "market_asset" && (
             <div className="space-y-1">
               <Label className="text-xs text-muted-foreground">Asset type</Label>
@@ -1936,7 +1943,7 @@ function OpeningPanel({ onStarted }: { onStarted: (threadId: number) => void }) 
                 onValueChange={(v) => {
                   const next = v as MarketAssetSubtype;
                   setMarketAssetSubtype(next);
-                  if (next !== "reit") setAllowSearch(false);
+                  if (next !== "reit" && next !== "equity") setAllowSearch(false);
                 }}
               >
                 <SelectTrigger className="w-[180px] bg-background">
@@ -1951,9 +1958,9 @@ function OpeningPanel({ onStarted }: { onStarted: (threadId: number) => void }) 
                 </SelectContent>
               </Select>
               <p className="text-[11px] text-muted-foreground max-w-[180px]">
-                {marketAssetSubtype === "reit"
-                  ? "AI search is available for REIT. Equity, Offshore fund, and SACCO search are coming later."
-                  : "Required before AI search for market assets can be enabled. Only REIT search is available so far."}
+                {marketAssetSubtype === "reit" || marketAssetSubtype === "equity"
+                  ? "AI search is available for REIT and Equity. Offshore fund and SACCO search are coming later."
+                  : "Required before AI search for market assets can be enabled. Only REIT and Equity search are available so far."}
               </p>
             </div>
           )}

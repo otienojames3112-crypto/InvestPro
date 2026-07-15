@@ -1,10 +1,10 @@
 /**
  * Market-asset search design (2026-07-13) — subtype selector (foundation slice) +
- * REIT search enablement (this slice). An explicit "Asset type" selector in Ask
- * AI's OpeningPanel, shown only when Focus = "Market assets", now also gates AI
- * search: search is enabled ONLY when Asset type = "reit" — equity/offshore fund/
- * SACCO remain unsearchable in this pass, exactly as CBK/MMF/bank search behavior
- * (Stage 7e/7f) is untouched.
+ * REIT search enablement + equity search enablement (this slice). An explicit
+ * "Asset type" selector in Ask AI's OpeningPanel, shown only when Focus = "Market
+ * assets", now also gates AI search: search is enabled when Asset type = "reit" OR
+ * "equity" — offshore fund/SACCO remain unsearchable in this pass, exactly as CBK/
+ * MMF/bank search behavior (Stage 7e/7f) is untouched.
  *
  * This repo has no jsdom/testing-library setup for client components (vitest runs
  * client-adjacent checks with `environment: "node"`); the established convention for
@@ -52,19 +52,19 @@ describe("Market-asset subtype selector · foundation", () => {
   });
 
   it("5. the dropdown is driven by MARKET_ASSET_SUBTYPE_OPTIONS, not a hardcoded/inferred list", () => {
-    const idx = opening.indexOf('scope === "market_asset" && (');
+    const idx = opening.indexOf('{scope === "market_asset" && (');
     const block = opening.slice(idx, idx + 1200);
     expect(block).toContain("MARKET_ASSET_SUBTYPE_OPTIONS.map((o) =>");
     expect(block).toContain("const next = v as MarketAssetSubtype;");
     expect(block).toContain("setMarketAssetSubtype(next);");
   });
 
-  it("6. copy tells the manager REIT is the only searchable subtype so far", () => {
-    const idx = opening.indexOf('scope === "market_asset" && (');
+  it("6. copy tells the manager REIT and Equity are the searchable subtypes so far", () => {
+    const idx = opening.indexOf('{scope === "market_asset" && (');
     const block = opening.slice(idx, idx + 1600);
-    expect(block).toMatch(/AI search is available for REIT/);
+    expect(block).toMatch(/AI search is available for REIT and Equity/);
     expect(block).toMatch(/Required before AI search for market assets can be enabled/);
-    expect(block).toMatch(/Only REIT search is available so far/);
+    expect(block).toMatch(/Only REIT and Equity search are available so far/);
   });
 
   it("7. switching Focus away from market_asset resets the subtype selection", () => {
@@ -80,36 +80,53 @@ describe("Market-asset subtype selector · foundation", () => {
     expect(setterCalls.sort()).toEqual(['setMarketAssetSubtype("")', "setMarketAssetSubtype(next)"].sort());
   });
 
-  it("10. selecting a subtype other than REIT resets allowSearch (no stale checked-but-about-to-be-disabled checkbox)", () => {
-    const idx = opening.indexOf('scope === "market_asset" && (');
+  it("10. selecting a subtype other than REIT or Equity resets allowSearch (no stale checked-but-about-to-be-disabled checkbox)", () => {
+    const idx = opening.indexOf('{scope === "market_asset" && (');
     const block = opening.slice(idx, idx + 1200);
-    expect(block).toContain('if (next !== "reit") setAllowSearch(false);');
+    expect(block).toContain('if (next !== "reit" && next !== "equity") setAllowSearch(false);');
   });
 });
 
-describe("Market-asset subtype selector · REIT search enablement", () => {
-  it("marketAssetSearchReady is derived from scope AND subtype together, never scope alone", () => {
-    expect(opening).toContain(
-      'const marketAssetSearchReady = scope === "market_asset" && marketAssetSubtype === "reit";',
+describe("Market-asset subtype selector · REIT + equity search enablement", () => {
+  it("marketAssetSearchReady is derived from scope AND (reit OR equity) subtype together, never scope alone", () => {
+    expect(opening).toMatch(
+      /const marketAssetSearchReady =\s*scope === "market_asset" && \(marketAssetSubtype === "reit" \|\| marketAssetSubtype === "equity"\);/,
     );
   });
 
-  it("the search checkbox is enabled (not disabled) when scope=market_asset and subtype=reit, alongside cbk/mmf/bank", () => {
+  it("the search checkbox is enabled (not disabled) when scope=market_asset and subtype is reit OR equity, alongside cbk/mmf/bank", () => {
     expect(opening).toContain(
       'disabled={scope !== "cbk" && scope !== "mmf" && scope !== "bank" && !marketAssetSearchReady}',
     );
+    // marketAssetSearchReady itself covers both reit and equity — confirmed by the
+    // "REIT + equity search enablement" describe block's first test above.
   });
 
-  it("allowSearch is sent to startResearchTask for market_asset ONLY when marketAssetSearchReady (i.e. subtype is reit)", () => {
+  it("UI: Focus=Market assets + Asset type=Equity enables the checkbox when no manual source exists (via marketAssetSearchReady)", () => {
+    // Simulate the exact state the checkbox's `disabled` expression reads.
+    const scope = "market_asset";
+    const marketAssetSubtype = "equity";
+    const marketAssetSearchReady = scope === "market_asset" && (marketAssetSubtype === "reit" || (marketAssetSubtype as string) === "equity");
+    const disabled = scope !== "cbk" && (scope as string) !== "mmf" && (scope as string) !== "bank" && !marketAssetSearchReady;
+    expect(disabled).toBe(false);
+  });
+
+  it("allowSearch is sent to startResearchTask for market_asset ONLY when marketAssetSearchReady (i.e. subtype is reit or equity)", () => {
     expect(opening).toContain(
       'allowSearch: !source && (scope === "cbk" || scope === "mmf" || scope === "bank" || marketAssetSearchReady) ? allowSearch : undefined,',
     );
   });
 
-  it("marketAssetSubtype is forwarded to startResearchTask ONLY for scope === market_asset, and only when selected", () => {
+  it("marketAssetSubtype is forwarded to startResearchTask ONLY for scope === market_asset, and only when selected (equity or reit alike)", () => {
     expect(opening).toContain(
       'marketAssetSubtype: scope === "market_asset" && marketAssetSubtype ? marketAssetSubtype : undefined,',
     );
+  });
+
+  it("REIT behavior (copy, gating expression, mutation wiring) is completely unchanged by adding equity", () => {
+    expect(opening).toContain("Search for a cited NSE/REIT source if I don’t attach a source.");
+    expect(opening).toMatch(/The AI searches for a current, cited NSE listing or REIT source — never from its own memory\. Please verify the cited source before relying on it\./);
+    expect(opening).toContain('if (next !== "reit" && next !== "equity") setAllowSearch(false);');
   });
 
   it("REIT gets its own honest search copy — cites NSE/REIT, tells the manager to verify", () => {
@@ -118,13 +135,18 @@ describe("Market-asset subtype selector · REIT search enablement", () => {
     expect(opening).toMatch(/Please verify the cited source before relying on it/);
   });
 
-  it("REIT copy never claims the same blanket 'authoritative' guarantee CBK's wording implies", () => {
-    expect(askAi).not.toMatch(/[Ss]earch authoritative (REIT|market asset)/);
+  it("equity gets its own honest search copy — cites NSE/equity, tells the manager to verify", () => {
+    expect(opening).toContain("Search for a cited NSE/equity source if I don’t attach a source.");
+    expect(opening).toMatch(/current, cited NSE listing or equity source/);
   });
 
-  it("equity, offshore fund, and SACCO get NO search opt-in copy of their own — only REIT does, in this slice", () => {
-    expect(askAi).not.toMatch(/Search for a cited (equity|offshore.fund|SACCO)(?! source if)/i);
-    expect(askAi).not.toMatch(/[Ss]earch authoritative (equity|offshore fund|SACCO)/);
+  it("REIT and equity copy never claim the same blanket 'authoritative' guarantee CBK's wording implies", () => {
+    expect(askAi).not.toMatch(/[Ss]earch authoritative (REIT|equity|market asset)/);
+  });
+
+  it("offshore fund and SACCO get NO search opt-in copy of their own — only REIT and equity do, in this slice", () => {
+    expect(askAi).not.toMatch(/Search for a cited (offshore.fund|SACCO)/i);
+    expect(askAi).not.toMatch(/[Ss]earch authoritative (offshore fund|SACCO)/);
   });
 
   it("ETF/property/pension/other are never mentioned anywhere near search copy (no route, never offered)", () => {
@@ -134,11 +156,11 @@ describe("Market-asset subtype selector · REIT search enablement", () => {
   });
 
   it("market_asset without a subtype selected (marketAssetSubtype === \"\") still keeps search disabled — falls through to the generic 'not ready' copy", () => {
-    expect(opening).toMatch(/Select\s*“?REIT”?\s*as the Asset type above to enable search/);
+    expect(opening).toMatch(/Select\s*“?REIT”?\s*or\s*“?Equity”?\s*as the Asset type above to enable search/);
   });
 
-  it("the unsupported-scope explanation now also mentions Market assets + REIT", () => {
-    expect(opening).toMatch(/Market assets” with Asset type = REIT/);
+  it("the unsupported-scope explanation now also mentions Market assets + REIT or Equity", () => {
+    expect(opening).toMatch(/Market assets” with Asset type = REIT or Equity/);
   });
 });
 

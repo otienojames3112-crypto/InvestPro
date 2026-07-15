@@ -30,7 +30,7 @@ describe("Stage 4.2b-iii · OpeningPanel search checkbox", () => {
   });
 
   it("2. the checkbox block is rendered ONLY when no manual source is attached (`{!src.provided && (`)", () => {
-    expect(opening).toMatch(/\{!src\.provided && \(\s*<label[\s\S]{0,1600}Search authoritative CBK sources/);
+    expect(opening).toMatch(/\{!src\.provided && \(\s*<label[\s\S]{0,2000}Search authoritative CBK sources/);
   });
 
   it("3. disabled outside CBK/MMF/bank scope (and outside market_asset+REIT), with a short explanation", () => {
@@ -68,7 +68,7 @@ describe("Stage 4.2b-iii · Conversation (follow-up) search checkbox", () => {
   });
 
   it("2. the checkbox sits inside the SAME `{!src.provided && (` guard as the source-mode pills", () => {
-    expect(conversation).toMatch(/\{!src\.provided && \(\s*<label[\s\S]{0,1600}Search authoritative CBK sources/);
+    expect(conversation).toMatch(/\{!src\.provided && \(\s*<label[\s\S]{0,2000}Search authoritative CBK sources/);
   });
 
   it("3. disabled outside a CBK/MMF/bank-scoped thread, with a short explanation", () => {
@@ -136,9 +136,10 @@ describe("Stage 4.2b-iii · both forms are wired consistently and stay CBK/MMF/b
     expect(verifyMentions.length).toBeGreaterThanOrEqual(2); // at least one per scope, in both OpeningPanel and Conversation copy would double this, but assert the minimum
   });
 
-  it("market_asset/REIT search opt-in copy now exists (market-asset search design's REIT slice) — offshore/SACCO/equity still do not", () => {
+  it("market_asset/REIT and market_asset/equity search opt-in copy now exist (market-asset search design) — offshore/SACCO still do not", () => {
     expect(askAi).toMatch(/Search for a cited NSE\/REIT source/);
-    expect(askAi).not.toMatch(/[Ss]earch authoritative (market asset|REIT|offshore|SACCO)/);
+    expect(askAi).toMatch(/Search for a cited NSE\/equity source/);
+    expect(askAi).not.toMatch(/[Ss]earch authoritative (market asset|REIT|equity|offshore|SACCO)/);
     expect(askAi).not.toMatch(/Search for a cited (offshore.fund|SACCO)/i);
   });
 

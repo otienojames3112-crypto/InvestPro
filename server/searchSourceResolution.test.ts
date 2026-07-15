@@ -93,6 +93,20 @@ function okEquityResult(overrides?: Partial<Extract<SearchSourceResult, { ok: tr
   };
 }
 
+function okOffshoreFundResult(overrides?: Partial<Extract<SearchSourceResult, { ok: true }>>): SearchSourceResult {
+  return {
+    ok: true,
+    kind: "search",
+    text: "Example Offshore Fund's NAV per share is USD 12.34 as of 2026-07-10.",
+    citations: [{ url: "https://www.example-offshore-am.com/funds/example-fund/nav", title: "Example Offshore Fund — NAV & Factsheet" }],
+    sourceLabel: "The fund manager's own factsheet / NAV page",
+    catalogue: "market_asset",
+    subtype: "offshore_fund",
+    searchedAt: Date.now(),
+    ...overrides,
+  };
+}
+
 describe("Stage 4.2b-ii · shouldAttemptSearch (pure)", () => {
   it("1. CBK + no manual source + allowSearch:true → true (the only case that fires)", () => {
     expect(shouldAttemptSearch({ hasManualSource: false, allowSearch: true })).toBe(true);
@@ -138,30 +152,29 @@ describe("Stage 4.2b-ii · resolveSearchSource", () => {
     expect(searchImpl).not.toHaveBeenCalled();
   });
 
-  it("3c. the unsupported-scope message mentions the three fully-supported scopes (CBK, MMF, bank) plus market assets/REIT/Equity", () => {
+  it("3c. the unsupported-scope message mentions the three fully-supported scopes (CBK, MMF, bank) plus market assets/REIT/Equity/Offshore fund", () => {
     expect(UNSUPPORTED_SEARCH_SCOPE_MESSAGE).toMatch(/CBK/);
     expect(UNSUPPORTED_SEARCH_SCOPE_MESSAGE).toMatch(/MMF/i);
     expect(UNSUPPORTED_SEARCH_SCOPE_MESSAGE).toMatch(/bank/i);
     expect(UNSUPPORTED_SEARCH_SCOPE_MESSAGE).toMatch(/REIT/i);
     expect(UNSUPPORTED_SEARCH_SCOPE_MESSAGE).toMatch(/Equity/i);
+    expect(UNSUPPORTED_SEARCH_SCOPE_MESSAGE).toMatch(/Offshore fund/i);
   });
 
-  it("3d. market_asset with subtype offshore_fund/sacco is blocked in this slice — only reit and equity are enabled", async () => {
-    for (const subtype of ["offshore_fund", "sacco"] as const) {
-      const searchImpl = vi.fn();
-      const resolution = await resolveSearchSource({
-        scope: "market_asset",
-        question: "What is the current price?",
-        allowUnsourced: false,
-        marketAssetSubtype: subtype,
-        searchImpl,
-      });
-      expect(resolution.outcome).toBe("unsupported_scope");
-      if (resolution.outcome === "unsupported_scope") {
-        expect(resolution.message).toBe(MARKET_ASSET_SEARCH_SUBTYPE_REQUIRED_MESSAGE);
-      }
-      expect(searchImpl).not.toHaveBeenCalled();
+  it("3d. market_asset with subtype sacco is blocked in this slice — only reit, equity, and offshore_fund are enabled", async () => {
+    const searchImpl = vi.fn();
+    const resolution = await resolveSearchSource({
+      scope: "market_asset",
+      question: "What is the current price?",
+      allowUnsourced: false,
+      marketAssetSubtype: "sacco",
+      searchImpl,
+    });
+    expect(resolution.outcome).toBe("unsupported_scope");
+    if (resolution.outcome === "unsupported_scope") {
+      expect(resolution.message).toBe(MARKET_ASSET_SEARCH_SUBTYPE_REQUIRED_MESSAGE);
     }
+    expect(searchImpl).not.toHaveBeenCalled();
   });
 
   it("3e. an unrecognised/garbage market-asset subtype is also blocked, never treated as reit", async () => {
@@ -297,6 +310,33 @@ describe("Stage 4.2b-ii · resolveSearchSource", () => {
   });
 
   it("4i. market-asset search design (equity slice) — a manual source prevents equity search from ever being attempted (shouldAttemptSearch gate, scope-agnostic)", () => {
+    expect(shouldAttemptSearch({ hasManualSource: true, allowSearch: true })).toBe(false);
+  });
+
+  it("4j. market-asset search design (offshore fund slice) — a successful offshore-fund search resolves to a url source, calling searchImpl with catalogue market_asset + subtype offshore_fund", async () => {
+    const searchImpl = vi.fn().mockResolvedValue(okOffshoreFundResult());
+    const resolution = await resolveSearchSource({
+      scope: "market_asset",
+      question: "What is the current NAV for this offshore fund?",
+      allowUnsourced: false,
+      marketAssetSubtype: "offshore_fund",
+      searchImpl,
+    });
+    expect(resolution.outcome).toBe("found");
+    if (resolution.outcome === "found") {
+      expect(resolution.source).toEqual({
+        kind: "url",
+        url: "https://www.example-offshore-am.com/funds/example-fund/nav",
+      });
+      expect(resolution.label).toMatch(/^AI search:/);
+      expect(resolution.label).toContain("Example Offshore Fund — NAV & Factsheet");
+    }
+    expect(searchImpl).toHaveBeenCalledWith(
+      expect.objectContaining({ catalogue: "market_asset", subtype: "offshore_fund" }),
+    );
+  });
+
+  it("4k. market-asset search design (offshore fund slice) — a manual source prevents offshore-fund search from ever being attempted (shouldAttemptSearch gate, scope-agnostic)", () => {
     expect(shouldAttemptSearch({ hasManualSource: true, allowSearch: true })).toBe(false);
   });
 
@@ -452,6 +492,38 @@ describe("Stage 4.2b-ii · resolveSearchSource", () => {
       question: "What is the current NSE price of this equity?",
       allowUnsourced: true,
       marketAssetSubtype: "equity",
+      searchImpl,
+    });
+    expect(resolution.outcome).toBe("search_failed_unsourced");
+  });
+
+  it("5k. market-asset search design (offshore fund slice) — an offshore-fund search failure with allowUnsourced:false blocks, same rule as CBK/MMF/bank/REIT/equity", async () => {
+    const searchImpl = vi.fn().mockResolvedValue({
+      ok: false,
+      reason: "no_citations",
+      message: "The search returned no real URL citations.",
+    } satisfies SearchSourceResult);
+    const resolution = await resolveSearchSource({
+      scope: "market_asset",
+      question: "What is the current NAV for this offshore fund?",
+      allowUnsourced: false,
+      marketAssetSubtype: "offshore_fund",
+      searchImpl,
+    });
+    expect(resolution.outcome).toBe("search_failed_blocked");
+  });
+
+  it("5l. market-asset search design (offshore fund slice) — the SAME offshore-fund search failure with allowUnsourced:true does not block", async () => {
+    const searchImpl = vi.fn().mockResolvedValue({
+      ok: false,
+      reason: "no_citations",
+      message: "The search returned no real URL citations.",
+    } satisfies SearchSourceResult);
+    const resolution = await resolveSearchSource({
+      scope: "market_asset",
+      question: "What is the current NAV for this offshore fund?",
+      allowUnsourced: true,
+      marketAssetSubtype: "offshore_fund",
       searchImpl,
     });
     expect(resolution.outcome).toBe("search_failed_unsourced");

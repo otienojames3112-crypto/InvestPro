@@ -940,7 +940,8 @@ export async function transcribeSourceToText(
 }
 
 /* ── Stage 4, Step 4.2b-ii — AI SEARCH source resolution (CBK, MMF, bank, ────
- *                                              market_asset/REIT, market_asset/equity)
+ *                          market_asset/REIT, market_asset/equity, market_asset/
+ *                                                              offshore_fund)
  *
  * When a manager asks a question with NO manual source attached and opts into
  * `allowSearch`, the caller (routers.ts) looks up an authoritative source via
@@ -951,22 +952,24 @@ export async function transcribeSourceToText(
  * never becomes the answer by itself.
  *
  * Deliberately scoped to CBK, MMF, bank, and now market_asset/REIT + market_asset/
- * equity only (Stage 7e added mmf, Stage 7f added bank; the market-asset search
- * design's REIT slice added the first market_asset case, its equity slice adds the
- * second). Step 4.1's routing table also covers market_asset offshore_fund/sacco,
- * but those stay off until each is separately proven live, same staged approach as
- * 7e/7f/REIT — see `MARKET_ASSET_SEARCH_SUBTYPE_REQUIRED_MESSAGE` below. Unlike MMF/
- * bank (no fixed domain at all), BOTH REIT's and equity's primary source (NSE,
- * `nse.co.ke`) IS a fixed domain — same safety tier as CBK — but the UI still
- * carries an explicit "verify the cited source" caveat per the approved design.
- * Like MMF, bank has NO fixed allowed domain — `authoritativeSourcesFor("bank")`
- * deliberately leaves `domains: []` on its primary source because the real source
- * varies per bank (KCB, Equity, NCBA, Absa, ...). A found bank citation is real and
- * grounded (the `no_citations` guardrail in webSearch.ts still applies — an uncited
- * answer is never treated as a source), but it is NOT guaranteed to come from one
- * known, pre-vetted domain the way a CBK, REIT, or equity citation is. The UI copy
- * for MMF and bank must stay honest about that difference — see AskAI.tsx's Step
- * 4.2b-iii block.
+ * equity + market_asset/offshore_fund only (Stage 7e added mmf, Stage 7f added bank;
+ * the market-asset search design's REIT slice added the first market_asset case,
+ * equity the second, offshore_fund the third). Step 4.1's routing table also covers
+ * market_asset/sacco, but that stays off until separately proven live, same staged
+ * approach as 7e/7f/REIT/equity — see `MARKET_ASSET_SEARCH_SUBTYPE_REQUIRED_MESSAGE`
+ * below. Unlike MMF/bank (no fixed domain at all), BOTH REIT's and equity's primary
+ * source (NSE, `nse.co.ke`) IS a fixed domain — same safety tier as CBK — but the UI
+ * still carries an explicit "verify the cited source" caveat per the approved
+ * design. Offshore fund is like MMF/bank, NOT like REIT/equity: no fixed domain —
+ * `authoritativeSourcesFor("market_asset", "offshore_fund")` deliberately leaves
+ * `domains: []` on its primary source because the real source varies per fund
+ * manager, same reasoning as `authoritativeSourcesFor("bank")` leaving `domains: []`
+ * because the real source varies per bank (KCB, Equity, NCBA, Absa, ...). A found
+ * bank or offshore-fund citation is real and grounded (the `no_citations` guardrail
+ * in webSearch.ts still applies — an uncited answer is never treated as a source),
+ * but it is NOT guaranteed to come from one known, pre-vetted domain the way a CBK,
+ * REIT, or equity citation is. The UI copy for MMF, bank, and offshore fund must
+ * stay honest about that difference — see AskAI.tsx's Step 4.2b-iii block.
  *
  * A search-found citation is stamped with `sourceKind: "url"` — NOT a new "search"
  * kind — because `source_kind` is a fixed-value MySQL ENUM on three tables
@@ -997,21 +1000,21 @@ export function searchFailureMessage(result: Extract<SearchSourceResult, { ok: f
 
 /** Human message when `allowSearch` was requested outside the scopes it supports. */
 export const UNSUPPORTED_SEARCH_SCOPE_MESSAGE =
-  'AI search is only available for the CBK, MMF, and bank-product scopes right now (or Market assets with Asset type = REIT or Equity). Switch Focus to one of those, or attach a source manually.';
+  'AI search is only available for the CBK, MMF, and bank-product scopes right now (or Market assets with Asset type = REIT, Equity, or Offshore fund). Switch Focus to one of those, or attach a source manually.';
 
 /** Human message when `allowSearch` was requested for market_asset but the manager's
  *  explicit subtype selection isn't one of the market-asset subtypes enabled so far
- *  (REIT, then equity). Distinct from `UNSUPPORTED_SEARCH_SCOPE_MESSAGE` because
- *  market_asset itself IS a supported scope now; it's the subtype gate that blocks
- *  here, which deserves its own clearer message. */
+ *  (REIT, equity, then offshore fund). Distinct from `UNSUPPORTED_SEARCH_SCOPE_MESSAGE`
+ *  because market_asset itself IS a supported scope now; it's the subtype gate that
+ *  blocks here, which deserves its own clearer message. */
 export const MARKET_ASSET_SEARCH_SUBTYPE_REQUIRED_MESSAGE =
-  'AI search for market assets is only available when Asset type = REIT or Equity right now. Select one of those, or attach a source manually.';
+  'AI search for market assets is only available when Asset type = REIT, Equity, or Offshore fund right now. Select one of those, or attach a source manually.';
 
 /** Market-asset subtypes AI search is enabled for so far — the market-asset search
- *  design's staged rollout (REIT slice, then equity; offshore fund and SACCO remain
- *  future slices). Kept as one list so `resolveSearchSource` and its tests agree on
+ *  design's staged rollout (REIT, then equity, then offshore fund; SACCO remains a
+ *  future slice). Kept as one list so `resolveSearchSource` and its tests agree on
  *  exactly what's enabled without duplicating the check inline. */
-const SEARCHABLE_MARKET_ASSET_SUBTYPES = ["reit", "equity"] as const;
+const SEARCHABLE_MARKET_ASSET_SUBTYPES = ["reit", "equity", "offshore_fund"] as const;
 
 /** A display label that makes a search-found source visibly distinct from a
  *  manually-attached one, without inventing a new persisted source kind. */
@@ -1034,10 +1037,10 @@ export type SearchSourceResolution =
 
 /**
  * Resolve an `allowSearch` opt-in into a source — CBK, MMF, bank, and market_asset
- * (REIT or equity only) — see the market-asset search design's REIT and equity
- * slices. Callers should only invoke this after confirming `shouldAttemptSearch(...)`
- * — this function does not re-check for a manual source, only the scope (and, for
- * market_asset, subtype) restriction.
+ * (REIT, equity, or offshore fund only) — see the market-asset search design's REIT,
+ * equity, and offshore-fund slices. Callers should only invoke this after confirming
+ * `shouldAttemptSearch(...)` — this function does not re-check for a manual source,
+ * only the scope (and, for market_asset, subtype) restriction.
  */
 export async function resolveSearchSource(args: {
   scope: ResearchScope;
@@ -1045,9 +1048,9 @@ export async function resolveSearchSource(args: {
   allowUnsourced: boolean;
   /** The manager's EXPLICITLY selected market-asset subtype (never inferred).
    *  Ignored for every scope other than "market_asset". Only the subtypes in
-   *  `SEARCHABLE_MARKET_ASSET_SUBTYPES` (reit, equity) are enabled so far — any
-   *  other value (or none) blocks with a distinct, clearer message than a genuinely
-   *  unsupported scope. */
+   *  `SEARCHABLE_MARKET_ASSET_SUBTYPES` (reit, equity, offshore_fund) are enabled so
+   *  far — any other value (or none) blocks with a distinct, clearer message than a
+   *  genuinely unsupported scope. */
   marketAssetSubtype?: string | null;
   /** Injected for tests — defaults to the real Step 4.2a wrapper. */
   searchImpl?: typeof searchAuthoritativeSource;

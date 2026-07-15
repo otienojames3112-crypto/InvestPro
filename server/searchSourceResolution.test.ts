@@ -1,7 +1,8 @@
 /**
  * Stage 4, Step 4.2b-ii — wiring searchAuthoritativeSource() into the research flow
- * (CBK; MMF as of Stage 7e; bank as of Stage 7f; market_asset/REIT as of the
- * market-asset search design's REIT slice), behind an explicit `allowSearch` opt-in.
+ * (CBK; MMF as of Stage 7e; bank as of Stage 7f; market_asset/REIT, /equity,
+ * /offshore_fund, and /sacco as of the market-asset search design's full staged
+ * rollout), behind an explicit `allowSearch` opt-in.
  *
  * These tests exercise `shouldAttemptSearch`, `resolveSearchSource`, and
  * `searchFoundLabel` directly from aiResearchService.ts — the pure/injectable layer
@@ -107,6 +108,20 @@ function okOffshoreFundResult(overrides?: Partial<Extract<SearchSourceResult, { 
   };
 }
 
+function okSaccoResult(overrides?: Partial<Extract<SearchSourceResult, { ok: true }>>): SearchSourceResult {
+  return {
+    ok: true,
+    kind: "search",
+    text: "Example SACCO's share-capital dividend rate is 14% as of 2026-07-10.",
+    citations: [{ url: "https://www.example-sacco.co.ke/announcements/2026-dividend", title: "Example SACCO — 2026 Dividend Announcement" }],
+    sourceLabel: "The SACCO's own official page",
+    catalogue: "market_asset",
+    subtype: "sacco",
+    searchedAt: Date.now(),
+    ...overrides,
+  };
+}
+
 describe("Stage 4.2b-ii · shouldAttemptSearch (pure)", () => {
   it("1. CBK + no manual source + allowSearch:true → true (the only case that fires)", () => {
     expect(shouldAttemptSearch({ hasManualSource: false, allowSearch: true })).toBe(true);
@@ -152,29 +167,32 @@ describe("Stage 4.2b-ii · resolveSearchSource", () => {
     expect(searchImpl).not.toHaveBeenCalled();
   });
 
-  it("3c. the unsupported-scope message mentions the three fully-supported scopes (CBK, MMF, bank) plus market assets/REIT/Equity/Offshore fund", () => {
+  it("3c. the unsupported-scope message mentions the three fully-supported scopes (CBK, MMF, bank) plus market assets/REIT/Equity/Offshore fund/SACCO", () => {
     expect(UNSUPPORTED_SEARCH_SCOPE_MESSAGE).toMatch(/CBK/);
     expect(UNSUPPORTED_SEARCH_SCOPE_MESSAGE).toMatch(/MMF/i);
     expect(UNSUPPORTED_SEARCH_SCOPE_MESSAGE).toMatch(/bank/i);
     expect(UNSUPPORTED_SEARCH_SCOPE_MESSAGE).toMatch(/REIT/i);
     expect(UNSUPPORTED_SEARCH_SCOPE_MESSAGE).toMatch(/Equity/i);
     expect(UNSUPPORTED_SEARCH_SCOPE_MESSAGE).toMatch(/Offshore fund/i);
+    expect(UNSUPPORTED_SEARCH_SCOPE_MESSAGE).toMatch(/SACCO/i);
   });
 
-  it("3d. market_asset with subtype sacco is blocked in this slice — only reit, equity, and offshore_fund are enabled", async () => {
-    const searchImpl = vi.fn();
-    const resolution = await resolveSearchSource({
-      scope: "market_asset",
-      question: "What is the current price?",
-      allowUnsourced: false,
-      marketAssetSubtype: "sacco",
-      searchImpl,
-    });
-    expect(resolution.outcome).toBe("unsupported_scope");
-    if (resolution.outcome === "unsupported_scope") {
-      expect(resolution.message).toBe(MARKET_ASSET_SEARCH_SUBTYPE_REQUIRED_MESSAGE);
+  it("3d. market_asset with an unrouted subtype (ETF/property/pension/other) is blocked — no route exists for any of them", async () => {
+    for (const subtype of ["etf", "property", "pension", "other"] as const) {
+      const searchImpl = vi.fn();
+      const resolution = await resolveSearchSource({
+        scope: "market_asset",
+        question: "What is the current price?",
+        allowUnsourced: false,
+        marketAssetSubtype: subtype,
+        searchImpl,
+      });
+      expect(resolution.outcome).toBe("unsupported_scope");
+      if (resolution.outcome === "unsupported_scope") {
+        expect(resolution.message).toBe(MARKET_ASSET_SEARCH_SUBTYPE_REQUIRED_MESSAGE);
+      }
+      expect(searchImpl).not.toHaveBeenCalled();
     }
-    expect(searchImpl).not.toHaveBeenCalled();
   });
 
   it("3e. an unrecognised/garbage market-asset subtype is also blocked, never treated as reit", async () => {
@@ -183,7 +201,7 @@ describe("Stage 4.2b-ii · resolveSearchSource", () => {
       scope: "market_asset",
       question: "q",
       allowUnsourced: false,
-      marketAssetSubtype: "etf",
+      marketAssetSubtype: "not_a_real_subtype",
       searchImpl,
     });
     expect(resolution.outcome).toBe("unsupported_scope");
@@ -337,6 +355,33 @@ describe("Stage 4.2b-ii · resolveSearchSource", () => {
   });
 
   it("4k. market-asset search design (offshore fund slice) — a manual source prevents offshore-fund search from ever being attempted (shouldAttemptSearch gate, scope-agnostic)", () => {
+    expect(shouldAttemptSearch({ hasManualSource: true, allowSearch: true })).toBe(false);
+  });
+
+  it("4l. market-asset search design (SACCO slice, final) — a successful SACCO search resolves to a url source, calling searchImpl with catalogue market_asset + subtype sacco", async () => {
+    const searchImpl = vi.fn().mockResolvedValue(okSaccoResult());
+    const resolution = await resolveSearchSource({
+      scope: "market_asset",
+      question: "What is the current dividend rate for this SACCO?",
+      allowUnsourced: false,
+      marketAssetSubtype: "sacco",
+      searchImpl,
+    });
+    expect(resolution.outcome).toBe("found");
+    if (resolution.outcome === "found") {
+      expect(resolution.source).toEqual({
+        kind: "url",
+        url: "https://www.example-sacco.co.ke/announcements/2026-dividend",
+      });
+      expect(resolution.label).toMatch(/^AI search:/);
+      expect(resolution.label).toContain("Example SACCO — 2026 Dividend Announcement");
+    }
+    expect(searchImpl).toHaveBeenCalledWith(
+      expect.objectContaining({ catalogue: "market_asset", subtype: "sacco" }),
+    );
+  });
+
+  it("4m. market-asset search design (SACCO slice) — a manual source prevents SACCO search from ever being attempted (shouldAttemptSearch gate, scope-agnostic)", () => {
     expect(shouldAttemptSearch({ hasManualSource: true, allowSearch: true })).toBe(false);
   });
 
@@ -524,6 +569,38 @@ describe("Stage 4.2b-ii · resolveSearchSource", () => {
       question: "What is the current NAV for this offshore fund?",
       allowUnsourced: true,
       marketAssetSubtype: "offshore_fund",
+      searchImpl,
+    });
+    expect(resolution.outcome).toBe("search_failed_unsourced");
+  });
+
+  it("5m. market-asset search design (SACCO slice, final) — a SACCO search failure with allowUnsourced:false blocks, same rule as CBK/MMF/bank/REIT/equity/offshore-fund", async () => {
+    const searchImpl = vi.fn().mockResolvedValue({
+      ok: false,
+      reason: "no_citations",
+      message: "The search returned no real URL citations.",
+    } satisfies SearchSourceResult);
+    const resolution = await resolveSearchSource({
+      scope: "market_asset",
+      question: "What is the current dividend rate for this SACCO?",
+      allowUnsourced: false,
+      marketAssetSubtype: "sacco",
+      searchImpl,
+    });
+    expect(resolution.outcome).toBe("search_failed_blocked");
+  });
+
+  it("5n. market-asset search design (SACCO slice) — the SAME SACCO search failure with allowUnsourced:true does not block", async () => {
+    const searchImpl = vi.fn().mockResolvedValue({
+      ok: false,
+      reason: "no_citations",
+      message: "The search returned no real URL citations.",
+    } satisfies SearchSourceResult);
+    const resolution = await resolveSearchSource({
+      scope: "market_asset",
+      question: "What is the current dividend rate for this SACCO?",
+      allowUnsourced: true,
+      marketAssetSubtype: "sacco",
       searchImpl,
     });
     expect(resolution.outcome).toBe("search_failed_unsourced");

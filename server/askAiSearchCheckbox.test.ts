@@ -136,11 +136,12 @@ describe("Stage 4.2b-iii · both forms are wired consistently and stay CBK/MMF/b
     expect(verifyMentions.length).toBeGreaterThanOrEqual(2); // at least one per scope, in both OpeningPanel and Conversation copy would double this, but assert the minimum
   });
 
-  it("market_asset/REIT and market_asset/equity search opt-in copy now exist (market-asset search design) — offshore/SACCO still do not", () => {
+  it("market_asset/REIT, market_asset/equity, market_asset/offshore-fund, and market_asset/SACCO search opt-in copy all exist (market-asset search design, full staged rollout) — none ever claim CBK's fixed-domain guarantee", () => {
     expect(askAi).toMatch(/Search for a cited NSE\/REIT source/);
     expect(askAi).toMatch(/Search for a cited NSE\/equity source/);
+    expect(askAi).toMatch(/Search for a cited fund-manager\/NAV source/);
+    expect(askAi).toMatch(/Search for a cited SACCO source/);
     expect(askAi).not.toMatch(/[Ss]earch authoritative (market asset|REIT|equity|offshore|SACCO)/);
-    expect(askAi).not.toMatch(/Search for a cited (offshore.fund|SACCO)/i);
   });
 
   it("no live OpenAI call is possible from this test file (static source read only)", () => {

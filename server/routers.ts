@@ -8654,6 +8654,13 @@ export const appRouter = router({
           // Step 4.2b-ii — explicit manager opt-in to search an authoritative source
           // when nothing is manually attached (see `ask`).
           allowSearch: z.boolean().optional(),
+          // Market-asset search design (2026-07-13) — the manager's EXPLICITLY selected
+          // market-asset subtype (never inferred), carried only so resolveSearchSource
+          // can gate search when scope === "market_asset". Ignored for every other
+          // scope. Only "reit" actually unlocks search in this slice — equity/
+          // offshore_fund/sacco are accepted here (so the UI can send them) but still
+          // resolve to a blocked search server-side.
+          marketAssetSubtype: z.enum(["equity", "reit", "offshore_fund", "sacco"]).optional(),
           threadId: z.number().int().positive().optional(),
           // Round 92 — explicit per-follow-up source behaviour (see `ask`).
           sourceMode: z.enum(["reuse_previous", "new", "none"]).optional(),
@@ -8721,12 +8728,14 @@ export const appRouter = router({
         // is never stored in the small source_ref column and the file is read exactly once.
         pending = await materializeUploadSource(pending, pendingLabel, input.allowUnsourced ?? false);
 
-        // Step 4.2b-ii — AI search (CBK, MMF, bank — Stage 7f); identical rule to `ask` above.
+        // Step 4.2b-ii — AI search (CBK, MMF, bank — Stage 7f; market_asset + REIT
+        // only — market-asset search design); identical rule to `ask` above.
         if (shouldAttemptSearch({ hasManualSource: Boolean(pending), allowSearch: input.allowSearch ?? false })) {
           const resolution = await resolveSearchSource({
             scope: input.scope as ResearchScope,
             question: input.question,
             allowUnsourced: input.allowUnsourced ?? false,
+            marketAssetSubtype: input.marketAssetSubtype ?? null,
           });
           if (resolution.outcome === "found") {
             pending = resolution.source;

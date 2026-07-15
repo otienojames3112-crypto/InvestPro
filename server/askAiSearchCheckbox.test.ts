@@ -1,7 +1,7 @@
 /**
  * Stage 4, Step 4.2b-iii — the Ask AI UI checkbox that lets a manager opt into
  * `allowSearch` (Step 4.2b-ii's search wiring — CBK; MMF as of Stage 7e; bank as of
- * Stage 7f).
+ * Stage 7f; market_asset/REIT as of the market-asset search design's REIT slice).
  *
  * This repo has no jsdom/testing-library setup for client components (vitest runs
  * client-adjacent checks with `environment: "node"`); the established convention for
@@ -33,8 +33,8 @@ describe("Stage 4.2b-iii · OpeningPanel search checkbox", () => {
     expect(opening).toMatch(/\{!src\.provided && \(\s*<label[\s\S]{0,1600}Search authoritative CBK sources/);
   });
 
-  it("3. disabled outside CBK/MMF/bank scope, with a short explanation", () => {
-    expect(opening).toContain('disabled={scope !== "cbk" && scope !== "mmf" && scope !== "bank"}');
+  it("3. disabled outside CBK/MMF/bank scope (and outside market_asset+REIT), with a short explanation", () => {
+    expect(opening).toContain('disabled={scope !== "cbk" && scope !== "mmf" && scope !== "bank" && !marketAssetSearchReady}');
     expect(opening).toContain("Only available when Focus (below) is set to");
   });
 
@@ -47,9 +47,9 @@ describe("Stage 4.2b-iii · OpeningPanel search checkbox", () => {
     expect(opening).toContain("onChange={(e) => setAllowSearch(e.target.checked)}");
   });
 
-  it("5. allowSearch is sent to startResearchTask ONLY when no source resolved AND scope is cbk, mmf, or bank", () => {
+  it("5. allowSearch is sent to startResearchTask ONLY when no source resolved AND scope is cbk/mmf/bank (or market_asset+REIT)", () => {
     expect(opening).toContain(
-      'allowSearch: !source && (scope === "cbk" || scope === "mmf" || scope === "bank") ? allowSearch : undefined,',
+      'allowSearch: !source && (scope === "cbk" || scope === "mmf" || scope === "bank" || marketAssetSearchReady) ? allowSearch : undefined,',
     );
   });
 
@@ -136,9 +136,10 @@ describe("Stage 4.2b-iii · both forms are wired consistently and stay CBK/MMF/b
     expect(verifyMentions.length).toBeGreaterThanOrEqual(2); // at least one per scope, in both OpeningPanel and Conversation copy would double this, but assert the minimum
   });
 
-  it("no market_asset/REIT/offshore/SACCO search opt-in copy exists yet (those stay off in this pass)", () => {
+  it("market_asset/REIT search opt-in copy now exists (market-asset search design's REIT slice) — offshore/SACCO/equity still do not", () => {
+    expect(askAi).toMatch(/Search for a cited NSE\/REIT source/);
     expect(askAi).not.toMatch(/[Ss]earch authoritative (market asset|REIT|offshore|SACCO)/);
-    expect(askAi).not.toMatch(/Search for a cited (market.asset|REIT|offshore|SACCO)/i);
+    expect(askAi).not.toMatch(/Search for a cited (offshore.fund|SACCO)/i);
   });
 
   it("no live OpenAI call is possible from this test file (static source read only)", () => {

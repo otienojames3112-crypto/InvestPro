@@ -1,9 +1,10 @@
 /**
- * Market-asset search design (2026-07-13) — foundation slice: an explicit "Asset
- * type" selector in Ask AI's OpeningPanel, shown only when Focus = "Market assets".
- * This slice is UI-only: it collects a subtype but does NOT send it to the server,
- * does NOT enable market-asset search, and does NOT change any search behavior for
- * CBK/MMF/bank (which stays exactly as Stage 7e/7f left it).
+ * Market-asset search design (2026-07-13) — subtype selector (foundation slice) +
+ * REIT search enablement (this slice). An explicit "Asset type" selector in Ask
+ * AI's OpeningPanel, shown only when Focus = "Market assets", now also gates AI
+ * search: search is enabled ONLY when Asset type = "reit" — equity/offshore fund/
+ * SACCO remain unsearchable in this pass, exactly as CBK/MMF/bank search behavior
+ * (Stage 7e/7f) is untouched.
  *
  * This repo has no jsdom/testing-library setup for client components (vitest runs
  * client-adjacent checks with `environment: "node"`); the established convention for
@@ -52,50 +53,114 @@ describe("Market-asset subtype selector · foundation", () => {
 
   it("5. the dropdown is driven by MARKET_ASSET_SUBTYPE_OPTIONS, not a hardcoded/inferred list", () => {
     const idx = opening.indexOf('scope === "market_asset" && (');
-    const block = opening.slice(idx, idx + 1000);
+    const block = opening.slice(idx, idx + 1200);
     expect(block).toContain("MARKET_ASSET_SUBTYPE_OPTIONS.map((o) =>");
-    expect(block).toContain("onValueChange={(v) => setMarketAssetSubtype(v as MarketAssetSubtype)}");
+    expect(block).toContain("const next = v as MarketAssetSubtype;");
+    expect(block).toContain("setMarketAssetSubtype(next);");
   });
 
-  it("6. copy makes clear the subtype is required before future market-asset search", () => {
+  it("6. copy tells the manager REIT is the only searchable subtype so far", () => {
     const idx = opening.indexOf('scope === "market_asset" && (');
-    const block = opening.slice(idx, idx + 1000);
+    const block = opening.slice(idx, idx + 1600);
+    expect(block).toMatch(/AI search is available for REIT/);
     expect(block).toMatch(/Required before AI search for market assets can be enabled/);
+    expect(block).toMatch(/Only REIT search is available so far/);
   });
 
   it("7. switching Focus away from market_asset resets the subtype selection", () => {
     expect(opening).toContain('if (v !== "market_asset") setMarketAssetSubtype("");');
   });
 
-  it("8. switching Focus TO market_asset does not touch allowSearch (the CBK/MMF/bank reset line is untouched)", () => {
+  it("8. switching Focus TO/away-from cbk/mmf/bank still resets allowSearch the same way as Stage 7f (market_asset falls through this same line)", () => {
     expect(opening).toContain('if (v !== "cbk" && v !== "mmf" && v !== "bank") setAllowSearch(false);');
   });
 
-  it("9. no inference from question text — the subtype setter is only ever called from the dropdown's onValueChange", () => {
+  it("9. the subtype setter is only ever called from Focus-change reset and the dropdown's own onValueChange — never inferred from question text", () => {
     const setterCalls = [...opening.matchAll(/setMarketAssetSubtype\([^)]*\)/g)].map((m) => m[0]);
-    expect(setterCalls.sort()).toEqual(
-      ['setMarketAssetSubtype("")', "setMarketAssetSubtype(v as MarketAssetSubtype)"].sort(),
-    );
+    expect(setterCalls.sort()).toEqual(['setMarketAssetSubtype("")', "setMarketAssetSubtype(next)"].sort());
+  });
+
+  it("10. selecting a subtype other than REIT resets allowSearch (no stale checked-but-about-to-be-disabled checkbox)", () => {
+    const idx = opening.indexOf('scope === "market_asset" && (');
+    const block = opening.slice(idx, idx + 1200);
+    expect(block).toContain('if (next !== "reit") setAllowSearch(false);');
   });
 });
 
-describe("Market-asset subtype selector · does not touch search behavior (guardrails)", () => {
-  it("market_asset is still never sent as allowSearch: true — the mutation-site ternary condition is unchanged from Stage 7f", () => {
+describe("Market-asset subtype selector · REIT search enablement", () => {
+  it("marketAssetSearchReady is derived from scope AND subtype together, never scope alone", () => {
+    expect(opening).toContain(
+      'const marketAssetSearchReady = scope === "market_asset" && marketAssetSubtype === "reit";',
+    );
+  });
+
+  it("the search checkbox is enabled (not disabled) when scope=market_asset and subtype=reit, alongside cbk/mmf/bank", () => {
+    expect(opening).toContain(
+      'disabled={scope !== "cbk" && scope !== "mmf" && scope !== "bank" && !marketAssetSearchReady}',
+    );
+  });
+
+  it("allowSearch is sent to startResearchTask for market_asset ONLY when marketAssetSearchReady (i.e. subtype is reit)", () => {
+    expect(opening).toContain(
+      'allowSearch: !source && (scope === "cbk" || scope === "mmf" || scope === "bank" || marketAssetSearchReady) ? allowSearch : undefined,',
+    );
+  });
+
+  it("marketAssetSubtype is forwarded to startResearchTask ONLY for scope === market_asset, and only when selected", () => {
+    expect(opening).toContain(
+      'marketAssetSubtype: scope === "market_asset" && marketAssetSubtype ? marketAssetSubtype : undefined,',
+    );
+  });
+
+  it("REIT gets its own honest search copy — cites NSE/REIT, tells the manager to verify", () => {
+    expect(opening).toContain("Search for a cited NSE/REIT source if I don’t attach a source.");
+    expect(opening).toMatch(/current, cited NSE listing or REIT source/);
+    expect(opening).toMatch(/Please verify the cited source before relying on it/);
+  });
+
+  it("REIT copy never claims the same blanket 'authoritative' guarantee CBK's wording implies", () => {
+    expect(askAi).not.toMatch(/[Ss]earch authoritative (REIT|market asset)/);
+  });
+
+  it("equity, offshore fund, and SACCO get NO search opt-in copy of their own — only REIT does, in this slice", () => {
+    expect(askAi).not.toMatch(/Search for a cited (equity|offshore.fund|SACCO)(?! source if)/i);
+    expect(askAi).not.toMatch(/[Ss]earch authoritative (equity|offshore fund|SACCO)/);
+  });
+
+  it("ETF/property/pension/other are never mentioned anywhere near search copy (no route, never offered)", () => {
+    const searchBlockIdx = opening.indexOf("Step 4.2b-iii");
+    const block = opening.slice(searchBlockIdx, searchBlockIdx + 3000);
+    expect(block).not.toMatch(/etf|property|pension/i);
+  });
+
+  it("market_asset without a subtype selected (marketAssetSubtype === \"\") still keeps search disabled — falls through to the generic 'not ready' copy", () => {
+    expect(opening).toMatch(/Select\s*“?REIT”?\s*as the Asset type above to enable search/);
+  });
+
+  it("the unsupported-scope explanation now also mentions Market assets + REIT", () => {
+    expect(opening).toMatch(/Market assets” with Asset type = REIT/);
+  });
+});
+
+describe("Market-asset subtype selector · does not touch unrelated search behavior (guardrails)", () => {
+  it("CBK/MMF/bank mutation-site conditions still include all three scopes, plus the new REIT case — not a regression, an addition", () => {
     const mutationSites = [...askAi.matchAll(/allowSearch: [^\n]+,/g)].map((m) => m[0]);
     expect(mutationSites.length).toBe(2); // OpeningPanel + Conversation, same as Stage 7f
     for (const site of mutationSites) {
       expect(site).toContain('=== "cbk"');
       expect(site).toContain('=== "mmf"');
       expect(site).toContain('=== "bank"');
-      expect(site).not.toContain('=== "market_asset"');
     }
   });
 
-  it("the search checkbox's disabled condition still does not include market_asset (unchanged from Stage 7f)", () => {
-    expect(opening).toContain('disabled={scope !== "cbk" && scope !== "mmf" && scope !== "bank"}');
+  it("Conversation's mutation site does NOT gain a market_asset/REIT condition — Conversation is untouched by this slice", () => {
+    const conversationMutationIdx = conversation.indexOf("allowSearch: ");
+    const conversationSite = conversation.slice(conversationMutationIdx, conversation.indexOf("\n", conversationMutationIdx));
+    expect(conversationSite).not.toContain("marketAssetSearchReady");
+    expect(conversationSite).not.toContain('=== "market_asset"');
   });
 
-  it("no new server call site or fetch was introduced — this file only touches AskAI.tsx", () => {
+  it("no new server call site or fetch was introduced — this file only touches AskAI.tsx (server changes verified separately)", () => {
     expect(askAi).not.toContain("api.openai.com");
     expect(askAi).not.toMatch(/searchAuthoritativeSource/);
   });
@@ -104,22 +169,28 @@ describe("Market-asset subtype selector · does not touch search behavior (guard
     expect(opening).toContain("Search authoritative CBK sources if I don’t attach a source.");
     expect(opening).toContain("Search for a cited fund-manager source if I don’t attach a source.");
     expect(opening).toContain("Search for a cited bank product page if I don’t attach a source.");
-  });
-
-  it("market_asset gets no search opt-in copy of its own in this slice", () => {
-    expect(askAi).not.toMatch(/Search for a cited (REIT|equity|offshore.fund|SACCO)/i);
-    expect(askAi).not.toMatch(/[Ss]earch authoritative (REIT|equity|offshore fund|SACCO|market asset)/);
+    expect(opening).toContain(
+      "The AI looks up a current, cited CBK source — never from its own memory — and grounds the answer in it, exactly as if you’d pasted the link yourself.",
+    );
+    expect(opening).toContain(
+      "The AI searches for a current, cited fund-manager factsheet (or CMA data as a cross-check) — never from its own memory. MMF sources vary by fund manager, so please verify the cited source before relying on it.",
+    );
+    expect(opening).toContain(
+      "The AI searches for a current, cited bank rates/product page — never from its own memory. Bank sources vary by bank, so please verify the cited source before relying on it.",
+    );
   });
 });
 
-describe("Market-asset subtype selector · Conversation correctly gets no selector in this slice", () => {
+describe("Market-asset subtype selector · Conversation correctly gets no selector or search in this slice", () => {
   // Conversation is a FOLLOW-UP on an existing thread. Its scope comes from
   // `data?.thread?.scope` — fixed at thread-creation time in OpeningPanel — and is
   // only ever displayed read-only ("Focus: {thread.scope}"), never re-selected. There
   // is no moment in Conversation where a manager picks Focus = "Market assets" (that
   // only happens once, when the thread is FIRST opened via OpeningPanel), so there is
-  // no corresponding moment where a market-asset subtype needs to be picked there
-  // either. These tests pin that invariant so a future slice can't silently violate it.
+  // no corresponding moment where a market-asset subtype needs to be picked (or REIT
+  // search enabled) there either — the subtype was never persisted anywhere server-
+  // side, so a follow-up on an existing market_asset thread has no way to reconstruct
+  // it. These tests pin that invariant so a future slice can't silently violate it.
 
   it("Conversation never calls setScope — its scope is read-only, inherited from the thread", () => {
     expect(conversation).not.toContain("setScope(");
@@ -138,13 +209,14 @@ describe("Market-asset subtype selector · Conversation correctly gets no select
     expect(conversation).not.toContain('<Label className="text-xs text-muted-foreground">Focus</Label>');
   });
 
-  it("Conversation has no market-asset subtype state or dropdown — MARKET_ASSET_SUBTYPE_OPTIONS is never referenced there", () => {
+  it("Conversation has no market-asset subtype state, dropdown, or REIT-readiness logic — none of these symbols appear there", () => {
     expect(conversation).not.toContain("marketAssetSubtype");
     expect(conversation).not.toContain("MARKET_ASSET_SUBTYPE_OPTIONS");
     expect(conversation).not.toContain("MarketAssetSubtype");
+    expect(conversation).not.toContain("marketAssetSearchReady");
   });
 
-  it("Conversation's search checkbox is still gated on the thread's FIXED scope, same guard as Stage 7f — unaffected by this slice", () => {
+  it("Conversation's search checkbox is still gated on the thread's FIXED scope only, same guard as Stage 7f — unaffected by this slice", () => {
     expect(conversation).toContain(
       'disabled={thread?.scope !== "cbk" && thread?.scope !== "mmf" && thread?.scope !== "bank"}',
     );

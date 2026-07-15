@@ -1,7 +1,7 @@
 /**
  * Stage 4, Step 4.2b-ii — wiring searchAuthoritativeSource() into the research flow
- * (CBK; MMF as of Stage 7e; bank as of Stage 7f), behind an explicit `allowSearch`
- * opt-in.
+ * (CBK; MMF as of Stage 7e; bank as of Stage 7f; market_asset/REIT as of the
+ * market-asset search design's REIT slice), behind an explicit `allowSearch` opt-in.
  *
  * These tests exercise `shouldAttemptSearch`, `resolveSearchSource`, and
  * `searchFoundLabel` directly from aiResearchService.ts — the pure/injectable layer
@@ -18,6 +18,7 @@ import {
   searchFailureMessage,
   searchFoundLabel,
   UNSUPPORTED_SEARCH_SCOPE_MESSAGE,
+  MARKET_ASSET_SEARCH_SUBTYPE_REQUIRED_MESSAGE,
   type SearchSourceResolution,
 } from "./aiResearchService";
 import type { SearchSourceResult } from "./_core/webSearch";
@@ -64,6 +65,20 @@ function okBankResult(overrides?: Partial<Extract<SearchSourceResult, { ok: true
   };
 }
 
+function okReitResult(overrides?: Partial<Extract<SearchSourceResult, { ok: true }>>): SearchSourceResult {
+  return {
+    ok: true,
+    kind: "search",
+    text: "Example REIT's distribution yield is 9.2% as of 2026-07-10.",
+    citations: [{ url: "https://www.nse.co.ke/reits/example-reit", title: "Example REIT — NSE Listing" }],
+    sourceLabel: "Nairobi Securities Exchange (NSE)",
+    catalogue: "market_asset",
+    subtype: "reit",
+    searchedAt: Date.now(),
+    ...overrides,
+  };
+}
+
 describe("Stage 4.2b-ii · shouldAttemptSearch (pure)", () => {
   it("1. CBK + no manual source + allowSearch:true → true (the only case that fires)", () => {
     expect(shouldAttemptSearch({ hasManualSource: false, allowSearch: true })).toBe(true);
@@ -93,7 +108,7 @@ describe("Stage 4.2b-ii · resolveSearchSource", () => {
     expect(searchImpl).not.toHaveBeenCalled();
   });
 
-  it("3b. market_asset is also unsupported (Stage 7f only enables cbk + mmf + bank)", async () => {
+  it("3b. market_asset with NO subtype is blocked, with the subtype-specific message (not the generic unsupported-scope one)", async () => {
     const searchImpl = vi.fn();
     const resolution = await resolveSearchSource({
       scope: "market_asset",
@@ -102,13 +117,49 @@ describe("Stage 4.2b-ii · resolveSearchSource", () => {
       searchImpl: searchImpl as unknown as typeof import("./_core/webSearch").searchAuthoritativeSource,
     });
     expect(resolution.outcome).toBe("unsupported_scope");
+    if (resolution.outcome === "unsupported_scope") {
+      expect(resolution.message).toBe(MARKET_ASSET_SEARCH_SUBTYPE_REQUIRED_MESSAGE);
+      expect(resolution.message).not.toBe(UNSUPPORTED_SEARCH_SCOPE_MESSAGE);
+    }
     expect(searchImpl).not.toHaveBeenCalled();
   });
 
-  it("3c. the unsupported-scope message mentions all three supported scopes (CBK, MMF, bank)", () => {
+  it("3c. the unsupported-scope message mentions the three fully-supported scopes (CBK, MMF, bank) plus market assets/REIT", () => {
     expect(UNSUPPORTED_SEARCH_SCOPE_MESSAGE).toMatch(/CBK/);
     expect(UNSUPPORTED_SEARCH_SCOPE_MESSAGE).toMatch(/MMF/i);
     expect(UNSUPPORTED_SEARCH_SCOPE_MESSAGE).toMatch(/bank/i);
+    expect(UNSUPPORTED_SEARCH_SCOPE_MESSAGE).toMatch(/REIT/i);
+  });
+
+  it("3d. market_asset with subtype equity/offshore_fund/sacco is blocked in this slice — only reit is enabled", async () => {
+    for (const subtype of ["equity", "offshore_fund", "sacco"] as const) {
+      const searchImpl = vi.fn();
+      const resolution = await resolveSearchSource({
+        scope: "market_asset",
+        question: "What is the current price?",
+        allowUnsourced: false,
+        marketAssetSubtype: subtype,
+        searchImpl,
+      });
+      expect(resolution.outcome).toBe("unsupported_scope");
+      if (resolution.outcome === "unsupported_scope") {
+        expect(resolution.message).toBe(MARKET_ASSET_SEARCH_SUBTYPE_REQUIRED_MESSAGE);
+      }
+      expect(searchImpl).not.toHaveBeenCalled();
+    }
+  });
+
+  it("3e. an unrecognised/garbage market-asset subtype is also blocked, never treated as reit", async () => {
+    const searchImpl = vi.fn();
+    const resolution = await resolveSearchSource({
+      scope: "market_asset",
+      question: "q",
+      allowUnsourced: false,
+      marketAssetSubtype: "etf",
+      searchImpl,
+    });
+    expect(resolution.outcome).toBe("unsupported_scope");
+    expect(searchImpl).not.toHaveBeenCalled();
   });
 
   it("4. a successful CBK search resolves to a url source with the real citation URL and a label carrying the title + 'AI search' wording", async () => {
@@ -177,6 +228,33 @@ describe("Stage 4.2b-ii · resolveSearchSource", () => {
   });
 
   it("4e. Stage 7f — a manual source prevents bank search from ever being attempted (shouldAttemptSearch gate, scope-agnostic)", () => {
+    expect(shouldAttemptSearch({ hasManualSource: true, allowSearch: true })).toBe(false);
+  });
+
+  it("4f. market-asset search design — a successful REIT search resolves to a url source, calling searchImpl with catalogue market_asset + subtype reit", async () => {
+    const searchImpl = vi.fn().mockResolvedValue(okReitResult());
+    const resolution = await resolveSearchSource({
+      scope: "market_asset",
+      question: "What is the current distribution yield for this REIT?",
+      allowUnsourced: false,
+      marketAssetSubtype: "reit",
+      searchImpl,
+    });
+    expect(resolution.outcome).toBe("found");
+    if (resolution.outcome === "found") {
+      expect(resolution.source).toEqual({
+        kind: "url",
+        url: "https://www.nse.co.ke/reits/example-reit",
+      });
+      expect(resolution.label).toMatch(/^AI search:/);
+      expect(resolution.label).toContain("Example REIT — NSE Listing");
+    }
+    expect(searchImpl).toHaveBeenCalledWith(
+      expect.objectContaining({ catalogue: "market_asset", subtype: "reit" }),
+    );
+  });
+
+  it("4g. market-asset search design — a manual source prevents REIT search from ever being attempted (shouldAttemptSearch gate, scope-agnostic)", () => {
     expect(shouldAttemptSearch({ hasManualSource: true, allowSearch: true })).toBe(false);
   });
 
@@ -268,6 +346,38 @@ describe("Stage 4.2b-ii · resolveSearchSource", () => {
       scope: "bank",
       question: "What is the top 12-month fixed deposit rate right now?",
       allowUnsourced: true,
+      searchImpl,
+    });
+    expect(resolution.outcome).toBe("search_failed_unsourced");
+  });
+
+  it("5g. market-asset search design — a REIT search failure with allowUnsourced:false blocks, same rule as CBK/MMF/bank", async () => {
+    const searchImpl = vi.fn().mockResolvedValue({
+      ok: false,
+      reason: "no_citations",
+      message: "The search returned no real URL citations.",
+    } satisfies SearchSourceResult);
+    const resolution = await resolveSearchSource({
+      scope: "market_asset",
+      question: "What is the current distribution yield for this REIT?",
+      allowUnsourced: false,
+      marketAssetSubtype: "reit",
+      searchImpl,
+    });
+    expect(resolution.outcome).toBe("search_failed_blocked");
+  });
+
+  it("5h. market-asset search design — the SAME REIT search failure with allowUnsourced:true does not block", async () => {
+    const searchImpl = vi.fn().mockResolvedValue({
+      ok: false,
+      reason: "no_citations",
+      message: "The search returned no real URL citations.",
+    } satisfies SearchSourceResult);
+    const resolution = await resolveSearchSource({
+      scope: "market_asset",
+      question: "What is the current distribution yield for this REIT?",
+      allowUnsourced: true,
+      marketAssetSubtype: "reit",
       searchImpl,
     });
     expect(resolution.outcome).toBe("search_failed_unsourced");

@@ -1,0 +1,487 @@
+/**
+ * Catalogue field contract — Slice 8a (foundation only, 2026-07-16), amended before
+ * approval to add the global source-provenance rule (every catalogue row must carry
+ * an openable source link + as-of date, even where a per-category desired list
+ * happened to omit it — see shared/catalogueFieldContracts.ts's file header).
+ *
+ * Pure tests for shared/catalogueFieldContracts.ts. This slice is documentation +
+ * data only: nothing here touches the DB, Ask AI, the approval gate, the Review
+ * Queue, or any catalogue UI. The guardrail tests at the bottom of this file exist
+ * specifically to catch a future slice accidentally wiring this contract in before
+ * it's meant to (or this slice quietly changing runtime behavior it shouldn't).
+ */
+import { describe, expect, it } from "vitest";
+import { readFileSync, readdirSync } from "node:fs";
+import { join } from "node:path";
+import {
+  CATALOGUE_FIELD_CONTRACTS,
+  UNSUPPORTED_MARKET_ASSET_SUBTYPES,
+  getCatalogueFieldContract,
+  type CatalogueFieldContract,
+  type CatalogueFieldContractEntry,
+} from "../shared/catalogueFieldContracts";
+
+/** The desired field labels, taken verbatim from the approved product requirement
+ *  (the file header's one normalization: "Occupancy rate, if available" → label
+ *  "Occupancy rate", optionality captured via `required: false` instead), PLUS the
+ *  global source-provenance additions from the pre-approval amendment: every base
+ *  CATALOGUE_FIELD_RULES set already requires BOTH `source` and `asOf`, so this
+ *  contract adds whichever of "Source link" / "Source as-of date" a catalogue's
+ *  original product list omitted — "Source link" for cbk/equity/reit/
+ *  offshore_fund/sacco, and "Source as-of date" for cbk AND mmf (mmf's list named
+ *  only "Source link"). Bank already had complete source coverage and is
+ *  unchanged. */
+const DESIRED_LABELS: Record<string, string[]> = {
+  mmf: [
+    "Fund name",
+    "Fund manager",
+    "EAR",
+    "Daily yield",
+    "Gross yield",
+    "Net yield",
+    "WHT",
+    "Minimum investment",
+    "Withdrawal period",
+    "AUM",
+    "Risk profile",
+    "Source link",
+    "Source as-of date",
+  ],
+  bank: [
+    "Bank name",
+    "Product name",
+    "Product type",
+    "Interest rate",
+    "Net return after WHT",
+    "Minimum deposit",
+    "Tenor / lock-in period",
+    "Early withdrawal rule",
+    "Fees / charges",
+    "Access speed",
+    "Source",
+    "Source as-of date",
+  ],
+  cbk: [
+    "Security type",
+    "Tenor",
+    "Application deadline",
+    "Indicative / previous yield",
+    "Net yield after WHT",
+    "Tax treatment",
+    "Minimum investment",
+    "Maturity date",
+    "Source link",
+    "Source as-of date",
+  ],
+  equity: [
+    "Company name",
+    "Ticker / symbol",
+    "Exchange",
+    "Current price",
+    "Dividend yield",
+    "Recent dividend",
+    "Price change",
+    "Market sector",
+    "Minimum buy amount or board lot",
+    "Liquidity / trading activity",
+    "Risk level",
+    "Source link",
+    "Source as-of date",
+  ],
+  reit: [
+    "REIT name",
+    "REIT type",
+    "Current price / unit price",
+    "Distribution yield",
+    "Recent distribution",
+    "Net asset value / NAV",
+    "Occupancy rate",
+    "Minimum investment",
+    "Liquidity / tradability",
+    "Risk level",
+    "Source link",
+    "Source as-of date",
+  ],
+  offshore_fund: [
+    "Fund name",
+    "Fund manager / provider",
+    "Currency",
+    "Fund type",
+    "Annualized return / performance",
+    "Minimum investment",
+    "Fees",
+    "Withdrawal period",
+    "FX risk note",
+    "Risk level",
+    "Source link",
+    "Source as-of date",
+  ],
+  sacco: [
+    "SACCO name",
+    "Product type",
+    "Dividend rate / interest rate",
+    "Minimum contribution",
+    "Membership requirement",
+    "Lock-in or withdrawal rule",
+    "Fees / charges",
+    "Liquidity",
+    "Risk / protection note",
+    "Source link",
+    "Source as-of date",
+  ],
+};
+
+function contractIdOf(c: CatalogueFieldContract): string {
+  return c.subtype ?? c.catalogue;
+}
+
+describe("Catalogue field contract · every catalogue/subtype has a contract", () => {
+  it("exactly 7 active contracts exist: mmf, bank, cbk, and 4 market_asset subtypes", () => {
+    expect(CATALOGUE_FIELD_CONTRACTS.length).toBe(7);
+    const ids = CATALOGUE_FIELD_CONTRACTS.map(contractIdOf).sort();
+    expect(ids).toEqual(["bank", "cbk", "equity", "mmf", "offshore_fund", "reit", "sacco"].sort());
+  });
+
+  it("getCatalogueFieldContract resolves mmf/bank/cbk directly (no subtype needed)", () => {
+    expect(getCatalogueFieldContract("mmf")?.label).toBe("MMF");
+    expect(getCatalogueFieldContract("bank")?.label).toBe("Bank products");
+    expect(getCatalogueFieldContract("cbk")?.label).toBe("CBK securities");
+  });
+
+  it("getCatalogueFieldContract resolves each market_asset subtype", () => {
+    expect(getCatalogueFieldContract("market_asset", "equity")?.label).toBe("Market assets — Equity");
+    expect(getCatalogueFieldContract("market_asset", "reit")?.label).toBe("Market assets — REIT");
+    expect(getCatalogueFieldContract("market_asset", "offshore_fund")?.label).toBe("Market assets — Offshore fund");
+    expect(getCatalogueFieldContract("market_asset", "sacco")?.label).toBe("Market assets — SACCO");
+  });
+
+  it("getCatalogueFieldContract returns null for market_asset with no subtype — never guesses", () => {
+    expect(getCatalogueFieldContract("market_asset")).toBeNull();
+  });
+});
+
+describe("Catalogue field contract · every desired field appears exactly once", () => {
+  for (const [id, labels] of Object.entries(DESIRED_LABELS)) {
+    it(`${id}: contract field labels match the desired list exactly (same set, no dupes, none missing, none extra)`, () => {
+      const contract = CATALOGUE_FIELD_CONTRACTS.find((c) => contractIdOf(c) === id);
+      expect(contract).toBeDefined();
+      const actualLabels = contract!.fields.map((f) => f.label);
+      expect(actualLabels.length).toBe(labels.length);
+      expect(new Set(actualLabels).size).toBe(labels.length); // no duplicate labels
+      expect([...actualLabels].sort()).toEqual([...labels].sort());
+    });
+  }
+});
+
+describe("Catalogue field contract · market-asset subtypes are distinct contracts", () => {
+  it("equity, REIT, offshore fund, and SACCO are four SEPARATE contracts, not one shared list", () => {
+    const marketAssetContracts = CATALOGUE_FIELD_CONTRACTS.filter((c) => c.catalogue === "market_asset");
+    expect(marketAssetContracts.length).toBe(4);
+    const subtypes = marketAssetContracts.map((c) => c.subtype).sort();
+    expect(subtypes).toEqual(["equity", "offshore_fund", "reit", "sacco"].sort());
+    // Each contract's own field array is a genuinely distinct object, not a shared reference.
+    const fieldArrays = new Set(marketAssetContracts.map((c) => c.fields));
+    expect(fieldArrays.size).toBe(4);
+  });
+});
+
+describe("Catalogue field contract · ETF/property/pension/other are NOT active contracts", () => {
+  it("UNSUPPORTED_MARKET_ASSET_SUBTYPES lists exactly etf/property/pension/other", () => {
+    expect([...UNSUPPORTED_MARKET_ASSET_SUBTYPES].sort()).toEqual(["etf", "other", "pension", "property"].sort());
+  });
+
+  it("none of the unsupported subtypes appear as a `subtype` on any active contract", () => {
+    const activeSubtypes = new Set(
+      CATALOGUE_FIELD_CONTRACTS.map((c) => c.subtype).filter((s): s is string => s !== undefined),
+    );
+    for (const unsupported of UNSUPPORTED_MARKET_ASSET_SUBTYPES) {
+      expect(activeSubtypes.has(unsupported)).toBe(false);
+    }
+  });
+
+  it("no field label anywhere mentions ETF/property/pension/other-as-an-instrument-type", () => {
+    const allLabels = CATALOGUE_FIELD_CONTRACTS.flatMap((c) => c.fields.map((f) => f.label));
+    expect(allLabels.some((l) => /\bETF\b|\bproperty\b|\bpension\b/i.test(l))).toBe(false);
+  });
+});
+
+describe("Catalogue field contract · every field has required metadata", () => {
+  const allFields: CatalogueFieldContractEntry[] = CATALOGUE_FIELD_CONTRACTS.flatMap((c) => c.fields);
+
+  it("every field has a non-empty key and label", () => {
+    for (const f of allFields) {
+      expect(typeof f.key).toBe("string");
+      expect(f.key.trim().length).toBeGreaterThan(0);
+      expect(typeof f.label).toBe("string");
+      expect(f.label.trim().length).toBeGreaterThan(0);
+    }
+  });
+
+  it("every field has a boolean `required` flag", () => {
+    for (const f of allFields) expect(typeof f.required).toBe("boolean");
+  });
+
+  it("every field has a valid storageStatus", () => {
+    const valid = new Set(["column", "extendedFields", "computed", "sourceOnly", "missingRequiresMigration"]);
+    for (const f of allFields) expect(valid.has(f.storageStatus)).toBe(true);
+  });
+
+  it("every field has a boolean managerEditable flag", () => {
+    for (const f of allFields) expect(typeof f.managerEditable).toBe("boolean");
+  });
+
+  it("every field has a boolean showInTable (display) flag", () => {
+    for (const f of allFields) expect(typeof f.showInTable).toBe("boolean");
+  });
+
+  it("every field has a boolean promoteToCatalogueRow flag", () => {
+    for (const f of allFields) expect(typeof f.promoteToCatalogueRow).toBe("boolean");
+  });
+
+  it("every field has an aliases array (possibly empty, never undefined)", () => {
+    for (const f of allFields) expect(Array.isArray(f.aliases)).toBe(true);
+  });
+
+  it("every field's catalogue/subtype matches the contract it lives in", () => {
+    for (const c of CATALOGUE_FIELD_CONTRACTS) {
+      for (const f of c.fields) {
+        expect(f.catalogue).toBe(c.catalogue);
+        expect(f.subtype).toBe(c.subtype);
+      }
+    }
+  });
+});
+
+describe("Catalogue field contract · no duplicate canonical keys within one contract", () => {
+  for (const c of CATALOGUE_FIELD_CONTRACTS) {
+    it(`${contractIdOf(c)}: field keys are unique`, () => {
+      const keys = c.fields.map((f) => f.key);
+      expect(new Set(keys).size).toBe(keys.length);
+    });
+  }
+});
+
+describe("Catalogue field contract · global source-provenance rule — every active contract has an openable source link + as-of date", () => {
+  it("every one of the 7 active contracts has a required 'sourceLink' field with storageStatus 'column'", () => {
+    for (const c of CATALOGUE_FIELD_CONTRACTS) {
+      const sourceLink = c.fields.find((f) => f.key === "sourceLink");
+      expect(sourceLink, `${contractIdOf(c)} is missing a sourceLink field`).toBeDefined();
+      expect(sourceLink!.required).toBe(true);
+      expect(sourceLink!.storageStatus).toBe("column");
+      expect(sourceLink!.promoteToCatalogueRow).toBe(true);
+    }
+  });
+
+  it("every one of the 7 active contracts has a required 'sourceAsOf' field with storageStatus 'column'", () => {
+    for (const c of CATALOGUE_FIELD_CONTRACTS) {
+      const sourceAsOf = c.fields.find((f) => f.key === "sourceAsOf");
+      expect(sourceAsOf, `${contractIdOf(c)} is missing a sourceAsOf field`).toBeDefined();
+      expect(sourceAsOf!.required).toBe(true);
+      expect(sourceAsOf!.storageStatus).toBe("column");
+      expect(sourceAsOf!.promoteToCatalogueRow).toBe(true);
+    }
+  });
+
+  it("mmf's sourceLink is labeled 'Source link' (unchanged from the original product list)", () => {
+    const mmf = getCatalogueFieldContract("mmf")!;
+    expect(mmf.fields.find((f) => f.key === "sourceLink")!.label).toBe("Source link");
+  });
+
+  it("bank's sourceLink is labeled 'Source' (unchanged display label; only the canonical KEY was unified to sourceLink for consistency)", () => {
+    const bank = getCatalogueFieldContract("bank")!;
+    const field = bank.fields.find((f) => f.key === "sourceLink")!;
+    expect(field.label).toBe("Source");
+    expect(field.aliases).toContain("source"); // real bank_instruments.source column name preserved as an alias
+  });
+
+  it("CBK now carries BOTH source fields — the pre-approval amendment added them because CATALOGUE_FIELD_RULES.cbk already requires 'source' and 'asOf' today; leaving them out would have made this contract weaker than the existing approval gate", () => {
+    const cbk = getCatalogueFieldContract("cbk")!;
+    const sourceLink = cbk.fields.find((f) => f.key === "sourceLink");
+    const sourceAsOf = cbk.fields.find((f) => f.key === "sourceAsOf");
+    expect(sourceLink).toBeDefined();
+    expect(sourceLink!.label).toBe("Source link");
+    expect(sourceLink!.required).toBe(true);
+    expect(sourceAsOf).toBeDefined();
+    expect(sourceAsOf!.label).toBe("Source as-of date");
+    expect(sourceAsOf!.required).toBe(true);
+    expect(cbk.fields.length).toBe(10); // the original 8 product-list fields + 2 provenance fields
+  });
+
+  it("no test or contract treats CBK's source absence as intentional — the field IS present (regression guard for the pre-approval amendment)", () => {
+    const cbk = getCatalogueFieldContract("cbk")!;
+    expect(cbk.fields.some((f) => f.key === "sourceLink")).toBe(true);
+    expect(cbk.fields.some((f) => f.key === "sourceAsOf")).toBe(true);
+  });
+
+  it("every market_asset subtype has BOTH a required 'Source link' and a required 'Source as-of date' field", () => {
+    for (const subtype of ["equity", "reit", "offshore_fund", "sacco"] as const) {
+      const contract = getCatalogueFieldContract("market_asset", subtype)!;
+      const sourceLink = contract.fields.find((f) => f.key === "sourceLink");
+      const sourceAsOf = contract.fields.find((f) => f.key === "sourceAsOf");
+      expect(sourceLink, `${subtype} is missing sourceLink`).toBeDefined();
+      expect(sourceLink!.label).toBe("Source link");
+      expect(sourceLink!.required).toBe(true);
+      expect(sourceLink!.storageStatus).toBe("column"); // opportunities.dataSource already exists
+      expect(sourceAsOf, `${subtype} is missing sourceAsOf`).toBeDefined();
+      expect(sourceAsOf!.label).toBe("Source as-of date");
+      expect(sourceAsOf!.required).toBe(true);
+      expect(sourceAsOf!.storageStatus).toBe("column"); // opportunities.dataAsOf already exists
+    }
+  });
+
+  it("sourceLink aliases include the real underlying column/field names per catalogue (source / dataSource / sourceUrl / sourceLabel)", () => {
+    for (const c of CATALOGUE_FIELD_CONTRACTS) {
+      const sourceLink = c.fields.find((f) => f.key === "sourceLink")!;
+      expect(sourceLink.aliases.length).toBeGreaterThan(0);
+      expect(sourceLink.aliases).toContain("source");
+    }
+  });
+});
+
+describe("Catalogue field contract · computed fields are marked computed, not column", () => {
+  it("mmf netYield is computed, not a stored column", () => {
+    const field = getCatalogueFieldContract("mmf")!.fields.find((f) => f.key === "netYield")!;
+    expect(field.storageStatus).toBe("computed");
+    expect(field.promoteToCatalogueRow).toBe(false);
+  });
+
+  it("bank netReturnAfterWht is computed, not a stored column", () => {
+    const field = getCatalogueFieldContract("bank")!.fields.find((f) => f.key === "netReturnAfterWht")!;
+    expect(field.storageStatus).toBe("computed");
+    expect(field.promoteToCatalogueRow).toBe(false);
+  });
+
+  it("cbk netYieldAfterWht is computed, not a stored column", () => {
+    const field = getCatalogueFieldContract("cbk")!.fields.find((f) => f.key === "netYieldAfterWht")!;
+    expect(field.storageStatus).toBe("computed");
+    expect(field.promoteToCatalogueRow).toBe(false);
+  });
+
+  it("no field anywhere is BOTH storageStatus:'computed' AND promoteToCatalogueRow:true — a computed value is never itself written to a row", () => {
+    const allFields = CATALOGUE_FIELD_CONTRACTS.flatMap((c) => c.fields);
+    const violators = allFields.filter((f) => f.storageStatus === "computed" && f.promoteToCatalogueRow);
+    expect(violators).toEqual([]);
+  });
+});
+
+describe("Catalogue field contract · missing fields are marked missingRequiresMigration, never silently treated as existing", () => {
+  const knownMissing: Array<{ catalogue: "mmf" | "bank"; subtype?: undefined; key: string }> = [
+    { catalogue: "mmf", key: "riskProfile" },
+    { catalogue: "mmf", key: "dailyYield" },
+    { catalogue: "bank", key: "fees" },
+    { catalogue: "bank", key: "accessSpeed" },
+  ];
+
+  for (const { catalogue, key } of knownMissing) {
+    it(`${catalogue}.${key} is marked missingRequiresMigration`, () => {
+      const field = getCatalogueFieldContract(catalogue)!.fields.find((f) => f.key === key)!;
+      expect(field.storageStatus).toBe("missingRequiresMigration");
+      expect(field.showInTable).toBe(false);
+      expect(field.promoteToCatalogueRow).toBe(false);
+    });
+  }
+
+  const knownMissingMarketAsset: Array<{ subtype: "equity" | "reit" | "offshore_fund" | "sacco"; key: string }> = [
+    { subtype: "equity", key: "recentDividend" },
+    { subtype: "equity", key: "priceChange" },
+    { subtype: "equity", key: "marketSector" },
+    { subtype: "equity", key: "minBuyAmount" },
+    { subtype: "equity", key: "riskLevel" },
+    { subtype: "reit", key: "reitType" },
+    { subtype: "reit", key: "recentDistribution" },
+    { subtype: "reit", key: "occupancyRate" },
+    { subtype: "reit", key: "minInvestment" },
+    { subtype: "reit", key: "riskLevel" },
+    { subtype: "offshore_fund", key: "fundType" },
+    { subtype: "offshore_fund", key: "minInvestment" },
+    { subtype: "offshore_fund", key: "withdrawalPeriod" },
+    { subtype: "offshore_fund", key: "riskLevel" },
+    { subtype: "sacco", key: "membershipRequirement" },
+    { subtype: "sacco", key: "fees" },
+  ];
+
+  for (const { subtype, key } of knownMissingMarketAsset) {
+    it(`market_asset/${subtype}.${key} is marked missingRequiresMigration`, () => {
+      const field = getCatalogueFieldContract("market_asset", subtype)!.fields.find((f) => f.key === key)!;
+      expect(field.storageStatus).toBe("missingRequiresMigration");
+      expect(field.showInTable).toBe(false);
+      expect(field.promoteToCatalogueRow).toBe(false);
+    });
+  }
+
+  it("no field marked missingRequiresMigration is also marked promoteToCatalogueRow:true — nothing missing gets silently promoted", () => {
+    const allFields = CATALOGUE_FIELD_CONTRACTS.flatMap((c) => c.fields);
+    const violators = allFields.filter(
+      (f) => f.storageStatus === "missingRequiresMigration" && f.promoteToCatalogueRow,
+    );
+    expect(violators).toEqual([]);
+  });
+
+  it("every missingRequiresMigration field carries a `note` explaining the gap (never silent)", () => {
+    const allFields = CATALOGUE_FIELD_CONTRACTS.flatMap((c) => c.fields);
+    const missing = allFields.filter((f) => f.storageStatus === "missingRequiresMigration");
+    expect(missing.length).toBeGreaterThan(0);
+    for (const f of missing) {
+      expect(typeof f.note).toBe("string");
+      expect(f.note!.trim().length).toBeGreaterThan(0);
+    }
+  });
+});
+
+describe("Catalogue field contract · gate-required fields not yet promoted are flagged, not silently marked column", () => {
+  it("REIT distributionYield is gate-required but storageStatus is extendedFields, not column, with a note explaining the promotion gap", () => {
+    const field = getCatalogueFieldContract("market_asset", "reit")!.fields.find((f) => f.key === "distributionYield")!;
+    expect(field.required).toBe(true);
+    expect(field.storageStatus).toBe("extendedFields");
+    expect(field.note).toMatch(/fallback chain/i);
+  });
+
+  it("SACCO's three gate-required fields (dividendRate, minContribution, lockInWithdrawalRule) are extendedFields, not column", () => {
+    const sacco = getCatalogueFieldContract("market_asset", "sacco")!;
+    for (const key of ["dividendRate", "minContribution", "lockInWithdrawalRule"]) {
+      const field = sacco.fields.find((f) => f.key === key)!;
+      expect(field.required).toBe(true);
+      expect(field.storageStatus).toBe("extendedFields");
+      expect(field.promoteToCatalogueRow).toBe(false);
+    }
+  });
+});
+
+describe("Catalogue field contract · foundation-only guardrails (no behavior change yet)", () => {
+  it("no other source file imports shared/catalogueFieldContracts — this slice wires nothing in yet", () => {
+    const root = join(__dirname, "..");
+    const searchDirs = ["server", "shared", join("client", "src")];
+    const offenders: string[] = [];
+    const walk = (dir: string) => {
+      let entries: string[];
+      try {
+        entries = readdirSync(dir);
+      } catch {
+        return;
+      }
+      for (const entry of entries) {
+        if (entry === "node_modules" || entry === ".git") continue;
+        const full = join(dir, entry);
+        const stat = require("node:fs").statSync(full);
+        if (stat.isDirectory()) {
+          walk(full);
+        } else if (/\.(ts|tsx)$/.test(entry) && full !== join(root, "shared", "catalogueFieldContracts.ts")) {
+          const content = readFileSync(full, "utf8");
+          if (content.includes("catalogueFieldContracts")) offenders.push(full);
+        }
+      }
+    };
+    for (const d of searchDirs) walk(join(root, d));
+    // This test file itself imports it — exclude it from the offender check.
+    const nonTestOffenders = offenders.filter((f) => !f.endsWith("catalogueFieldContracts.test.ts"));
+    expect(nonTestOffenders).toEqual([]);
+  });
+
+  it("no field is both required:true and storageStatus:'missingRequiresMigration' AND promoteToCatalogueRow:true at once (a required-but-missing field must never claim it's already promotable)", () => {
+    const allFields = CATALOGUE_FIELD_CONTRACTS.flatMap((c) => c.fields);
+    const violators = allFields.filter(
+      (f) => f.required && f.storageStatus === "missingRequiresMigration" && f.promoteToCatalogueRow,
+    );
+    expect(violators).toEqual([]);
+  });
+});

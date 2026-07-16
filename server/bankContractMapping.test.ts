@@ -337,11 +337,11 @@ describe("Slice 8c · FindingCard wiring", () => {
     expect(idx).toBeGreaterThan(-1);
   });
 
-  it("the 'Additional extracted details' label appears alongside EITHER the MMF, Bank, or CBK block, never unconditionally", () => {
+  it("the 'Additional extracted details' label appears alongside EITHER the MMF, Bank, CBK, or Equity block, never unconditionally", () => {
     const idx = findingCard.indexOf("Additional extracted details");
     expect(idx).toBeGreaterThan(-1);
-    const before = findingCard.slice(Math.max(0, idx - 160), idx);
-    expect(before).toContain("(mmfDisplayRows || bankDisplayRows || cbkDisplayRows) &&");
+    const before = findingCard.slice(Math.max(0, idx - 200), idx);
+    expect(before).toContain("(mmfDisplayRows || bankDisplayRows || cbkDisplayRows || equityDisplayRows) &&");
   });
 
   it("the draft mutation call projects Bank figures via the contract and falls back to them when there's no MMF figures", () => {
@@ -349,15 +349,15 @@ describe("Slice 8c · FindingCard wiring", () => {
       "const bankFigures = bankContract ? projectFindingToContractFigures(bankContract, finding) : undefined;",
     );
     expect(findingCard).toContain(
-      "draft.mutate({ findingId: finding.id, figures: mmfFigures ?? bankFigures ?? cbkFigures });",
+      "draft.mutate({ findingId: finding.id, figures: mmfFigures ?? bankFigures ?? cbkFigures ?? equityFigures });",
     );
   });
 
-  it("non-MMF, non-Bank, non-CBK findings send undefined figures — draftFromFinding's existing raw-extractedFields default is completely unchanged for them", () => {
-    // mmfContract/bankContract/cbkContract are each null whenever targetCatalogue
-    // doesn't match their own catalogue, so mmfFigures ?? bankFigures ?? cbkFigures
-    // resolves to undefined ?? undefined ?? undefined = undefined for market-asset
-    // findings (the only catalogue still unwired).
+  it("non-MMF, non-Bank, non-CBK, non-Equity findings send undefined figures — draftFromFinding's existing raw-extractedFields default is completely unchanged for them", () => {
+    // mmfContract/bankContract/cbkContract/equityContract are each null whenever
+    // targetCatalogue/assetClass doesn't match their own catalogue/subtype, so the
+    // whole ?? chain resolves to undefined for REIT/offshore-fund/SACCO findings
+    // (the market-asset subtypes still unwired).
     expect(findingCard).toContain("mmfContract ? projectFindingToContractFigures(mmfContract, finding) : undefined");
     expect(findingCard).toContain("bankContract ? projectFindingToContractFigures(bankContract, finding) : undefined");
   });
@@ -378,11 +378,13 @@ describe("Slice 8c · FindingCard wiring", () => {
     expect(dialog).not.toContain("getCatalogueFieldContract");
   });
 
-  it("no market_asset contract lookups exist anywhere yet — only MMF, Bank and CBK are wired", () => {
+  it("no REIT/offshore-fund/SACCO market_asset contract lookups exist anywhere yet — only MMF, Bank, CBK and Equity are wired", () => {
     const contractCalls = [...askAi.matchAll(/getCatalogueFieldContract\([^)]*\)/g)].map((m) => m[0]);
     expect(contractCalls.length).toBeGreaterThan(0);
     for (const call of contractCalls) {
-      expect(call.includes('"mmf"') || call.includes('"bank"') || call.includes('"cbk"')).toBe(true);
+      expect(
+        call.includes('"mmf"') || call.includes('"bank"') || call.includes('"cbk"') || call.includes('"equity"'),
+      ).toBe(true);
     }
   });
 });

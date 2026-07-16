@@ -710,20 +710,20 @@ const MARKET_ASSET_EQUITY_FIELD_CONTRACT: CatalogueFieldContract = {
     {
       catalogue: "market_asset",
       subtype: "equity",
-      key: "exchange",
+      key: "market",
       label: "Exchange",
       required: true,
-      aliases: ["exchange", "market"],
+      aliases: ["market", "exchange"],
       storageStatus: "extendedFields",
       managerEditable: true,
       showInTable: true,
       promoteToCatalogueRow: true,
-      note: "extendedFields.MarketAssetProfile.exchange exists; opportunities.market is a generic free-text column shared across all market-asset subtypes, not exchange-specific.",
+      note: "Key renamed from 'exchange' to 'market' during Slice 8e-1's pre-approval compatibility check (2026-07-16) — buildPromotionPlan's opportunity branch reads f.market only (no fallback to f.exchange); the gate's OWN market-rule alias table tolerates 'exchange', which made the original key LOOK compatible while the value was actually silently dropped at promotion. extendedFields.MarketAssetProfile.exchange exists; opportunities.market is a generic free-text column shared across all market-asset subtypes, not exchange-specific.",
     },
     {
       catalogue: "market_asset",
       subtype: "equity",
-      key: "currentPrice",
+      key: "lastPrice",
       label: "Current price",
       required: true,
       aliases: ["marketPrice", "lastPrice"],
@@ -731,11 +731,12 @@ const MARKET_ASSET_EQUITY_FIELD_CONTRACT: CatalogueFieldContract = {
       managerEditable: true,
       showInTable: true,
       promoteToCatalogueRow: true,
+      note: "Key renamed from 'currentPrice' to 'lastPrice' during Slice 8e-1's pre-approval compatibility check (2026-07-16) — neither figurePresent's lastPrice alias table nor buildPromotionPlan's f.lastPrice ?? f.price read recognised the original key. Display label unchanged.",
     },
     {
       catalogue: "market_asset",
       subtype: "equity",
-      key: "dividendYield",
+      key: "yieldPct",
       label: "Dividend yield",
       required: true,
       aliases: ["dividendYield", "yieldPct"],
@@ -743,7 +744,7 @@ const MARKET_ASSET_EQUITY_FIELD_CONTRACT: CatalogueFieldContract = {
       managerEditable: true,
       showInTable: true,
       promoteToCatalogueRow: true,
-      note: "opportunities.yieldPct is a generic column shared across yield/coupon/dividend concepts for ALL market-asset subtypes, not equity-specific.",
+      note: "Key renamed from 'dividendYield' to 'yieldPct' during Slice 8e-1's pre-approval compatibility check (2026-07-16) — buildPromotionPlan's opportunity branch reads f.yieldPct ?? f.yield ?? f.coupon only, never f.dividendYield. The gate's OWN lastPrice-rule alias table tolerates 'dividendYield' as an alternate way to satisfy the price/yield/return requirement, which made the original key LOOK compatible while the value was actually silently dropped from the opportunities.yieldPct column at promotion. opportunities.yieldPct is a generic column shared across yield/coupon/dividend concepts for ALL market-asset subtypes, not equity-specific.",
     },
     {
       catalogue: "market_asset",
@@ -1419,7 +1420,14 @@ const ENVELOPE_ROUTED_CONTRACT_KEYS: Record<CatalogueKey, ReadonlySet<string>> =
   // opportunity branch sets `source` from the envelope only, and dataAsOf is
   // written from the pending update's own `asOf` column, never from figures.
   cbk: new Set(["sourceLink", "sourceAsOf"]),
-  market_asset: new Set(),
+  // Slice 8e-1 — Equity only. companyName mirrors MMF's fundName/Bank's bankName:
+  // buildPromotionPlan's opportunity branch sets `name` from the envelope
+  // (update.name, itself finding.instrumentName) only, never from figures.
+  // sourceLink/sourceAsOf mirror MMF/Bank/CBK: source/dataAsOf are envelope-only
+  // too. REIT/offshore_fund/SACCO each have their OWN name-equivalent key
+  // (reitName/fundName/saccoName) — out of scope for this slice, add when each
+  // of THEIR slices wires in.
+  market_asset: new Set(["companyName", "sourceLink", "sourceAsOf"]),
 };
 
 /** Read a field's value from a raw key/value bag by trying each of its

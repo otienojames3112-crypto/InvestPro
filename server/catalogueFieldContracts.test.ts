@@ -502,7 +502,7 @@ describe("Catalogue field contract · gate-required fields not yet promoted are 
 });
 
 describe("Catalogue field contract · foundation-only guardrails (no behavior change yet)", () => {
-  it("only the Slice 8b/8c/8d-approved consumers import shared/catalogueFieldContracts — MMF, Bank and CBK only, nothing wired for market-asset yet", () => {
+  it("only the Slice 8b/8c/8d/8e-1-approved consumers import shared/catalogueFieldContracts — MMF, Bank, CBK and Equity only, nothing wired for REIT/offshore-fund/SACCO yet", () => {
     const root = join(__dirname, "..");
     const searchDirs = ["server", "shared", join("client", "src")];
     const offenders: string[] = [];
@@ -528,14 +528,16 @@ describe("Catalogue field contract · foundation-only guardrails (no behavior ch
     for (const d of searchDirs) walk(join(root, d));
     // This test file imports it directly (8a's own suite), Slice 8b wires
     // MMF-only support into AskAI.tsx plus its own test file, Slice 8c adds Bank
-    // support to the SAME AskAI.tsx file plus its own test file, and Slice 8d adds
-    // CBK support the same way. Any OTHER consumer (e.g. a premature market-asset
-    // wiring) must still fail this guardrail.
+    // support to the SAME AskAI.tsx file plus its own test file, Slice 8d adds
+    // CBK support the same way, and Slice 8e-1 adds Equity support the same way.
+    // Any OTHER consumer (e.g. a premature REIT/offshore-fund/SACCO wiring) must
+    // still fail this guardrail.
     const allowed = new Set([
       join(root, "server", "catalogueFieldContracts.test.ts"),
       join(root, "server", "mmfContractMapping.test.ts"),
       join(root, "server", "bankContractMapping.test.ts"),
       join(root, "server", "cbkContractMapping.test.ts"),
+      join(root, "server", "equityContractMapping.test.ts"),
       join(root, "client", "src", "pages", "AskAI.tsx"),
     ]);
     const unexpectedOffenders = offenders.filter((f) => !allowed.has(f));

@@ -799,6 +799,20 @@ export function FindingCard({
         (row) => row.key !== "sourceLink" && row.key !== "sourceAsOf",
       )
     : null;
+  // Slice 8e-1 — Market asset EQUITY findings only, same pattern as Slices
+  // 8b/8c/8d above. equityContract is null for every other catalogue/subtype, so
+  // nothing below changes for MMF/bank/CBK findings, or for REIT/offshore-fund/
+  // SACCO/other market-asset subtypes (those stay on 8a's foundation only, not
+  // yet wired — their own slices come later).
+  const equityContract =
+    finding.targetCatalogue === "market_asset" && finding.assetClass === "equity"
+      ? getCatalogueFieldContract("market_asset", "equity")
+      : null;
+  const equityDisplayRows = equityContract
+    ? projectFindingToContractDisplayRows(equityContract, finding).filter(
+        (row) => row.key !== "sourceLink" && row.key !== "sourceAsOf",
+      )
+    : null;
   // Stage 5 — deterministic, template-based follow-up questions for each missing
   // gate field (pure, no LLM). Never implies a value was found — only asks. Stage
   // 7c sharpens the wording when Stage 7b's extraction already found a candidate
@@ -1006,8 +1020,44 @@ export function FindingCard({
           </div>
         )}
 
+        {/* Slice 8e-1 — the fixed Equity quick-decision fields from the catalogue
+            field contract, in contract order. Same purpose as the MMF/Bank/CBK
+            blocks above: PRIMARY view for an Equity finding, raw/grouped
+            extraction below becomes secondary source context. Every other
+            catalogue/subtype is untouched (equityDisplayRows is null for them). */}
+        {equityDisplayRows && (
+          <div className="rounded-lg border border-primary/25 bg-primary/[0.03] overflow-hidden">
+            <div className="px-3 py-2 border-b border-primary/15 bg-primary/[0.05]">
+              <span className="text-xs font-medium text-foreground uppercase tracking-wide">
+                Equity catalogue fields
+              </span>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-2 px-3 py-2.5">
+              {equityDisplayRows.map((row) => (
+                <div key={row.key} className="min-w-0">
+                  <span className="text-[11px] text-muted-foreground">
+                    {row.label}
+                    {row.required && <span className="text-amber-600"> *</span>}
+                  </span>
+                  <div className="text-sm truncate">
+                    {row.value ? (
+                      <span className="font-medium tabular-nums">{row.value}</span>
+                    ) : row.storageStatus === "computed" ? (
+                      <span className="text-muted-foreground/60 italic text-xs">calculated at approval</span>
+                    ) : row.storageStatus === "missingRequiresMigration" ? (
+                      <span className="text-muted-foreground/60 italic text-xs">not yet trackable</span>
+                    ) : (
+                      <span className="text-muted-foreground/50">—</span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Round 102 — grouped instrument profile preview (replaces flat field list when _extendedFields is present) */}
-        {(mmfDisplayRows || bankDisplayRows || cbkDisplayRows) && (
+        {(mmfDisplayRows || bankDisplayRows || cbkDisplayRows || equityDisplayRows) && (
           <p className="text-[11px] text-muted-foreground -mb-1">Additional extracted details:</p>
         )}
         {(() => {
@@ -1137,14 +1187,16 @@ export function FindingCard({
             <Button
               size="sm"
               onClick={() => {
-                // Slice 8b/8c/8d — MMF, Bank and CBK findings draft ONLY their fixed
-                // catalogue contract's figures, never the raw arbitrary extraction.
-                // undefined for every other catalogue leaves draftFromFinding's existing
-                // default (the finding's raw extractedFields) completely unchanged.
+                // Slice 8b/8c/8d/8e-1 — MMF, Bank, CBK and Equity findings draft ONLY
+                // their fixed catalogue contract's figures, never the raw arbitrary
+                // extraction. undefined for every other catalogue/subtype leaves
+                // draftFromFinding's existing default (the finding's raw
+                // extractedFields) completely unchanged.
                 const mmfFigures = mmfContract ? projectFindingToContractFigures(mmfContract, finding) : undefined;
                 const bankFigures = bankContract ? projectFindingToContractFigures(bankContract, finding) : undefined;
                 const cbkFigures = cbkContract ? projectFindingToContractFigures(cbkContract, finding) : undefined;
-                draft.mutate({ findingId: finding.id, figures: mmfFigures ?? bankFigures ?? cbkFigures });
+                const equityFigures = equityContract ? projectFindingToContractFigures(equityContract, finding) : undefined;
+                draft.mutate({ findingId: finding.id, figures: mmfFigures ?? bankFigures ?? cbkFigures ?? equityFigures });
               }}
               disabled={busy}
               variant={finding.extractedFields?._unsourced === "true" ? "outline" : "default"}

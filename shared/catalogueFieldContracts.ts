@@ -506,6 +506,18 @@ const CBK_FIELD_CONTRACT: CatalogueFieldContract = {
     },
     {
       catalogue: "cbk",
+      key: "issueNumber",
+      label: "Issue number",
+      required: false,
+      aliases: ["issueNumber"],
+      storageStatus: "extendedFields",
+      managerEditable: true,
+      showInTable: false,
+      promoteToCatalogueRow: false,
+      note: "Added post-approval (2026-07-16) — omitted from the original 10-field product list, but CBK_SUBTYPE_FIELD_RULES.fxd/ifb require figures.issueNumber (hard, no escape) at the approval gate once an FXD/IFB is confidently detected, and the field extraction schema requires it. Lives in extendedFields.CbkSecurityProfile.issueNumber. required:false at the contract level because it's subtype-conditional (T-bills don't need it) — the real enforcement is checkApprovalGate's own subtype branch, which doesn't consult this contract.",
+    },
+    {
+      catalogue: "cbk",
       key: "tenor",
       label: "Tenor",
       required: true,
@@ -530,7 +542,31 @@ const CBK_FIELD_CONTRACT: CatalogueFieldContract = {
     },
     {
       catalogue: "cbk",
-      key: "indicativeYield",
+      key: "auctionDate",
+      label: "Auction date",
+      required: false,
+      aliases: ["auctionDate"],
+      storageStatus: "extendedFields",
+      managerEditable: true,
+      showInTable: false,
+      promoteToCatalogueRow: false,
+      note: "Added post-approval (2026-07-16) — omitted from the original 10-field product list, but CBK_SUBTYPE_FIELD_RULES.tbill requires figures.auctionDate (hard, no escape) at the approval gate once a T-bill is confidently detected, and the field is required by the T-bill extraction schema. Lives in extendedFields.CbkSecurityProfile.auctionDate. Distinct from sourceAsOf below — Stage 4 already bridges a T-bill's auctionDate into the finding's OWN sourceAsOf for provenance purposes, but the raw figure itself is a separate fact the gate checks independently.",
+    },
+    {
+      catalogue: "cbk",
+      key: "valueDate",
+      label: "Value / settlement date",
+      required: false,
+      aliases: ["valueDate", "settlementDate"],
+      storageStatus: "extendedFields",
+      managerEditable: true,
+      showInTable: false,
+      promoteToCatalogueRow: false,
+      note: "Added post-approval (2026-07-16) — omitted from the original 10-field product list, but CBK_SUBTYPE_FIELD_RULES.tbill requires figures.valueDate (hard, no escape) at the approval gate once a T-bill is confidently detected. Lives in extendedFields.CbkSecurityProfile.settlementDate (figurePresent's own valueDate alias table already tolerates 'settlementDate').",
+    },
+    {
+      catalogue: "cbk",
+      key: "yieldPct",
       label: "Indicative / previous yield",
       required: true,
       aliases: ["yieldPct", "weightedAvgRate", "prevAvgRate", "couponRate"],
@@ -538,6 +574,19 @@ const CBK_FIELD_CONTRACT: CatalogueFieldContract = {
       managerEditable: true,
       showInTable: true,
       promoteToCatalogueRow: true,
+      note: "Key renamed from 'indicativeYield' to 'yieldPct' during Slice 8d's pre-approval compatibility check (2026-07-16) — figurePresent's alias table for the gate's yieldPct rule, and buildPromotionPlan's f.yieldPct read, do NOT recognise 'indicativeYield'; submitting under that key would have silently failed the approval gate. Display label unchanged.",
+    },
+    {
+      catalogue: "cbk",
+      key: "couponRate",
+      label: "Coupon rate",
+      required: false,
+      aliases: ["couponRate"],
+      storageStatus: "extendedFields",
+      managerEditable: true,
+      showInTable: false,
+      promoteToCatalogueRow: false,
+      note: "Added post-approval (2026-07-16) — omitted from the original 10-field product list, but CBK_SUBTYPE_FIELD_RULES.fxd/ifb require figures.couponRate (hard, no escape) at the approval gate once an FXD/IFB is confidently detected. Lives in extendedFields.CbkSecurityProfile.couponRate. Distinct from yieldPct above — a bond's fixed coupon and its yield-to-maturity/auction yield are different figures the source states separately.",
     },
     {
       catalogue: "cbk",
@@ -549,19 +598,31 @@ const CBK_FIELD_CONTRACT: CatalogueFieldContract = {
       managerEditable: false,
       showInTable: true,
       promoteToCatalogueRow: false,
-      note: "Computed from indicativeYield and taxTreatment (taxExempt / withholdingTaxRate); never persisted. Requires taxTreatment to actually be promoted first (see that field's note).",
+      note: "Computed from yieldPct and whtRule/taxExempt; never persisted. Requires whtRule/taxExempt to actually be promoted first (see those fields' notes).",
     },
     {
       catalogue: "cbk",
-      key: "taxTreatment",
+      key: "whtRule",
       label: "Tax treatment",
       required: true,
-      aliases: ["taxExempt", "withholdingTaxRate", "whtRate"],
+      aliases: ["whtRule", "withholdingTaxRate", "whtRate"],
       storageStatus: "extendedFields",
       managerEditable: true,
       showInTable: true,
       promoteToCatalogueRow: false,
-      note: "Lives in extendedFields.CbkSecurityProfile only. Today's CBK catalogue page infers a 'Tax-exempt coupon' badge via a REGEX over the instrument name/factNote text, not this structured field — fragile.",
+      note: "Key renamed from 'taxTreatment' to 'whtRule' during Slice 8d's pre-approval compatibility check (2026-07-16) — the gate's whtRule and taxExempt rules are TWO SEPARATE, independently-checked figures keys (confirmed via applyCbkRuleFill, which sets them as genuinely distinct values, e.g. whtRule: '15% withholding tax on the discount', taxExempt: 'false'); no single combined key could satisfy both, so this field now covers the free-text WHT-rule description specifically (what a manager actually reads as 'tax treatment'), and the boolean-ish flag is split out into its own 'taxExempt' field below. Lives in extendedFields.CbkSecurityProfile only. Today's CBK catalogue page infers a 'Tax-exempt coupon' badge via a REGEX over the instrument name/factNote text, not this structured field — fragile.",
+    },
+    {
+      catalogue: "cbk",
+      key: "taxExempt",
+      label: "Tax-exempt flag",
+      required: true,
+      aliases: ["taxExempt", "taxExemptFlag", "isTaxExempt"],
+      storageStatus: "extendedFields",
+      managerEditable: true,
+      showInTable: true,
+      promoteToCatalogueRow: false,
+      note: "Added post-approval (2026-07-16) — split out of the original single 'Tax treatment' field (see whtRule's note above) because CATALOGUE_FIELD_RULES.cbk requires figures.taxExempt as its own separate, independently-checked gate field, and checkApprovalGate ALSO has an infrastructure-bond-specific value assertion (taxExempt must be literally TRUE for an IFB, checked directly against this exact key). Lives in extendedFields.CbkSecurityProfile.taxExempt.",
     },
     {
       catalogue: "cbk",
@@ -580,11 +641,12 @@ const CBK_FIELD_CONTRACT: CatalogueFieldContract = {
       key: "maturityDate",
       label: "Maturity date",
       required: true,
-      aliases: ["maturityDate"],
+      aliases: ["maturityDate", "maturityRule"],
       storageStatus: "column",
       managerEditable: true,
       showInTable: true,
       promoteToCatalogueRow: true,
+      note: "'maturityRule' added as a fallback alias during Slice 8d's pre-approval compatibility check (2026-07-16) — a T-bill never gets a literal maturityDate; applyCbkRuleFill instead sets 'maturityRule' as a text description (e.g. 'value date + 91 days'), which is what CATALOGUE_FIELD_RULES.cbk's own baseline maturityRule rule actually checks for every CBK finding (T-bill, FXD or IFB alike). Writing the found value under the canonical 'maturityDate' key is still gate-compatible either way — figurePresent's own maturityRule alias table already tolerates 'maturityDate'. A bond's literal date is preferred first when both are present.",
     },
     {
       catalogue: "cbk",
@@ -1350,7 +1412,13 @@ const ENVELOPE_ROUTED_CONTRACT_KEYS: Record<CatalogueKey, ReadonlySet<string>> =
   // sourceAsOf mirror MMF for the same reason: the gate's bank rules and
   // buildPromotionPlan both read source/asOf from the envelope only.
   bank: new Set(["bankName", "sourceLink", "sourceAsOf"]),
-  cbk: new Set(),
+  // Slice 8d — CBK has no name-equivalent envelope field (the contract has no
+  // "name" field at all, matching CATALOGUE_FIELD_RULES.cbk, which likewise has
+  // no name-sourced rule — validatePendingUpdate already enforces a name
+  // universally). sourceLink/sourceAsOf mirror MMF/Bank: buildPromotionPlan's
+  // opportunity branch sets `source` from the envelope only, and dataAsOf is
+  // written from the pending update's own `asOf` column, never from figures.
+  cbk: new Set(["sourceLink", "sourceAsOf"]),
   market_asset: new Set(),
 };
 

@@ -346,20 +346,22 @@ describe("Slice 8b · FindingCard wiring", () => {
   it("the 'Additional extracted details' label appears only alongside the MMF block, never unconditionally", () => {
     const idx = findingCard.indexOf("Additional extracted details");
     expect(idx).toBeGreaterThan(-1);
-    const before = findingCard.slice(Math.max(0, idx - 120), idx);
-    // Slice 8c extended the condition to also cover Bank findings — still gated
-    // on a contract-display-rows flag, never unconditional.
-    expect(before).toContain("(mmfDisplayRows || bankDisplayRows) &&");
+    const before = findingCard.slice(Math.max(0, idx - 160), idx);
+    // Slices 8c/8d extended the condition to also cover Bank and CBK findings —
+    // still gated on a contract-display-rows flag, never unconditional.
+    expect(before).toContain("(mmfDisplayRows || bankDisplayRows || cbkDisplayRows) &&");
   });
 
   it("the draft mutation call projects MMF figures via the contract and passes them explicitly", () => {
     expect(findingCard).toContain(
       "const mmfFigures = mmfContract ? projectFindingToContractFigures(mmfContract, finding) : undefined;",
     );
-    // Slice 8c extended this to also compute bankFigures and fall back to it —
-    // mmfFigures and bankFigures can never both be real objects at once (a
-    // finding has exactly one targetCatalogue), so this is a pure either/or.
-    expect(findingCard).toContain("draft.mutate({ findingId: finding.id, figures: mmfFigures ?? bankFigures });");
+    // Slices 8c/8d extended this to also compute bankFigures/cbkFigures and fall
+    // back through them — at most one of mmfFigures/bankFigures/cbkFigures is
+    // ever a real object at once (a finding has exactly one targetCatalogue).
+    expect(findingCard).toContain(
+      "draft.mutate({ findingId: finding.id, figures: mmfFigures ?? bankFigures ?? cbkFigures });",
+    );
   });
 
   it("non-MMF findings send undefined figures — draftFromFinding's existing raw-extractedFields default is completely unchanged for them", () => {
@@ -384,11 +386,11 @@ describe("Slice 8b · FindingCard wiring", () => {
     expect(dialog).not.toContain("getCatalogueFieldContract");
   });
 
-  it("no CBK/market_asset contract lookups exist anywhere yet — only MMF (Slice 8b) and Bank (Slice 8c) are wired", () => {
+  it("no market_asset contract lookups exist anywhere yet — only MMF (8b), Bank (8c) and CBK (8d) are wired", () => {
     const contractCalls = [...askAi.matchAll(/getCatalogueFieldContract\([^)]*\)/g)].map((m) => m[0]);
     expect(contractCalls.length).toBeGreaterThan(0);
     for (const call of contractCalls) {
-      expect(call.includes('"mmf"') || call.includes('"bank"')).toBe(true);
+      expect(call.includes('"mmf"') || call.includes('"bank"') || call.includes('"cbk"')).toBe(true);
     }
   });
 });

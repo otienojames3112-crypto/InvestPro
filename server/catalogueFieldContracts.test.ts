@@ -25,6 +25,28 @@
  * buildPromotionPlan's bank branch, so submitting figures under them would
  * have silently failed the approval gate even with a real value present.
  *
+ * Amended a fourth time during Slice 8d's pre-approval compatibility check
+ * (2026-07-16): CBK grew from 10 to 15 fields. Two existing KEYS renamed
+ * (display labels unchanged): "indicativeYield" → "yieldPct" (same failure
+ * mode as Bank's renames — neither figurePresent's alias table nor
+ * buildPromotionPlan's f.yieldPct read recognised the original key), and
+ * "taxTreatment" → "whtRule" (the gate's whtRule and taxExempt rules are TWO
+ * SEPARATE, independently-checked figures keys — applyCbkRuleFill sets them
+ * as genuinely distinct values — so one combined field could never satisfy
+ * both; the free-text WHT-rule description now covers "Tax treatment", and
+ * the boolean-ish flag is split into its own new field). Five new fields
+ * added: "Tax-exempt flag" (taxExempt — the split-out half of the above, ALSO
+ * the target of an infrastructure-bond-specific value assertion in the gate),
+ * "Issue number" / "Coupon rate" (issueNumber/couponRate — hard-required by
+ * CBK_SUBTYPE_FIELD_RULES.fxd/ifb once an FXD/IFB is confidently detected,
+ * which is the normal case for a real bond finding, not an edge case), and
+ * "Auction date" / "Value / settlement date" (auctionDate/valueDate —
+ * hard-required by CBK_SUBTYPE_FIELD_RULES.tbill once a T-bill is detected).
+ * All five are genuinely extracted by the LLM schemas and have real homes in
+ * extendedFields.CbkSecurityProfile; omitting them would have silently failed
+ * the approval gate for essentially every real CBK finding once contract-
+ * projected figures replaced raw passthrough.
+ *
  * Pure tests for shared/catalogueFieldContracts.ts. This slice is documentation +
  * data only: nothing here touches the DB, Ask AI, the approval gate, the Review
  * Queue, or any catalogue UI. The guardrail tests at the bottom of this file exist
@@ -86,11 +108,16 @@ const DESIRED_LABELS: Record<string, string[]> = {
   ],
   cbk: [
     "Security type",
+    "Issue number",
     "Tenor",
     "Application deadline",
+    "Auction date",
+    "Value / settlement date",
     "Indicative / previous yield",
+    "Coupon rate",
     "Net yield after WHT",
     "Tax treatment",
+    "Tax-exempt flag",
     "Minimum investment",
     "Maturity date",
     "Source link",
@@ -327,7 +354,11 @@ describe("Catalogue field contract · global source-provenance rule — every ac
     expect(sourceAsOf).toBeDefined();
     expect(sourceAsOf!.label).toBe("Source as-of date");
     expect(sourceAsOf!.required).toBe(true);
-    expect(cbk.fields.length).toBe(10); // the original 8 product-list fields + 2 provenance fields
+    // 8a: the original 8 product-list fields + 2 provenance fields = 10.
+    // 8d added 5 more (issueNumber, auctionDate, valueDate, couponRate,
+    // taxExempt) during its own pre-approval compatibility check — see this
+    // file's header for why.
+    expect(cbk.fields.length).toBe(15);
   });
 
   it("no test or contract treats CBK's source absence as intentional — the field IS present (regression guard for the pre-approval amendment)", () => {
@@ -471,7 +502,7 @@ describe("Catalogue field contract · gate-required fields not yet promoted are 
 });
 
 describe("Catalogue field contract · foundation-only guardrails (no behavior change yet)", () => {
-  it("only the Slice 8b/8c-approved consumers import shared/catalogueFieldContracts — MMF and Bank only, nothing wired for CBK/market-asset yet", () => {
+  it("only the Slice 8b/8c/8d-approved consumers import shared/catalogueFieldContracts — MMF, Bank and CBK only, nothing wired for market-asset yet", () => {
     const root = join(__dirname, "..");
     const searchDirs = ["server", "shared", join("client", "src")];
     const offenders: string[] = [];
@@ -496,14 +527,15 @@ describe("Catalogue field contract · foundation-only guardrails (no behavior ch
     };
     for (const d of searchDirs) walk(join(root, d));
     // This test file imports it directly (8a's own suite), Slice 8b wires
-    // MMF-only support into AskAI.tsx plus its own test file, and Slice 8c adds
-    // Bank support to the SAME AskAI.tsx file plus its own test file. Any OTHER
-    // consumer (e.g. a premature CBK/market-asset wiring) must still fail this
-    // guardrail.
+    // MMF-only support into AskAI.tsx plus its own test file, Slice 8c adds Bank
+    // support to the SAME AskAI.tsx file plus its own test file, and Slice 8d adds
+    // CBK support the same way. Any OTHER consumer (e.g. a premature market-asset
+    // wiring) must still fail this guardrail.
     const allowed = new Set([
       join(root, "server", "catalogueFieldContracts.test.ts"),
       join(root, "server", "mmfContractMapping.test.ts"),
       join(root, "server", "bankContractMapping.test.ts"),
+      join(root, "server", "cbkContractMapping.test.ts"),
       join(root, "client", "src", "pages", "AskAI.tsx"),
     ]);
     const unexpectedOffenders = offenders.filter((f) => !allowed.has(f));

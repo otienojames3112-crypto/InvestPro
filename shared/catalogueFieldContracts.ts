@@ -193,6 +193,18 @@ const MMF_FIELD_CONTRACT: CatalogueFieldContract = {
     },
     {
       catalogue: "mmf",
+      key: "managementFee",
+      label: "Management fee",
+      required: true,
+      aliases: ["managementFee", "expenseRatioPct", "fee"],
+      storageStatus: "column",
+      managerEditable: true,
+      showInTable: true,
+      promoteToCatalogueRow: true,
+      note: "Added post-approval (2026-07-16) — omitted from the original 13-field product list, but mmf_funds.managementFee is NOT NULL, CATALOGUE_FIELD_RULES.mmf has required figures.managementFee at the approval gate since before this initiative, and buildPromotionPlan writes it directly to the column. Without this field, Slice 8b's contract-based figures projection would silently drop a genuinely-extracted, gate-required value — see server/mmfContractMapping.test.ts's 'compatibility with the existing MMF approval gate and promotion path' tests.",
+    },
+    {
+      catalogue: "mmf",
       key: "dailyYield",
       label: "Daily yield",
       required: false,
@@ -1267,4 +1279,155 @@ export function getCatalogueFieldContract(
     return CATALOGUE_FIELD_CONTRACTS.find((c) => c.catalogue === "market_asset" && c.subtype === subtype) ?? null;
   }
   return CATALOGUE_FIELD_CONTRACTS.find((c) => c.catalogue === catalogue) ?? null;
+}
+
+/* ── Slice 8b — projecting a finding into a contract's fixed field shape ────
+ *
+ * The contract above is pure data. This section is the first (and, in this
+ * slice, ONLY — MMF-only) consumer: given an Ask AI finding, project its raw
+ * AI-extracted figures (plus its envelope identity/provenance fields) into the
+ * contract's fixed shape, so a manager sees and drafts EXACTLY the established
+ * quick-decision fields for that catalogue — never an arbitrary AI-extracted
+ * key that happens not to be in the contract.
+ *
+ * Two different projections, for two different jobs:
+ *   - `projectFindingToContractDisplayRows` — ALL of a contract's fields, in
+ *     contract order, each with its found value (or null) — for showing the
+ *     manager the complete fixed field set at a glance, including fields that
+ *     are computed or not yet capturable (shown as null, never fabricated).
+ *   - `projectFindingToContractFigures` — ONLY the fields that genuinely belong
+ *     in a `research_updates.figures` bag: never a computed field (nothing raw
+ *     to write), never a `missingRequiresMigration` field (nowhere for a value
+ *     to have come from), and never a field whose real value already lives on
+ *     the update's ENVELOPE (name/issuer/source/asOf columns) rather than
+ *     `figures` itself — `draftFromFinding`/`buildPromotionPlan` already read
+ *     those from the envelope, so duplicating them into figures would be
+ *     redundant, not protective. This is what a caller should send as the
+ *     `figures` override when drafting a finding into the review queue.
+ */
+
+/**
+ * A minimal, structural shape of an Ask AI finding (or an already-governed
+ * pending update) these projections need. Deliberately NOT an import of the
+ * real client `Finding` or server `ResearchFindingDraft` types — this module
+ * is shared and must stay framework/layer-agnostic; any object with this shape
+ * works via TypeScript's structural typing.
+ */
+export interface ProjectableFinding {
+  instrumentName: string;
+  issuer?: string | null;
+  sourceLabel?: string | null;
+  sourceUrl?: string | null;
+  sourceAsOf?: string | number | null;
+  extractedFields?: Record<string, unknown> | null;
+}
+
+/** MMF-only for this slice: canonical contract keys whose real value already
+ *  lives on the finding/update ENVELOPE, not the figures bag — see the section
+ *  header above. Each later slice (bank/cbk/market-asset) will need its own
+ *  small set here when it's wired, since which keys are envelope-routed is
+ *  catalogue-specific (see buildPromotionPlan, shared/researchPipeline.ts). */
+const ENVELOPE_ROUTED_CONTRACT_KEYS: Record<CatalogueKey, ReadonlySet<string>> = {
+  mmf: new Set(["fundName", "fundManager", "sourceLink", "sourceAsOf"]),
+  bank: new Set(),
+  cbk: new Set(),
+  market_asset: new Set(),
+};
+
+/** Read a field's value from a raw key/value bag by trying each of its
+ *  `aliases` in order, stopping at the first present, non-empty, non-sentinel
+ *  value. Never invents a value; returns null when nothing matches. */
+function readAliasValue(field: CatalogueFieldContractEntry, raw: Record<string, unknown>): string | null {
+  for (const alias of field.aliases) {
+    const v = raw[alias];
+    if (v === undefined || v === null) continue;
+    const s = String(v).trim();
+    if (s === "" || s === "missing_from_source") continue;
+    return s;
+  }
+  return null;
+}
+
+/** Merge a finding's raw AI-extracted figures with its envelope identity/
+ *  provenance fields under the synthetic keys the contracts' own `aliases`
+ *  already expect (e.g. MMF's `fundManager` field lists `"company"` as an
+ *  alias because that mirrors `buildPromotionPlan`'s own figures-bag
+ *  fallback naming) — so `readAliasValue` above needs no special-casing per
+ *  field, only a correctly-built bag to search. Envelope fields are added
+ *  AFTER the extractedFields spread so they always win over any raw noise
+ *  that happened to reuse the same key. */
+function buildContractRawValueBag(finding: ProjectableFinding): Record<string, unknown> {
+  return {
+    ...(finding.extractedFields ?? {}),
+    fundName: finding.instrumentName,
+    instrumentName: finding.instrumentName,
+    company: finding.issuer ?? undefined,
+    fundManager: finding.issuer ?? undefined,
+    source: finding.sourceLabel ?? undefined,
+    sourceLabel: finding.sourceLabel ?? undefined,
+    sourceUrl: finding.sourceUrl ?? undefined,
+    asOf: finding.sourceAsOf ?? undefined,
+    sourceAsOf: finding.sourceAsOf ?? undefined,
+  };
+}
+
+/** One row of a contract's fixed field set, projected against a specific
+ *  finding — always present (in contract order) whether or not a value was
+ *  actually found, so the manager sees the COMPLETE established field set,
+ *  not just whichever ones happened to extract. */
+export interface CatalogueFieldDisplayRow {
+  key: string;
+  label: string;
+  required: boolean;
+  storageStatus: FieldStorageStatus;
+  /** The found value, or null — never fabricated. Always null for `computed`
+   *  and `missingRequiresMigration` fields (nothing raw to show). */
+  value: string | null;
+}
+
+/**
+ * Project a finding into a contract's COMPLETE fixed field set for display —
+ * every field the contract defines, in contract order, each carrying its
+ * found value or null. Pure, no I/O, never throws.
+ */
+export function projectFindingToContractDisplayRows(
+  contract: CatalogueFieldContract,
+  finding: ProjectableFinding,
+): CatalogueFieldDisplayRow[] {
+  const raw = buildContractRawValueBag(finding);
+  return contract.fields.map((field) => ({
+    key: field.key,
+    label: field.label,
+    required: field.required,
+    storageStatus: field.storageStatus,
+    value:
+      field.storageStatus === "computed" || field.storageStatus === "missingRequiresMigration"
+        ? null
+        : readAliasValue(field, raw),
+  }));
+}
+
+/**
+ * Project a finding into ONLY the figures a draft into the review queue should
+ * carry for this contract — see the section header above for exactly which
+ * fields are excluded and why (computed / missingRequiresMigration / envelope-
+ * routed). Pure, no I/O, never throws. Any raw AI-extracted key not reachable
+ * via a contract field's `aliases` is silently dropped — this is the actual
+ * mechanism that keeps arbitrary extraction noise from becoming a catalogue
+ * field.
+ */
+export function projectFindingToContractFigures(
+  contract: CatalogueFieldContract,
+  finding: ProjectableFinding,
+): Record<string, string> {
+  const raw = buildContractRawValueBag(finding);
+  const envelopeRouted = ENVELOPE_ROUTED_CONTRACT_KEYS[contract.catalogue] ?? new Set<string>();
+  const result: Record<string, string> = {};
+  for (const field of contract.fields) {
+    if (field.storageStatus === "computed" || field.storageStatus === "missingRequiresMigration") continue;
+    if (envelopeRouted.has(field.key)) continue;
+    const value = readAliasValue(field, raw);
+    if (value !== null) result[field.key] = value;
+  }
+  return result;
 }

@@ -4,6 +4,16 @@
  * an openable source link + as-of date, even where a per-category desired list
  * happened to omit it — see shared/catalogueFieldContracts.ts's file header).
  *
+ * Amended a second time during Slice 8b's pre-approval compatibility check
+ * (2026-07-16): MMF gained a 14th field, "Management fee" (key: managementFee).
+ * It was missing from the original 13-field product list, but mmf_funds.
+ * managementFee is NOT NULL, CATALOGUE_FIELD_RULES.mmf has required
+ * figures.managementFee at the approval gate since before this initiative, and
+ * buildPromotionPlan writes it straight into the column — Slice 8b's
+ * contract-based figures projection would otherwise have silently dropped a
+ * genuinely-extracted, gate-required value the first time it wired the MMF
+ * contract into the actual draft path.
+ *
  * Pure tests for shared/catalogueFieldContracts.ts. This slice is documentation +
  * data only: nothing here touches the DB, Ask AI, the approval gate, the Review
  * Queue, or any catalogue UI. The guardrail tests at the bottom of this file exist
@@ -36,6 +46,7 @@ const DESIRED_LABELS: Record<string, string[]> = {
     "Fund name",
     "Fund manager",
     "EAR",
+    "Management fee",
     "Daily yield",
     "Gross yield",
     "Net yield",
@@ -448,7 +459,7 @@ describe("Catalogue field contract · gate-required fields not yet promoted are 
 });
 
 describe("Catalogue field contract · foundation-only guardrails (no behavior change yet)", () => {
-  it("no other source file imports shared/catalogueFieldContracts — this slice wires nothing in yet", () => {
+  it("only the Slice 8b-approved consumers import shared/catalogueFieldContracts — MMF only, nothing wired for bank/cbk/market-asset yet", () => {
     const root = join(__dirname, "..");
     const searchDirs = ["server", "shared", join("client", "src")];
     const offenders: string[] = [];
@@ -472,9 +483,17 @@ describe("Catalogue field contract · foundation-only guardrails (no behavior ch
       }
     };
     for (const d of searchDirs) walk(join(root, d));
-    // This test file itself imports it — exclude it from the offender check.
-    const nonTestOffenders = offenders.filter((f) => !f.endsWith("catalogueFieldContracts.test.ts"));
-    expect(nonTestOffenders).toEqual([]);
+    // This test file imports it directly (8a's own suite), and Slice 8b
+    // deliberately wires MMF-only support into AskAI.tsx plus its own test
+    // file. Any OTHER consumer (e.g. a premature bank/cbk/market-asset wiring)
+    // must still fail this guardrail.
+    const allowed = new Set([
+      join(root, "server", "catalogueFieldContracts.test.ts"),
+      join(root, "server", "mmfContractMapping.test.ts"),
+      join(root, "client", "src", "pages", "AskAI.tsx"),
+    ]);
+    const unexpectedOffenders = offenders.filter((f) => !allowed.has(f));
+    expect(unexpectedOffenders).toEqual([]);
   });
 
   it("no field is both required:true and storageStatus:'missingRequiresMigration' AND promoteToCatalogueRow:true at once (a required-but-missing field must never claim it's already promotable)", () => {

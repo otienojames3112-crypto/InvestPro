@@ -63,6 +63,11 @@ import {
 import { InfoHint } from "@/components/InfoHint";
 import { catalogueLabel, suggestFollowUpQuestions, type ReferenceCatalogue } from "@shared/researchPipeline";
 import { parseCandidatePhrases } from "@shared/candidatePhrases";
+import {
+  getCatalogueFieldContract,
+  projectFindingToContractDisplayRows,
+  projectFindingToContractFigures,
+} from "@shared/catalogueFieldContracts";
 import { SOURCE_CLASS_LABELS, isSourceClass } from "@shared/instrumentProfile";
 import { formatRelativeTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -758,6 +763,22 @@ export function FindingCard({
   const conf = CONFIDENCE_META[finding.confidence] ?? CONFIDENCE_META.low;
   const fields = fmtFields(finding.extractedFields);
   const missing = finding.missingFields ?? [];
+  // Slice 8b — MMF findings only: project the finding into the fixed MMF catalogue
+  // field contract (shared/catalogueFieldContracts.ts) instead of an arbitrary raw
+  // extracted-field list. mmfContract is null for every other catalogue, so nothing
+  // below changes for CBK/bank/market-asset findings (those stay on 8a's foundation
+  // only, not yet wired).
+  const mmfContract = finding.targetCatalogue === "mmf" ? getCatalogueFieldContract("mmf") : null;
+  // sourceLink/sourceAsOf are excluded from THIS grid only — they're already shown,
+  // correctly formatted (a real date, a real link), by the card's existing source
+  // line below. The contract itself still fully defines both (and drives the
+  // figures projection's exclusion logic) — this is a display-only omission to
+  // avoid a raw duplicate epoch-ms string, not a contract change.
+  const mmfDisplayRows = mmfContract
+    ? projectFindingToContractDisplayRows(mmfContract, finding).filter(
+        (row) => row.key !== "sourceLink" && row.key !== "sourceAsOf",
+      )
+    : null;
   // Stage 5 — deterministic, template-based follow-up questions for each missing
   // gate field (pure, no LLM). Never implies a value was found — only asks. Stage
   // 7c sharpens the wording when Stage 7b's extraction already found a candidate
@@ -857,7 +878,46 @@ export function FindingCard({
         {/* Round 98: Diff table for update/stale proposals */}
         <ComparisonDiffTable extractedFields={finding.extractedFields} />
 
+        {/* Slice 8b — the fixed MMF quick-decision fields from the catalogue field
+            contract, in contract order. This is the PRIMARY view for an MMF finding;
+            the raw/grouped extraction below becomes secondary source context — never
+            removed, just no longer the first thing a manager maps from. Every other
+            catalogue is untouched (mmfDisplayRows is null for them). */}
+        {mmfDisplayRows && (
+          <div className="rounded-lg border border-primary/25 bg-primary/[0.03] overflow-hidden">
+            <div className="px-3 py-2 border-b border-primary/15 bg-primary/[0.05]">
+              <span className="text-xs font-medium text-foreground uppercase tracking-wide">
+                MMF catalogue fields
+              </span>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-2 px-3 py-2.5">
+              {mmfDisplayRows.map((row) => (
+                <div key={row.key} className="min-w-0">
+                  <span className="text-[11px] text-muted-foreground">
+                    {row.label}
+                    {row.required && <span className="text-amber-600"> *</span>}
+                  </span>
+                  <div className="text-sm truncate">
+                    {row.value ? (
+                      <span className="font-medium tabular-nums">{row.value}</span>
+                    ) : row.storageStatus === "computed" ? (
+                      <span className="text-muted-foreground/60 italic text-xs">calculated at approval</span>
+                    ) : row.storageStatus === "missingRequiresMigration" ? (
+                      <span className="text-muted-foreground/60 italic text-xs">not yet trackable</span>
+                    ) : (
+                      <span className="text-muted-foreground/50">—</span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Round 102 — grouped instrument profile preview (replaces flat field list when _extendedFields is present) */}
+        {mmfDisplayRows && (
+          <p className="text-[11px] text-muted-foreground -mb-1">Additional extracted details:</p>
+        )}
         {(() => {
           const extRaw = finding.extractedFields?._extendedFields;
           if (extRaw) {
@@ -984,7 +1044,14 @@ export function FindingCard({
           <div className="flex items-center gap-2 pt-1 flex-wrap">
             <Button
               size="sm"
-              onClick={() => draft.mutate({ findingId: finding.id })}
+              onClick={() => {
+                // Slice 8b — MMF findings draft ONLY the fixed catalogue contract's
+                // figures, never the raw arbitrary extraction. undefined for every
+                // other catalogue leaves draftFromFinding's existing default (the
+                // finding's raw extractedFields) completely unchanged.
+                const mmfFigures = mmfContract ? projectFindingToContractFigures(mmfContract, finding) : undefined;
+                draft.mutate({ findingId: finding.id, figures: mmfFigures });
+              }}
               disabled={busy}
               variant={finding.extractedFields?._unsourced === "true" ? "outline" : "default"}
               className={finding.extractedFields?._unsourced === "true" ? "bg-background" : ""}

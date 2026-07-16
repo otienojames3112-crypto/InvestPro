@@ -366,7 +366,7 @@ const BANK_FIELD_CONTRACT: CatalogueFieldContract = {
     },
     {
       catalogue: "bank",
-      key: "interestRate",
+      key: "indicativeRate",
       label: "Interest rate",
       required: true,
       aliases: ["indicativeRate", "rate"],
@@ -374,6 +374,7 @@ const BANK_FIELD_CONTRACT: CatalogueFieldContract = {
       managerEditable: true,
       showInTable: true,
       promoteToCatalogueRow: true,
+      note: "Key renamed from 'interestRate' to 'indicativeRate' during Slice 8c's pre-approval compatibility check (2026-07-16) — figurePresent's alias table for the gate's indicativeRate rule, and buildPromotionPlan's f.indicativeRate read, do NOT recognise 'interestRate'; submitting under that key would have silently failed the approval gate. Display label unchanged.",
     },
     {
       catalogue: "bank",
@@ -385,11 +386,23 @@ const BANK_FIELD_CONTRACT: CatalogueFieldContract = {
       managerEditable: false,
       showInTable: true,
       promoteToCatalogueRow: false,
-      note: "Computed as interestRate × (1 − 0.15), Kenya's standard bank-interest WHT; never persisted.",
+      note: "Computed as indicativeRate × (1 − 0.15), Kenya's standard bank-interest WHT; never persisted.",
     },
     {
       catalogue: "bank",
-      key: "minimumDeposit",
+      key: "isNegotiable",
+      label: "Negotiable",
+      required: true,
+      aliases: ["isNegotiable", "negotiable"],
+      storageStatus: "column",
+      managerEditable: true,
+      showInTable: true,
+      promoteToCatalogueRow: true,
+      note: "Added post-approval (2026-07-16) — omitted from the original 12-field product list, but bank_instruments.isNegotiable is NOT NULL, CATALOGUE_FIELD_RULES.bank has required figures.isNegotiable (non-escapable) at the approval gate since before this initiative, and the extraction schema's `negotiable` field is required on every structured bank finding. Without this field, Slice 8c's contract-based figures projection would silently drop a genuinely-extracted, gate-required value — same class of gap as MMF's managementFee in Slice 8b.",
+    },
+    {
+      catalogue: "bank",
+      key: "minAmount",
       label: "Minimum deposit",
       required: true,
       aliases: ["minAmount", "minimumAmount", "minInvestment"],
@@ -397,6 +410,7 @@ const BANK_FIELD_CONTRACT: CatalogueFieldContract = {
       managerEditable: true,
       showInTable: true,
       promoteToCatalogueRow: true,
+      note: "Key renamed from 'minimumDeposit' to 'minAmount' during Slice 8c's pre-approval compatibility check (2026-07-16) — figurePresent's alias table for the gate's minAmount rule, and buildPromotionPlan's f.minAmount read, do NOT recognise 'minimumDeposit'; submitting under that key would have silently failed the approval gate. Display label unchanged.",
     },
     {
       catalogue: "bank",
@@ -1329,7 +1343,13 @@ export interface ProjectableFinding {
  *  catalogue-specific (see buildPromotionPlan, shared/researchPipeline.ts). */
 const ENVELOPE_ROUTED_CONTRACT_KEYS: Record<CatalogueKey, ReadonlySet<string>> = {
   mmf: new Set(["fundName", "fundManager", "sourceLink", "sourceAsOf"]),
-  bank: new Set(),
+  // Slice 8c — bankName mirrors MMF's fundName: buildPromotionPlan's bank branch
+  // reads `bankName: str(update.issuer) ?? name` from the envelope, never
+  // `f.bankName`, even though the raw extraction also happens to carry a
+  // `bankName` figures key (it isn't excluded at extraction time). sourceLink/
+  // sourceAsOf mirror MMF for the same reason: the gate's bank rules and
+  // buildPromotionPlan both read source/asOf from the envelope only.
+  bank: new Set(["bankName", "sourceLink", "sourceAsOf"]),
   cbk: new Set(),
   market_asset: new Set(),
 };
@@ -1363,6 +1383,10 @@ function buildContractRawValueBag(finding: ProjectableFinding): Record<string, u
     instrumentName: finding.instrumentName,
     company: finding.issuer ?? undefined,
     fundManager: finding.issuer ?? undefined,
+    // Slice 8c — bank findings carry the bank's name on the same envelope
+    // `issuer` field MMF uses for fund manager (server/aiResearchService.ts's
+    // structuredInstrumentToDraft sets `issuer: raw.fundManager ?? raw.bankName`).
+    bankName: finding.issuer ?? undefined,
     source: finding.sourceLabel ?? undefined,
     sourceLabel: finding.sourceLabel ?? undefined,
     sourceUrl: finding.sourceUrl ?? undefined,

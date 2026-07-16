@@ -14,6 +14,17 @@
  * genuinely-extracted, gate-required value the first time it wired the MMF
  * contract into the actual draft path.
  *
+ * Amended a third time during Slice 8c's pre-approval compatibility check
+ * (2026-07-16): Bank gained a 13th field, "Negotiable" (key: isNegotiable) —
+ * same class of gap as MMF's managementFee (bank_instruments.isNegotiable is
+ * NOT NULL, CATALOGUE_FIELD_RULES.bank requires figures.isNegotiable
+ * non-escapably, and the extraction schema's `negotiable` field is required).
+ * Also renamed two existing Bank contract KEYS (display labels unchanged):
+ * "interestRate" → "indicativeRate" and "minimumDeposit" → "minAmount" —
+ * neither original key was recognised by figurePresent's alias table or
+ * buildPromotionPlan's bank branch, so submitting figures under them would
+ * have silently failed the approval gate even with a real value present.
+ *
  * Pure tests for shared/catalogueFieldContracts.ts. This slice is documentation +
  * data only: nothing here touches the DB, Ask AI, the approval gate, the Review
  * Queue, or any catalogue UI. The guardrail tests at the bottom of this file exist
@@ -64,6 +75,7 @@ const DESIRED_LABELS: Record<string, string[]> = {
     "Product type",
     "Interest rate",
     "Net return after WHT",
+    "Negotiable",
     "Minimum deposit",
     "Tenor / lock-in period",
     "Early withdrawal rule",
@@ -459,7 +471,7 @@ describe("Catalogue field contract · gate-required fields not yet promoted are 
 });
 
 describe("Catalogue field contract · foundation-only guardrails (no behavior change yet)", () => {
-  it("only the Slice 8b-approved consumers import shared/catalogueFieldContracts — MMF only, nothing wired for bank/cbk/market-asset yet", () => {
+  it("only the Slice 8b/8c-approved consumers import shared/catalogueFieldContracts — MMF and Bank only, nothing wired for CBK/market-asset yet", () => {
     const root = join(__dirname, "..");
     const searchDirs = ["server", "shared", join("client", "src")];
     const offenders: string[] = [];
@@ -483,13 +495,15 @@ describe("Catalogue field contract · foundation-only guardrails (no behavior ch
       }
     };
     for (const d of searchDirs) walk(join(root, d));
-    // This test file imports it directly (8a's own suite), and Slice 8b
-    // deliberately wires MMF-only support into AskAI.tsx plus its own test
-    // file. Any OTHER consumer (e.g. a premature bank/cbk/market-asset wiring)
-    // must still fail this guardrail.
+    // This test file imports it directly (8a's own suite), Slice 8b wires
+    // MMF-only support into AskAI.tsx plus its own test file, and Slice 8c adds
+    // Bank support to the SAME AskAI.tsx file plus its own test file. Any OTHER
+    // consumer (e.g. a premature CBK/market-asset wiring) must still fail this
+    // guardrail.
     const allowed = new Set([
       join(root, "server", "catalogueFieldContracts.test.ts"),
       join(root, "server", "mmfContractMapping.test.ts"),
+      join(root, "server", "bankContractMapping.test.ts"),
       join(root, "client", "src", "pages", "AskAI.tsx"),
     ]);
     const unexpectedOffenders = offenders.filter((f) => !allowed.has(f));

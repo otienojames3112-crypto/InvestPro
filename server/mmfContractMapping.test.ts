@@ -347,14 +347,19 @@ describe("Slice 8b · FindingCard wiring", () => {
     const idx = findingCard.indexOf("Additional extracted details");
     expect(idx).toBeGreaterThan(-1);
     const before = findingCard.slice(Math.max(0, idx - 120), idx);
-    expect(before).toContain("mmfDisplayRows &&");
+    // Slice 8c extended the condition to also cover Bank findings — still gated
+    // on a contract-display-rows flag, never unconditional.
+    expect(before).toContain("(mmfDisplayRows || bankDisplayRows) &&");
   });
 
   it("the draft mutation call projects MMF figures via the contract and passes them explicitly", () => {
     expect(findingCard).toContain(
       "const mmfFigures = mmfContract ? projectFindingToContractFigures(mmfContract, finding) : undefined;",
     );
-    expect(findingCard).toContain("draft.mutate({ findingId: finding.id, figures: mmfFigures });");
+    // Slice 8c extended this to also compute bankFigures and fall back to it —
+    // mmfFigures and bankFigures can never both be real objects at once (a
+    // finding has exactly one targetCatalogue), so this is a pure either/or.
+    expect(findingCard).toContain("draft.mutate({ findingId: finding.id, figures: mmfFigures ?? bankFigures });");
   });
 
   it("non-MMF findings send undefined figures — draftFromFinding's existing raw-extractedFields default is completely unchanged for them", () => {
@@ -379,11 +384,11 @@ describe("Slice 8b · FindingCard wiring", () => {
     expect(dialog).not.toContain("getCatalogueFieldContract");
   });
 
-  it("no bank/cbk/market_asset contract lookups exist anywhere yet — this slice is MMF-only", () => {
+  it("no CBK/market_asset contract lookups exist anywhere yet — only MMF (Slice 8b) and Bank (Slice 8c) are wired", () => {
     const contractCalls = [...askAi.matchAll(/getCatalogueFieldContract\([^)]*\)/g)].map((m) => m[0]);
     expect(contractCalls.length).toBeGreaterThan(0);
     for (const call of contractCalls) {
-      expect(call).toContain('"mmf"');
+      expect(call.includes('"mmf"') || call.includes('"bank"')).toBe(true);
     }
   });
 });

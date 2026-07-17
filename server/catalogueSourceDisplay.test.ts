@@ -150,13 +150,14 @@ describe("Slice 8h-1 · B — MmfFunds.tsx wiring", () => {
     );
   });
 
-  it("table structure outside the source cell — Stage 10a-4 replaced Stage 10a-3's one-column-per-field layout with a compact grouped primary row (Fund/Yield/Cost & tax/Entry & liquidity/Size/Source & freshness/Actions) plus a per-row expand grid (see server/mmfFieldParity4.test.ts for the full proof); same underlying sort keys throughout", () => {
+  it("table structure outside the source cell — Stage 10a-3 replaced Stage 10a-2's grouped 'Yield'/'Cost & tax' captions with one explicit column per established MMF field (see server/mmfFieldParity3.test.ts for the full column-parity proof); same underlying sort keys throughout", () => {
     for (const header of [
       "Fund <SortIcon",
-      "Yield <SortIcon",
-      "Cost &amp; tax <SortIcon",
-      "Entry &amp; liquidity <SortIcon",
-      "Size <SortIcon",
+      "EAR <SortIcon",
+      "Gross yield <SortIcon",
+      "Management fee <SortIcon",
+      "Minimum investment <SortIcon",
+      "AUM <SortIcon",
     ]) {
       expect(mmfFunds).toContain(header);
     }

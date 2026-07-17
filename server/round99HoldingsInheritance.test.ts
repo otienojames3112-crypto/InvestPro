@@ -86,9 +86,12 @@ describe("Round 99 · D — reviewResearchUpdate writes only to catalogue tables
   const dbSrc = readFileSync(join(ROOT, "server/db.ts"), "utf-8");
 
   it("reviewResearchUpdate does NOT reference securities table for writes", () => {
-    // Extract the reviewResearchUpdate function body (it's large)
+    // Extract the reviewResearchUpdate function body (it's large). Window kept
+    // generous (not tight to the function's current length) since this function
+    // grows incrementally slice-by-slice — a tight window has already needed
+    // widening once (Slice 8f pushed `upsertOpportunity` past the prior 12000).
     const fnStart = dbSrc.indexOf("export async function reviewResearchUpdate");
-    const fnBody = dbSrc.slice(fnStart, fnStart + 12000);
+    const fnBody = dbSrc.slice(fnStart, fnStart + 16000);
     // It should reference mmfFunds, bankInstruments, and opportunities (via upsertOpportunity)
     expect(fnBody).toContain("mmfFunds");
     expect(fnBody).toContain("bankInstruments");

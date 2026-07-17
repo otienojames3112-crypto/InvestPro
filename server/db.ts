@@ -1981,6 +1981,25 @@ export function asOfDateFromEpochMs(asOf: number | null | undefined): Date | nul
   return asOf && Number(asOf) > 0 ? new Date(Number(asOf)) : null;
 }
 
+/**
+ * Slice 8f — builds the extendedFields provenance stamp (sourceLabel/sourceUrl/
+ * sourceAsOfDate) from the SAME envelope values already trusted for the top-level
+ * source/asOfDate columns and opportunities' fieldProvenance. Omits any key whose
+ * envelope value is empty, rather than writing an empty string. Pure — exported so
+ * it's unit-testable without a DB.
+ */
+export function buildSourceEnrichment(
+  source: string | null | undefined,
+  sourceUrl: string | null | undefined,
+  asOfDate: Date | null,
+): { sourceLabel?: string; sourceUrl?: string; sourceAsOfDate?: string } {
+  return {
+    ...(source ? { sourceLabel: source } : {}),
+    ...(sourceUrl ? { sourceUrl } : {}),
+    ...(asOfDate ? { sourceAsOfDate: asOfDate.toISOString().slice(0, 10) } : {}),
+  };
+}
+
 /** Coerce a stored JSON weights blob into a clean AllocationWeights (numbers per bucket). */
 function coerceWeights(raw: unknown): AllocationWeights {
   const src = (raw ?? {}) as Record<string, unknown>;
@@ -2594,6 +2613,19 @@ export async function reviewResearchUpdate(args: {
   // (insert), exactly as before this change. opportunities' promotionProvenance()
   // already threads current.asOf through separately and is untouched here.
   const promotedAsOfDate = asOfDateFromEpochMs(current.asOf);
+  // Slice 8f — source/source-as-of consistency audit. SharedProfileFields
+  // (shared/instrumentProfile.ts) — the type every catalogue's extendedFields
+  // JSON already conforms to — has ALWAYS had designated sourceLabel/
+  // sourceUrl/sourceAsOfDate slots, but promotion never populated them: only
+  // raw AI-extraction data landed in extendedFields, so a manager's captured
+  // source URL was silently unreachable from the live mmf_funds/
+  // bank_instruments row (preserved only in mmf_rate_history/
+  // bank_product_rate_history, not the current row). Stamped here from the
+  // SAME envelope values already used for the top-level source/asOfDate
+  // columns and for opportunities' fieldProvenance — envelope always wins
+  // over any raw extraction noise. No schema change: extendedFields already
+  // exists as a column on all three catalogue tables.
+  const sourceEnrichment = buildSourceEnrichment(current.source, current.sourceUrl, promotedAsOfDate);
 
   if (plan.target === "mmf") {
     const p = plan.payload;
@@ -2616,10 +2648,15 @@ export async function reviewResearchUpdate(args: {
       isActive: true as const,
     };
     // Round 97 — persist extendedFields from structured extraction if present.
+    // Slice 8f — merge in the envelope's source provenance (see sourceEnrichment
+    // above) so it's not lost from the live row, even when there was no structured
+    // extraction blob to merge it into.
     const mmfExtRaw = figuresIn._extendedFields;
     if (mmfExtRaw) {
       const mmfExtended = typeof mmfExtRaw === "string" ? JSON.parse(mmfExtRaw) : mmfExtRaw;
-      (values as Record<string, unknown>).extendedFields = mmfExtended;
+      (values as Record<string, unknown>).extendedFields = { ...mmfExtended, ...sourceEnrichment };
+    } else if (Object.keys(sourceEnrichment).length > 0) {
+      (values as Record<string, unknown>).extendedFields = sourceEnrichment;
     }
     if (existing[0]) {
       await db.update(mmfFunds).set(values).where(eq(mmfFunds.id, existing[0].id));
@@ -2650,10 +2687,15 @@ export async function reviewResearchUpdate(args: {
       isActive: true as const,
     };
     // Round 97 — persist extendedFields from structured extraction if present.
+    // Slice 8f — merge in the envelope's source provenance (see sourceEnrichment
+    // above) so it's not lost from the live row, even when there was no structured
+    // extraction blob to merge it into.
     const bankExtRaw = figuresIn._extendedFields;
     if (bankExtRaw) {
       const bankExtended = typeof bankExtRaw === "string" ? JSON.parse(bankExtRaw) : bankExtRaw;
-      (values as Record<string, unknown>).extendedFields = bankExtended;
+      (values as Record<string, unknown>).extendedFields = { ...bankExtended, ...sourceEnrichment };
+    } else if (Object.keys(sourceEnrichment).length > 0) {
+      (values as Record<string, unknown>).extendedFields = sourceEnrichment;
     }
     if (existing[0]) {
       await db.update(bankInstruments).set(values).where(eq(bankInstruments.id, existing[0].id));
@@ -2706,10 +2748,16 @@ export async function reviewResearchUpdate(args: {
       active: true as const,
     } as unknown as InsertOpportunity;
     // Round 97 — persist extendedFields from structured extraction if present.
+    // Slice 8f — merge in the envelope's source provenance (see sourceEnrichment
+    // above) — a simpler top-level home alongside the per-figure fieldProvenance
+    // map already set above — even when there was no structured extraction blob
+    // to merge it into.
     const oppExtRaw = figuresIn._extendedFields;
     if (oppExtRaw) {
       const oppExtended = typeof oppExtRaw === "string" ? JSON.parse(oppExtRaw) : oppExtRaw;
-      (insert as Record<string, unknown>).extendedFields = oppExtended;
+      (insert as Record<string, unknown>).extendedFields = { ...oppExtended, ...sourceEnrichment };
+    } else if (Object.keys(sourceEnrichment).length > 0) {
+      (insert as Record<string, unknown>).extendedFields = sourceEnrichment;
     }
     await upsertOpportunity(insert);
     promotedRef = p.ref;

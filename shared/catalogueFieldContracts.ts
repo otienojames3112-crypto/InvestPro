@@ -127,6 +127,18 @@ export interface CatalogueFieldContractEntry {
    *  can be read from today. Empty when no extraction path is known yet (typically
    *  alongside `storageStatus: "missingRequiresMigration"`). */
   aliases: string[];
+  /** Slice 8e-2 — the RARE case where the same found value must be written
+   *  under MORE THAN ONE output key in `projectFindingToContractFigures`'s
+   *  figures bag, because two independently-keyed downstream consumers (e.g. a
+   *  live approval-gate rule and buildPromotionPlan's typed payload) each check
+   *  a DIFFERENT literal key for the same underlying figure, with no shared
+   *  alias covering both. `key` stays the field's own canonical key (what
+   *  `projectFindingToContractDisplayRows` shows and what one consumer expects);
+   *  `alsoWriteKeys` are additional keys the SAME value is duplicated onto, for
+   *  the other consumer. Never affects display — a field still renders as
+   *  exactly one row. Omit for the normal case (a single key satisfies every
+   *  consumer). */
+  alsoWriteKeys?: string[];
   /** Current factual reality — see the file header. */
   storageStatus: FieldStorageStatus;
   /** Target design: should a manager be able to edit this value while mapping a
@@ -887,7 +899,20 @@ const MARKET_ASSET_REIT_FIELD_CONTRACT: CatalogueFieldContract = {
     {
       catalogue: "market_asset",
       subtype: "reit",
-      key: "currentPrice",
+      key: "market",
+      label: "Exchange",
+      required: true,
+      aliases: ["market", "exchange"],
+      storageStatus: "extendedFields",
+      managerEditable: true,
+      showInTable: true,
+      promoteToCatalogueRow: true,
+      note: "Added post-approval (2026-07-16) — omitted from the original 12-field product list, but CATALOGUE_FIELD_RULES.market_asset hard-requires figures.market (non-escapable) for EVERY market-asset finding regardless of subtype, and MARKET_ASSET_EXTRACTION_SCHEMA requires 'exchange' on every extraction too — proven directly via a live checkApprovalGate call that still reported 'market' missing with every other REIT field supplied. Same shape as Equity's already-fixed 'market' field: extendedFields.MarketAssetProfile.exchange exists (a generic field shared across all market-asset subtypes); opportunities.market is the generic promoted column.",
+    },
+    {
+      catalogue: "market_asset",
+      subtype: "reit",
+      key: "lastPrice",
       label: "Current price / unit price",
       required: true,
       aliases: ["marketPrice", "lastPrice"],
@@ -895,6 +920,7 @@ const MARKET_ASSET_REIT_FIELD_CONTRACT: CatalogueFieldContract = {
       managerEditable: true,
       showInTable: true,
       promoteToCatalogueRow: true,
+      note: "Key renamed from 'currentPrice' to 'lastPrice' during Slice 8e-2's pre-approval compatibility check (2026-07-16) — same fix as Equity's currentPrice: neither figurePresent's lastPrice alias table nor buildPromotionPlan's f.lastPrice ?? f.price read recognised the original key. Display label unchanged.",
     },
     {
       catalogue: "market_asset",
@@ -903,11 +929,12 @@ const MARKET_ASSET_REIT_FIELD_CONTRACT: CatalogueFieldContract = {
       label: "Distribution yield",
       required: true,
       aliases: ["distributionYield"],
+      alsoWriteKeys: ["yieldPct"],
       storageStatus: "extendedFields",
       managerEditable: true,
       showInTable: true,
       promoteToCatalogueRow: true,
-      note: "Already gate-required for REIT rows (see MARKET_ASSET_SUBTYPE_FIELD_RULES.reit in shared/researchPipeline.ts), but buildPromotionPlan's opportunity payload derives yieldPct from `f.yieldPct ?? f.yield ?? f.coupon` — distributionYield is NOT in that fallback chain, so a gate-satisfying value may still fail to reach the promoted column. Documented here, not fixed in this slice.",
+      note: "Gained alsoWriteKeys:['yieldPct'] during Slice 8e-2's pre-approval compatibility check (2026-07-16) — this field genuinely needs to satisfy TWO independently-keyed consumers under two DIFFERENT literal keys, not fixable by a rename either way. MARKET_ASSET_SUBTYPE_FIELD_RULES.reit's own gate rule checks figures.distributionYield specifically (figurePresent's alias table for it is ['distributionYield'] only — no fallback), so the canonical key must stay 'distributionYield'. But buildPromotionPlan's opportunity payload derives yieldPct from f.yieldPct ?? f.yield ?? f.coupon — 'distributionYield' is NOT in that chain — so without also writing 'yieldPct', a gate-satisfying value would still silently fail to reach the promoted opportunities.yieldPct column. alsoWriteKeys duplicates the SAME found value onto 'yieldPct' too, satisfying both.",
     },
     {
       catalogue: "market_asset",
@@ -1420,14 +1447,13 @@ const ENVELOPE_ROUTED_CONTRACT_KEYS: Record<CatalogueKey, ReadonlySet<string>> =
   // opportunity branch sets `source` from the envelope only, and dataAsOf is
   // written from the pending update's own `asOf` column, never from figures.
   cbk: new Set(["sourceLink", "sourceAsOf"]),
-  // Slice 8e-1 — Equity only. companyName mirrors MMF's fundName/Bank's bankName:
-  // buildPromotionPlan's opportunity branch sets `name` from the envelope
-  // (update.name, itself finding.instrumentName) only, never from figures.
-  // sourceLink/sourceAsOf mirror MMF/Bank/CBK: source/dataAsOf are envelope-only
-  // too. REIT/offshore_fund/SACCO each have their OWN name-equivalent key
-  // (reitName/fundName/saccoName) — out of scope for this slice, add when each
-  // of THEIR slices wires in.
-  market_asset: new Set(["companyName", "sourceLink", "sourceAsOf"]),
+  // Slice 8e-1 (Equity) + Slice 8e-2 (REIT). companyName/reitName each mirror
+  // MMF's fundName/Bank's bankName: buildPromotionPlan's opportunity branch
+  // sets `name` from the envelope (update.name, itself finding.instrumentName)
+  // only, never from figures. sourceLink/sourceAsOf mirror MMF/Bank/CBK too.
+  // Offshore_fund/SACCO each have their OWN name-equivalent key (fundName/
+  // saccoName) — out of scope until THEIR slices wire in.
+  market_asset: new Set(["companyName", "reitName", "sourceLink", "sourceAsOf"]),
 };
 
 /** Read a field's value from a raw key/value bag by trying each of its
@@ -1527,7 +1553,13 @@ export function projectFindingToContractFigures(
     if (field.storageStatus === "computed" || field.storageStatus === "missingRequiresMigration") continue;
     if (envelopeRouted.has(field.key)) continue;
     const value = readAliasValue(field, raw);
-    if (value !== null) result[field.key] = value;
+    if (value === null) continue;
+    result[field.key] = value;
+    // Slice 8e-2 — duplicate onto any extra keys a different downstream
+    // consumer expects the same value under (see alsoWriteKeys' own doc).
+    for (const extraKey of field.alsoWriteKeys ?? []) {
+      if (!envelopeRouted.has(extraKey)) result[extraKey] = value;
+    }
   }
   return result;
 }

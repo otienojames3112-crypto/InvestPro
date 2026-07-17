@@ -429,11 +429,13 @@ describe("Slice 8d · FindingCard wiring", () => {
     expect(idx).toBeGreaterThan(-1);
   });
 
-  it("the 'Additional extracted details' label appears alongside ANY of the MMF, Bank, CBK, or Equity blocks, never unconditionally", () => {
+  it("the 'Additional extracted details' label appears alongside ANY of the MMF, Bank, CBK, Equity, or REIT blocks, never unconditionally", () => {
     const idx = findingCard.indexOf("Additional extracted details");
     expect(idx).toBeGreaterThan(-1);
-    const before = findingCard.slice(Math.max(0, idx - 200), idx);
-    expect(before).toContain("(mmfDisplayRows || bankDisplayRows || cbkDisplayRows || equityDisplayRows) &&");
+    const before = findingCard.slice(Math.max(0, idx - 240), idx);
+    expect(before).toContain(
+      "(mmfDisplayRows || bankDisplayRows || cbkDisplayRows || equityDisplayRows || reitDisplayRows) &&",
+    );
   });
 
   it("the draft mutation call projects CBK figures via the contract and falls back to them when there's no MMF/Bank figures", () => {
@@ -441,11 +443,11 @@ describe("Slice 8d · FindingCard wiring", () => {
       "const cbkFigures = cbkContract ? projectFindingToContractFigures(cbkContract, finding) : undefined;",
     );
     expect(findingCard).toContain(
-      "draft.mutate({ findingId: finding.id, figures: mmfFigures ?? bankFigures ?? cbkFigures ?? equityFigures });",
+      "figures: mmfFigures ?? bankFigures ?? cbkFigures ?? equityFigures ?? reitFigures,",
     );
   });
 
-  it("non-MMF, non-Bank, non-CBK, non-Equity findings (REIT/offshore-fund/SACCO) send undefined figures — draftFromFinding's existing raw-extractedFields default is completely unchanged for them", () => {
+  it("non-MMF, non-Bank, non-CBK, non-Equity, non-REIT findings (offshore-fund/SACCO) send undefined figures — draftFromFinding's existing raw-extractedFields default is completely unchanged for them", () => {
     expect(findingCard).toContain("cbkContract ? projectFindingToContractFigures(cbkContract, finding) : undefined");
   });
 
@@ -465,12 +467,16 @@ describe("Slice 8d · FindingCard wiring", () => {
     expect(dialog).not.toContain("getCatalogueFieldContract");
   });
 
-  it("no REIT/offshore-fund/SACCO market_asset contract lookups exist anywhere yet — only MMF, Bank, CBK and Equity are wired", () => {
+  it("no offshore-fund/SACCO market_asset contract lookups exist anywhere yet — only MMF, Bank, CBK, Equity and REIT are wired", () => {
     const contractCalls = [...askAi.matchAll(/getCatalogueFieldContract\([^)]*\)/g)].map((m) => m[0]);
     expect(contractCalls.length).toBeGreaterThan(0);
     for (const call of contractCalls) {
       expect(
-        call.includes('"mmf"') || call.includes('"bank"') || call.includes('"cbk"') || call.includes('"equity"'),
+        call.includes('"mmf"') ||
+          call.includes('"bank"') ||
+          call.includes('"cbk"') ||
+          call.includes('"equity"') ||
+          call.includes('"reit"'),
       ).toBe(true);
     }
   });

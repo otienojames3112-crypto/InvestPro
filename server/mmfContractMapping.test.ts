@@ -346,22 +346,25 @@ describe("Slice 8b · FindingCard wiring", () => {
   it("the 'Additional extracted details' label appears only alongside the MMF block, never unconditionally", () => {
     const idx = findingCard.indexOf("Additional extracted details");
     expect(idx).toBeGreaterThan(-1);
-    const before = findingCard.slice(Math.max(0, idx - 200), idx);
-    // Slices 8c/8d/8e-1 extended the condition to also cover Bank, CBK and Equity
-    // findings — still gated on a contract-display-rows flag, never unconditional.
-    expect(before).toContain("(mmfDisplayRows || bankDisplayRows || cbkDisplayRows || equityDisplayRows) &&");
+    const before = findingCard.slice(Math.max(0, idx - 240), idx);
+    // Slices 8c/8d/8e-1/8e-2 extended the condition to also cover Bank, CBK,
+    // Equity and REIT findings — still gated on a contract-display-rows flag,
+    // never unconditional.
+    expect(before).toContain(
+      "(mmfDisplayRows || bankDisplayRows || cbkDisplayRows || equityDisplayRows || reitDisplayRows) &&",
+    );
   });
 
   it("the draft mutation call projects MMF figures via the contract and passes them explicitly", () => {
     expect(findingCard).toContain(
       "const mmfFigures = mmfContract ? projectFindingToContractFigures(mmfContract, finding) : undefined;",
     );
-    // Slices 8c/8d/8e-1 extended this to also compute bankFigures/cbkFigures/
-    // equityFigures and fall back through them — at most one of
-    // mmfFigures/bankFigures/cbkFigures/equityFigures is ever a real object at
-    // once (a finding has exactly one targetCatalogue/subtype).
+    // Slices 8c/8d/8e-1/8e-2 extended this to also compute bankFigures/
+    // cbkFigures/equityFigures/reitFigures and fall back through them — at most
+    // one of them is ever a real object at once (a finding has exactly one
+    // targetCatalogue/subtype).
     expect(findingCard).toContain(
-      "draft.mutate({ findingId: finding.id, figures: mmfFigures ?? bankFigures ?? cbkFigures ?? equityFigures });",
+      "figures: mmfFigures ?? bankFigures ?? cbkFigures ?? equityFigures ?? reitFigures,",
     );
   });
 
@@ -387,12 +390,16 @@ describe("Slice 8b · FindingCard wiring", () => {
     expect(dialog).not.toContain("getCatalogueFieldContract");
   });
 
-  it("no REIT/offshore-fund/SACCO market_asset contract lookups exist anywhere yet — only MMF (8b), Bank (8c), CBK (8d) and Equity (8e-1) are wired", () => {
+  it("no offshore-fund/SACCO market_asset contract lookups exist anywhere yet — only MMF (8b), Bank (8c), CBK (8d), Equity (8e-1) and REIT (8e-2) are wired", () => {
     const contractCalls = [...askAi.matchAll(/getCatalogueFieldContract\([^)]*\)/g)].map((m) => m[0]);
     expect(contractCalls.length).toBeGreaterThan(0);
     for (const call of contractCalls) {
       expect(
-        call.includes('"mmf"') || call.includes('"bank"') || call.includes('"cbk"') || call.includes('"equity"'),
+        call.includes('"mmf"') ||
+          call.includes('"bank"') ||
+          call.includes('"cbk"') ||
+          call.includes('"equity"') ||
+          call.includes('"reit"'),
       ).toBe(true);
     }
   });

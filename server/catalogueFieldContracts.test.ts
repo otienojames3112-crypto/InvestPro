@@ -47,6 +47,31 @@
  * the approval gate for essentially every real CBK finding once contract-
  * projected figures replaced raw passthrough.
  *
+ * Amended a fifth time during Slice 8e-1's pre-approval compatibility check
+ * (2026-07-16): Market asset Equity had three KEYS renamed (display labels
+ * unchanged, field count unchanged at 13): "currentPrice" → "lastPrice",
+ * "dividendYield" → "yieldPct" (buildPromotionPlan reads f.yieldPct only, even
+ * though the gate's own lastPrice-rule alias table tolerated "dividendYield"
+ * — a gate pass was not proof of promotion compatibility), and "exchange" →
+ * "market" (same gate-tolerates-but-promotion-drops trap).
+ *
+ * Amended a sixth time during Slice 8e-2's pre-approval compatibility check
+ * (2026-07-16): Market asset REIT grew from 12 to 13 fields and introduced a
+ * NEW mechanism, `alsoWriteKeys`, on `CatalogueFieldContractEntry` — the first
+ * case where one value genuinely needs two DIFFERENT downstream keys at once
+ * (MARKET_ASSET_SUBTYPE_FIELD_RULES.reit's own gate rule strictly checks the
+ * literal key `distributionYield`, with no fallback, while buildPromotionPlan
+ * only reads `yieldPct`/`yield`/`coupon` for the promoted column — no single
+ * key could satisfy both). `distributionYield` kept its canonical key and
+ * gained `alsoWriteKeys: ["yieldPct"]`, duplicating the same found value onto
+ * both, confined entirely to the projector — no researchPipeline.ts change.
+ * Also: "currentPrice" renamed to "lastPrice" (same class as Equity's rename),
+ * and a genuinely missing field, "Exchange" (key: market), was added — omitted
+ * from the original 12-field product list, but CATALOGUE_FIELD_RULES.market_asset
+ * hard-requires figures.market for EVERY market-asset subtype, proven directly
+ * via a live checkApprovalGate call that still reported "market" missing with
+ * every other REIT field supplied.
+ *
  * Pure tests for shared/catalogueFieldContracts.ts. This slice is documentation +
  * data only: nothing here touches the DB, Ask AI, the approval gate, the Review
  * Queue, or any catalogue UI. The guardrail tests at the bottom of this file exist
@@ -141,6 +166,7 @@ const DESIRED_LABELS: Record<string, string[]> = {
   reit: [
     "REIT name",
     "REIT type",
+    "Exchange",
     "Current price / unit price",
     "Distribution yield",
     "Recent distribution",
@@ -483,11 +509,17 @@ describe("Catalogue field contract · missing fields are marked missingRequiresM
 });
 
 describe("Catalogue field contract · gate-required fields not yet promoted are flagged, not silently marked column", () => {
-  it("REIT distributionYield is gate-required but storageStatus is extendedFields, not column, with a note explaining the promotion gap", () => {
+  it("REIT distributionYield is gate-required, storageStatus is extendedFields (not column), and its promotion gap was fixed in Slice 8e-2 via alsoWriteKeys", () => {
     const field = getCatalogueFieldContract("market_asset", "reit")!.fields.find((f) => f.key === "distributionYield")!;
     expect(field.required).toBe(true);
     expect(field.storageStatus).toBe("extendedFields");
-    expect(field.note).toMatch(/fallback chain/i);
+    // Slice 8e-2: the REIT subtype gate strictly checks the literal key
+    // 'distributionYield' (figurePresent has no fallback for it), but
+    // buildPromotionPlan only reads yieldPct/yield/coupon for the promoted
+    // column — no single key could satisfy both, so the same value is
+    // duplicated onto 'yieldPct' too via alsoWriteKeys.
+    expect(field.alsoWriteKeys).toEqual(["yieldPct"]);
+    expect(field.note).toMatch(/alsoWriteKeys/i);
   });
 
   it("SACCO's three gate-required fields (dividendRate, minContribution, lockInWithdrawalRule) are extendedFields, not column", () => {
@@ -502,7 +534,7 @@ describe("Catalogue field contract · gate-required fields not yet promoted are 
 });
 
 describe("Catalogue field contract · foundation-only guardrails (no behavior change yet)", () => {
-  it("only the Slice 8b/8c/8d/8e-1-approved consumers import shared/catalogueFieldContracts — MMF, Bank, CBK and Equity only, nothing wired for REIT/offshore-fund/SACCO yet", () => {
+  it("only the Slice 8b/8c/8d/8e-1/8e-2-approved consumers import shared/catalogueFieldContracts — MMF, Bank, CBK, Equity and REIT only, nothing wired for offshore-fund/SACCO yet", () => {
     const root = join(__dirname, "..");
     const searchDirs = ["server", "shared", join("client", "src")];
     const offenders: string[] = [];
@@ -529,15 +561,16 @@ describe("Catalogue field contract · foundation-only guardrails (no behavior ch
     // This test file imports it directly (8a's own suite), Slice 8b wires
     // MMF-only support into AskAI.tsx plus its own test file, Slice 8c adds Bank
     // support to the SAME AskAI.tsx file plus its own test file, Slice 8d adds
-    // CBK support the same way, and Slice 8e-1 adds Equity support the same way.
-    // Any OTHER consumer (e.g. a premature REIT/offshore-fund/SACCO wiring) must
-    // still fail this guardrail.
+    // CBK support the same way, Slice 8e-1 adds Equity support the same way, and
+    // Slice 8e-2 adds REIT support the same way. Any OTHER consumer (e.g. a
+    // premature offshore-fund/SACCO wiring) must still fail this guardrail.
     const allowed = new Set([
       join(root, "server", "catalogueFieldContracts.test.ts"),
       join(root, "server", "mmfContractMapping.test.ts"),
       join(root, "server", "bankContractMapping.test.ts"),
       join(root, "server", "cbkContractMapping.test.ts"),
       join(root, "server", "equityContractMapping.test.ts"),
+      join(root, "server", "reitContractMapping.test.ts"),
       join(root, "client", "src", "pages", "AskAI.tsx"),
     ]);
     const unexpectedOffenders = offenders.filter((f) => !allowed.has(f));

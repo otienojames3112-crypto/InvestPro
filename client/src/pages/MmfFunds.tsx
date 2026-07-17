@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, Fragment } from "react";
 import { AiExplainDialog } from "@/components/AiExplainDialog";
 import { Sparkles } from "lucide-react";
 import { Link, useLocation } from "wouter";
@@ -24,6 +24,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 import { ArrowUpDown, ArrowUp, ArrowDown, Search, Plus, Pencil, CheckCircle2, Circle, Info, Star, AlertTriangle, ExternalLink, MoreHorizontal, PiggyBank, Receipt, PieChart, ListChecks } from "lucide-react";
+import { ChevronDown, ChevronRight } from "lucide-react";
 import { getCatalogueFieldContract } from "@shared/catalogueFieldContracts";
 import {
   DropdownMenu,
@@ -381,6 +382,16 @@ export default function MmfFunds({ embedded = false }: { embedded?: boolean } = 
   const [editFund, setEditFund] = useState<Fund | null>(null);
   // Stage 10a — the full-field detail drawer.
   const [detailFund, setDetailFund] = useState<Fund | null>(null);
+  // Stage 10a-4 — per-row expandable field grid (compact primary row +
+  // expand-in-place, rather than 10a-3's one-column-per-field wide table).
+  const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
+  const toggleExpanded = (id: number) =>
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
 
   const addMutation = trpc.mmfFunds.add.useMutation({
     onSuccess: () => { invalidatePortfolioMoney(utils, portfolioId); setAddOpen(false); toast.success("Fund added."); },
@@ -637,59 +648,50 @@ export default function MmfFunds({ embedded = false }: { embedded?: boolean } = 
             <thead>
               <tr className="border-b bg-muted/30">
                 <th className="text-left px-4 py-3 font-medium w-8">#</th>
-                <th className="text-left px-4 py-3 font-medium">
+                {/* Stage 10a-4 — compact grouped primary row (Fund/Yield/
+                    Cost & tax/Entry & liquidity/Size/Source & freshness/
+                    Actions), replacing Stage 10a-3's one-column-per-field
+                    layout, which was complete but too wide to scan. Every
+                    established field Stage 10a-3 added stays visible — moved
+                    into the per-row expand grid below (see the expandedIds
+                    toggle) rather than hidden in the drawer only. Fund and
+                    Actions are sticky so a manager never loses fund identity
+                    or the ability to act while scrolling. */}
+                <th className="text-left px-4 py-3 font-medium sticky left-0 z-10 bg-muted/30">
                   <button className="flex items-center" onClick={() => handleSort("fundName")}>
                     Fund <SortIcon k="fundName" />
                   </button>
                 </th>
-                {/* Stage 10a-3 — the established MMF catalogue fields are now
-                    explicit columns, not grouped captions: the Reference
-                    Catalogue is the quick-decision surface, so a manager must
-                    be able to see EAR/Daily/Gross/Net yield, WHT, fee, min
-                    investment, withdrawal period, AUM, and risk profile at a
-                    glance without opening the drawer. The table scrolls
-                    horizontally (CardContent already has overflow-x-auto)
-                    rather than hiding any of them. */}
                 <th className="text-right px-4 py-3 font-medium">
                   <button className="flex items-center ml-auto" onClick={() => handleSort("ear")}>
-                    EAR <SortIcon k="ear" />
+                    Yield <SortIcon k="ear" />
                   </button>
                 </th>
-                <th className="text-right px-4 py-3 font-medium">Daily yield</th>
-                <th className="text-right px-4 py-3 font-medium">
-                  <button className="flex items-center ml-auto" onClick={() => handleSort("grossYield")}>
-                    Gross yield <SortIcon k="grossYield" />
-                  </button>
-                </th>
-                <th className="text-right px-4 py-3 font-medium">Net yield</th>
-                <th className="text-right px-4 py-3 font-medium">WHT</th>
                 <th className="text-right px-4 py-3 font-medium">
                   <button className="flex items-center ml-auto" onClick={() => handleSort("managementFee")}>
-                    Management fee <SortIcon k="managementFee" />
+                    Cost &amp; tax <SortIcon k="managementFee" />
                   </button>
                 </th>
                 <th className="text-right px-4 py-3 font-medium">
                   <button className="flex items-center ml-auto" onClick={() => handleSort("minInvestment")}>
-                    Minimum investment <SortIcon k="minInvestment" />
+                    Entry &amp; liquidity <SortIcon k="minInvestment" />
                   </button>
                 </th>
-                <th className="text-right px-4 py-3 font-medium">Withdrawal period</th>
                 <th className="text-right px-4 py-3 font-medium">
                   <button className="flex items-center ml-auto" onClick={() => handleSort("aumMillions")}>
-                    AUM <SortIcon k="aumMillions" />
+                    Size <SortIcon k="aumMillions" />
                   </button>
                 </th>
-                <th className="text-left px-4 py-3 font-medium">Risk profile</th>
                 <th className="text-left px-4 py-3 font-medium">Source &amp; freshness</th>
-                <th className="px-4 py-3" />
+                <th className="px-4 py-3 sticky right-0 z-10 bg-muted/30">Actions</th>
               </tr>
             </thead>
             <tbody>
               {isLoading && (
-                <tr><td colSpan={14} className="text-center py-8 text-muted-foreground">Loading…</td></tr>
+                <tr><td colSpan={8} className="text-center py-8 text-muted-foreground">Loading…</td></tr>
               )}
               {!isLoading && sorted.length === 0 && (
-                <tr><td colSpan={14} className="text-center py-8 text-muted-foreground">No funds found.</td></tr>
+                <tr><td colSpan={8} className="text-center py-8 text-muted-foreground">No funds found.</td></tr>
               )}
               {sorted.map((fund, idx) => {
                 const isSelected = fund.id === selectedFundId;
@@ -699,9 +701,10 @@ export default function MmfFunds({ embedded = false }: { embedded?: boolean } = 
                 const catSource = resolveCatalogueSource(fund.source, fund.extendedFields, fund.asOfDate);
                 const fresh = freshnessTone(daysSince(typeof catSource.asOf === "string" ? catSource.asOf : fund.asOfDate));
                 // Stage 10a-2 introduced Net yield computed the same way the
-                // detail drawer computes it (EAR net of WHT); Stage 10a-3 gives
-                // it (and WHT, Daily yield, Withdrawal period, Risk profile)
-                // their own explicit table columns instead of a grouped caption.
+                // detail drawer computes it (EAR net of WHT); Stage 10a-4
+                // keeps that computation but shows it (and Daily yield/WHT/
+                // Withdrawal period/Risk profile) in the per-row expand grid
+                // instead of Stage 10a-3's one-column-per-field layout.
                 const whtRate = fund.whtRate ?? 15;
                 const netYield = fund.ear * (1 - whtRate / 100);
                 const rowExtendedFields = fund.extendedFields as Record<string, unknown> | null | undefined;
@@ -709,18 +712,27 @@ export default function MmfFunds({ embedded = false }: { embedded?: boolean } = 
                 const withdrawalPeriod = rowExtendedFields?.withdrawalNoticePeriod
                   ? String(rowExtendedFields.withdrawalNoticePeriod)
                   : null;
+                const isExpanded = expandedIds.has(fund.id);
+                const rowBgClass = isSelected ? "bg-primary/8" : focused ? "bg-primary/5" : "hover:bg-muted/30";
                 return (
+                  <Fragment key={fund.id}>
                   <tr
-                    key={fund.id}
                     ref={refFocus.registerRow(fund.fundName)}
                     data-ref={fund.fundName}
-                    className={`border-b transition-colors ${
-                      isSelected ? "bg-primary/8" : focused ? "bg-primary/5" : "hover:bg-muted/30"
-                    }`}
+                    className={`border-b transition-colors ${rowBgClass}`}
                   >
                     <td className="px-4 py-3 text-muted-foreground text-xs">{idx + 1}</td>
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-2">
+                    <td className="px-4 py-3 sticky left-0 z-10 bg-background">
+                      <div className="flex items-start gap-2">
+                        <button
+                          type="button"
+                          onClick={() => toggleExpanded(fund.id)}
+                          className="mt-0.5 text-muted-foreground hover:text-foreground shrink-0"
+                          aria-label={isExpanded ? "Hide fields" : "View fields"}
+                          aria-expanded={isExpanded}
+                        >
+                          {isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+                        </button>
                         <div>
                           <div className="font-medium flex items-center gap-1.5 flex-wrap">
                             {fund.fundName}
@@ -741,6 +753,13 @@ export default function MmfFunds({ embedded = false }: { embedded?: boolean } = 
                             )}
                           </div>
                           <div className="text-xs text-muted-foreground">{fund.company}</div>
+                          <button
+                            type="button"
+                            onClick={() => toggleExpanded(fund.id)}
+                            className="text-[10px] text-primary hover:underline mt-0.5"
+                          >
+                            {isExpanded ? "Hide fields" : "View fields"}
+                          </button>
                         </div>
                       </div>
                     </td>
@@ -753,25 +772,21 @@ export default function MmfFunds({ embedded = false }: { embedded?: boolean } = 
                           {vsAvg >= 0 ? "+" : ""}{vsAvg.toFixed(1)}% vs avg
                         </div>
                       )}
+                      <div className="text-[10px] text-muted-foreground">
+                        Gross {fund.grossYield.toFixed(2)}% · Net {netYield.toFixed(2)}%
+                      </div>
                     </td>
-                    <td className="px-4 py-3 text-right text-muted-foreground">{dailyYield ?? "—"}</td>
-                    <td className="px-4 py-3 text-right text-muted-foreground">{fund.grossYield.toFixed(2)}%</td>
-                    <td className="px-4 py-3 text-right text-muted-foreground">{netYield.toFixed(2)}%</td>
-                    <td className="px-4 py-3 text-right text-muted-foreground">{whtRate.toFixed(2)}%</td>
-                    <td className="px-4 py-3 text-right text-muted-foreground">{fund.managementFee.toFixed(2)}%</td>
                     <td className="px-4 py-3 text-right text-muted-foreground">
-                      KES {fund.minInvestment.toLocaleString("en-KE")}
+                      <div>{fund.managementFee.toFixed(2)}% fee</div>
+                      <div className="text-[10px]">WHT {whtRate.toFixed(2)}%</div>
                     </td>
-                    <td className="px-4 py-3 text-right text-muted-foreground">{withdrawalPeriod ?? "—"}</td>
+                    <td className="px-4 py-3 text-right text-muted-foreground">
+                      <div>KES {fund.minInvestment.toLocaleString("en-KE")}</div>
+                      <div className="text-[10px]">{withdrawalPeriod ?? "—"} withdrawal</div>
+                    </td>
                     <td className="px-4 py-3 text-right text-muted-foreground">
                       {fund.aumMillions != null ? `KES ${fund.aumMillions.toLocaleString("en-KE", { maximumFractionDigits: 0 })}M` : "—"}
                     </td>
-                    {/* Risk profile has no storage anywhere in the schema today
-                        (the mmf contract's own note: storageStatus
-                        "missingRequiresMigration") — shown honestly as
-                        unavailable, never fabricated, same convention the
-                        detail drawer already uses. */}
-                    <td className="px-4 py-3 text-left text-muted-foreground">Not available</td>
                     <td className="px-4 py-3">
                       <div className="flex flex-col gap-0.5">
                         {catSource.label ? (
@@ -795,7 +810,7 @@ export default function MmfFunds({ embedded = false }: { embedded?: boolean } = 
                         </span>
                       </div>
                     </td>
-                    <td className="px-4 py-3">
+                    <td className="px-4 py-3 sticky right-0 z-10 bg-background">
                       <div className="flex items-center gap-1 justify-end">
                         {isSelected ? (
                           <Button
@@ -870,6 +885,63 @@ export default function MmfFunds({ embedded = false }: { embedded?: boolean } = 
                       </div>
                     </td>
                   </tr>
+                  {/* Stage 10a-4 — the full established MMF field set for this
+                      fund, expanded in place rather than requiring the drawer.
+                      Reuses the SAME DrawerFact component the detail drawer
+                      already uses for identical labels/values, so the two
+                      views can never drift apart. */}
+                  {isExpanded && (
+                    <tr className="border-b bg-muted/10">
+                      <td colSpan={8} className="px-4 py-4">
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-6 gap-y-3">
+                          <DrawerFact label="Fund name" value={fund.fundName} />
+                          <DrawerFact label="Fund manager" value={fund.company} />
+                          <DrawerFact label="EAR" value={`${fund.ear.toFixed(2)}%`} />
+                          <DrawerFact label="Daily yield" value={dailyYield ?? "—"} />
+                          <DrawerFact label="Gross yield" value={`${fund.grossYield.toFixed(2)}%`} />
+                          <DrawerFact label="Net yield" value={`${netYield.toFixed(2)}%`} />
+                          <DrawerFact label="WHT" value={`${whtRate.toFixed(2)}%`} />
+                          <DrawerFact label="Management fee" value={`${fund.managementFee.toFixed(2)}%`} />
+                          <DrawerFact label="Minimum investment" value={`KES ${fund.minInvestment.toLocaleString("en-KE")}`} />
+                          <DrawerFact label="Withdrawal period" value={withdrawalPeriod ?? "—"} />
+                          <DrawerFact
+                            label="AUM"
+                            value={fund.aumMillions != null ? `KES ${fund.aumMillions.toLocaleString("en-KE", { maximumFractionDigits: 0 })}M` : "—"}
+                          />
+                          {/* Risk profile has no storage anywhere in the schema
+                              today (the mmf contract's own note: storageStatus
+                              "missingRequiresMigration") — shown honestly as
+                              unavailable, never fabricated, same convention the
+                              detail drawer already uses. */}
+                          <DrawerFact label="Risk profile" value="Not available" />
+                          <div className="space-y-0.5">
+                            <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">Source label/link</p>
+                            {catSource.label ? (
+                              catSource.url ? (
+                                <a
+                                  href={catSource.url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-sm text-primary underline underline-offset-2 inline-flex items-center gap-1"
+                                >
+                                  {catSource.label} <ExternalLink className="w-3 h-3 shrink-0" />
+                                </a>
+                              ) : (
+                                <p className="text-sm">{catSource.label}</p>
+                              )
+                            ) : (
+                              <p className="text-sm text-amber-600 dark:text-amber-400">No source</p>
+                            )}
+                          </div>
+                          <DrawerFact
+                            label="Source-as-of date"
+                            value={catSource.asOf ? String(catSource.asOf).slice(0, 10) : "—"}
+                          />
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                  </Fragment>
                 );
               })}
             </tbody>

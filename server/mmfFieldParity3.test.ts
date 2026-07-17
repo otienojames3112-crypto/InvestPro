@@ -7,15 +7,20 @@
  * established MMF fields still weren't actual visible catalogue columns —
  * the Reference Catalogue is the quick-decision surface, so a manager
  * shouldn't have to open the drawer (or squint at a caption) to see WHT or
- * Net yield. This slice replaces the grouped cells with one explicit column
- * per established field: EAR, Daily yield, Gross yield, Net yield, WHT,
- * Management fee, Minimum investment, Withdrawal period, AUM, Risk profile,
- * Source & freshness — Fund name/manager stay stacked in one "Fund" column
- * (explicitly permitted: "may be stacked... if necessary, but the manager
- * must still be visible") and Source/as-of stay combined in one "Source &
- * freshness" column (explicitly permitted: "can share a compact column only
- * if both are clearly visible"). The table now scrolls horizontally
- * (CardContent already had `overflow-x-auto`) rather than hiding any field.
+ * Net yield. This slice replaced the grouped cells with one explicit column
+ * per established field.
+ *
+ * SUPERSEDED BY STAGE 10a-4 (see server/mmfFieldParity4.test.ts): live
+ * verification of *this* slice found the resulting 14-column table was too
+ * wide to scan, so Stage 10a-4 replaced the one-column-per-field layout with
+ * a compact grouped primary row (Fund/Yield/Cost & tax/Entry & liquidity/
+ * Size/Source & freshness/Actions) plus a per-row expand grid carrying the
+ * SAME full established field set this file originally proved were columns
+ * — now proved to be in the expand grid instead. The tests below are
+ * REWRITTEN to assert the CURRENT (10a-4) structure rather than pin the
+ * superseded one-column-per-field layout; the field-parity GUARANTEE this
+ * file's title describes ("no established field is only in the drawer")
+ * still holds, just via a different UI mechanism.
  *
  * Display-only: no promotion/gate/schema change. Reuses every value already
  * computed for the (unchanged) detail drawer — Net yield = EAR × (1 − WHT),
@@ -38,30 +43,12 @@ const tableIdx = mmfFundsPage.indexOf("{/* Table */}");
 const tableEndIdx = mmfFundsPage.indexOf("{/* Reference-vs-holdings separation");
 const tableBlock = mmfFundsPage.slice(tableIdx, tableEndIdx);
 
-describe("Stage 10a-3 · the established MMF fields are explicit table headers", () => {
-  it("1. every established MMF field has its own <th> header in the table (not folded into a grouped caption)", () => {
-    const headers = [
-      "Fund <SortIcon",
-      "EAR <SortIcon",
-      "Daily yield<",
-      "Gross yield <SortIcon",
-      "Net yield<",
-      "WHT<",
-      "Management fee <SortIcon",
-      "Minimum investment <SortIcon",
-      "Withdrawal period<",
-      "AUM <SortIcon",
-      "Risk profile<",
-      "Source &amp; freshness",
-    ];
+describe("Stage 10a-3 · the primary row headers are the compact grouped columns Stage 10a-4 introduced", () => {
+  it("1. the primary row has one grouped header per quick-decision category (Fund/Yield/Cost & tax/Entry & liquidity/Size/Source & freshness/Actions)", () => {
+    const headers = ["Fund <SortIcon", "Yield <SortIcon", "Cost &amp; tax <SortIcon", "Entry &amp; liquidity <SortIcon", "Size <SortIcon", "Source &amp; freshness", ">Actions<"];
     for (const header of headers) {
       expect(tableBlock).toContain(header);
     }
-  });
-
-  it("no more grouped 'Yield (EAR/Gross/Net)' or 'Cost & tax (Fee/WHT)' captions remain", () => {
-    expect(tableBlock).not.toContain("Yield (EAR/Gross/Net)");
-    expect(tableBlock).not.toContain("Cost &amp; tax (Fee/WHT)");
   });
 
   it("the table scrolls horizontally rather than hiding a column", () => {
@@ -69,55 +56,63 @@ describe("Stage 10a-3 · the established MMF fields are explicit table headers",
   });
 });
 
-describe("Stage 10a-3 · each established field renders as its own cell", () => {
-  it("2. EAR is its own cell, no longer prefixed inline with 'EAR ' inside a shared Yield cell", () => {
-    expect(tableBlock).toContain("{fund.ear.toFixed(2)}%");
-    expect(tableBlock).not.toContain("EAR {fund.ear.toFixed(2)}%");
+describe("Stage 10a-3 · every established field is still findable (now in the per-row expand grid, not the drawer only)", () => {
+  it("2/4/5/6/7. EAR, Gross yield, Net yield, WHT, Management fee are all present in the expand grid via DrawerFact", () => {
+    const idx = tableBlock.indexOf("isExpanded && (");
+    const block = tableBlock.slice(idx);
+    expect(block).toContain('<DrawerFact label="EAR" value={`${fund.ear.toFixed(2)}%`} />');
+    expect(block).toContain('<DrawerFact label="Gross yield" value={`${fund.grossYield.toFixed(2)}%`} />');
+    expect(block).toContain('<DrawerFact label="Net yield" value={`${netYield.toFixed(2)}%`} />');
+    expect(block).toContain('<DrawerFact label="WHT" value={`${whtRate.toFixed(2)}%`} />');
+    expect(block).toContain('<DrawerFact label="Management fee" value={`${fund.managementFee.toFixed(2)}%`} />');
   });
 
-  it("3. Daily yield is its own cell, reading extendedFields.dailyYield, dash when absent", () => {
+  it("EAR/Gross yield/Net yield remain visible without opening the expand grid too — the primary Yield cell still shows all three compactly", () => {
+    const idx = tableBlock.indexOf('<td className="px-4 py-3 text-right">');
+    const block = tableBlock.slice(idx, idx + 900);
+    expect(block).toContain("{fund.ear.toFixed(2)}%");
+    expect(block).toContain("Gross {fund.grossYield.toFixed(2)}% · Net {netYield.toFixed(2)}%");
+  });
+
+  it("Management fee/WHT remain visible in the primary Cost & tax cell too", () => {
+    expect(tableBlock).toContain("{fund.managementFee.toFixed(2)}% fee</div>");
+    expect(tableBlock).toContain("WHT {whtRate.toFixed(2)}%</div>");
+  });
+
+  it("3. Daily yield is in the expand grid, reading extendedFields.dailyYield, dash when absent", () => {
     expect(tableBlock).toContain('rowExtendedFields?.dailyYield ? String(rowExtendedFields.dailyYield) : null');
-    expect(tableBlock).toContain('{dailyYield ?? "—"}');
+    const idx = tableBlock.indexOf("isExpanded && (");
+    const block = tableBlock.slice(idx);
+    expect(block).toContain('<DrawerFact label="Daily yield" value={dailyYield ?? "—"} />');
   });
 
-  it("4. Gross yield is its own cell, no longer inside the 'Gross X% · Net Y%' caption", () => {
-    expect(tableBlock).toContain("{fund.grossYield.toFixed(2)}%</td>");
-    expect(tableBlock).not.toContain("Gross {fund.grossYield.toFixed(2)}%");
-  });
-
-  it("5. Net yield is its own cell, computed the same way as the (unchanged) drawer", () => {
-    expect(tableBlock).toContain("const netYield = fund.ear * (1 - whtRate / 100);");
-    expect(tableBlock).toContain("{netYield.toFixed(2)}%</td>");
-  });
-
-  it("6. WHT is its own cell, no longer inside a 'Fee X% / WHT Y%' caption", () => {
-    expect(tableBlock).toContain("{whtRate.toFixed(2)}%</td>");
-    expect(tableBlock).not.toContain("WHT {whtRate.toFixed(2)}%");
-  });
-
-  it("7. Management fee is its own cell", () => {
-    expect(tableBlock).toContain("{fund.managementFee.toFixed(2)}%</td>");
-  });
-
-  it("8. Minimum investment is its own cell, labeled with its currency", () => {
+  it("8. Minimum investment is visible in BOTH the primary Entry & liquidity cell and the expand grid, labeled with its currency", () => {
     expect(tableBlock).toContain('KES {fund.minInvestment.toLocaleString("en-KE")}');
+    const idx = tableBlock.indexOf("isExpanded && (");
+    const block = tableBlock.slice(idx);
+    expect(block).toContain('<DrawerFact label="Minimum investment" value={`KES ${fund.minInvestment.toLocaleString("en-KE")}`} />');
   });
 
-  it("9. Withdrawal period is its own cell, reading extendedFields.withdrawalNoticePeriod, dash when absent", () => {
+  it("9. Withdrawal period is visible in both the primary Entry & liquidity cell and the expand grid, dash when absent", () => {
     expect(tableBlock).toContain("rowExtendedFields?.withdrawalNoticePeriod");
     expect(tableBlock).toContain("String(rowExtendedFields.withdrawalNoticePeriod)");
-    expect(tableBlock).toContain('{withdrawalPeriod ?? "—"}');
+    expect(tableBlock).toContain('{withdrawalPeriod ?? "—"} withdrawal');
+    const idx = tableBlock.indexOf("isExpanded && (");
+    const block = tableBlock.slice(idx);
+    expect(block).toContain('<DrawerFact label="Withdrawal period" value={withdrawalPeriod ?? "—"} />');
   });
 
-  it("10. AUM is its own cell, labeled with currency/millions", () => {
+  it("10. AUM is visible in both the primary Size cell and the expand grid, labeled with currency/millions", () => {
     expect(tableBlock).toContain('`KES ${fund.aumMillions.toLocaleString("en-KE", { maximumFractionDigits: 0 })}M`');
   });
 
-  it("11. Risk profile is its own cell, cleanly 'Not available' (never fabricated — no storage exists anywhere for it)", () => {
-    expect(tableBlock).toContain('<td className="px-4 py-3 text-left text-muted-foreground">Not available</td>');
+  it("11. Risk profile is in the expand grid, cleanly 'Not available' (never fabricated — no storage exists anywhere for it)", () => {
+    const idx = tableBlock.indexOf("isExpanded && (");
+    const block = tableBlock.slice(idx);
+    expect(block).toContain('<DrawerFact label="Risk profile" value="Not available" />');
   });
 
-  it("12. Source label/link renders cleanly via the established resolveCatalogueSource helper (8h)", () => {
+  it("12. Source label/link renders cleanly via the established resolveCatalogueSource helper (8h), both in the primary row and the expand grid", () => {
     expect(tableBlock).toContain(
       "const catSource = resolveCatalogueSource(fund.source, fund.extendedFields, fund.asOfDate);",
     );
@@ -126,7 +121,7 @@ describe("Stage 10a-3 · each established field renders as its own cell", () => 
     expect(tableBlock).toContain("No source</span>");
   });
 
-  it("13. Source-as-of renders as a readable date slice, never a raw epoch number", () => {
+  it("13. Source-as-of renders as a readable date slice, never a raw epoch number, both in the primary row and the expand grid", () => {
     expect(tableBlock).toContain("String(catSource.asOf).slice(0, 10)");
   });
 });
@@ -167,9 +162,9 @@ describe("Stage 10a-3 · no raw JSON or raw camelCase keys in the redesigned tab
   });
 });
 
-describe("Stage 10a-3 · sorting is preserved for every field that already had a stable sort key", () => {
-  it("EAR/Gross yield/Management fee/Minimum investment/AUM keep their own sort buttons (Fund's own sort key is unchanged too)", () => {
-    for (const key of ["fundName", "ear", "grossYield", "managementFee", "minInvestment", "aumMillions"]) {
+describe("Stage 10a-3 · sorting is preserved for every grouped category that has a stable underlying sort key", () => {
+  it("Fund/Yield(EAR)/Cost & tax(fee)/Entry & liquidity(min investment)/Size(AUM) each keep a sort button", () => {
+    for (const key of ["fundName", "ear", "managementFee", "minInvestment", "aumMillions"]) {
       expect(tableBlock).toContain(`handleSort("${key}")`);
     }
   });

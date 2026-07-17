@@ -240,29 +240,28 @@ describe("Stage 10a-2 · B — client/src/lib/format.ts owns the two new pure he
 
 describe("Stage 10a-2 · B — MMF Reference Catalogue table redesign", () => {
   // Stage 10a-3 superseded the grouped-cell design this block originally
-  // pinned (one "Yield" cell for EAR/Gross/Net, one "Cost & tax" cell for
-  // Fee/WHT) with an explicit column per established field — live
-  // verification found grouped captions still didn't satisfy "the
-  // established fields must be actual visible columns". See
-  // server/mmfFieldParity3.test.ts for the full column-parity proof; this
-  // block now asserts the CURRENT (10a-3) structure instead of the
-  // superseded 10a-2 one, so it stays a real regression guard rather than a
+  // pinned with one explicit column per established field; Stage 10a-4 then
+  // superseded THAT (too wide to scan) with a compact grouped primary row
+  // plus a per-row expand grid. See server/mmfFieldParity4.test.ts for the
+  // full current-structure proof; this block now asserts the CURRENT
+  // (10a-4) structure so it stays a real regression guard rather than a
   // stale pin.
-  it("9. the main table gives EAR, Gross yield, Net yield, WHT, Management fee each their own explicit column (no longer grouped into 'Yield'/'Cost & tax' captions)", () => {
-    expect(mmfFundsPage).not.toContain("Yield (EAR/Gross/Net)");
-    expect(mmfFundsPage).not.toContain("Cost &amp; tax (Fee/WHT)");
-    expect(mmfFundsPage).toContain("{fund.grossYield.toFixed(2)}%</td>");
-    expect(mmfFundsPage).toContain("{netYield.toFixed(2)}%</td>");
-    expect(mmfFundsPage).toContain("{whtRate.toFixed(2)}%</td>");
+  it("9. EAR/Gross/Net yield and Management fee/WHT are grouped into compact 'Yield'/'Cost & tax' primary cells, with the full values also reachable in the per-row expand grid", () => {
+    expect(mmfFundsPage).toContain("Gross {fund.grossYield.toFixed(2)}% · Net {netYield.toFixed(2)}%");
+    expect(mmfFundsPage).toContain("{fund.managementFee.toFixed(2)}% fee</div>");
+    expect(mmfFundsPage).toContain("WHT {whtRate.toFixed(2)}%</div>");
+    expect(mmfFundsPage).toContain('<DrawerFact label="Gross yield" value={`${fund.grossYield.toFixed(2)}%`} />');
+    expect(mmfFundsPage).toContain('<DrawerFact label="Net yield" value={`${netYield.toFixed(2)}%`} />');
+    expect(mmfFundsPage).toContain('<DrawerFact label="WHT" value={`${whtRate.toFixed(2)}%`} />');
   });
 
   it("Net yield is computed the same way the detail drawer already computes it (EAR net of WHT)", () => {
     expect(mmfFundsPage).toContain("const netYield = fund.ear * (1 - whtRate / 100);");
   });
 
-  it("Minimum investment, AUM, and Source & freshness remain their own visible columns", () => {
-    expect(mmfFundsPage).toContain("Minimum investment");
-    expect(mmfFundsPage).toContain("AUM <SortIcon");
+  it("Minimum investment, AUM, and Source & freshness remain visible in the primary row", () => {
+    expect(mmfFundsPage).toContain("Entry &amp; liquidity");
+    expect(mmfFundsPage).toContain("Size <SortIcon");
     expect(mmfFundsPage).toContain("Source &amp; freshness");
   });
 
@@ -282,7 +281,7 @@ describe("Stage 10a-2 · B — MMF Reference Catalogue table redesign", () => {
     const nextIdx = mmfFundsPage.indexOf("</tr>", idx);
     const block = mmfFundsPage.slice(idx, nextIdx);
     expect(block).not.toContain("{fund.whtRate}"); // raw, unlabeled — must go through the computed whtRate cell
-    expect(block).toContain("{whtRate.toFixed(2)}%</td>");
+    expect(block).toContain("WHT {whtRate.toFixed(2)}%</div>");
   });
 });
 

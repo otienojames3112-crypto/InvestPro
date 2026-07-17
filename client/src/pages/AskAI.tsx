@@ -70,6 +70,7 @@ import {
 } from "@shared/catalogueFieldContracts";
 import { SOURCE_CLASS_LABELS, isSourceClass } from "@shared/instrumentProfile";
 import { formatRelativeTime } from "@/lib/format";
+import { formatLocalYmd } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { AiPrincipleBanner } from "@/pages/AiIntake";
 import { InstrumentProfilePreview } from "@/components/InstrumentProfilePreview";
@@ -653,7 +654,7 @@ function CorrectFigureDialog({
                 {!useOwnSource && (
                   <p className="text-xs text-muted-foreground">
                     Reusing the finding's original source: <span className="font-medium">{finding.sourceLabel ?? finding.sourceUrl}</span>
-                    {finding.sourceAsOf ? ` (as of ${new Date(finding.sourceAsOf).toISOString().slice(0, 10)})` : ""}.
+                    {finding.sourceAsOf ? ` (as of ${formatLocalYmd(finding.sourceAsOf)})` : ""}.
                   </p>
                 )}
               </>
@@ -1333,7 +1334,7 @@ export function FindingCard({
               open <ExternalLink className="w-3 h-3" />
             </a>
           )}
-          {finding.sourceAsOf && <span>· as of {new Date(finding.sourceAsOf).toLocaleDateString()}</span>}
+          {finding.sourceAsOf && <span>· as of {formatLocalYmd(finding.sourceAsOf)}</span>}
         </div>
 
         {/* Round 103 — unsourced finding warning */}
@@ -1709,7 +1710,7 @@ function SourcesUsedPanel({
           open <ExternalLink className="w-2.5 h-2.5" />
         </a>
       )}
-      {asOf != null && <span>· as of {new Date(asOf).toLocaleDateString()}</span>}
+      {asOf != null && <span>· as of {formatLocalYmd(asOf)}</span>}
     </div>
   );
 }

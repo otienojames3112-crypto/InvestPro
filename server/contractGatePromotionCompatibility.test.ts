@@ -551,7 +551,7 @@ describe("Slice 8g-3 · negative-drift pins", () => {
 // ── 5. Known, accepted, not-a-bug gaps (documented so they can't silently drift) ──
 
 describe("Slice 8g-3 · known-gap pins — accepted current behavior, not bugs to fix here", () => {
-  it("MMF: wht and aum are contract fields marked promoteToCatalogueRow: true, but buildPromotionPlan's MmfPromotion payload has NO field for either — a documented, pre-existing gap, not touched by 8g-2 (MMF's extendedFields tier was never wired, deliberately, since MMF has no gate-required extendedFields-only gap)", () => {
+  it("MMF: wht and aum are contract fields marked promoteToCatalogueRow: true — FIXED in Stage 10a (previously pinned here as a known, accepted gap; this test now pins the corrected behavior instead of the bug, closing the exact gap Stage 9f-1's live MMF test exposed)", () => {
     const contract = getCatalogueFieldContract("mmf");
     const whtField = contract?.fields.find((f) => f.key === "wht");
     const aumField = contract?.fields.find((f) => f.key === "aum");
@@ -564,10 +564,11 @@ describe("Slice 8g-3 · known-gap pins — accepted current behavior, not bugs t
       figures: { ear: "16.5", grossYield: "17.0", managementFee: "2.0", minInvestment: "1000", wht: "15", aum: "500" },
       source: "Test",
     });
-    // Neither key exists on the typed payload at all.
+    // Stage 10a — both keys now exist on the typed payload with the correct values.
     expect(plan.target).toBe("mmf");
-    expect(Object.keys(plan.payload)).not.toContain("wht");
-    expect(Object.keys(plan.payload)).not.toContain("aum");
+    if (plan.target !== "mmf") throw new Error("unreachable");
+    expect(plan.payload.wht).toBe(15);
+    expect(plan.payload.aumMillions).toBe(500);
   });
 
   it("Bank: liquidity is gate-required but has no extraction source and no DB column — approving a bank draft without a manually-supplied liquidity value stays blocked, by design (not fixed by 8g-2, which is opportunity-only)", () => {

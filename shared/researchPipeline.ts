@@ -165,7 +165,14 @@ export function requiresHumanApproval(_origin: UpdateOrigin): boolean {
 
 function num(v: unknown): number | null {
   if (v === null || v === undefined || v === "") return null;
-  const n = typeof v === "number" ? v : Number(String(v).replace(/,/g, ""));
+  // Stage 10a — strip thousands separators AND a trailing "%" before parsing.
+  // AI extraction (and pasted source text) commonly keeps the "%" a source
+  // printed verbatim (e.g. "12.50%"); without this, Number() returns NaN and
+  // every caller silently falls back to null/0 — the Stage 9f-1 MMF repro's
+  // EAR 12.50%/gross yield 14.20% both promoted as 0.00% for exactly this
+  // reason (documented as a known gap since Slice 8b — see
+  // server/mmfContractMapping.test.ts's compatibility-test comment).
+  const n = typeof v === "number" ? v : Number(String(v).replace(/,/g, "").replace(/%/g, "").trim());
   return Number.isFinite(n) ? n : null;
 }
 function str(v: unknown): string | null {
@@ -181,6 +188,20 @@ export interface MmfPromotion {
   ear: number | null;
   managementFee: number | null;
   minInvestment: number | null;
+  /** Stage 10a — mmf_funds.whtRate is a real, already-existing column (default
+   *  15%) that promotion never wrote (see the mmf contract's "wht" field note,
+   *  Slice 8b) — an approved update's WHT figure was silently dropped. Null
+   *  when the update never carried one, so the row's existing/default rate is
+   *  left untouched rather than overwritten with a guess. */
+  wht: number | null;
+  /** Stage 10a — mmf_funds.aumMillions is a real, already-existing column that
+   *  promotion never wrote either (only the manual Add/Edit dialog could set
+   *  it) — an approved update's AUM figure was silently dropped. Null when the
+   *  update never carried one. */
+  aumMillions: number | null;
+  /** Stage 10a — no first-class column exists; folded into mmf_funds.extendedFields
+   *  (MmfProfile.withdrawalNoticePeriod) at promotion time, same as sourceEnrichment. */
+  withdrawalPeriod: string | null;
   source: string;
 }
 export interface BankPromotion {
@@ -296,6 +317,9 @@ export function buildPromotionPlan(update: {
         ear: num(f.ear ?? f.netYield ?? f.yieldPct),
         managementFee: num(f.managementFee ?? f.expenseRatioPct ?? f.fee),
         minInvestment: num(f.minInvestment ?? f.minAmount),
+        wht: num(f.wht ?? f.whtRate),
+        aumMillions: num(f.aum ?? f.aumMillions),
+        withdrawalPeriod: str(f.withdrawalPeriod ?? f.withdrawalNoticePeriod),
         source,
       },
     };

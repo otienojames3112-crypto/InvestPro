@@ -111,6 +111,7 @@ import {
   countPendingResearchUpdates,
   getResearchUpdate,
   reviewResearchUpdate,
+  updatePendingResearchUpdateFigures,
   listSources,
   upsertSource,
   markSourceReviewed,
@@ -8179,12 +8180,56 @@ export const appRouter = router({
           isPrimaryMmf = names.some((n) => n.toLowerCase() === update.name.trim().toLowerCase());
         }
         const impact = describePortfolioImpact({ assetClass: ac, isPrimaryMmf, instrumentName: update.name });
+        // Stage 10a — this call was missing name/issuer/currency/source/asOf,
+        // so every "name"/"issuer"/"provenanceSource"/"asOf" gate rule always
+        // read them as undefined and reported the field missing regardless of
+        // whether the update actually carried one (reviewResearchUpdate's own
+        // gate check, below, already passes all five correctly — this preview
+        // query had silently drifted out of sync with it).
         const gate = checkApprovalGate({
           assetClass: ac,
           changeKind: update.changeKind,
           figures: (update.figures as Record<string, unknown> | null) ?? {},
+          name: update.name,
+          issuer: update.issuer,
+          currency: update.currency,
+          source: update.source,
+          asOf: update.asOf,
         });
         return { impact, gate, catalogue: catalogueForAssetClass(ac) };
+      }),
+
+    // Stage 10a — edit a PENDING update's identity/figures in place before
+    // approval (multi-field correction). `figures` is merged onto whatever the
+    // update already carries, so a manager can save one field and keep editing
+    // another without losing prior corrections. A no-op once the update has
+    // left "pending" (same guard reviewResearchUpdate itself uses).
+    updatePendingFields: adminProcedure
+      .input(
+        z.object({
+          id: z.number().int().positive(),
+          name: z.string().min(1).max(200).optional(),
+          issuer: z.string().max(200).optional(),
+          currency: z.string().min(1).max(8).optional(),
+          figures: z.record(z.string(), z.unknown()).optional(),
+          source: z.string().min(1).max(300).optional(),
+          sourceUrl: z.string().url().max(500).optional().or(z.literal("")),
+          asOf: z.number().int().positive().optional(),
+        }),
+      )
+      .mutation(async ({ input }) => {
+        const updated = await updatePendingResearchUpdateFigures({
+          id: input.id,
+          name: input.name,
+          issuer: input.issuer,
+          currency: input.currency,
+          figures: input.figures,
+          source: input.source,
+          sourceUrl: input.sourceUrl === "" ? null : input.sourceUrl,
+          asOf: input.asOf,
+        });
+        if (!updated) throw new TRPCError({ code: "NOT_FOUND", message: "Update not found." });
+        return { update: updated };
       }),
 
     // ── Source registry + cadence ──

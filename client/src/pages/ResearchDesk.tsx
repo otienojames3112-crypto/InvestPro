@@ -49,11 +49,14 @@ import {
   resolveContractCatalogueForUpdate,
   resolveApprovalFigureLabel,
   isInternalRoutingFigureKey,
+  getCatalogueFieldContract,
+  projectFindingToContractDisplayRows,
   type CatalogueKey,
   type MarketAssetSubtype,
 } from "@shared/catalogueFieldContracts";
 import { useLocation } from "wouter";
 import { formatRelativeTime } from "@/lib/format";
+import { formatLocalYmd } from "@/lib/format";
 import AiIntake from "./AiIntake";
 import AiReview from "./AiReview";
 import SourceConflicts from "./SourceConflicts";
@@ -310,6 +313,7 @@ function ApproveDialog({
   setManagerValue,
   onClose,
   onApprove,
+  onEditFields,
   busy,
 }: {
   updateId: number | null;
@@ -318,12 +322,39 @@ function ApproveDialog({
   setManagerValue: (v: string) => void;
   onClose: () => void;
   onApprove: (overrideGate: boolean) => void;
+  /** Stage 10a — jump to the multi-field edit dialog for this same update. */
+  onEditFields: () => void;
   busy: boolean;
 }) {
   const { data, isLoading } = trpc.researchPipeline.impactOf.useQuery(
     updateId != null ? { id: updateId, portfolioId: portfolioId ?? undefined } : (undefined as never),
     { enabled: updateId != null, refetchOnWindowFocus: false },
   );
+  // Stage 10a — the full established catalogue field set for this update, the
+  // SAME reusable pattern as the pending-queue card and EditCatalogueFieldsDialog,
+  // so what the manager reviews here before approving is never a subset.
+  const { data: updateData } = trpc.researchPipeline.getUpdate.useQuery(
+    updateId != null ? { id: updateId } : (undefined as never),
+    { enabled: updateId != null, refetchOnWindowFocus: false },
+  );
+  const update = updateData?.update;
+  const fullContract =
+    data?.catalogue && update
+      ? data.catalogue === "market_asset"
+        ? null // market-asset subtype resolution isn't available from impactOf's return; shown on the pending card instead
+        : getCatalogueFieldContract(data.catalogue)
+      : null;
+  const contractRows =
+    fullContract && update
+      ? projectFindingToContractDisplayRows(fullContract, {
+          instrumentName: update.name,
+          issuer: update.issuer,
+          sourceLabel: update.source,
+          sourceUrl: update.sourceUrl,
+          sourceAsOf: update.asOf,
+          extractedFields: update.figures as Record<string, unknown> | null,
+        })
+      : [];
 
   const gate = data?.gate;
   const impact = data?.impact;
@@ -384,6 +415,33 @@ function ApproveDialog({
                 </div>
               </div>
             )}
+
+            {contractRows.length > 0 && (
+              <div className="rounded-lg border border-border bg-muted/20 p-3 space-y-1.5">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-xs font-medium text-muted-foreground flex items-center gap-1.5">
+                    <ListChecks className="w-3.5 h-3.5" /> Catalogue fields
+                  </div>
+                  {data?.catalogue === "mmf" && (
+                    <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" onClick={onEditFields}>
+                      <PencilLine className="w-3 h-3 mr-1" /> Edit
+                    </Button>
+                  )}
+                </div>
+                <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
+                  {contractRows.map((row) => (
+                    <div key={row.key} className="text-xs">
+                      <span className="text-muted-foreground">{row.label}: </span>
+                      {row.value != null ? (
+                        <span className="font-medium">{row.value}</span>
+                      ) : (
+                        <span className="italic text-amber-600 dark:text-amber-400">Missing</span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -402,6 +460,141 @@ function ApproveDialog({
               Approve &amp; promote
             </Button>
           )}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/* ── Multi-field catalogue edit (Stage 10a) ──────────────────────────────────
+ * Lets a manager correct MULTIPLE MMF catalogue fields on a PENDING update in
+ * one place before drafting/approving — closes the gap where Correct Figure
+ * (AskAI.tsx) only versions ONE field on a FINDING and then dead-ends, with no
+ * path back to correct a second field without starting over. Built from the
+ * same mmf contract every other display layer already uses, so the field
+ * list/order/labels can never drift from what the review queue and approval
+ * modal show. Edits the PENDING update in place (via updatePendingFields) —
+ * distinct from Correct Figure, which versions an already-drafted finding.
+ * MMF-only for this slice (the button that opens this is itself gated to
+ * catalogue === "mmf") — Bank/CBK/Market asset get their own wiring later,
+ * the same staged rollout Slices 8b-8e already established per catalogue.
+ */
+function EditCatalogueFieldsDialog({ updateId, onClose }: { updateId: number | null; onClose: () => void }) {
+  const utils = trpc.useUtils();
+  const { data, isLoading } = trpc.researchPipeline.getUpdate.useQuery(
+    updateId != null ? { id: updateId } : (undefined as never),
+    { enabled: updateId != null, refetchOnWindowFocus: false },
+  );
+  const update = data?.update;
+  const isMmf = update ? catalogueForAssetClass(update.assetClass as AssetClass) === "mmf" : false;
+  const contract = isMmf ? getCatalogueFieldContract("mmf") : null;
+  const rows =
+    contract && update
+      ? projectFindingToContractDisplayRows(contract, {
+          instrumentName: update.name,
+          issuer: update.issuer,
+          sourceLabel: update.source,
+          sourceUrl: update.sourceUrl,
+          sourceAsOf: update.asOf,
+          extractedFields: update.figures as Record<string, unknown> | null,
+        })
+      : [];
+  const editableRows = rows.filter((row) => contract?.fields.find((f) => f.key === row.key)?.managerEditable === true);
+
+  // Stage 10a — the canonical contract keys that route to the update's ENVELOPE
+  // columns (name/issuer/source/asOf), not the figures bag — mirrors the SAME
+  // routing buildPromotionPlan's MMF branch and ENVELOPE_ROUTED_CONTRACT_KEYS.mmf
+  // (shared/catalogueFieldContracts.ts) already encode, kept local here rather
+  // than exported since this dialog is the only UI consumer today.
+  const MMF_ENVELOPE_KEYS: Record<string, "name" | "issuer" | "source" | "asOf"> = {
+    fundName: "name",
+    fundManager: "issuer",
+    sourceLink: "source",
+    sourceAsOf: "asOf",
+  };
+
+  const [values, setValues] = useState<Record<string, string>>({});
+  useEffect(() => {
+    if (!update) return;
+    const initial: Record<string, string> = {};
+    for (const row of editableRows) {
+      initial[row.key] = row.key === "sourceAsOf" ? (update.asOf ? formatLocalYmd(update.asOf) : "") : (row.value ?? "");
+    }
+    setValues(initial);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [update?.id]);
+
+  const save = trpc.researchPipeline.updatePendingFields.useMutation({
+    onSuccess: () => {
+      utils.researchPipeline.listUpdates.invalidate();
+      utils.researchPipeline.getUpdate.invalidate();
+      utils.researchPipeline.impactOf.invalidate();
+      toast.success("Fields saved to the pending update.");
+      onClose();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  if (updateId == null) return null;
+
+  const handleSave = () => {
+    if (updateId == null) return;
+    const figures: Record<string, unknown> = {};
+    const envelope: { name?: string; issuer?: string; source?: string; asOf?: number } = {};
+    for (const row of editableRows) {
+      const v = (values[row.key] ?? "").trim();
+      if (v === "") continue;
+      const envelopeField = MMF_ENVELOPE_KEYS[row.key];
+      if (envelopeField === "asOf") {
+        const ms = Date.parse(v);
+        if (Number.isFinite(ms)) envelope.asOf = ms;
+      } else if (envelopeField) {
+        envelope[envelopeField] = v;
+      } else {
+        figures[row.key] = v;
+      }
+    }
+    save.mutate({ id: updateId, ...(Object.keys(figures).length ? { figures } : {}), ...envelope });
+  };
+
+  return (
+    <Dialog open={updateId != null} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <PencilLine className="w-5 h-5 text-primary" /> Edit catalogue fields
+          </DialogTitle>
+          <DialogDescription>
+            Correct or fill in any of the established MMF fields below. Saved to this pending update only — nothing
+            changes in the live catalogue until you approve it.
+          </DialogDescription>
+        </DialogHeader>
+        {isLoading || !update ? (
+          <Skeleton className="h-40 w-full rounded-lg" />
+        ) : (
+          <div className="space-y-3 py-1">
+            {editableRows.map((row) => (
+              <div key={row.key}>
+                <Label className="text-xs">{row.label}</Label>
+                <Input
+                  type={row.key === "sourceAsOf" ? "date" : "text"}
+                  value={values[row.key] ?? ""}
+                  onChange={(e) => setValues((v) => ({ ...v, [row.key]: e.target.value }))}
+                  className="bg-background"
+                  placeholder="Not on record"
+                />
+              </div>
+            ))}
+          </div>
+        )}
+        <DialogFooter>
+          <Button variant="outline" className="bg-background" onClick={onClose} disabled={save.isPending}>
+            Cancel
+          </Button>
+          <Button onClick={handleSave} disabled={save.isPending || isLoading}>
+            {save.isPending ? <RefreshCw className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : null}
+            Save fields
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -436,6 +629,8 @@ function PendingQueue() {
   // The update currently being approved through the confirmation dialog.
   const [approveId, setApproveId] = useState<number | null>(null);
   const [managerValue, setManagerValue] = useState("");
+  // Stage 10a — the update currently open in the multi-field edit dialog.
+  const [editFieldsId, setEditFieldsId] = useState<number | null>(null);
 
   const review = trpc.researchPipeline.review.useMutation({
     onSuccess: (res, vars) => {
@@ -531,6 +726,27 @@ function PendingQueue() {
           issuer: u.issuer,
         });
         const figures = fmtFigures(u.figures as Record<string, unknown> | null, contract);
+        // Stage 10a — the FULL established catalogue field set (filled AND
+        // missing), not just whichever figures happened to be extracted. Reuses
+        // the SAME projectFindingToContractDisplayRows AskAI.tsx's finding card
+        // already renders correctly — this update-shaped object is adapted into
+        // the same structural ProjectableFinding shape that function expects.
+        const fullContract =
+          contract.catalogue === "market_asset"
+            ? contract.subtype
+              ? getCatalogueFieldContract("market_asset", contract.subtype)
+              : null
+            : getCatalogueFieldContract(contract.catalogue);
+        const contractRows = fullContract
+          ? projectFindingToContractDisplayRows(fullContract, {
+              instrumentName: u.name,
+              issuer: u.issuer,
+              sourceLabel: u.source,
+              sourceUrl: u.sourceUrl,
+              sourceAsOf: u.asOf,
+              extractedFields: u.figures as Record<string, unknown> | null,
+            })
+          : null;
         const origin = ORIGIN_META[u.origin] ?? ORIGIN_META.manual;
         const OriginIcon = origin.icon;
         const busy = review.isPending && review.variables?.id === u.id;
@@ -595,6 +811,29 @@ function PendingQueue() {
                 </p>
               )}
 
+              {/* Stage 10a — the full established catalogue field set (filled AND
+                  missing), so a manager reviews against the SAME field list the
+                  catalogue itself publishes, not just whichever figures extracted. */}
+              {contractRows && contractRows.length > 0 && (
+                <div className="rounded-md border border-border bg-muted/20 p-3 space-y-1.5">
+                  <div className="text-xs font-medium text-muted-foreground flex items-center gap-1.5">
+                    <ListChecks className="w-3.5 h-3.5" /> Catalogue fields
+                  </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-1.5">
+                    {contractRows.map((row) => (
+                      <div key={row.key} className="text-xs">
+                        <span className="text-muted-foreground">{row.label}: </span>
+                        {row.value != null ? (
+                          <span className="font-medium">{row.value}</span>
+                        ) : (
+                          <span className="italic text-amber-600 dark:text-amber-400">Missing</span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               <div className="flex items-center gap-2 text-xs text-muted-foreground flex-wrap">
                 <ShieldCheck className="w-3.5 h-3.5 shrink-0" />
                 <span>
@@ -610,7 +849,7 @@ function PendingQueue() {
                     open <ExternalLink className="w-3 h-3" />
                   </a>
                 )}
-                {u.asOf && <span>· as of {new Date(u.asOf).toLocaleDateString()}</span>}
+                {u.asOf && <span>· as of {formatLocalYmd(u.asOf)}</span>}
                 {u.createdAt && <span>· proposed {formatRelativeTime(new Date(u.createdAt).getTime())}</span>}
               </div>
 
@@ -642,11 +881,29 @@ function PendingQueue() {
                 >
                   <XCircle className="w-3.5 h-3.5 mr-1.5" /> Reject
                 </Button>
+                {/* Stage 10a — MMF-only for this slice (see EditCatalogueFieldsDialog's
+                    own doc comment); Bank/CBK/Market asset get their own wiring later,
+                    the same staged-rollout pattern Slices 8b-8e already established. */}
+                {fullContract && contract.catalogue === "mmf" && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="bg-background"
+                    onClick={() => setEditFieldsId(u.id)}
+                  >
+                    <PencilLine className="w-3.5 h-3.5 mr-1.5" /> Edit fields
+                  </Button>
+                )}
               </div>
             </CardContent>
           </Card>
         );
       })}
+
+      <EditCatalogueFieldsDialog
+        updateId={editFieldsId}
+        onClose={() => setEditFieldsId(null)}
+      />
 
       <ApproveDialog
         updateId={approveId}
@@ -666,6 +923,11 @@ function PendingQueue() {
             overrideGate,
           })
         }
+        onEditFields={() => {
+          if (approveId != null) setEditFieldsId(approveId);
+          setApproveId(null);
+          setManagerValue("");
+        }}
         busy={review.isPending}
       />
 

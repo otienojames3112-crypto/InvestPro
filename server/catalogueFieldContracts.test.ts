@@ -649,6 +649,13 @@ describe("Catalogue field contract · foundation-only guardrails (no behavior ch
       // same getCatalogueFieldContract/readContractFieldValue pattern 9c
       // established for SaccoRow.
       join(root, "server", "marketAssetCompactDisplay.test.ts"),
+      // Stage 10a — MMF end-to-end field-parity repair: review-queue/approval-
+      // modal full-field blocks (ResearchDesk.tsx — already allowlisted above
+      // since Slice 9b) and the new MMF detail drawer; display-only, reuses the
+      // same getCatalogueFieldContract/projectFindingToContractDisplayRows
+      // pattern every prior slice established.
+      join(root, "client", "src", "pages", "MmfFunds.tsx"),
+      join(root, "server", "mmfFieldParity.test.ts"),
     ]);
     const unexpectedOffenders = offenders.filter((f) => !allowed.has(f));
     expect(unexpectedOffenders).toEqual([]);

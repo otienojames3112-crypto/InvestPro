@@ -20,9 +20,11 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
-import { ArrowUpDown, ArrowUp, ArrowDown, Search, Plus, Pencil, CheckCircle2, Circle, Info, Star, AlertTriangle, ExternalLink, MoreHorizontal, PiggyBank, Receipt, PieChart } from "lucide-react";
+import { ArrowUpDown, ArrowUp, ArrowDown, Search, Plus, Pencil, CheckCircle2, Circle, Info, Star, AlertTriangle, ExternalLink, MoreHorizontal, PiggyBank, Receipt, PieChart, ListChecks } from "lucide-react";
+import { getCatalogueFieldContract } from "@shared/catalogueFieldContracts";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -52,8 +54,22 @@ type Fund = {
   asOfDate: string | null;
   source: string | null;
   isActive: boolean;
+  /** Stage 10a — already returned by mmfFunds.list (server/routers.ts); the
+   *  client type just hadn't caught up, so it was unreadable client-side. */
+  whtRate?: number;
   extendedFields?: CatalogueSourceExtendedFields | null;
 };
+
+/** A single labeled fact in the detail drawer — same compact pattern as
+ *  CbkSecuritiesReference.tsx's own DrawerFact. */
+function DrawerFact({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="space-y-0.5">
+      <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">{label}</p>
+      <p className="text-sm">{value}</p>
+    </div>
+  );
+}
 
 type SortKey = "fundName" | "ear" | "grossYield" | "managementFee" | "minInvestment" | "aumMillions";
 type SortDir = "asc" | "desc";
@@ -228,6 +244,104 @@ function FundFormDialog({
   );
 }
 
+/**
+ * Stage 10a — MMF detail drawer, closing the Stage 10a audit finding that the
+ * main table's 7 columns can't show every established MMF field without
+ * becoming unreadably wide. Same compact-table-plus-drawer pattern Stage 9c
+ * already established for CBK securities. Values come from the SAME mmf
+ * contract every other display layer (Ask AI finding card, review queue,
+ * approval modal) already uses — never a second, hand-typed field list.
+ */
+function MmfDetailDrawer({ fund, onOpenChange }: { fund: Fund | null; onOpenChange: (open: boolean) => void }) {
+  const contract = getCatalogueFieldContract("mmf");
+  const fieldByKey = (key: string) => contract?.fields.find((f) => f.key === key);
+  const extendedFields = fund?.extendedFields as Record<string, unknown> | null | undefined;
+  const dailyYield = extendedFields?.dailyYield ? String(extendedFields.dailyYield) : null;
+  const withdrawalPeriod = extendedFields?.withdrawalNoticePeriod ? String(extendedFields.withdrawalNoticePeriod) : null;
+  const whtRate = fund?.whtRate ?? 15;
+  const netYield = fund ? fund.ear * (1 - whtRate / 100) : null;
+  const catSource = fund ? resolveCatalogueSource(fund.source, fund.extendedFields, fund.asOfDate) : null;
+
+  return (
+    <Sheet open={fund !== null} onOpenChange={onOpenChange}>
+      <SheetContent className="w-full sm:max-w-md overflow-y-auto">
+        {fund && (
+          <>
+            <SheetHeader>
+              <SheetTitle className="flex items-center gap-2">
+                <ListChecks className="w-4 h-4 text-primary" /> {fund.fundName}
+              </SheetTitle>
+              <SheetDescription>{fund.company}</SheetDescription>
+            </SheetHeader>
+            <div className="mt-5 space-y-4">
+              <div className="grid grid-cols-2 gap-3">
+                <DrawerFact label={fieldByKey("ear")?.label ?? "EAR"} value={`${fund.ear.toFixed(2)}%`} />
+                <DrawerFact label={fieldByKey("grossYield")?.label ?? "Gross yield"} value={`${fund.grossYield.toFixed(2)}%`} />
+                <DrawerFact
+                  label={fieldByKey("netYield")?.label ?? "Net yield"}
+                  value={netYield != null ? `${netYield.toFixed(2)}%` : "—"}
+                />
+                <DrawerFact label={fieldByKey("dailyYield")?.label ?? "Daily yield"} value={dailyYield ?? "—"} />
+              </div>
+
+              <div className="border-t pt-3 grid grid-cols-2 gap-3">
+                <DrawerFact label={fieldByKey("wht")?.label ?? "WHT"} value={`${whtRate.toFixed(2)}%`} />
+                <DrawerFact
+                  label={fieldByKey("managementFee")?.label ?? "Management fee"}
+                  value={`${fund.managementFee.toFixed(2)}%`}
+                />
+                <DrawerFact
+                  label={fieldByKey("minInvestment")?.label ?? "Minimum investment"}
+                  value={`KES ${fund.minInvestment.toLocaleString("en-KE")}`}
+                />
+                <DrawerFact
+                  label={fieldByKey("aum")?.label ?? "AUM"}
+                  value={fund.aumMillions != null ? `KES ${fund.aumMillions.toLocaleString("en-KE")}M` : "—"}
+                />
+              </div>
+
+              <div className="border-t pt-3 grid grid-cols-2 gap-3">
+                <DrawerFact label={fieldByKey("withdrawalPeriod")?.label ?? "Withdrawal period"} value={withdrawalPeriod ?? "—"} />
+                {/* Risk profile has no storage anywhere in the schema today (the
+                    contract's own note: storageStatus "missingRequiresMigration")
+                    — shown honestly as unavailable, never fabricated. */}
+                <DrawerFact label={fieldByKey("riskProfile")?.label ?? "Risk profile"} value="Not available" />
+              </div>
+
+              <div className="border-t pt-3">
+                <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide mb-1">
+                  {fieldByKey("sourceLink")?.label ?? "Source"}
+                </p>
+                {catSource?.label ? (
+                  catSource.url ? (
+                    <a
+                      href={catSource.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-sm text-primary underline underline-offset-2 inline-flex items-center gap-1"
+                    >
+                      {catSource.label} <ExternalLink className="w-3 h-3 shrink-0" />
+                    </a>
+                  ) : (
+                    <p className="text-sm">{catSource.label}</p>
+                  )
+                ) : (
+                  <p className="text-sm text-amber-600 dark:text-amber-400">No source</p>
+                )}
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {catSource?.asOf
+                    ? `${fieldByKey("sourceAsOf")?.label ?? "As of"}: ${String(catSource.asOf).slice(0, 10)}`
+                    : "No as-of date"}
+                </p>
+              </div>
+            </div>
+          </>
+        )}
+      </SheetContent>
+    </Sheet>
+  );
+}
+
 export default function MmfFunds({ embedded = false }: { embedded?: boolean } = {}) {
   const { portfolioId, portfolio } = usePortfolio();
   const utils = trpc.useUtils();
@@ -265,6 +379,8 @@ export default function MmfFunds({ embedded = false }: { embedded?: boolean } = 
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [addOpen, setAddOpen] = useState(false);
   const [editFund, setEditFund] = useState<Fund | null>(null);
+  // Stage 10a — the full-field detail drawer.
+  const [detailFund, setDetailFund] = useState<Fund | null>(null);
 
   const addMutation = trpc.mmfFunds.add.useMutation({
     onSuccess: () => { invalidatePortfolioMoney(utils, portfolioId); setAddOpen(false); toast.success("Fund added."); },
@@ -693,6 +809,9 @@ export default function MmfFunds({ embedded = false }: { embedded?: boolean } = 
                             <DropdownMenuItem onClick={() => navigate("/mmf-strategy")}>
                               <PieChart className="w-4 h-4 mr-2" /> View composition
                             </DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => setDetailFund(fund)}>
+                              <ListChecks className="w-4 h-4 mr-2" /> View full details
+                            </DropdownMenuItem>
                           </DropdownMenuContent>
                         </DropdownMenu>
                         {isManager && (
@@ -826,6 +945,7 @@ export default function MmfFunds({ embedded = false }: { embedded?: boolean } = 
         errorMessage={catExplainQuery.error?.message}
         onRetry={() => catExplainQuery.refetch()}
       />
+      <MmfDetailDrawer fund={detailFund} onOpenChange={(open) => !open && setDetailFund(null)} />
     </div>
     </AppShell>
   );

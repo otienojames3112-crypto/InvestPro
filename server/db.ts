@@ -2475,6 +2475,50 @@ export async function getResearchUpdate(id: number): Promise<ResearchUpdate | nu
   return rows[0] ?? null;
 }
 
+/**
+ * Stage 10a — edit a PENDING research update's identity/figures in place, before
+ * it is approved. Closes the correction/editing gap Correct Figure never covered:
+ * that path only ever versions an already-drafted FINDING (one field, via
+ * correctResearchFinding) — there was no way to fix multiple fields on the
+ * pending catalogue proposal itself without rejecting it and starting over.
+ * `figures` is MERGED onto the existing bag (never replaced wholesale) so a
+ * manager can save one field and keep editing another without losing prior
+ * corrections. A no-op (returns the row unchanged) once the update has left
+ * "pending" — same idempotent guard `reviewResearchUpdate` uses — so a stray
+ * edit can never silently rewrite an already-approved/rejected record.
+ */
+export async function updatePendingResearchUpdateFigures(args: {
+  id: number;
+  name?: string;
+  issuer?: string | null;
+  currency?: string;
+  figures?: Record<string, unknown>;
+  source?: string;
+  sourceUrl?: string | null;
+  asOf?: number | null;
+}): Promise<ResearchUpdate | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const current = await getResearchUpdate(args.id);
+  if (!current || current.status !== "pending") return current;
+
+  const mergedFigures: Record<string, unknown> = {
+    ...((current.figures as Record<string, unknown> | null) ?? {}),
+    ...(args.figures ?? {}),
+  };
+  const values: Partial<InsertResearchUpdate> = {
+    ...(args.name !== undefined ? { name: args.name.trim() } : {}),
+    ...(args.issuer !== undefined ? { issuer: args.issuer } : {}),
+    ...(args.currency !== undefined ? { currency: args.currency.trim() || "KES" } : {}),
+    figures: mergedFigures,
+    ...(args.source !== undefined ? { source: args.source.trim() } : {}),
+    ...(args.sourceUrl !== undefined ? { sourceUrl: args.sourceUrl } : {}),
+    ...(args.asOf !== undefined ? { asOf: args.asOf } : {}),
+  };
+  await db.update(researchUpdates).set(values).where(eq(researchUpdates.id, args.id));
+  return getResearchUpdate(args.id);
+}
+
 /** Build a human-entered per-figure provenance map for a promoted opportunity row. */
 function promotionProvenance(args: {
   fields: Partial<Record<FieldKey, number | string | null>>;
@@ -2644,6 +2688,10 @@ export async function reviewResearchUpdate(args: {
       ear: String(p.ear ?? p.grossYield ?? 0),
       ...(p.managementFee != null ? { managementFee: String(p.managementFee) } : {}),
       ...(p.minInvestment != null ? { minInvestment: String(p.minInvestment) } : {}),
+      // Stage 10a — WHT and AUM are real columns promotion never wrote; only
+      // touch them when the update actually carried a value.
+      ...(p.wht != null ? { whtRate: String(p.wht) } : {}),
+      ...(p.aumMillions != null ? { aumMillions: String(p.aumMillions) } : {}),
       source: p.source,
       // Stage 6a — preserve the approved update's as-of date, same as manual edits.
       ...(promotedAsOfDate ? { asOfDate: promotedAsOfDate } : {}),
@@ -2653,12 +2701,16 @@ export async function reviewResearchUpdate(args: {
     // Slice 8f — merge in the envelope's source provenance (see sourceEnrichment
     // above) so it's not lost from the live row, even when there was no structured
     // extraction blob to merge it into.
+    // Stage 10a — withdrawal period has no first-class column; fold it into the
+    // same extendedFields merge (mirrors sourceEnrichment's own pattern) rather
+    // than silently dropping it.
     const mmfExtRaw = figuresIn._extendedFields;
+    const mmfWithdrawalPeriod = p.withdrawalPeriod ? { withdrawalNoticePeriod: p.withdrawalPeriod } : {};
     if (mmfExtRaw) {
       const mmfExtended = typeof mmfExtRaw === "string" ? JSON.parse(mmfExtRaw) : mmfExtRaw;
-      (values as Record<string, unknown>).extendedFields = { ...mmfExtended, ...sourceEnrichment };
-    } else if (Object.keys(sourceEnrichment).length > 0) {
-      (values as Record<string, unknown>).extendedFields = sourceEnrichment;
+      (values as Record<string, unknown>).extendedFields = { ...mmfExtended, ...mmfWithdrawalPeriod, ...sourceEnrichment };
+    } else if (Object.keys(sourceEnrichment).length > 0 || p.withdrawalPeriod) {
+      (values as Record<string, unknown>).extendedFields = { ...mmfWithdrawalPeriod, ...sourceEnrichment };
     }
     if (existing[0]) {
       await db.update(mmfFunds).set(values).where(eq(mmfFunds.id, existing[0].id));

@@ -337,29 +337,50 @@ describe("Slice 8c · FindingCard wiring", () => {
     expect(idx).toBeGreaterThan(-1);
   });
 
-  it("the 'Additional extracted details' label appears alongside EITHER the MMF, Bank, CBK, Equity, or REIT block, never unconditionally", () => {
+  it("the 'Additional extracted details' label appears alongside EITHER the MMF, Bank, CBK, Equity, REIT, or Offshore fund block, never unconditionally", () => {
     const idx = findingCard.indexOf("Additional extracted details");
     expect(idx).toBeGreaterThan(-1);
-    const before = findingCard.slice(Math.max(0, idx - 240), idx);
-    expect(before).toContain(
-      "(mmfDisplayRows || bankDisplayRows || cbkDisplayRows || equityDisplayRows || reitDisplayRows) &&",
-    );
+    const before = findingCard.slice(Math.max(0, idx - 320), idx);
+    // Matched by individual term presence, not an exact literal block, since
+    // prettier re-wraps this condition across lines as it grows each slice.
+    for (const term of [
+      "mmfDisplayRows",
+      "bankDisplayRows",
+      "cbkDisplayRows",
+      "equityDisplayRows",
+      "reitDisplayRows",
+      "offshoreFundDisplayRows",
+    ]) {
+      expect(before).toContain(term);
+    }
+    expect(before).toMatch(/\) &&\s*\(/);
   });
 
   it("the draft mutation call projects Bank figures via the contract and falls back to them when there's no MMF figures", () => {
     expect(findingCard).toContain(
       "const bankFigures = bankContract ? projectFindingToContractFigures(bankContract, finding) : undefined;",
     );
-    expect(findingCard).toContain(
-      "figures: mmfFigures ?? bankFigures ?? cbkFigures ?? equityFigures ?? reitFigures,",
-    );
+    const mutateIdx = findingCard.indexOf("draft.mutate({");
+    expect(mutateIdx).toBeGreaterThan(-1);
+    const mutateBlock = findingCard.slice(mutateIdx, mutateIdx + 300);
+    for (const term of [
+      "mmfFigures",
+      "bankFigures",
+      "cbkFigures",
+      "equityFigures",
+      "reitFigures",
+      "offshoreFundFigures",
+    ]) {
+      expect(mutateBlock).toContain(term);
+    }
   });
 
-  it("non-MMF, non-Bank, non-CBK, non-Equity, non-REIT findings send undefined figures — draftFromFinding's existing raw-extractedFields default is completely unchanged for them", () => {
-    // mmfContract/bankContract/cbkContract/equityContract/reitContract are each
-    // null whenever targetCatalogue/assetClass doesn't match their own
-    // catalogue/subtype, so the whole ?? chain resolves to undefined for
-    // offshore-fund/SACCO findings (the market-asset subtypes still unwired).
+  it("non-MMF, non-Bank, non-CBK, non-Equity, non-REIT, non-Offshore-fund findings send undefined figures — draftFromFinding's existing raw-extractedFields default is completely unchanged for them", () => {
+    // mmfContract/bankContract/cbkContract/equityContract/reitContract/
+    // offshoreFundContract are each null whenever targetCatalogue/assetClass
+    // doesn't match their own catalogue/subtype, so the whole ?? chain
+    // resolves to undefined for SACCO findings (the only market-asset subtype
+    // still unwired).
     expect(findingCard).toContain("mmfContract ? projectFindingToContractFigures(mmfContract, finding) : undefined");
     expect(findingCard).toContain("bankContract ? projectFindingToContractFigures(bankContract, finding) : undefined");
   });
@@ -380,7 +401,7 @@ describe("Slice 8c · FindingCard wiring", () => {
     expect(dialog).not.toContain("getCatalogueFieldContract");
   });
 
-  it("no offshore-fund/SACCO market_asset contract lookups exist anywhere yet — only MMF, Bank, CBK, Equity and REIT are wired", () => {
+  it("no SACCO market_asset contract lookups exist anywhere yet — only MMF, Bank, CBK, Equity, REIT and Offshore fund are wired", () => {
     const contractCalls = [...askAi.matchAll(/getCatalogueFieldContract\([^)]*\)/g)].map((m) => m[0]);
     expect(contractCalls.length).toBeGreaterThan(0);
     for (const call of contractCalls) {
@@ -389,7 +410,8 @@ describe("Slice 8c · FindingCard wiring", () => {
           call.includes('"bank"') ||
           call.includes('"cbk"') ||
           call.includes('"equity"') ||
-          call.includes('"reit"'),
+          call.includes('"reit"') ||
+          call.includes('"offshore_fund"'),
       ).toBe(true);
     }
   });

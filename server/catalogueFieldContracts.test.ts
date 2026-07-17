@@ -72,6 +72,21 @@
  * via a live checkApprovalGate call that still reported "market" missing with
  * every other REIT field supplied.
  *
+ * Amended a seventh time during Slice 8e-3's pre-approval compatibility check
+ * (2026-07-16): Market asset Offshore fund grew from 12 to 13 fields. Two KEYS
+ * renamed (display labels unchanged): "fees" → "expenseRatioPct" (the offshore
+ * subtype gate's own rule checks figures.expenseRatioPct specifically —
+ * figurePresent's alias table for it is ['expenseRatioPct', 'fee'], 'fees'
+ * plural was never in it — and buildPromotionPlan's fallback chain didn't
+ * recognise 'fees' either), and "annualizedReturn" → "trailingReturnPct"
+ * (buildPromotionPlan has a DEDICATED trailingReturnPct payload field,
+ * separate from lastPrice — this one rename happened to ALSO satisfy the base
+ * gate's lastPrice OR-requirement via its existing alias tolerance, so no
+ * alsoWriteKeys was needed here, unlike REIT's distributionYield). A
+ * genuinely missing field, "Market" (key: market — labeled differently from
+ * Equity/REIT's "Exchange" since an offshore fund isn't exchange-listed), was
+ * added — proven via the same live-gate-call method as REIT's fix.
+ *
  * Pure tests for shared/catalogueFieldContracts.ts. This slice is documentation +
  * data only: nothing here touches the DB, Ask AI, the approval gate, the Review
  * Queue, or any catalogue UI. The guardrail tests at the bottom of this file exist
@@ -182,6 +197,7 @@ const DESIRED_LABELS: Record<string, string[]> = {
     "Fund name",
     "Fund manager / provider",
     "Currency",
+    "Market",
     "Fund type",
     "Annualized return / performance",
     "Minimum investment",
@@ -534,7 +550,7 @@ describe("Catalogue field contract · gate-required fields not yet promoted are 
 });
 
 describe("Catalogue field contract · foundation-only guardrails (no behavior change yet)", () => {
-  it("only the Slice 8b/8c/8d/8e-1/8e-2-approved consumers import shared/catalogueFieldContracts — MMF, Bank, CBK, Equity and REIT only, nothing wired for offshore-fund/SACCO yet", () => {
+  it("only the Slice 8b/8c/8d/8e-1/8e-2/8e-3-approved consumers import shared/catalogueFieldContracts — MMF, Bank, CBK, Equity, REIT and Offshore fund only, nothing wired for SACCO yet", () => {
     const root = join(__dirname, "..");
     const searchDirs = ["server", "shared", join("client", "src")];
     const offenders: string[] = [];
@@ -561,9 +577,10 @@ describe("Catalogue field contract · foundation-only guardrails (no behavior ch
     // This test file imports it directly (8a's own suite), Slice 8b wires
     // MMF-only support into AskAI.tsx plus its own test file, Slice 8c adds Bank
     // support to the SAME AskAI.tsx file plus its own test file, Slice 8d adds
-    // CBK support the same way, Slice 8e-1 adds Equity support the same way, and
-    // Slice 8e-2 adds REIT support the same way. Any OTHER consumer (e.g. a
-    // premature offshore-fund/SACCO wiring) must still fail this guardrail.
+    // CBK support the same way, Slice 8e-1 adds Equity support the same way,
+    // Slice 8e-2 adds REIT support the same way, and Slice 8e-3 adds Offshore
+    // fund support the same way. Any OTHER consumer (e.g. a premature SACCO
+    // wiring) must still fail this guardrail.
     const allowed = new Set([
       join(root, "server", "catalogueFieldContracts.test.ts"),
       join(root, "server", "mmfContractMapping.test.ts"),
@@ -571,6 +588,7 @@ describe("Catalogue field contract · foundation-only guardrails (no behavior ch
       join(root, "server", "cbkContractMapping.test.ts"),
       join(root, "server", "equityContractMapping.test.ts"),
       join(root, "server", "reitContractMapping.test.ts"),
+      join(root, "server", "offshoreFundContractMapping.test.ts"),
       join(root, "client", "src", "pages", "AskAI.tsx"),
     ]);
     const unexpectedOffenders = offenders.filter((f) => !allowed.has(f));

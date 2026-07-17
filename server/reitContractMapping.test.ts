@@ -379,25 +379,43 @@ describe("Slice 8e-2 · FindingCard wiring", () => {
     expect(idx).toBeGreaterThan(-1);
   });
 
-  it("the 'Additional extracted details' label appears alongside ANY of the MMF, Bank, CBK, Equity, or REIT blocks, never unconditionally", () => {
+  it("the 'Additional extracted details' label appears alongside ANY of the MMF, Bank, CBK, Equity, REIT, or Offshore fund blocks, never unconditionally", () => {
     const idx = findingCard.indexOf("Additional extracted details");
     expect(idx).toBeGreaterThan(-1);
-    const before = findingCard.slice(Math.max(0, idx - 240), idx);
-    expect(before).toContain(
-      "(mmfDisplayRows || bankDisplayRows || cbkDisplayRows || equityDisplayRows || reitDisplayRows) &&",
-    );
+    const before = findingCard.slice(Math.max(0, idx - 320), idx);
+    for (const term of [
+      "mmfDisplayRows",
+      "bankDisplayRows",
+      "cbkDisplayRows",
+      "equityDisplayRows",
+      "reitDisplayRows",
+      "offshoreFundDisplayRows",
+    ]) {
+      expect(before).toContain(term);
+    }
+    expect(before).toMatch(/\) &&\s*\(/);
   });
 
   it("the draft mutation call projects REIT figures via the contract and falls back to them when there's no MMF/Bank/CBK/Equity figures", () => {
     expect(findingCard).toContain(
       "const reitFigures = reitContract ? projectFindingToContractFigures(reitContract, finding) : undefined;",
     );
-    expect(findingCard).toContain(
-      "figures: mmfFigures ?? bankFigures ?? cbkFigures ?? equityFigures ?? reitFigures,",
-    );
+    const mutateIdx = findingCard.indexOf("draft.mutate({");
+    expect(mutateIdx).toBeGreaterThan(-1);
+    const mutateBlock = findingCard.slice(mutateIdx, mutateIdx + 300);
+    for (const term of [
+      "mmfFigures",
+      "bankFigures",
+      "cbkFigures",
+      "equityFigures",
+      "reitFigures",
+      "offshoreFundFigures",
+    ]) {
+      expect(mutateBlock).toContain(term);
+    }
   });
 
-  it("non-MMF, non-Bank, non-CBK, non-Equity, non-REIT findings (offshore-fund/SACCO) send undefined figures — draftFromFinding's existing raw-extractedFields default is completely unchanged for them", () => {
+  it("non-MMF, non-Bank, non-CBK, non-Equity, non-REIT, non-Offshore-fund findings (SACCO) send undefined figures — draftFromFinding's existing raw-extractedFields default is completely unchanged for them", () => {
     expect(findingCard).toContain(
       "reitContract ? projectFindingToContractFigures(reitContract, finding) : undefined",
     );
@@ -419,7 +437,7 @@ describe("Slice 8e-2 · FindingCard wiring", () => {
     expect(dialog).not.toContain("getCatalogueFieldContract");
   });
 
-  it("no offshore-fund/SACCO market_asset contract lookups exist anywhere yet — only MMF, Bank, CBK, Equity and REIT are wired", () => {
+  it("no SACCO market_asset contract lookups exist anywhere yet — only MMF, Bank, CBK, Equity, REIT and Offshore fund are wired", () => {
     const contractCalls = [...askAi.matchAll(/getCatalogueFieldContract\([^)]*\)/g)].map((m) => m[0]);
     expect(contractCalls.length).toBeGreaterThan(0);
     for (const call of contractCalls) {
@@ -428,7 +446,8 @@ describe("Slice 8e-2 · FindingCard wiring", () => {
           call.includes('"bank"') ||
           call.includes('"cbk"') ||
           call.includes('"equity"') ||
-          call.includes('"reit"'),
+          call.includes('"reit"') ||
+          call.includes('"offshore_fund"'),
       ).toBe(true);
     }
   });

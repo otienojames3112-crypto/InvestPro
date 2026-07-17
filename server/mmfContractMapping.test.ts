@@ -346,26 +346,48 @@ describe("Slice 8b · FindingCard wiring", () => {
   it("the 'Additional extracted details' label appears only alongside the MMF block, never unconditionally", () => {
     const idx = findingCard.indexOf("Additional extracted details");
     expect(idx).toBeGreaterThan(-1);
-    const before = findingCard.slice(Math.max(0, idx - 240), idx);
-    // Slices 8c/8d/8e-1/8e-2 extended the condition to also cover Bank, CBK,
-    // Equity and REIT findings — still gated on a contract-display-rows flag,
-    // never unconditional.
-    expect(before).toContain(
-      "(mmfDisplayRows || bankDisplayRows || cbkDisplayRows || equityDisplayRows || reitDisplayRows) &&",
-    );
+    const before = findingCard.slice(Math.max(0, idx - 320), idx);
+    // Slices 8c/8d/8e-1/8e-2/8e-3 extended the condition to also cover Bank,
+    // CBK, Equity, REIT and Offshore fund findings — still gated on a
+    // contract-display-rows flag, never unconditional. Matched by individual
+    // term presence, not an exact literal block, since prettier re-wraps this
+    // condition across lines as it grows with each new slice.
+    for (const term of [
+      "mmfDisplayRows",
+      "bankDisplayRows",
+      "cbkDisplayRows",
+      "equityDisplayRows",
+      "reitDisplayRows",
+      "offshoreFundDisplayRows",
+    ]) {
+      expect(before).toContain(term);
+    }
+    expect(before).toMatch(/\) &&\s*\(/);
   });
 
   it("the draft mutation call projects MMF figures via the contract and passes them explicitly", () => {
     expect(findingCard).toContain(
       "const mmfFigures = mmfContract ? projectFindingToContractFigures(mmfContract, finding) : undefined;",
     );
-    // Slices 8c/8d/8e-1/8e-2 extended this to also compute bankFigures/
-    // cbkFigures/equityFigures/reitFigures and fall back through them — at most
-    // one of them is ever a real object at once (a finding has exactly one
-    // targetCatalogue/subtype).
-    expect(findingCard).toContain(
-      "figures: mmfFigures ?? bankFigures ?? cbkFigures ?? equityFigures ?? reitFigures,",
-    );
+    // Slices 8c/8d/8e-1/8e-2/8e-3 extended this to also compute bankFigures/
+    // cbkFigures/equityFigures/reitFigures/offshoreFundFigures and fall back
+    // through them — at most one of them is ever a real object at once (a
+    // finding has exactly one targetCatalogue/subtype). Matched by individual
+    // term presence within the draft.mutate call, not an exact literal (also
+    // prettier-fragile).
+    const mutateIdx = findingCard.indexOf("draft.mutate({");
+    expect(mutateIdx).toBeGreaterThan(-1);
+    const mutateBlock = findingCard.slice(mutateIdx, mutateIdx + 300);
+    for (const term of [
+      "mmfFigures",
+      "bankFigures",
+      "cbkFigures",
+      "equityFigures",
+      "reitFigures",
+      "offshoreFundFigures",
+    ]) {
+      expect(mutateBlock).toContain(term);
+    }
   });
 
   it("non-MMF findings send undefined figures — draftFromFinding's existing raw-extractedFields default is completely unchanged for them", () => {
@@ -390,7 +412,7 @@ describe("Slice 8b · FindingCard wiring", () => {
     expect(dialog).not.toContain("getCatalogueFieldContract");
   });
 
-  it("no offshore-fund/SACCO market_asset contract lookups exist anywhere yet — only MMF (8b), Bank (8c), CBK (8d), Equity (8e-1) and REIT (8e-2) are wired", () => {
+  it("no SACCO market_asset contract lookups exist anywhere yet — only MMF (8b), Bank (8c), CBK (8d), Equity (8e-1), REIT (8e-2) and Offshore fund (8e-3) are wired", () => {
     const contractCalls = [...askAi.matchAll(/getCatalogueFieldContract\([^)]*\)/g)].map((m) => m[0]);
     expect(contractCalls.length).toBeGreaterThan(0);
     for (const call of contractCalls) {
@@ -399,7 +421,8 @@ describe("Slice 8b · FindingCard wiring", () => {
           call.includes('"bank"') ||
           call.includes('"cbk"') ||
           call.includes('"equity"') ||
-          call.includes('"reit"'),
+          call.includes('"reit"') ||
+          call.includes('"offshore_fund"'),
       ).toBe(true);
     }
   });

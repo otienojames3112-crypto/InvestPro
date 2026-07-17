@@ -1085,7 +1085,20 @@ const MARKET_ASSET_OFFSHORE_FUND_FIELD_CONTRACT: CatalogueFieldContract = {
       managerEditable: true,
       showInTable: true,
       promoteToCatalogueRow: true,
-      note: "The one desired field with real enforced business logic already: MARKET_ASSET_SUBTYPE_FIELD_RULES.offshore_fund requires currency !== \"KES\" (shared/researchPipeline.ts).",
+      note: "The one desired field with real enforced business logic already: MARKET_ASSET_SUBTYPE_FIELD_RULES.offshore_fund requires currency !== \"KES\" (shared/researchPipeline.ts). Envelope-routed (see ENVELOPE_ROUTED_CONTRACT_KEYS) — both the base gate's currency rule and the offshore-fund KES check read args.currency (the envelope parameter, itself sourced server-side from finding.currency), never figures.currency.",
+    },
+    {
+      catalogue: "market_asset",
+      subtype: "offshore_fund",
+      key: "market",
+      label: "Market",
+      required: true,
+      aliases: ["market", "exchange"],
+      storageStatus: "extendedFields",
+      managerEditable: true,
+      showInTable: true,
+      promoteToCatalogueRow: true,
+      note: "Added post-approval (2026-07-16) — omitted from the original 12-field product list, but CATALOGUE_FIELD_RULES.market_asset hard-requires figures.market (non-escapable) for EVERY market-asset finding regardless of subtype, proven directly via a live checkApprovalGate call that still reported 'market' missing with every other offshore-fund field supplied. Labeled 'Market' rather than reusing Equity/REIT's 'Exchange' — an offshore fund is not exchange-listed the way an NSE equity or REIT is. Same underlying opportunities.market column and extendedFields.MarketAssetProfile.exchange home.",
     },
     {
       catalogue: "market_asset",
@@ -1103,7 +1116,7 @@ const MARKET_ASSET_OFFSHORE_FUND_FIELD_CONTRACT: CatalogueFieldContract = {
     {
       catalogue: "market_asset",
       subtype: "offshore_fund",
-      key: "annualizedReturn",
+      key: "trailingReturnPct",
       label: "Annualized return / performance",
       required: true,
       aliases: ["trailingReturn", "trailingReturnPct"],
@@ -1111,6 +1124,7 @@ const MARKET_ASSET_OFFSHORE_FUND_FIELD_CONTRACT: CatalogueFieldContract = {
       managerEditable: true,
       showInTable: true,
       promoteToCatalogueRow: true,
+      note: "Key renamed from 'annualizedReturn' to 'trailingReturnPct' during Slice 8e-3's pre-approval compatibility check (2026-07-16) — buildPromotionPlan has a DEDICATED trailingReturnPct payload field (num(f.trailingReturnPct ?? f.trailingReturn)), separate from lastPrice; the original key wasn't recognised by it. This rename also happens to satisfy the base gate's lastPrice OR-requirement, since figurePresent's lastPrice alias table already tolerates 'trailingReturnPct' — no alsoWriteKeys needed, unlike REIT's distributionYield. Display label unchanged.",
     },
     {
       catalogue: "market_asset",
@@ -1128,7 +1142,7 @@ const MARKET_ASSET_OFFSHORE_FUND_FIELD_CONTRACT: CatalogueFieldContract = {
     {
       catalogue: "market_asset",
       subtype: "offshore_fund",
-      key: "fees",
+      key: "expenseRatioPct",
       label: "Fees",
       required: true,
       aliases: ["fee", "expenseRatioPct", "expense"],
@@ -1136,7 +1150,7 @@ const MARKET_ASSET_OFFSHORE_FUND_FIELD_CONTRACT: CatalogueFieldContract = {
       managerEditable: true,
       showInTable: true,
       promoteToCatalogueRow: true,
-      note: "Already gate-required for offshore-fund rows (MARKET_ASSET_SUBTYPE_FIELD_RULES.offshore_fund).",
+      note: "Key renamed from 'fees' to 'expenseRatioPct' during Slice 8e-3's pre-approval compatibility check (2026-07-16) — MARKET_ASSET_SUBTYPE_FIELD_RULES.offshore_fund's own gate rule checks figures.expenseRatioPct specifically (figurePresent's alias table for it is ['expenseRatioPct', 'fee'] — 'fees' plural was never in it), and buildPromotionPlan's f.expenseRatioPct ?? f.expense ?? f.fee read didn't recognise 'fees' either. Display label unchanged.",
     },
     {
       catalogue: "market_asset",
@@ -1447,13 +1461,21 @@ const ENVELOPE_ROUTED_CONTRACT_KEYS: Record<CatalogueKey, ReadonlySet<string>> =
   // opportunity branch sets `source` from the envelope only, and dataAsOf is
   // written from the pending update's own `asOf` column, never from figures.
   cbk: new Set(["sourceLink", "sourceAsOf"]),
-  // Slice 8e-1 (Equity) + Slice 8e-2 (REIT). companyName/reitName each mirror
-  // MMF's fundName/Bank's bankName: buildPromotionPlan's opportunity branch
-  // sets `name` from the envelope (update.name, itself finding.instrumentName)
-  // only, never from figures. sourceLink/sourceAsOf mirror MMF/Bank/CBK too.
-  // Offshore_fund/SACCO each have their OWN name-equivalent key (fundName/
-  // saccoName) — out of scope until THEIR slices wire in.
-  market_asset: new Set(["companyName", "reitName", "sourceLink", "sourceAsOf"]),
+  // Slice 8e-1 (Equity) + Slice 8e-2 (REIT) + Slice 8e-3 (Offshore fund).
+  // companyName/reitName/fundName each mirror MMF's fundName/Bank's bankName:
+  // buildPromotionPlan's opportunity branch sets `name` from the envelope
+  // (update.name, itself finding.instrumentName) only, never from figures.
+  // fundManager mirrors MMF/Bank's fund-manager-equivalent field: the base
+  // gate's issuer rule and buildPromotionPlan both read args.issuer/
+  // update.issuer from the envelope only, never figures.fundManager (also see
+  // the reconfirmed pre-existing gap: finding.issuer is always null for
+  // AI-originated market-asset findings — unaffected by envelope-routing
+  // either way). currency mirrors the same pattern: both the base gate's
+  // currency rule and the offshore-fund KES check read args.currency, never
+  // figures.currency. sourceLink/sourceAsOf mirror MMF/Bank/CBK too. SACCO has
+  // its OWN name-equivalent key (saccoName) — out of scope until its own slice
+  // wires in.
+  market_asset: new Set(["companyName", "reitName", "fundName", "fundManager", "currency", "sourceLink", "sourceAsOf"]),
 };
 
 /** Read a field's value from a raw key/value bag by trying each of its

@@ -627,6 +627,9 @@ describe("Catalogue field contract · foundation-only guardrails (no behavior ch
       join(root, "server", "saccoContractMapping.test.ts"),
       join(root, "server", "db.ts"),
       join(root, "server", "contractPromotionExtendedFields.test.ts"),
+      // Slice 8g-3 — tests-only compatibility lock across the contract, gate,
+      // and promotion layers; no production consumer change.
+      join(root, "server", "contractGatePromotionCompatibility.test.ts"),
       join(root, "client", "src", "pages", "AskAI.tsx"),
     ]);
     const unexpectedOffenders = offenders.filter((f) => !allowed.has(f));

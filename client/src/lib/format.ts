@@ -295,3 +295,31 @@ export function firstFieldProvenanceSourceUrl(
   }
   return null;
 }
+
+/**
+ * Stage 9c — reads a value from a catalogue row's `extendedFields` JSON for a
+ * given contract field, trying its canonical `key` first then each of its
+ * `aliases` (structurally typed so any contract field entry from the shared
+ * catalogue-contract module can be passed directly, without this client-only
+ * lib importing that shared module itself). Going forward, Slice 8g-2
+ * always persists under the canonical key; the alias fallback only matters
+ * for rows that predate 8g-2 or were populated through the older raw
+ * `_extendedFields` blob mechanism, which used the AI-extraction-schema's own
+ * field names instead. Tolerates the `missing_from_source` sentinel and
+ * empty strings. Never fabricates a value — returns null when nothing real
+ * is found under any of the tried keys.
+ */
+export function readContractFieldValue(
+  extendedFields: Record<string, unknown> | null | undefined,
+  field: { key: string; aliases: string[] },
+): string | null {
+  if (!extendedFields) return null;
+  for (const k of [field.key, ...field.aliases]) {
+    const v = extendedFields[k];
+    if (v === undefined || v === null) continue;
+    const s = String(v).trim();
+    if (s === "" || s === "missing_from_source") continue;
+    return s;
+  }
+  return null;
+}

@@ -52,6 +52,9 @@ import { ArchivedRowsPanel, CatalogueScopeFilter, type CatalogueRowScope } from 
 import { humanCheckedCount, figureCount, type FieldProvenanceMap } from "@shared/provenance";
 import { rateStaleness } from "@/lib/rateStaleness";
 import { resolveCatalogueSource, firstFieldProvenanceSourceUrl } from "@/lib/format";
+import { readContractFieldValue } from "@/lib/format";
+import { getCatalogueFieldContract } from "@shared/catalogueFieldContracts";
+import { detectMarketAssetSacco } from "@shared/researchPipeline";
 import { dashboardHref } from "@shared/navigation";
 import type { inferRouterOutputs } from "@trpc/server";
 import type { AppRouter } from "../../../server/routers";
@@ -95,6 +98,31 @@ function fmtPct(v: string | null): string {
 function fmtPrice(v: string | null, currency: string): string {
   const n = num(v);
   return n === null ? "—" : `${currency} ${n.toLocaleString("en-KE", { maximumFractionDigits: 2 })}`;
+}
+
+/**
+ * Stage 9c — SACCOs have no distinct `assetClass` (they share "alt" with ETF/
+ * property/pension/other), so they need their own detection to split out of
+ * the generic price/yield/fee table. Reuses `detectMarketAssetSacco` — the
+ * SAME safe detection `checkApprovalGate`/`reviewResearchUpdate` already use —
+ * against the row's `extendedFields` (which Slice 8g-2 stamps under the same
+ * canonical keys `detectMarketAssetSacco`'s own alias table recognizes:
+ * dividendRate, minimumShareCapital, minimumMonthlyDeposit, withdrawalTerms,
+ * regulatoryStatus). This reliably detects SACCO rows promoted via 8g-2;
+ * older "alt" rows without any of these extendedFields keys fall through to
+ * the generic table unchanged — the same pre-existing, already-documented
+ * "SACCO row identity" gap the contract module's own header describes, not
+ * something this display-only slice claims to fully solve.
+ */
+function isSaccoRow(r: Opportunity): boolean {
+  if (r.assetClass !== "alt") return false;
+  return detectMarketAssetSacco({
+    catalogue: "market_asset",
+    assetClass: "alt",
+    figures: r.extendedFields as Record<string, unknown> | null,
+    name: r.name,
+    issuer: r.issuer,
+  });
 }
 
 export default function MarketAssetsReference({ embedded = false }: { embedded?: boolean } = {}) {
@@ -167,6 +195,13 @@ export default function MarketAssetsReference({ embedded = false }: { embedded?:
     }
     return out;
   }, [marketRows, search, classFilter, currencyFilter, sortKey, sortDir]);
+
+  // Stage 9c — split out SACCO rows into their own display, since the generic
+  // price/yield/trailing-return/fee columns are meaningless for a SACCO's
+  // dividend-rate/share-capital model. Equity/REIT/offshore-fund/other-"alt"
+  // rows keep the exact same table/columns/sort as before this slice.
+  const saccoFiltered = useMemo(() => filtered.filter(isSaccoRow), [filtered]);
+  const nonSaccoFiltered = useMemo(() => filtered.filter((r) => !isSaccoRow(r)), [filtered]);
 
   function toggleSort(key: SortKey) {
     if (sortKey === key) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
@@ -348,57 +383,77 @@ export default function MarketAssetsReference({ embedded = false }: { embedded?:
           </Card>
         )}
 
-        {/* Table */}
+        {/* Table(s) */}
         {scope !== "archived" && (
-        <Card>
-          <CardContent className="p-0">
-            {isLoading ? (
-              <div className="p-8 text-center text-sm text-muted-foreground">Loading market assets…</div>
-            ) : filtered.length === 0 ? (
-              <div className="p-8 text-center text-sm text-muted-foreground">
-                No market assets match your filters. Try widening them.
-              </div>
-            ) : (
-              <div className="overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead><SortHead k="name">Instrument</SortHead></TableHead>
-                      <TableHead>Class</TableHead>
-                      <TableHead className="text-right"><SortHead k="lastPrice" numeric>Price</SortHead></TableHead>
-                      <TableHead className="text-right">
-                        <span className="inline-flex items-center justify-end gap-1 w-full">
-                          <SortHead k="yieldPct" numeric>Yield</SortHead>
-                          <InfoHint side="left">Distribution / dividend yield where published. Before tax; may be trailing.</InfoHint>
-                        </span>
-                      </TableHead>
-                      <TableHead className="text-right">
-                        <span className="inline-flex items-center justify-end gap-1 w-full">
-                          <SortHead k="trailingReturnPct" numeric>Trailing 1Y</SortHead>
-                          <InfoHint side="left">The actual return over the past 12 months. It describes what already happened and does not predict the future.</InfoHint>
-                        </span>
-                      </TableHead>
-                      <TableHead className="text-right"><SortHead k="expenseRatioPct" numeric>Fee</SortHead></TableHead>
-                      <TableHead>
-                        <span className="inline-flex items-center gap-1">
-                          Source &amp; freshness
-                          <InfoHint>Where each figure came from and how recently it was updated.</InfoHint>
-                        </span>
-                      </TableHead>
-                      <TableHead className="text-right">Action</TableHead>
-                      <TableHead className="w-10"></TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {filtered.map((r) => (
-                      <MarketRow key={r.ref} r={r} onTrack={() => trackHolding(r)} isManager={isManager} staleByRef={staleByRef} refFocus={refFocus} />
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
-            )}
-          </CardContent>
-        </Card>
+          isLoading ? (
+            <Card>
+              <CardContent className="p-0">
+                <div className="p-8 text-center text-sm text-muted-foreground">Loading market assets…</div>
+              </CardContent>
+            </Card>
+          ) : filtered.length === 0 ? (
+            <Card>
+              <CardContent className="p-0">
+                <div className="p-8 text-center text-sm text-muted-foreground">
+                  No market assets match your filters. Try widening them.
+                </div>
+              </CardContent>
+            </Card>
+          ) : (
+            <>
+              {/* Equity / REIT / offshore fund / other "alt" — unchanged from before Stage 9c. */}
+              {nonSaccoFiltered.length > 0 && (
+                <Card>
+                  <CardContent className="p-0">
+                    <div className="overflow-x-auto">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead><SortHead k="name">Instrument</SortHead></TableHead>
+                            <TableHead>Class</TableHead>
+                            <TableHead className="text-right"><SortHead k="lastPrice" numeric>Price</SortHead></TableHead>
+                            <TableHead className="text-right">
+                              <span className="inline-flex items-center justify-end gap-1 w-full">
+                                <SortHead k="yieldPct" numeric>Yield</SortHead>
+                                <InfoHint side="left">Distribution / dividend yield where published. Before tax; may be trailing.</InfoHint>
+                              </span>
+                            </TableHead>
+                            <TableHead className="text-right">
+                              <span className="inline-flex items-center justify-end gap-1 w-full">
+                                <SortHead k="trailingReturnPct" numeric>Trailing 1Y</SortHead>
+                                <InfoHint side="left">The actual return over the past 12 months. It describes what already happened and does not predict the future.</InfoHint>
+                              </span>
+                            </TableHead>
+                            <TableHead className="text-right"><SortHead k="expenseRatioPct" numeric>Fee</SortHead></TableHead>
+                            <TableHead>
+                              <span className="inline-flex items-center gap-1">
+                                Source &amp; freshness
+                                <InfoHint>Where each figure came from and how recently it was updated.</InfoHint>
+                              </span>
+                            </TableHead>
+                            <TableHead className="text-right">Action</TableHead>
+                            <TableHead className="w-10"></TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {nonSaccoFiltered.map((r) => (
+                            <MarketRow key={r.ref} r={r} onTrack={() => trackHolding(r)} isManager={isManager} staleByRef={staleByRef} refFocus={refFocus} />
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+
+              {/* Stage 9c — SACCO gets its OWN table with SACCO-specific columns,
+                  instead of being forced into the generic price/yield/fee row
+                  above, where those figures are meaningless for a SACCO. */}
+              {saccoFiltered.length > 0 && (
+                <SaccoTable rows={saccoFiltered} isManager={isManager} staleByRef={staleByRef} refFocus={refFocus} />
+              )}
+            </>
+          )
         )}
 
         <p className="text-xs text-muted-foreground flex items-center gap-1.5">
@@ -504,6 +559,218 @@ function MarketRow({ r, onTrack, isManager, staleByRef, refFocus }: { r: Opportu
             {checked}/{total} checked
           </span>
         )}
+      </TableCell>
+      <TableCell className="text-right">
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={onTrack}
+              className="h-8 gap-1.5 active:scale-[0.97] transition-transform"
+            >
+              <PlusCircle className="w-3.5 h-3.5" /> Track holding
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="left" className="max-w-xs text-xs">
+            Opens the Holdings → Other add form seeded to this instrument. You confirm the amount and
+            figures before anything is saved — nothing is bought or moved automatically.
+          </TooltipContent>
+        </Tooltip>
+      </TableCell>
+      <TableCell>
+        <div className="flex items-center justify-end gap-1">
+          {isManager && (
+            <CatalogueRowControls
+              catalogue="market_asset"
+              targetRef={r.ref}
+              instrumentName={r.name}
+              isActive={r.active ?? true}
+              isStale={markedStale}
+              showRateHistory={false}
+            />
+          )}
+          <Link href={`/explore/${encodeURIComponent(r.ref)}`}>
+            <Button variant="ghost" size="icon" className="h-8 w-8" aria-label={`View ${r.name}`}>
+              <ChevronRight className="w-4 h-4" />
+            </Button>
+          </Link>
+        </div>
+      </TableCell>
+    </TableRow>
+  );
+}
+
+/**
+ * Stage 9c — the SACCO-specific table, closing Stage 9a's audit finding that
+ * SACCO rows were forced into the generic price/yield/trailing-return/fee
+ * columns above, which are meaningless for a SACCO's dividend-rate/share-
+ * capital model (a published SACCO row showed a near-empty row of dashes).
+ * Column values/labels come from the SAME SACCO contract every other layer
+ * already uses (shared/catalogueFieldContracts.ts) — never a second,
+ * hand-typed copy of the field list.
+ */
+function SaccoTable({
+  rows,
+  isManager,
+  staleByRef,
+  refFocus,
+}: {
+  rows: Opportunity[];
+  isManager: boolean;
+  staleByRef: Map<string, boolean>;
+  refFocus: RefFocus;
+}) {
+  const contract = getCatalogueFieldContract("market_asset", "sacco");
+  const fieldByKey = (key: string) => contract?.fields.find((f) => f.key === key);
+  const [, navigate] = useLocation();
+
+  function trackSaccoHolding(r: Opportunity) {
+    const params = new URLSearchParams({
+      track: "1",
+      name: r.name,
+      class: "other",
+      notes: `Tracked from Market Assets Reference (${r.ref})`,
+    });
+    navigate(`${dashboardHref.other}${dashboardHref.other.includes("?") ? "&" : "?"}${params.toString()}`);
+  }
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="text-base flex items-center gap-2">
+          SACCOs
+          <InfoHint side="right">
+            SACCO products don't have a market price or trailing return — dividend rate, share
+            capital and contribution terms are the established quick-decision fields instead.
+          </InfoHint>
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="p-0">
+        <div className="overflow-x-auto">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>{fieldByKey("saccoName")?.label ?? "SACCO"}</TableHead>
+                <TableHead>{fieldByKey("productType")?.label ?? "Product type"}</TableHead>
+                <TableHead className="text-right">{fieldByKey("dividendRate")?.label ?? "Dividend rate"}</TableHead>
+                <TableHead className="text-right">
+                  {fieldByKey("minimumShareCapital")?.label ?? "Minimum share capital"}
+                </TableHead>
+                <TableHead className="text-right">
+                  {fieldByKey("minimumMonthlyDeposit")?.label ?? "Minimum contribution"}
+                </TableHead>
+                <TableHead>{fieldByKey("withdrawalTerms")?.label ?? "Withdrawal terms"}</TableHead>
+                <TableHead>{fieldByKey("regulatoryStatus")?.label ?? "Regulatory status"}</TableHead>
+                <TableHead>Liquidity</TableHead>
+                <TableHead>
+                  <span className="inline-flex items-center gap-1">
+                    Source &amp; freshness
+                    <InfoHint>Where each figure came from and how recently it was updated.</InfoHint>
+                  </span>
+                </TableHead>
+                <TableHead className="text-right">Action</TableHead>
+                <TableHead className="w-10"></TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {rows.map((r) => (
+                <SaccoRow
+                  key={r.ref}
+                  r={r}
+                  contract={contract}
+                  onTrack={() => trackSaccoHolding(r)}
+                  isManager={isManager}
+                  staleByRef={staleByRef}
+                  refFocus={refFocus}
+                />
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function SaccoRow({
+  r,
+  contract,
+  onTrack,
+  isManager,
+  staleByRef,
+  refFocus,
+}: {
+  r: Opportunity;
+  contract: ReturnType<typeof getCatalogueFieldContract>;
+  onTrack: () => void;
+  isManager: boolean;
+  staleByRef: Map<string, boolean>;
+  refFocus: RefFocus;
+}) {
+  const fp = (r.fieldProvenance ?? {}) as FieldProvenanceMap;
+  const catSource = resolveCatalogueSource(r.dataSource, r.extendedFields, r.dataAsOf, firstFieldProvenanceSourceUrl(fp));
+  const stale = rateStaleness(catSource.asOf);
+  const markedStale = staleByRef.get(r.ref);
+  const extendedFields = r.extendedFields as Record<string, unknown> | null;
+  const fieldByKey = (key: string) => contract?.fields.find((f) => f.key === key);
+  const readField = (key: string) => {
+    const field = fieldByKey(key);
+    return field ? readContractFieldValue(extendedFields, field) : null;
+  };
+
+  const productType = readField("productType");
+  const dividendRate = readField("dividendRate");
+  const minimumShareCapital = readField("minimumShareCapital");
+  const minimumMonthlyDeposit = readField("minimumMonthlyDeposit");
+  const withdrawalTerms = readField("withdrawalTerms");
+  const regulatoryStatus = readField("regulatoryStatus");
+
+  return (
+    <TableRow
+      ref={refFocus.registerRow(r.ref, r.name)}
+      data-ref={r.ref}
+      className={`align-top ${refFocus.isFocused(r.ref, r.name) ? "bg-primary/5" : ""}`}
+    >
+      <TableCell>
+        <Link href={`/explore/${encodeURIComponent(r.ref)}`} className="font-medium text-foreground hover:text-primary hover:underline">
+          {r.name}
+        </Link>
+        <div className="text-xs text-muted-foreground mt-0.5">{r.issuer ?? r.ref}</div>
+        {markedStale && (
+          <Badge variant="outline" className="mt-1 text-[10px] px-1.5 py-0 border-amber-300 text-amber-600">Stale</Badge>
+        )}
+      </TableCell>
+      <TableCell className="text-sm text-muted-foreground whitespace-nowrap">{productType ?? "—"}</TableCell>
+      <TableCell className="text-right tabular-nums text-sm">{dividendRate ? `${dividendRate}%` : "—"}</TableCell>
+      <TableCell className="text-right tabular-nums text-sm">{minimumShareCapital ?? "—"}</TableCell>
+      <TableCell className="text-right tabular-nums text-sm">{minimumMonthlyDeposit ?? "—"}</TableCell>
+      <TableCell className="text-sm max-w-[160px] truncate">{withdrawalTerms ?? "—"}</TableCell>
+      <TableCell className="text-sm max-w-[160px] truncate">{regulatoryStatus ?? "—"}</TableCell>
+      <TableCell className="text-sm whitespace-nowrap">{r.liquidity ? r.liquidity.replace(/_/g, " ") : "—"}</TableCell>
+      <TableCell>
+        {catSource.label ? (
+          catSource.url ? (
+            <a
+              href={catSource.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-xs text-primary underline underline-offset-2 inline-flex items-center gap-1 max-w-[200px] truncate"
+            >
+              {catSource.label} <ExternalLink className="w-2.5 h-2.5 shrink-0" />
+            </a>
+          ) : (
+            <div className="text-xs text-muted-foreground max-w-[200px] truncate">{catSource.label}</div>
+          )
+        ) : (
+          <div className="text-xs text-amber-600 dark:text-amber-400">Source not recorded</div>
+        )}
+        <div className="flex items-center gap-1 mt-0.5">
+          <Clock className="w-3 h-3 text-muted-foreground" />
+          <span className={`text-[10px] font-medium ${stale.isVeryStale ? "text-red-500" : stale.isStale ? "text-amber-500" : "text-muted-foreground"}`}>
+            {stale.label}{stale.isStale ? " · may be stale" : ""}
+          </span>
+        </div>
       </TableCell>
       <TableCell className="text-right">
         <Tooltip>

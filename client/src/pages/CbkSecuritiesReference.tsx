@@ -24,6 +24,13 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetDescription,
+} from "@/components/ui/sheet";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { InfoHint } from "@/components/InfoHint";
 import {
@@ -39,6 +46,7 @@ import {
   PlusCircle,
   ShieldCheck,
   ExternalLink,
+  FileText,
 } from "lucide-react";
 import { profileFor, type AssetClass } from "@shared/assetModel";
 import { useAuth } from "@/_core/hooks/useAuth";
@@ -51,6 +59,8 @@ import { ArchivedRowsPanel, CatalogueScopeFilter, type CatalogueRowScope } from 
 import { humanCheckedCount, figureCount, type FieldProvenanceMap } from "@shared/provenance";
 import { rateStaleness } from "@/lib/rateStaleness";
 import { resolveCatalogueSource, firstFieldProvenanceSourceUrl } from "@/lib/format";
+import { readContractFieldValue } from "@/lib/format";
+import { getCatalogueFieldContract } from "@shared/catalogueFieldContracts";
 import { dashboardHref } from "@shared/navigation";
 import { useDepositDrawer, type DepositPrefill } from "@/contexts/DepositDrawerContext";
 import type { inferRouterOutputs } from "@trpc/server";
@@ -171,6 +181,9 @@ export default function CbkSecuritiesReference({ embedded = false }: { embedded?
   const [classFilter, setClassFilter] = useState<string>("all");
   const [sortKey, setSortKey] = useState<SortKey | null>(null);
   const [sortDir, setSortDir] = useState<SortDir>("asc");
+  // Stage 9c — the CBK-specific detail drawer, separate from the generic
+  // /explore/:ref page every opportunity row also links to.
+  const [drawerRow, setDrawerRow] = useState<Opportunity | null>(null);
 
   const govRows = useMemo(
     () => rows.filter((r) => (GOV_CLASSES as readonly string[]).includes(r.assetClass)),
@@ -411,7 +424,15 @@ export default function CbkSecuritiesReference({ embedded = false }: { embedded?
                   </TableHeader>
                   <TableBody>
                     {filtered.map((r) => (
-                      <GovRow key={r.ref} r={r} onRecord={() => openDrawer(govPrefill(r))} isManager={isManager} staleByRef={staleByRef} refFocus={refFocus} />
+                      <GovRow
+                        key={r.ref}
+                        r={r}
+                        onRecord={() => openDrawer(govPrefill(r))}
+                        onViewDetails={() => setDrawerRow(r)}
+                        isManager={isManager}
+                        staleByRef={staleByRef}
+                        refFocus={refFocus}
+                      />
                     ))}
                   </TableBody>
                 </Table>
@@ -438,11 +459,26 @@ export default function CbkSecuritiesReference({ embedded = false }: { embedded?
         errorMessage={catExplainQuery.error?.message}
         onRetry={() => catExplainQuery.refetch()}
       />
+      <CbkDetailDrawer row={drawerRow} onOpenChange={(open) => !open && setDrawerRow(null)} isManager={isManager} staleByRef={staleByRef} />
     </AppShell>
   );
 }
 
-function GovRow({ r, onRecord, isManager, staleByRef, refFocus }: { r: Opportunity; onRecord: () => void; isManager: boolean; staleByRef: Map<string, boolean>; refFocus: RefFocus }) {
+function GovRow({
+  r,
+  onRecord,
+  onViewDetails,
+  isManager,
+  staleByRef,
+  refFocus,
+}: {
+  r: Opportunity;
+  onRecord: () => void;
+  onViewDetails: () => void;
+  isManager: boolean;
+  staleByRef: Map<string, boolean>;
+  refFocus: RefFocus;
+}) {
   const profile = profileFor(r.assetClass as AssetClass);
   const fp = (r.fieldProvenance ?? {}) as FieldProvenanceMap;
   const catSource = resolveCatalogueSource(r.dataSource, r.extendedFields, r.dataAsOf, firstFieldProvenanceSourceUrl(fp));
@@ -539,6 +575,23 @@ function GovRow({ r, onRecord, isManager, staleByRef, refFocus }: { r: Opportuni
               isStale={markedStale}
             />
           )}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8"
+                aria-label={`CBK details for ${r.name}`}
+                onClick={onViewDetails}
+              >
+                <FileText className="w-4 h-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="left" className="max-w-xs text-xs">
+              Security type, tenor, tax treatment, issue number, coupon, auction/value dates and
+              source — the established CBK quick-decision fields for this security.
+            </TooltipContent>
+          </Tooltip>
           <Link href={`/explore/${encodeURIComponent(r.ref)}`}>
             <Button variant="ghost" size="icon" className="h-8 w-8" aria-label={`View ${r.name}`}>
               <ChevronRight className="w-4 h-4" />
@@ -547,5 +600,158 @@ function GovRow({ r, onRecord, isManager, staleByRef, refFocus }: { r: Opportuni
         </div>
       </TableCell>
     </TableRow>
+  );
+}
+
+/** Same compact label/value block Bank's catalogue drawer already uses. */
+function DrawerFact({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="space-y-0.5">
+      <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">{label}</p>
+      <p className="text-sm">{value}</p>
+    </div>
+  );
+}
+
+/** Formats a raw extendedFields boolean-ish string ("true"/"false") as Yes/No,
+ *  passing anything else through unchanged (never fabricates a value). */
+function fmtYesNo(v: string | null): string | null {
+  if (v === null) return null;
+  const t = v.trim().toLowerCase();
+  if (t === "true") return "Yes";
+  if (t === "false") return "No";
+  return v;
+}
+
+/**
+ * Stage 9c — the CBK-specific detail drawer, closing Stage 9a's audit finding
+ * that CBK's extendedFields-tier fields (tax treatment, tax-exempt flag,
+ * issue number, coupon rate, auction/value dates — the ones Slice 8g-2 made
+ * persist) had nowhere to be seen cleanly after approval, only as raw
+ * `key: value` text in the generic /explore/:ref page's "Full instrument
+ * profile" dump. Reads each field's value from the row's typed columns first
+ * (tenor/yield/maturity — already reach real columns via buildPromotionPlan),
+ * falling back to `extendedFields` for the fields 8g-2 persists there. Labels
+ * come directly from the SAME CBK contract (shared/catalogueFieldContracts.ts)
+ * every other layer already uses — never a second, hand-typed label copy.
+ */
+function CbkDetailDrawer({
+  row,
+  onOpenChange,
+  isManager,
+  staleByRef,
+}: {
+  row: Opportunity | null;
+  onOpenChange: (open: boolean) => void;
+  isManager: boolean;
+  staleByRef: Map<string, boolean>;
+}) {
+  const contract = getCatalogueFieldContract("cbk");
+  const fieldByKey = (key: string) => contract?.fields.find((f) => f.key === key);
+  const extendedFields = row?.extendedFields as Record<string, unknown> | null | undefined;
+
+  const securityType = row ? readContractFieldValue(extendedFields, fieldByKey("securityType")!) : null;
+  const issueNumber = row ? readContractFieldValue(extendedFields, fieldByKey("issueNumber")!) : null;
+  const applicationDeadline = row ? readContractFieldValue(extendedFields, fieldByKey("applicationDeadline")!) : null;
+  const auctionDate = row ? readContractFieldValue(extendedFields, fieldByKey("auctionDate")!) : null;
+  const valueDate = row ? readContractFieldValue(extendedFields, fieldByKey("valueDate")!) : null;
+  const couponRate = row ? readContractFieldValue(extendedFields, fieldByKey("couponRate")!) : null;
+  const whtRule = row ? readContractFieldValue(extendedFields, fieldByKey("whtRule")!) : null;
+  const taxExempt = row ? fmtYesNo(readContractFieldValue(extendedFields, fieldByKey("taxExempt")!)) : null;
+  const minInvestment = row ? readContractFieldValue(extendedFields, fieldByKey("minInvestment")!) : null;
+
+  const fp = (row?.fieldProvenance ?? {}) as FieldProvenanceMap;
+  const catSource = row
+    ? resolveCatalogueSource(row.dataSource, row.extendedFields, row.dataAsOf, firstFieldProvenanceSourceUrl(fp))
+    : null;
+
+  return (
+    <Sheet open={row !== null} onOpenChange={onOpenChange}>
+      <SheetContent className="w-full sm:max-w-md overflow-y-auto">
+        {row && (
+          <>
+            <SheetHeader>
+              <SheetTitle className="flex items-center gap-2">
+                <Building2 className="w-4 h-4 text-primary" /> {row.name}
+              </SheetTitle>
+              <SheetDescription>{profileFor(row.assetClass as AssetClass).label}</SheetDescription>
+            </SheetHeader>
+            <div className="mt-5 space-y-4">
+              <div className="grid grid-cols-2 gap-3">
+                <DrawerFact label={fieldByKey("securityType")!.label} value={securityType ?? "—"} />
+                <DrawerFact
+                  label="Tenor"
+                  value={num(row.tenorYears) === null ? "—" : `${Number(row.tenorYears)} yr`}
+                />
+                <DrawerFact label={fieldByKey("yieldPct")?.label ?? "Yield"} value={fmtPct(row.yieldPct)} />
+                <DrawerFact label="Maturity date" value={fmtDate(row.maturityDate)} />
+              </div>
+
+              <div className="border-t pt-3 grid grid-cols-2 gap-3">
+                <DrawerFact label={fieldByKey("whtRule")!.label} value={whtRule ?? "—"} />
+                <DrawerFact label={fieldByKey("taxExempt")!.label} value={taxExempt ?? "—"} />
+              </div>
+
+              {(applicationDeadline || auctionDate || valueDate) && (
+                <div className="border-t pt-3 grid grid-cols-2 gap-3">
+                  {applicationDeadline && (
+                    <DrawerFact label={fieldByKey("applicationDeadline")!.label} value={applicationDeadline} />
+                  )}
+                  {auctionDate && <DrawerFact label={fieldByKey("auctionDate")!.label} value={auctionDate} />}
+                  {valueDate && <DrawerFact label={fieldByKey("valueDate")!.label} value={valueDate} />}
+                </div>
+              )}
+
+              {(issueNumber || couponRate || minInvestment) && (
+                <div className="border-t pt-3 grid grid-cols-2 gap-3">
+                  {issueNumber && <DrawerFact label={fieldByKey("issueNumber")!.label} value={issueNumber} />}
+                  {couponRate && <DrawerFact label={fieldByKey("couponRate")!.label} value={`${couponRate}%`} />}
+                  {minInvestment && <DrawerFact label={fieldByKey("minInvestment")!.label} value={minInvestment} />}
+                </div>
+              )}
+
+              <div className="border-t pt-3">
+                <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide mb-1">Source</p>
+                {catSource?.label ? (
+                  catSource.url ? (
+                    <a
+                      href={catSource.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-sm text-primary underline underline-offset-2 inline-flex items-center gap-1"
+                    >
+                      {catSource.label} <ExternalLink className="w-3 h-3 shrink-0" />
+                    </a>
+                  ) : (
+                    <p className="text-sm">{catSource.label}</p>
+                  )
+                ) : (
+                  <p className="text-sm text-amber-600 dark:text-amber-400">No source</p>
+                )}
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {catSource?.asOf ? `As of ${fmtDate(catSource.asOf as string | Date)}` : "No as-of date"}
+                </p>
+              </div>
+
+              {isManager && (
+                <div className="border-t pt-4">
+                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">
+                    Manager controls
+                  </p>
+                  <CatalogueRowControls
+                    catalogue="cbk"
+                    targetRef={row.ref}
+                    instrumentName={row.name}
+                    isActive={row.active ?? true}
+                    isStale={staleByRef.get(row.ref)}
+                    size="sm"
+                  />
+                </div>
+              )}
+            </div>
+          </>
+        )}
+      </SheetContent>
+    </Sheet>
   );
 }

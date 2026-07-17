@@ -636,6 +636,13 @@ describe("Catalogue field contract · foundation-only guardrails (no behavior ch
       // or promotion layers.
       join(root, "client", "src", "pages", "ResearchDesk.tsx"),
       join(root, "server", "researchDeskFigureLabels.test.ts"),
+      // Slice 9c — CBK detail drawer + SACCO-specific catalogue table use
+      // getCatalogueFieldContract directly for clean, contract-derived labels
+      // and SACCO detection; display-only, never wired into the gate or
+      // promotion layers.
+      join(root, "client", "src", "pages", "CbkSecuritiesReference.tsx"),
+      join(root, "client", "src", "pages", "MarketAssetsReference.tsx"),
+      join(root, "server", "cbkSaccoCatalogueDisplay.test.ts"),
       join(root, "client", "src", "pages", "AskAI.tsx"),
     ]);
     const unexpectedOffenders = offenders.filter((f) => !allowed.has(f));

@@ -195,3 +195,70 @@ export function formatSourceProvenance(
   const asOfLabel = asOf ? new Date(asOf).toLocaleDateString() : null;
   return asOfLabel ? `Source: ${src} · as of ${asOfLabel}` : `Source: ${src}`;
 }
+
+/** The subset of a catalogue row's extendedFields this app cares about for source display. */
+export interface CatalogueSourceExtendedFields {
+  sourceLabel?: string | null;
+  sourceUrl?: string | null;
+  sourceAsOfDate?: string | null;
+}
+
+export interface CatalogueSourceDisplay {
+  /** Human-readable label — never a raw JSON blob, always trimmed/shortened. */
+  label: string | null;
+  /** Clickable URL, or null when nothing on record is a real http(s) URL. */
+  url: string | null;
+  /** Resolved as-of value (raw — caller formats with its own existing date formatter). */
+  asOf: string | Date | null;
+}
+
+function isHttpUrl(value: string | null | undefined): value is string {
+  if (!value) return false;
+  try {
+    const u = new URL(value.trim());
+    return u.protocol === "http:" || u.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+/** Shorten a source string/URL into a compact, readable label (hostname, or the raw text, truncated). */
+function shortenSourceLabel(raw: string): string {
+  const s = raw.trim();
+  if (isHttpUrl(s)) {
+    try {
+      return new URL(s).hostname.replace(/^www\./, "");
+    } catch {
+      // fall through to the plain-text truncation below
+    }
+  }
+  return s.length > 32 ? `${s.slice(0, 30)}…` : s;
+}
+
+/**
+ * Slice 8h-1 — resolves a catalogue row's source label/link/as-of for display,
+ * shared by the MMF and Bank catalogue pages so the logic (and any future fix to
+ * it) can't drift between them. Prefers the row's own top-level columns (always
+ * populated, authoritative for label/as-of) and layers in the Slice-8f-stamped
+ * `extendedFields` provenance for whatever the top-level columns can't carry
+ * (mmf_funds/bank_instruments have no sourceUrl column at all).
+ */
+export function resolveCatalogueSource(
+  source: string | null | undefined,
+  extendedFields: CatalogueSourceExtendedFields | null | undefined,
+  asOfDate: string | Date | null | undefined,
+): CatalogueSourceDisplay {
+  const rawLabel =
+    (source && source.trim()) || (extendedFields?.sourceLabel && extendedFields.sourceLabel.trim()) || "";
+  const label = rawLabel ? shortenSourceLabel(rawLabel) : null;
+
+  const url = isHttpUrl(extendedFields?.sourceUrl)
+    ? extendedFields!.sourceUrl!.trim()
+    : isHttpUrl(source)
+      ? source!.trim()
+      : null;
+
+  const asOf = asOfDate ?? extendedFields?.sourceAsOfDate ?? null;
+
+  return { label, url, asOf };
+}

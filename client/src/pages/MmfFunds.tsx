@@ -11,6 +11,7 @@ import { usePortfolio } from "@/contexts/PortfolioContext";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { useRefFocus } from "@/hooks/useRefFocus";
 import { CatalogueRowControls } from "@/components/CatalogueRowControls";
+import { resolveCatalogueSource, type CatalogueSourceExtendedFields } from "@/lib/format";
 import { CatalogueSourceReviewButton } from "@/components/CatalogueSourceReview";
 import { ArchivedRowsPanel, CatalogueScopeFilter, type CatalogueRowScope } from "@/components/ArchivedRowsPanel";
 import { Card, CardContent } from "@/components/ui/card";
@@ -51,6 +52,7 @@ type Fund = {
   asOfDate: string | null;
   source: string | null;
   isActive: boolean;
+  extendedFields?: CatalogueSourceExtendedFields | null;
 };
 
 type SortKey = "fundName" | "ear" | "grossYield" | "managementFee" | "minInvestment" | "aumMillions";
@@ -66,16 +68,6 @@ function sourceLabel(source: string | null): string | null {
     return u.hostname.replace(/^www\./, "");
   } catch {
     return s.length > 32 ? `${s.slice(0, 30)}…` : s;
-  }
-}
-
-function isUrl(source: string | null): boolean {
-  if (!source) return false;
-  try {
-    const u = new URL(source.trim());
-    return u.protocol === "http:" || u.protocol === "https:";
-  } catch {
-    return false;
   }
 }
 
@@ -575,8 +567,8 @@ export default function MmfFunds({ embedded = false }: { embedded?: boolean } = 
                 const isTop5 = top5Ids.includes(fund.id);
                 const vsAvg = avgEar != null ? fund.ear - avgEar : null;
                 const focused = refFocus.isFocused(fund.fundName);
-                const src = sourceLabel(fund.source);
-                const fresh = freshnessTone(daysSince(fund.asOfDate));
+                const catSource = resolveCatalogueSource(fund.source, fund.extendedFields, fund.asOfDate);
+                const fresh = freshnessTone(daysSince(typeof catSource.asOf === "string" ? catSource.asOf : fund.asOfDate));
                 return (
                   <tr
                     key={fund.id}
@@ -632,24 +624,24 @@ export default function MmfFunds({ embedded = false }: { embedded?: boolean } = 
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex flex-col gap-0.5">
-                        {src ? (
-                          isUrl(fund.source) ? (
+                        {catSource.label ? (
+                          catSource.url ? (
                             <a
-                              href={fund.source as string}
+                              href={catSource.url}
                               target="_blank"
                               rel="noopener noreferrer"
                               className="text-xs text-primary underline underline-offset-2 inline-flex items-center gap-1 max-w-[160px] truncate"
                             >
-                              {src} <ExternalLink className="w-2.5 h-2.5 shrink-0" />
+                              {catSource.label} <ExternalLink className="w-2.5 h-2.5 shrink-0" />
                             </a>
                           ) : (
-                            <span className="text-xs text-foreground max-w-[160px] truncate">{src}</span>
+                            <span className="text-xs text-foreground max-w-[160px] truncate">{catSource.label}</span>
                           )
                         ) : (
                           <span className="text-xs text-amber-600 dark:text-amber-400">No source</span>
                         )}
                         <span className={`text-[10px] ${fresh.cls}`}>
-                          {fund.asOfDate ? `as of ${fund.asOfDate} · ${fresh.label}` : "no as-of date"}
+                          {catSource.asOf ? `as of ${String(catSource.asOf).slice(0, 10)} · ${fresh.label}` : "no as-of date"}
                         </span>
                       </div>
                     </td>

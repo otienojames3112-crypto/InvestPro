@@ -65,6 +65,7 @@ import { AiExplainDialog } from "@/components/AiExplainDialog";
 import { Sparkles } from "lucide-react";
 import { usePortfolio } from "@/contexts/PortfolioContext";
 import { ArchivedRowsPanel, CatalogueScopeFilter, type CatalogueRowScope } from "@/components/ArchivedRowsPanel";
+import { resolveCatalogueSource } from "@/lib/format";
 
 type BankInstrumentType =
   | "call_deposit"
@@ -522,10 +523,33 @@ export default function BankInstruments({ embedded = false }: { embedded?: boole
                   <DrawerFact label="Tenor / notice" value={drawerRow.typicalTenor ?? "—"} />
                 </div>
                 {drawerRow.notes && <DrawerFact label="Notes" value={drawerRow.notes} />}
-                <div className="grid grid-cols-2 gap-3">
-                  <DrawerFact label="Source" value={drawerRow.source ?? "—"} />
-                  <DrawerFact label="As of" value={asOfLabel(drawerRow.asOfDate)} />
-                </div>
+                {(() => {
+                  const catSource = resolveCatalogueSource(drawerRow.source, drawerRow.extendedFields, drawerRow.asOfDate);
+                  return (
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-0.5">
+                        <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">Source</p>
+                        {catSource.label ? (
+                          catSource.url ? (
+                            <a
+                              href={catSource.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-sm text-primary underline underline-offset-2 inline-flex items-center gap-1"
+                            >
+                              {catSource.label} <ExternalLink className="w-3 h-3 shrink-0" />
+                            </a>
+                          ) : (
+                            <p className="text-sm">{catSource.label}</p>
+                          )
+                        ) : (
+                          <p className="text-sm text-amber-600 dark:text-amber-400">No source</p>
+                        )}
+                      </div>
+                      <DrawerFact label="As of" value={catSource.asOf ? asOfLabel(catSource.asOf) : "—"} />
+                    </div>
+                  );
+                })()}
 
                 {/* Round 97 — Extended profile fields from structured extraction */}
                 {drawerRow.extendedFields && Object.keys(drawerRow.extendedFields).length > 0 && (
@@ -533,7 +557,19 @@ export default function BankInstruments({ embedded = false }: { embedded?: boole
                     <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Full profile</p>
                     <div className="grid grid-cols-2 gap-x-4 gap-y-2">
                       {Object.entries(drawerRow.extendedFields)
-                        .filter(([k]) => !k.startsWith("_") && k !== "catalogueType" && k !== "instrumentName" && k !== "sourceClass")
+                        .filter(
+                          ([k]) =>
+                            !k.startsWith("_") &&
+                            k !== "catalogueType" &&
+                            k !== "instrumentName" &&
+                            k !== "sourceClass" &&
+                            // Slice 8h-1 — already shown properly above (clickable link +
+                            // as-of); including them again here would just duplicate them
+                            // as raw, unlinked "key: value" text.
+                            k !== "sourceLabel" &&
+                            k !== "sourceUrl" &&
+                            k !== "sourceAsOfDate",
+                        )
                         .map(([k, v]) => (
                           <div key={k} className="text-sm">
                             <span className="text-muted-foreground text-xs">{k}: </span>

@@ -642,36 +642,54 @@ export default function MmfFunds({ embedded = false }: { embedded?: boolean } = 
                     Fund <SortIcon k="fundName" />
                   </button>
                 </th>
+                {/* Stage 10a-3 — the established MMF catalogue fields are now
+                    explicit columns, not grouped captions: the Reference
+                    Catalogue is the quick-decision surface, so a manager must
+                    be able to see EAR/Daily/Gross/Net yield, WHT, fee, min
+                    investment, withdrawal period, AUM, and risk profile at a
+                    glance without opening the drawer. The table scrolls
+                    horizontally (CardContent already has overflow-x-auto)
+                    rather than hiding any of them. */}
                 <th className="text-right px-4 py-3 font-medium">
                   <button className="flex items-center ml-auto" onClick={() => handleSort("ear")}>
-                    Yield (EAR/Gross/Net) <SortIcon k="ear" />
+                    EAR <SortIcon k="ear" />
                   </button>
                 </th>
+                <th className="text-right px-4 py-3 font-medium">Daily yield</th>
+                <th className="text-right px-4 py-3 font-medium">
+                  <button className="flex items-center ml-auto" onClick={() => handleSort("grossYield")}>
+                    Gross yield <SortIcon k="grossYield" />
+                  </button>
+                </th>
+                <th className="text-right px-4 py-3 font-medium">Net yield</th>
+                <th className="text-right px-4 py-3 font-medium">WHT</th>
                 <th className="text-right px-4 py-3 font-medium">
                   <button className="flex items-center ml-auto" onClick={() => handleSort("managementFee")}>
-                    Cost &amp; tax (Fee/WHT) <SortIcon k="managementFee" />
+                    Management fee <SortIcon k="managementFee" />
                   </button>
                 </th>
                 <th className="text-right px-4 py-3 font-medium">
                   <button className="flex items-center ml-auto" onClick={() => handleSort("minInvestment")}>
-                    Min (KES) <SortIcon k="minInvestment" />
+                    Minimum investment <SortIcon k="minInvestment" />
                   </button>
                 </th>
+                <th className="text-right px-4 py-3 font-medium">Withdrawal period</th>
                 <th className="text-right px-4 py-3 font-medium">
                   <button className="flex items-center ml-auto" onClick={() => handleSort("aumMillions")}>
-                    AUM (M) <SortIcon k="aumMillions" />
+                    AUM <SortIcon k="aumMillions" />
                   </button>
                 </th>
+                <th className="text-left px-4 py-3 font-medium">Risk profile</th>
                 <th className="text-left px-4 py-3 font-medium">Source &amp; freshness</th>
                 <th className="px-4 py-3" />
               </tr>
             </thead>
             <tbody>
               {isLoading && (
-                <tr><td colSpan={8} className="text-center py-8 text-muted-foreground">Loading…</td></tr>
+                <tr><td colSpan={14} className="text-center py-8 text-muted-foreground">Loading…</td></tr>
               )}
               {!isLoading && sorted.length === 0 && (
-                <tr><td colSpan={8} className="text-center py-8 text-muted-foreground">No funds found.</td></tr>
+                <tr><td colSpan={14} className="text-center py-8 text-muted-foreground">No funds found.</td></tr>
               )}
               {sorted.map((fund, idx) => {
                 const isSelected = fund.id === selectedFundId;
@@ -680,12 +698,17 @@ export default function MmfFunds({ embedded = false }: { embedded?: boolean } = 
                 const focused = refFocus.isFocused(fund.fundName);
                 const catSource = resolveCatalogueSource(fund.source, fund.extendedFields, fund.asOfDate);
                 const fresh = freshnessTone(daysSince(typeof catSource.asOf === "string" ? catSource.asOf : fund.asOfDate));
-                // Stage 10a-2 — table redesign: Net yield computed the same way
-                // as the detail drawer (EAR net of WHT), grouped with EAR/Gross
-                // into one compact "Yield" cell so the table gains WHT/Net yield
-                // without adding two more full-width columns.
+                // Stage 10a-2 introduced Net yield computed the same way the
+                // detail drawer computes it (EAR net of WHT); Stage 10a-3 gives
+                // it (and WHT, Daily yield, Withdrawal period, Risk profile)
+                // their own explicit table columns instead of a grouped caption.
                 const whtRate = fund.whtRate ?? 15;
                 const netYield = fund.ear * (1 - whtRate / 100);
+                const rowExtendedFields = fund.extendedFields as Record<string, unknown> | null | undefined;
+                const dailyYield = rowExtendedFields?.dailyYield ? String(rowExtendedFields.dailyYield) : null;
+                const withdrawalPeriod = rowExtendedFields?.withdrawalNoticePeriod
+                  ? String(rowExtendedFields.withdrawalNoticePeriod)
+                  : null;
                 return (
                   <tr
                     key={fund.id}
@@ -723,27 +746,32 @@ export default function MmfFunds({ embedded = false }: { embedded?: boolean } = 
                     </td>
                     <td className="px-4 py-3 text-right">
                       <span className={`font-semibold ${avgEar != null && fund.ear >= avgEar ? "text-emerald-600 dark:text-emerald-400" : "text-muted-foreground"}`}>
-                        EAR {fund.ear.toFixed(2)}%
+                        {fund.ear.toFixed(2)}%
                       </span>
                       {vsAvg != null && (
                         <div className="text-[10px] text-muted-foreground">
                           {vsAvg >= 0 ? "+" : ""}{vsAvg.toFixed(1)}% vs avg
                         </div>
                       )}
-                      <div className="text-[10px] text-muted-foreground">
-                        Gross {fund.grossYield.toFixed(2)}% · Net {netYield.toFixed(2)}%
-                      </div>
                     </td>
+                    <td className="px-4 py-3 text-right text-muted-foreground">{dailyYield ?? "—"}</td>
+                    <td className="px-4 py-3 text-right text-muted-foreground">{fund.grossYield.toFixed(2)}%</td>
+                    <td className="px-4 py-3 text-right text-muted-foreground">{netYield.toFixed(2)}%</td>
+                    <td className="px-4 py-3 text-right text-muted-foreground">{whtRate.toFixed(2)}%</td>
+                    <td className="px-4 py-3 text-right text-muted-foreground">{fund.managementFee.toFixed(2)}%</td>
                     <td className="px-4 py-3 text-right text-muted-foreground">
-                      <div>Fee {fund.managementFee.toFixed(2)}%</div>
-                      <div className="text-[10px]">WHT {whtRate.toFixed(2)}%</div>
+                      KES {fund.minInvestment.toLocaleString("en-KE")}
                     </td>
+                    <td className="px-4 py-3 text-right text-muted-foreground">{withdrawalPeriod ?? "—"}</td>
                     <td className="px-4 py-3 text-right text-muted-foreground">
-                      {fund.minInvestment.toLocaleString("en-KE")}
+                      {fund.aumMillions != null ? `KES ${fund.aumMillions.toLocaleString("en-KE", { maximumFractionDigits: 0 })}M` : "—"}
                     </td>
-                    <td className="px-4 py-3 text-right text-muted-foreground">
-                      {fund.aumMillions != null ? fund.aumMillions.toLocaleString("en-KE", { maximumFractionDigits: 0 }) : "—"}
-                    </td>
+                    {/* Risk profile has no storage anywhere in the schema today
+                        (the mmf contract's own note: storageStatus
+                        "missingRequiresMigration") — shown honestly as
+                        unavailable, never fabricated, same convention the
+                        detail drawer already uses. */}
+                    <td className="px-4 py-3 text-left text-muted-foreground">Not available</td>
                     <td className="px-4 py-3">
                       <div className="flex flex-col gap-0.5">
                         {catSource.label ? (

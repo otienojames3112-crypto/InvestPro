@@ -150,8 +150,15 @@ describe("Slice 8h-1 · B — MmfFunds.tsx wiring", () => {
     );
   });
 
-  it("table structure outside the source cell — Stage 10a-2 intentionally grouped EAR/Gross/Net yield into one 'Yield' cell and Fee/WHT into one 'Cost & tax' cell (same underlying sort keys, fewer header columns) to fit the established quick-decision fields without an unreadably wide table", () => {
-    for (const header of ["Fund <SortIcon", "Yield (EAR/Gross/Net) <SortIcon", "Cost &amp; tax (Fee/WHT) <SortIcon", "Min (KES) <SortIcon", "AUM (M) <SortIcon"]) {
+  it("table structure outside the source cell — Stage 10a-3 replaced Stage 10a-2's grouped 'Yield'/'Cost & tax' captions with one explicit column per established MMF field (see server/mmfFieldParity3.test.ts for the full column-parity proof); same underlying sort keys throughout", () => {
+    for (const header of [
+      "Fund <SortIcon",
+      "EAR <SortIcon",
+      "Gross yield <SortIcon",
+      "Management fee <SortIcon",
+      "Minimum investment <SortIcon",
+      "AUM <SortIcon",
+    ]) {
       expect(mmfFunds).toContain(header);
     }
     expect(mmfFunds).toContain('<th className="text-left px-4 py-3 font-medium">Source &amp; freshness</th>');

@@ -239,11 +239,21 @@ describe("Stage 10a-2 · B — client/src/lib/format.ts owns the two new pure he
 });
 
 describe("Stage 10a-2 · B — MMF Reference Catalogue table redesign", () => {
-  it("9. the main table groups EAR/Gross/Net yield into one Yield cell and Fee/WHT into one Cost & tax cell", () => {
-    expect(mmfFundsPage).toContain("Yield (EAR/Gross/Net)");
-    expect(mmfFundsPage).toContain("Cost &amp; tax (Fee/WHT)");
-    expect(mmfFundsPage).toContain("Gross {fund.grossYield.toFixed(2)}% · Net {netYield.toFixed(2)}%");
-    expect(mmfFundsPage).toContain("WHT {whtRate.toFixed(2)}%");
+  // Stage 10a-3 superseded the grouped-cell design this block originally
+  // pinned (one "Yield" cell for EAR/Gross/Net, one "Cost & tax" cell for
+  // Fee/WHT) with an explicit column per established field — live
+  // verification found grouped captions still didn't satisfy "the
+  // established fields must be actual visible columns". See
+  // server/mmfFieldParity3.test.ts for the full column-parity proof; this
+  // block now asserts the CURRENT (10a-3) structure instead of the
+  // superseded 10a-2 one, so it stays a real regression guard rather than a
+  // stale pin.
+  it("9. the main table gives EAR, Gross yield, Net yield, WHT, Management fee each their own explicit column (no longer grouped into 'Yield'/'Cost & tax' captions)", () => {
+    expect(mmfFundsPage).not.toContain("Yield (EAR/Gross/Net)");
+    expect(mmfFundsPage).not.toContain("Cost &amp; tax (Fee/WHT)");
+    expect(mmfFundsPage).toContain("{fund.grossYield.toFixed(2)}%</td>");
+    expect(mmfFundsPage).toContain("{netYield.toFixed(2)}%</td>");
+    expect(mmfFundsPage).toContain("{whtRate.toFixed(2)}%</td>");
   });
 
   it("Net yield is computed the same way the detail drawer already computes it (EAR net of WHT)", () => {
@@ -251,8 +261,8 @@ describe("Stage 10a-2 · B — MMF Reference Catalogue table redesign", () => {
   });
 
   it("Minimum investment, AUM, and Source & freshness remain their own visible columns", () => {
-    expect(mmfFundsPage).toContain("Min (KES)");
-    expect(mmfFundsPage).toContain("AUM (M)");
+    expect(mmfFundsPage).toContain("Minimum investment");
+    expect(mmfFundsPage).toContain("AUM <SortIcon");
     expect(mmfFundsPage).toContain("Source &amp; freshness");
   });
 
@@ -271,8 +281,8 @@ describe("Stage 10a-2 · B — MMF Reference Catalogue table redesign", () => {
     const idx = mmfFundsPage.indexOf("const whtRate = fund.whtRate");
     const nextIdx = mmfFundsPage.indexOf("</tr>", idx);
     const block = mmfFundsPage.slice(idx, nextIdx);
-    expect(block).not.toContain("{fund.whtRate}"); // raw, unlabeled — must go through the "WHT " prefix
-    expect(block).toContain("WHT {whtRate.toFixed(2)}%");
+    expect(block).not.toContain("{fund.whtRate}"); // raw, unlabeled — must go through the computed whtRate cell
+    expect(block).toContain("{whtRate.toFixed(2)}%</td>");
   });
 });
 

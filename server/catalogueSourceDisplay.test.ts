@@ -150,8 +150,8 @@ describe("Slice 8h-1 · B — MmfFunds.tsx wiring", () => {
     );
   });
 
-  it("existing table structure outside the source cell is unchanged — same columns, same sort keys", () => {
-    for (const header of ["Fund <SortIcon", "EAR (%) <SortIcon", "Gross (%) <SortIcon", "Fee (%) <SortIcon", "Min (KES) <SortIcon", "AUM (M) <SortIcon"]) {
+  it("table structure outside the source cell — Stage 10a-2 intentionally grouped EAR/Gross/Net yield into one 'Yield' cell and Fee/WHT into one 'Cost & tax' cell (same underlying sort keys, fewer header columns) to fit the established quick-decision fields without an unreadably wide table", () => {
+    for (const header of ["Fund <SortIcon", "Yield (EAR/Gross/Net) <SortIcon", "Cost &amp; tax (Fee/WHT) <SortIcon", "Min (KES) <SortIcon", "AUM (M) <SortIcon"]) {
       expect(mmfFunds).toContain(header);
     }
     expect(mmfFunds).toContain('<th className="text-left px-4 py-3 font-medium">Source &amp; freshness</th>');

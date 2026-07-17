@@ -1508,12 +1508,40 @@ const ENVELOPE_ROUTED_CONTRACT_KEYS: Record<CatalogueKey, ReadonlySet<string>> =
   ]),
 };
 
-/** Read a field's value from a raw key/value bag by trying each of its
- *  `aliases` in order, stopping at the first present, non-empty, non-sentinel
- *  value. Never invents a value; returns null when nothing matches. */
+/** Read a field's value from a raw key/value bag, trying the field's own
+ *  canonical `key` FIRST (but only when the field actually declares at least
+ *  one alias — see below), then each of its `aliases` in order, stopping at
+ *  the first present, non-empty, non-sentinel value. Never invents a value;
+ *  returns null when nothing matches.
+ *
+ *  Stage 10a-2 — checking `field.key` was missing here (this function only
+ *  ever tried `aliases`), which was silently correct for every field whose
+ *  own `aliases` array happens to list its canonical key too (the majority —
+ *  e.g. `ear: ["ear", "effectiveAnnualRate"]`), but silently WRONG for the
+ *  two MMF fields whose aliases don't (`wht: ["whtRate"]`,
+ *  `withdrawalPeriod: ["withdrawalNoticePeriod"]`): a value saved under the
+ *  canonical key itself (exactly what EditCatalogueFieldsDialog and
+ *  updatePendingFields both write) could never be found again by
+ *  `projectFindingToContractDisplayRows`/`projectFindingToContractFigures`,
+ *  even though the SAME value was visible elsewhere (e.g. ResearchDesk.tsx's
+ *  `fmtFigures`, which reads the raw figures bag directly with no alias
+ *  resolution). This brings `readAliasValue` in line with the established,
+ *  already-correct key-first convention `readContractFieldValue`
+ *  (client/src/lib/format.ts) already uses.
+ *
+ *  The `field.aliases.length > 0` guard matters: SACCO's `productType` field
+ *  (storageStatus "extendedFields", so it DOES reach this function, unlike
+ *  most other `aliases: []` fields which are "missingRequiresMigration"/
+ *  "computed" and short-circuit before ever calling it) uses a deliberately
+ *  EMPTY aliases array as an explicit "no reliable source exists today, never
+ *  resolve this" marker (its own note: "no single explicit product-type key
+ *  exists"). Checking its canonical key too would silently start surfacing
+ *  whatever raw noise happens to land under a coincidental `productType`
+ *  key — the opposite of what that empty array was designed to guarantee. */
 function readAliasValue(field: CatalogueFieldContractEntry, raw: Record<string, unknown>): string | null {
-  for (const alias of field.aliases) {
-    const v = raw[alias];
+  const candidates = field.aliases.length > 0 ? [field.key, ...field.aliases] : field.aliases;
+  for (const candidate of candidates) {
+    const v = raw[candidate];
     if (v === undefined || v === null) continue;
     const s = String(v).trim();
     if (s === "" || s === "missing_from_source") continue;

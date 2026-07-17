@@ -180,6 +180,28 @@ export function formatLocalYmd(input: number | string | Date | null | undefined)
 }
 
 /**
+ * Stage 10a-2 — format an epoch-ms timestamp as a stable UTC `YYYY-MM-DD`.
+ *
+ * `formatLocalYmd` (above) is deliberately LOCAL-based because it's the right
+ * tool for a value constructed via LOCAL-time construction (e.g. a maturity
+ * date built from local `year/month/day` parts). The Research Desk pipeline's
+ * `sourceAsOf`/`asOf` values are a DIFFERENT construction: they come from
+ * `Date.parse("YYYY-MM-DD")` (an HTML `<input type="date">`'s value, or a
+ * source's own printed date string) — and a date-only ISO string parses to
+ * UTC MIDNIGHT per the ECMAScript spec, not local midnight. Formatting a
+ * UTC-anchored value with LOCAL getters drifts a day backward for any viewer
+ * behind UTC — the exact opposite bug `formatLocalYmd` exists to prevent for
+ * its own (locally-anchored) inputs. Use this one for `sourceAsOf`/`asOf`
+ * specifically; use `formatLocalYmd` for locally-constructed date-only values.
+ */
+export function formatUtcYmd(input: number | string | Date | null | undefined): string {
+  if (input == null) return "—";
+  const d = input instanceof Date ? input : new Date(input);
+  if (isNaN(d.getTime())) return "—";
+  return d.toISOString().slice(0, 10);
+}
+
+/**
  * Stage 6b — a compact "Source: X · as of Y" provenance line for a Holdings row,
  * shared across MMF/Government/Bank so wording and date formatting can never drift
  * between tabs (mirrors the pattern OtherAssets.tsx originated). Never returns a
@@ -322,4 +344,47 @@ export function readContractFieldValue(
     return s;
   }
   return null;
+}
+
+/**
+ * Stage 10a-2 — a plain source string that's actually THIS app's own URL/path
+ * (e.g. a manager pasted the browser's current address bar as a stand-in
+ * "source" while testing a pending update) is never a real source. Takes
+ * `origin` explicitly (rather than reading `window.location.origin`
+ * internally) so it's directly unit-testable without a DOM; callers pass
+ * `window.location.origin` at the real render/seed site. The path-only check
+ * (`/research`, `/explore`) still applies even when no origin is known, since
+ * a bare app-relative path is never a real external citation either way.
+ */
+export function looksLikeOwnAppUrl(value: string | null | undefined, origin?: string): boolean {
+  if (!value) return false;
+  const v = value.trim();
+  if (v === "") return false;
+  if (origin && v.startsWith(origin)) return true;
+  return /^\/(research|explore)(\?|\/|$)/.test(v);
+}
+
+/**
+ * Stage 10a-2 — a contract row's raw `value` string (from the shared
+ * catalogue-contract module's display-row projection) isn't always
+ * display-ready: `sourceAsOf` is a raw epoch-ms string (that module
+ * deliberately has no concept of "this field is a date", it only reads
+ * opaque strings), and `sourceLink` can end up holding this app's own URL
+ * (see `looksLikeOwnAppUrl`). Neither is something the generic,
+ * catalogue-agnostic shared module should special-case — resolved here so
+ * every render site (review queue card, approval modal, edit dialog) goes
+ * through the same fix and can never show a raw epoch number or a
+ * self-referential URL.
+ */
+export function displayContractRowValue(row: { key: string; value: string | null }): string | null {
+  if (row.value == null) return null;
+  if (row.key === "sourceAsOf") {
+    const ms = Number(row.value);
+    return Number.isFinite(ms) && ms > 0 ? formatUtcYmd(ms) : row.value;
+  }
+  if (row.key === "sourceLink") {
+    const origin = typeof window !== "undefined" ? window.location.origin : undefined;
+    if (looksLikeOwnAppUrl(row.value, origin)) return "Pasted source text";
+  }
+  return row.value;
 }

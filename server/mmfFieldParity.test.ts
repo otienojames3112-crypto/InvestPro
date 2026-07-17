@@ -270,7 +270,7 @@ describe("Stage 10a · B — ResearchDesk.tsx: review queue shows the full estab
 
   it("missing values render as a clean 'Missing' label, never a raw camelCase key", () => {
     const idx = researchDeskPage.indexOf("Catalogue fields");
-    const block = researchDeskPage.slice(idx, idx + 900);
+    const block = researchDeskPage.slice(idx, idx + 1200);
     expect(block).toContain("Missing");
     expect(block).toContain("row.label");
     expect(block).not.toContain("{row.key}:");
@@ -378,7 +378,18 @@ describe("Stage 10a · B — MmfFunds.tsx: detail drawer surfaces Net yield/WHT/
   });
 });
 
-describe("Stage 10a · B — as-of date rendering uses formatLocalYmd consistently (no timezone off-by-one)", () => {
+describe("Stage 10a · B — as-of date rendering uses a shared helper consistently (no more 3 different formats)", () => {
+  // Stage 10a-2 correction: this originally read `formatLocalYmd` (local
+  // getters). A Stage 10a-2 test proved that's the WRONG tool for THIS
+  // pipeline's asOf/sourceAsOf values specifically — they're constructed via
+  // `Date.parse("YYYY-MM-DD")` (an <input type="date"> value, or a source's
+  // printed date), which parses to UTC midnight per spec, not local midnight.
+  // Local getters on a UTC-anchored value drift a day backward for any viewer
+  // behind UTC. Stage 10a-2 switched these call sites to `formatUtcYmd`
+  // (client/src/lib/format.ts) instead — see mmfFieldParity2.test.ts for the
+  // full root-cause writeup and the behavioural proof this really doesn't
+  // drift. `formatLocalYmd` itself is untouched and remains correct for
+  // locally-constructed date-only values elsewhere in the app.
   it("8. AskAI.tsx no longer uses toLocaleDateString()/toISOString().slice for finding.sourceAsOf display", () => {
     // The only remaining toISOString().slice(0, 10) usage in the file is the
     // unrelated default-date-input seed (new Date().toISOString()...), not a
@@ -386,32 +397,25 @@ describe("Stage 10a · B — as-of date rendering uses formatLocalYmd consistent
     expect(askAiPage).not.toContain("new Date(finding.sourceAsOf).toLocaleDateString()");
     expect(askAiPage).not.toContain("new Date(finding.sourceAsOf).toISOString().slice(0, 10)");
     expect(askAiPage).not.toContain("new Date(asOf).toLocaleDateString()");
-    expect(askAiPage).toContain("formatLocalYmd(finding.sourceAsOf)");
-    expect(askAiPage).toContain("formatLocalYmd(asOf)");
+    expect(askAiPage).toContain("formatUtcYmd(finding.sourceAsOf)");
+    expect(askAiPage).toContain("formatUtcYmd(asOf)");
   });
 
   it("ResearchDesk.tsx's pending-card as-of display uses the same helper", () => {
     expect(researchDeskPage).not.toContain("new Date(u.asOf).toLocaleDateString()");
-    expect(researchDeskPage).toContain("formatLocalYmd(u.asOf)");
+    expect(researchDeskPage).toContain("formatUtcYmd(u.asOf)");
   });
 
-  it("9. formatLocalYmd never applies a UTC-vs-local shift — 17 July 2026 renders as 17 July, not 16", () => {
-    // Re-import via a dynamic require avoids a second static top-level import
-    // just for this one cross-check; formatLocalYmd itself is already proven
-    // exhaustively by client/src/lib/format.test.ts (R78) — this only proves
-    // ResearchDesk/AskAI actually call it against a real Stage 9f-1-shaped
-    // epoch-ms value, not that the helper itself is correct.
+  it("9. formatUtcYmd never applies a UTC-vs-local shift — 17 July 2026 renders as 17 July, not 16", () => {
     const formatPath = join(ROOT, "client/src/lib/format.ts");
     const formatSrc = readFileSync(formatPath, "utf8");
-    expect(formatSrc).toContain("export function formatLocalYmd(");
-    // formatLocalYmd uses LOCAL getters (getFullYear/getMonth/getDate), never
-    // toISOString, which is exactly why it doesn't drift for either side of UTC.
-    const idx = formatSrc.indexOf("export function formatLocalYmd(");
-    const block = formatSrc.slice(idx, idx + 500);
-    expect(block).toContain("d.getFullYear()");
-    expect(block).toContain("d.getMonth()");
-    expect(block).toContain("d.getDate()");
-    expect(block).not.toContain("toISOString");
+    expect(formatSrc).toContain("export function formatUtcYmd(");
+    // formatUtcYmd formats via toISOString — the SAME clock the value was
+    // parsed against (Date.parse of a date-only string is UTC per spec), so
+    // construction and display agree regardless of the viewer's timezone.
+    const idx = formatSrc.indexOf("export function formatUtcYmd(");
+    const block = formatSrc.slice(idx, idx + 300);
+    expect(block).toContain("d.toISOString().slice(0, 10)");
   });
 });
 

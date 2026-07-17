@@ -656,6 +656,10 @@ describe("Catalogue field contract · foundation-only guardrails (no behavior ch
       // pattern every prior slice established.
       join(root, "client", "src", "pages", "MmfFunds.tsx"),
       join(root, "server", "mmfFieldParity.test.ts"),
+      // Stage 10a-2 — fixes the readAliasValue key-first bug and adds
+      // looksLikeOwnAppUrl/displayContractRowValue; test-only import of the
+      // contract module for direct behavioural proof.
+      join(root, "server", "mmfFieldParity2.test.ts"),
     ]);
     const unexpectedOffenders = offenders.filter((f) => !allowed.has(f));
     expect(unexpectedOffenders).toEqual([]);

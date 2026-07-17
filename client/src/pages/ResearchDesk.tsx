@@ -56,7 +56,8 @@ import {
 } from "@shared/catalogueFieldContracts";
 import { useLocation } from "wouter";
 import { formatRelativeTime } from "@/lib/format";
-import { formatLocalYmd } from "@/lib/format";
+import { formatUtcYmd } from "@/lib/format";
+import { looksLikeOwnAppUrl, displayContractRowValue } from "@/lib/format";
 import AiIntake from "./AiIntake";
 import AiReview from "./AiReview";
 import SourceConflicts from "./SourceConflicts";
@@ -429,16 +430,19 @@ function ApproveDialog({
                   )}
                 </div>
                 <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
-                  {contractRows.map((row) => (
-                    <div key={row.key} className="text-xs">
-                      <span className="text-muted-foreground">{row.label}: </span>
-                      {row.value != null ? (
-                        <span className="font-medium">{row.value}</span>
-                      ) : (
-                        <span className="italic text-amber-600 dark:text-amber-400">Missing</span>
-                      )}
-                    </div>
-                  ))}
+                  {contractRows.map((row) => {
+                    const displayValue = displayContractRowValue(row);
+                    return (
+                      <div key={row.key} className="text-xs">
+                        <span className="text-muted-foreground">{row.label}: </span>
+                        {displayValue != null ? (
+                          <span className="font-medium">{displayValue}</span>
+                        ) : (
+                          <span className="italic text-amber-600 dark:text-amber-400">Missing</span>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             )}
@@ -518,7 +522,19 @@ function EditCatalogueFieldsDialog({ updateId, onClose }: { updateId: number | n
     if (!update) return;
     const initial: Record<string, string> = {};
     for (const row of editableRows) {
-      initial[row.key] = row.key === "sourceAsOf" ? (update.asOf ? formatLocalYmd(update.asOf) : "") : (row.value ?? "");
+      if (row.key === "sourceAsOf") {
+        initial[row.key] = update.asOf ? formatUtcYmd(update.asOf) : "";
+      } else if (row.key === "sourceLink") {
+        // Stage 10a-2 — never prefill "Source link" with this app's own URL
+        // (e.g. a manager pasted the browser's current address bar as a
+        // stand-in while testing); fall back to the same "Pasted source
+        // text" label the server already uses for an unsourced pasted-text
+        // finding (server/aiResearchService.ts's fallbackLabel).
+        const origin = typeof window !== "undefined" ? window.location.origin : undefined;
+        initial[row.key] = looksLikeOwnAppUrl(row.value, origin) ? "Pasted source text" : (row.value ?? "");
+      } else {
+        initial[row.key] = row.value ?? "";
+      }
     }
     setValues(initial);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -820,16 +836,19 @@ function PendingQueue() {
                     <ListChecks className="w-3.5 h-3.5" /> Catalogue fields
                   </div>
                   <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-1.5">
-                    {contractRows.map((row) => (
+                    {contractRows.map((row) => {
+                      const displayValue = displayContractRowValue(row);
+                      return (
                       <div key={row.key} className="text-xs">
                         <span className="text-muted-foreground">{row.label}: </span>
-                        {row.value != null ? (
-                          <span className="font-medium">{row.value}</span>
+                        {displayValue != null ? (
+                          <span className="font-medium">{displayValue}</span>
                         ) : (
                           <span className="italic text-amber-600 dark:text-amber-400">Missing</span>
                         )}
                       </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               )}
@@ -849,7 +868,7 @@ function PendingQueue() {
                     open <ExternalLink className="w-3 h-3" />
                   </a>
                 )}
-                {u.asOf && <span>· as of {formatLocalYmd(u.asOf)}</span>}
+                {u.asOf && <span>· as of {formatUtcYmd(u.asOf)}</span>}
                 {u.createdAt && <span>· proposed {formatRelativeTime(new Date(u.createdAt).getTime())}</span>}
               </div>
 

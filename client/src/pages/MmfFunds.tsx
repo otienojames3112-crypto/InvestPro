@@ -644,17 +644,12 @@ export default function MmfFunds({ embedded = false }: { embedded?: boolean } = 
                 </th>
                 <th className="text-right px-4 py-3 font-medium">
                   <button className="flex items-center ml-auto" onClick={() => handleSort("ear")}>
-                    EAR (%) <SortIcon k="ear" />
-                  </button>
-                </th>
-                <th className="text-right px-4 py-3 font-medium">
-                  <button className="flex items-center ml-auto" onClick={() => handleSort("grossYield")}>
-                    Gross (%) <SortIcon k="grossYield" />
+                    Yield (EAR/Gross/Net) <SortIcon k="ear" />
                   </button>
                 </th>
                 <th className="text-right px-4 py-3 font-medium">
                   <button className="flex items-center ml-auto" onClick={() => handleSort("managementFee")}>
-                    Fee (%) <SortIcon k="managementFee" />
+                    Cost &amp; tax (Fee/WHT) <SortIcon k="managementFee" />
                   </button>
                 </th>
                 <th className="text-right px-4 py-3 font-medium">
@@ -673,10 +668,10 @@ export default function MmfFunds({ embedded = false }: { embedded?: boolean } = 
             </thead>
             <tbody>
               {isLoading && (
-                <tr><td colSpan={9} className="text-center py-8 text-muted-foreground">Loading…</td></tr>
+                <tr><td colSpan={8} className="text-center py-8 text-muted-foreground">Loading…</td></tr>
               )}
               {!isLoading && sorted.length === 0 && (
-                <tr><td colSpan={9} className="text-center py-8 text-muted-foreground">No funds found.</td></tr>
+                <tr><td colSpan={8} className="text-center py-8 text-muted-foreground">No funds found.</td></tr>
               )}
               {sorted.map((fund, idx) => {
                 const isSelected = fund.id === selectedFundId;
@@ -685,6 +680,12 @@ export default function MmfFunds({ embedded = false }: { embedded?: boolean } = 
                 const focused = refFocus.isFocused(fund.fundName);
                 const catSource = resolveCatalogueSource(fund.source, fund.extendedFields, fund.asOfDate);
                 const fresh = freshnessTone(daysSince(typeof catSource.asOf === "string" ? catSource.asOf : fund.asOfDate));
+                // Stage 10a-2 — table redesign: Net yield computed the same way
+                // as the detail drawer (EAR net of WHT), grouped with EAR/Gross
+                // into one compact "Yield" cell so the table gains WHT/Net yield
+                // without adding two more full-width columns.
+                const whtRate = fund.whtRate ?? 15;
+                const netYield = fund.ear * (1 - whtRate / 100);
                 return (
                   <tr
                     key={fund.id}
@@ -722,16 +723,21 @@ export default function MmfFunds({ embedded = false }: { embedded?: boolean } = 
                     </td>
                     <td className="px-4 py-3 text-right">
                       <span className={`font-semibold ${avgEar != null && fund.ear >= avgEar ? "text-emerald-600 dark:text-emerald-400" : "text-muted-foreground"}`}>
-                        {fund.ear.toFixed(2)}%
+                        EAR {fund.ear.toFixed(2)}%
                       </span>
                       {vsAvg != null && (
                         <div className="text-[10px] text-muted-foreground">
                           {vsAvg >= 0 ? "+" : ""}{vsAvg.toFixed(1)}% vs avg
                         </div>
                       )}
+                      <div className="text-[10px] text-muted-foreground">
+                        Gross {fund.grossYield.toFixed(2)}% · Net {netYield.toFixed(2)}%
+                      </div>
                     </td>
-                    <td className="px-4 py-3 text-right text-muted-foreground">{fund.grossYield.toFixed(2)}%</td>
-                    <td className="px-4 py-3 text-right text-muted-foreground">{fund.managementFee.toFixed(2)}%</td>
+                    <td className="px-4 py-3 text-right text-muted-foreground">
+                      <div>Fee {fund.managementFee.toFixed(2)}%</div>
+                      <div className="text-[10px]">WHT {whtRate.toFixed(2)}%</div>
+                    </td>
                     <td className="px-4 py-3 text-right text-muted-foreground">
                       {fund.minInvestment.toLocaleString("en-KE")}
                     </td>

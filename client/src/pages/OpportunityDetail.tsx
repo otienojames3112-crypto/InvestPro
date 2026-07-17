@@ -32,6 +32,7 @@ import {
 } from "@shared/provenance";
 import { StatusBadge } from "@/components/StatusBadge";
 import { rateStaleness } from "@/lib/rateStaleness";
+import { resolveCatalogueSource, firstFieldProvenanceSourceUrl } from "@/lib/format";
 import { usePortfolio } from "@/contexts/PortfolioContext";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { ModelDrawer } from "@/components/ModelDrawer";
@@ -86,6 +87,7 @@ function Fact({
   provenance,
   fallbackSource,
   fallbackAsOf,
+  fallbackSourceUrl,
   caution,
   canVerify,
   onVerified,
@@ -97,6 +99,15 @@ function Fact({
   provenance?: FieldProvenance;
   fallbackSource?: string | null;
   fallbackAsOf?: Date | string | null;
+  /**
+   * Slice 8h-2 — a row-level source URL (resolved once via resolveCatalogueSource,
+   * see OpportunityDetail below) used ONLY when this specific figure's own
+   * per-figure provenance has no sourceUrl of its own — e.g. Liquidity (no
+   * provenance entry at all) or any figure whose provenance predates a captured
+   * link. The per-figure provenance URL, when present, always wins — it is more
+   * specific than the row-level envelope.
+   */
+  fallbackSourceUrl?: string | null;
   caution?: string;
   canVerify: boolean;
   onVerified?: () => void;
@@ -116,7 +127,7 @@ function Fact({
   });
 
   const source = provenance?.source ?? fallbackSource ?? null;
-  const sourceUrl = provenance?.sourceUrl ?? null;
+  const sourceUrl = provenance?.sourceUrl ?? fallbackSourceUrl ?? null;
   const asOfMs = provenance?.asOf ?? null;
   const asOfForStale: Date | string | null =
     asOfMs != null ? new Date(asOfMs) : (fallbackAsOf ?? null);
@@ -326,6 +337,9 @@ export default function OpportunityDetail() {
   const fp = (r.fieldProvenance ?? {}) as FieldProvenanceMap;
   const total = figureCount(fp);
   const checkedCount = humanCheckedCount(fp);
+  // Slice 8h-2 — row-level source resolution, used as each Fact's fallback URL
+  // when that specific figure's own provenance has none of its own.
+  const catSource = resolveCatalogueSource(r.dataSource, r.extendedFields, r.dataAsOf, firstFieldProvenanceSourceUrl(fp));
 
   const onVerified = () => {
     void utils.opportunities.byRef.invalidate({ ref });
@@ -428,6 +442,7 @@ export default function OpportunityDetail() {
                 provenance={yieldIsDistribution ? fp.distribution : fp.yield}
                 fallbackSource={r.dataSource}
                 fallbackAsOf={r.dataAsOf}
+                fallbackSourceUrl={catSource.url}
                 canVerify={isMaintainer}
                 onVerified={onVerified}
               />
@@ -441,6 +456,7 @@ export default function OpportunityDetail() {
                 provenance={fp.price}
                 fallbackSource={r.dataSource}
                 fallbackAsOf={r.dataAsOf}
+                fallbackSourceUrl={catSource.url}
                 canVerify={isMaintainer}
                 onVerified={onVerified}
               />
@@ -454,6 +470,7 @@ export default function OpportunityDetail() {
                 provenance={fp.trailingReturn}
                 fallbackSource={r.dataSource}
                 fallbackAsOf={r.dataAsOf}
+                fallbackSourceUrl={catSource.url}
                 caution="Past performance — describes what already happened and does not predict future results."
                 canVerify={isMaintainer}
                 onVerified={onVerified}
@@ -468,6 +485,7 @@ export default function OpportunityDetail() {
                 provenance={fp.expense}
                 fallbackSource={r.dataSource}
                 fallbackAsOf={r.dataAsOf}
+                fallbackSourceUrl={catSource.url}
                 canVerify={isMaintainer}
                 onVerified={onVerified}
               />
@@ -481,6 +499,7 @@ export default function OpportunityDetail() {
                 provenance={fp.tenor}
                 fallbackSource={r.dataSource}
                 fallbackAsOf={r.dataAsOf}
+                fallbackSourceUrl={catSource.url}
                 canVerify={isMaintainer}
                 onVerified={onVerified}
               />
@@ -494,6 +513,7 @@ export default function OpportunityDetail() {
                 provenance={fp.maturity}
                 fallbackSource={r.dataSource}
                 fallbackAsOf={r.dataAsOf}
+                fallbackSourceUrl={catSource.url}
                 canVerify={isMaintainer}
                 onVerified={onVerified}
               />
@@ -503,6 +523,9 @@ export default function OpportunityDetail() {
                 opportunityRef={r.ref}
                 label="Liquidity"
                 value={r.liquidity.replace(/_/g, " ")}
+                fallbackSource={r.dataSource}
+                fallbackAsOf={r.dataAsOf}
+                fallbackSourceUrl={catSource.url}
                 canVerify={false}
               />
             )}
@@ -524,7 +547,19 @@ export default function OpportunityDetail() {
             <CardContent>
               <div className="grid grid-cols-2 gap-x-6 gap-y-2">
                 {Object.entries(r.extendedFields as unknown as Record<string, unknown>)
-                  .filter(([k]) => !k.startsWith("_") && k !== "catalogueType" && k !== "instrumentName" && k !== "sourceClass")
+                  .filter(
+                    ([k]) =>
+                      !k.startsWith("_") &&
+                      k !== "catalogueType" &&
+                      k !== "instrumentName" &&
+                      k !== "sourceClass" &&
+                      // Slice 8h-2 — already folded into each figure's source line
+                      // above (via catSource/fallbackSourceUrl); showing them again
+                      // here would just duplicate them as raw, unlinked text.
+                      k !== "sourceLabel" &&
+                      k !== "sourceUrl" &&
+                      k !== "sourceAsOfDate",
+                  )
                   .map(([k, v]) => (
                     <div key={k} className="text-sm">
                       <span className="text-muted-foreground text-xs">{k}: </span>

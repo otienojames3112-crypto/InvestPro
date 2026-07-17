@@ -39,6 +39,7 @@ import {
   PlusCircle,
   Globe,
   ShieldCheck,
+  ExternalLink,
 } from "lucide-react";
 import { profileFor, type AssetClass } from "@shared/assetModel";
 import { useAuth } from "@/_core/hooks/useAuth";
@@ -50,6 +51,7 @@ import { usePortfolio } from "@/contexts/PortfolioContext";
 import { ArchivedRowsPanel, CatalogueScopeFilter, type CatalogueRowScope } from "@/components/ArchivedRowsPanel";
 import { humanCheckedCount, figureCount, type FieldProvenanceMap } from "@shared/provenance";
 import { rateStaleness } from "@/lib/rateStaleness";
+import { resolveCatalogueSource, firstFieldProvenanceSourceUrl } from "@/lib/format";
 import { dashboardHref } from "@shared/navigation";
 import type { inferRouterOutputs } from "@trpc/server";
 import type { AppRouter } from "../../../server/routers";
@@ -422,10 +424,11 @@ export default function MarketAssetsReference({ embedded = false }: { embedded?:
 
 function MarketRow({ r, onTrack, isManager, staleByRef, refFocus }: { r: Opportunity; onTrack: () => void; isManager: boolean; staleByRef: Map<string, boolean>; refFocus: RefFocus }) {
   const profile = profileFor(r.assetClass as AssetClass);
-  const stale = rateStaleness(r.dataAsOf);
+  const fp = (r.fieldProvenance ?? {}) as FieldProvenanceMap;
+  const catSource = resolveCatalogueSource(r.dataSource, r.extendedFields, r.dataAsOf, firstFieldProvenanceSourceUrl(fp));
+  const stale = rateStaleness(catSource.asOf);
   const markedStale = staleByRef.get(r.ref);
   const trailing = num(r.trailingReturnPct);
-  const fp = (r.fieldProvenance ?? {}) as FieldProvenanceMap;
   const total = figureCount(fp);
   const checked = humanCheckedCount(fp);
   return (
@@ -473,7 +476,22 @@ function MarketRow({ r, onTrack, isManager, staleByRef, refFocus }: { r: Opportu
       </TableCell>
       <TableCell className="text-right tabular-nums text-sm">{fmtPct(r.expenseRatioPct)}</TableCell>
       <TableCell>
-        <div className="text-xs text-muted-foreground max-w-[200px]">{r.dataSource ?? "Source not recorded"}</div>
+        {catSource.label ? (
+          catSource.url ? (
+            <a
+              href={catSource.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-xs text-primary underline underline-offset-2 inline-flex items-center gap-1 max-w-[200px] truncate"
+            >
+              {catSource.label} <ExternalLink className="w-2.5 h-2.5 shrink-0" />
+            </a>
+          ) : (
+            <div className="text-xs text-muted-foreground max-w-[200px] truncate">{catSource.label}</div>
+          )
+        ) : (
+          <div className="text-xs text-amber-600 dark:text-amber-400">Source not recorded</div>
+        )}
         <div className="flex items-center gap-1 mt-0.5">
           <Clock className="w-3 h-3 text-muted-foreground" />
           <span className={`text-[10px] font-medium ${stale.isVeryStale ? "text-red-500" : stale.isStale ? "text-amber-500" : "text-muted-foreground"}`}>

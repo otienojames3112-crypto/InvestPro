@@ -242,11 +242,19 @@ function shortenSourceLabel(raw: string): string {
  * populated, authoritative for label/as-of) and layers in the Slice-8f-stamped
  * `extendedFields` provenance for whatever the top-level columns can't carry
  * (mmf_funds/bank_instruments have no sourceUrl column at all).
+ *
+ * Slice 8h-2 — extended with an optional 4th argument, `fieldProvenanceUrl`, for
+ * opportunity-backed rows (CBK/equity/REIT/offshore fund/SACCO): a caller-resolved
+ * URL from that row's per-figure `fieldProvenance` map (see
+ * `firstFieldProvenanceSourceUrl` below), tried after `extendedFields.sourceUrl`
+ * but before the "top-level source is itself a URL" fallback. Omitted entirely,
+ * this behaves exactly as it did for MMF/Bank in 8h-1 — fully backward compatible.
  */
 export function resolveCatalogueSource(
   source: string | null | undefined,
   extendedFields: CatalogueSourceExtendedFields | null | undefined,
   asOfDate: string | Date | null | undefined,
+  fieldProvenanceUrl?: string | null,
 ): CatalogueSourceDisplay {
   const rawLabel =
     (source && source.trim()) || (extendedFields?.sourceLabel && extendedFields.sourceLabel.trim()) || "";
@@ -254,11 +262,36 @@ export function resolveCatalogueSource(
 
   const url = isHttpUrl(extendedFields?.sourceUrl)
     ? extendedFields!.sourceUrl!.trim()
-    : isHttpUrl(source)
-      ? source!.trim()
-      : null;
+    : isHttpUrl(fieldProvenanceUrl)
+      ? fieldProvenanceUrl!.trim()
+      : isHttpUrl(source)
+        ? source!.trim()
+        : null;
 
   const asOf = asOfDate ?? extendedFields?.sourceAsOfDate ?? null;
 
   return { label, url, asOf };
+}
+
+/**
+ * Slice 8h-2 — scans an opportunity row's per-figure `fieldProvenance` map (Part
+ * 7.1) for the first entry carrying a real http(s) `sourceUrl`, for use as
+ * `resolveCatalogueSource`'s `fieldProvenanceUrl` fallback. This is ONLY a
+ * fallback for when `extendedFields.sourceUrl` (Slice 8f) isn't present — most
+ * opportunity rows already carry both, stamped from the same envelope value at
+ * promotion time, so this mainly helps rows that predate Slice 8f but were
+ * already governed through the older Part 7.1 provenance system. Scans in a
+ * fixed, deterministic key order so the resolved URL never depends on object
+ * iteration order.
+ */
+export function firstFieldProvenanceSourceUrl(
+  fieldProvenance: Partial<Record<string, { sourceUrl?: string | null } | undefined>> | null | undefined,
+): string | null {
+  if (!fieldProvenance) return null;
+  const KEY_ORDER = ["yield", "price", "distribution", "trailingReturn", "expense", "tenor", "maturity", "coupon", "fx"];
+  for (const key of KEY_ORDER) {
+    const url = fieldProvenance[key]?.sourceUrl;
+    if (isHttpUrl(url)) return url.trim();
+  }
+  return null;
 }

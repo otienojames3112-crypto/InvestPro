@@ -644,6 +644,11 @@ describe("Catalogue field contract · foundation-only guardrails (no behavior ch
       join(root, "client", "src", "pages", "MarketAssetsReference.tsx"),
       join(root, "server", "cbkSaccoCatalogueDisplay.test.ts"),
       join(root, "client", "src", "pages", "AskAI.tsx"),
+      // Slice 9d — Equity ticker/REIT distribution-yield+NAV/offshore
+      // fx-risk-note compact display in MarketRow; display-only, reuses the
+      // same getCatalogueFieldContract/readContractFieldValue pattern 9c
+      // established for SaccoRow.
+      join(root, "server", "marketAssetCompactDisplay.test.ts"),
     ]);
     const unexpectedOffenders = offenders.filter((f) => !allowed.has(f));
     expect(unexpectedOffenders).toEqual([]);

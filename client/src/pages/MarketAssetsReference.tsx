@@ -486,6 +486,23 @@ function MarketRow({ r, onTrack, isManager, staleByRef, refFocus }: { r: Opportu
   const trailing = num(r.trailingReturnPct);
   const total = figureCount(fp);
   const checked = humanCheckedCount(fp);
+
+  // Stage 9d — Equity/REIT/offshore-fund quick-decision fields that were
+  // previously only reachable via the raw extendedFields dump on the detail
+  // page. Reuses the same contract lookup + readContractFieldValue pattern
+  // Stage 9c's SaccoRow already established.
+  const subtype = r.assetClass === "equity" || r.assetClass === "reit" || r.assetClass === "offshore_fund" ? r.assetClass : null;
+  const subtypeContract = subtype ? getCatalogueFieldContract("market_asset", subtype) : null;
+  const subtypeField = (key: string) => subtypeContract?.fields.find((f) => f.key === key);
+  const readSubtypeField = (key: string) => {
+    const field = subtypeField(key);
+    return field ? readContractFieldValue(r.extendedFields as Record<string, unknown> | null, field) : null;
+  };
+  const ticker = subtype === "equity" ? readSubtypeField("ticker") : null;
+  const distributionYieldLabel = subtype === "reit" ? (subtypeField("distributionYield")?.label ?? null) : null;
+  const nav = subtype === "reit" ? readSubtypeField("nav") : null;
+  const fxRiskNote = subtype === "offshore_fund" ? readSubtypeField("fxRiskNote") : null;
+
   return (
     <TableRow
       ref={refFocus.registerRow(r.ref, r.name)}
@@ -496,21 +513,42 @@ function MarketRow({ r, onTrack, isManager, staleByRef, refFocus }: { r: Opportu
         <Link href={`/explore/${encodeURIComponent(r.ref)}`} className="font-medium text-foreground hover:text-primary hover:underline">
           {r.name}
         </Link>
+        {ticker && (
+          <Badge variant="outline" className="ml-1.5 text-[10px] px-1.5 py-0 font-mono align-middle">{ticker}</Badge>
+        )}
         <div className="text-xs text-muted-foreground mt-0.5">{r.issuer ?? r.market ?? r.ref}</div>
         {markedStale && (
           <Badge variant="outline" className="mt-1 mr-1 text-[10px] px-1.5 py-0 border-amber-300 text-amber-600">Stale</Badge>
         )}
         {profile.fxExposed && (
-          <Badge variant="outline" className="mt-1 text-[10px] px-1.5 py-0 gap-1 border-blue-500/30 text-blue-600 dark:text-blue-400">
-            <Globe className="w-2.5 h-2.5" /> FX risk
-          </Badge>
+          fxRiskNote ? (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Badge variant="outline" className="mt-1 text-[10px] px-1.5 py-0 gap-1 border-blue-500/30 text-blue-600 dark:text-blue-400 cursor-help">
+                  <Globe className="w-2.5 h-2.5" /> FX risk
+                </Badge>
+              </TooltipTrigger>
+              <TooltipContent side="left" className="max-w-xs text-xs">{fxRiskNote}</TooltipContent>
+            </Tooltip>
+          ) : (
+            <Badge variant="outline" className="mt-1 text-[10px] px-1.5 py-0 gap-1 border-blue-500/30 text-blue-600 dark:text-blue-400">
+              <Globe className="w-2.5 h-2.5" /> FX risk
+            </Badge>
+          )
         )}
       </TableCell>
       <TableCell className="text-sm text-muted-foreground whitespace-nowrap">{profile.label}</TableCell>
-      <TableCell className="text-right tabular-nums text-sm">{fmtPrice(r.lastPrice, r.currency)}</TableCell>
+      <TableCell className="text-right tabular-nums text-sm">
+        {fmtPrice(r.lastPrice, r.currency)}
+        {nav && <div className="text-[10px] text-muted-foreground font-normal">NAV {fmtPrice(nav, r.currency)}</div>}
+      </TableCell>
       <TableCell className="text-right tabular-nums">
         <div>{fmtPct(r.yieldPct)}</div>
-        {r.yieldKind && <div className="text-[10px] text-muted-foreground">{r.yieldKind}</div>}
+        {distributionYieldLabel ? (
+          <div className="text-[10px] text-muted-foreground">{distributionYieldLabel}</div>
+        ) : (
+          r.yieldKind && <div className="text-[10px] text-muted-foreground">{r.yieldKind}</div>
+        )}
       </TableCell>
       <TableCell className="text-right tabular-nums">
         {trailing === null ? (

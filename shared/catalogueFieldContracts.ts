@@ -84,6 +84,12 @@
  * silently assumed away.
  */
 
+// Slice 9b — one-directional dependency on researchPipeline.ts (which itself
+// only imports ./assetModel, never this module), used by
+// resolveContractCatalogueForUpdate below.
+import { catalogueForAssetClass, detectMarketAssetSacco } from "./researchPipeline";
+import type { AssetClass } from "./assetModel";
+
 /** The four top-level catalogue categories a manager reviews findings into. */
 export type CatalogueKey = "mmf" | "bank" | "cbk" | "market_asset";
 
@@ -1709,4 +1715,111 @@ export function projectContractFiguresToExtendedFields(
   // reliably filter/find SACCO rows in the catalogue today") is a separate,
   // already-documented, out-of-scope structural issue this slice does not fix.
   return result;
+}
+
+/* ── Slice 9b — approval-screen display helpers (display-only, never wired
+ * into the gate, promotion, or projection layers) ──────────────────────────
+ *
+ * Stage 9a's audit found that ResearchDesk.tsx's actual approval screen
+ * (`fmtFigures`/`PendingDiffTable`) has its own small, independent 13-entry
+ * label map — completely disconnected from this contract module — so most
+ * extendedFields-tier figures (CBK's whtRule/taxExempt/auctionDate/...,
+ * SACCO's entire subtype-defining figure set) render with their raw
+ * camelCase key as the label, and SACCO's internal `assetType` routing
+ * signal is shown to the manager as if it were a real field. These helpers
+ * fix exactly that, reusing the SAME contract data every other layer already
+ * reads — never mutating figures, never changing what is submitted,
+ * approved, or promoted.
+ */
+
+/** A pending update's identity fields, sufficient to resolve which contract
+ *  (if any) applies — the same subset `reviewResearchUpdate` (server/db.ts,
+ *  Slice 8g-2) already has in scope at promotion time. */
+export interface ContractResolvableUpdate {
+  assetClass: AssetClass;
+  figures?: Record<string, unknown> | null;
+  name?: string | null;
+  issuer?: string | null;
+}
+
+/**
+ * Resolves which catalogue + (for market_asset) subtype contract applies to
+ * a pending update, from data already present on any `research_updates` row.
+ * Mirrors the SAME resolution `reviewResearchUpdate` uses at promotion time
+ * (Slice 8g-2) — extracted here so the approval-screen display (Slice 9b) and
+ * promotion-time persistence (8g-2) read from ONE place instead of two
+ * independently-maintained copies of the same equity/reit/offshore_fund/sacco
+ * branching logic. Imports `catalogueForAssetClass`/`detectMarketAssetSacco`
+ * from `./researchPipeline` directly — a one-directional dependency
+ * (researchPipeline.ts has no import of this module), so there is no
+ * circular-import risk.
+ */
+export function resolveContractCatalogueForUpdate(
+  update: ContractResolvableUpdate,
+): { catalogue: CatalogueKey; subtype?: MarketAssetSubtype } {
+  const catalogue = catalogueForAssetClass(update.assetClass);
+  if (catalogue !== "market_asset") return { catalogue };
+  if (update.assetClass === "equity" || update.assetClass === "reit" || update.assetClass === "offshore_fund") {
+    return { catalogue, subtype: update.assetClass };
+  }
+  const isSacco = detectMarketAssetSacco({
+    catalogue,
+    assetClass: update.assetClass,
+    figures: update.figures,
+    name: update.name,
+    issuer: update.issuer,
+  });
+  return { catalogue, subtype: isSacco ? "sacco" : undefined };
+}
+
+/**
+ * Internal routing/detection signals that must never be shown to a manager
+ * as if they were a real approval figure. Currently just SACCO's `assetType`
+ * stamp (see `projectFindingToContractFigures`'s own doc comment for why it
+ * exists at all). Catalogue/subtype-scoped so the same raw string appearing
+ * in a DIFFERENT catalogue's figures bag is never accidentally hidden.
+ */
+export function isInternalRoutingFigureKey(
+  catalogue: CatalogueKey | null | undefined,
+  subtype: MarketAssetSubtype | undefined,
+  key: string,
+): boolean {
+  return catalogue === "market_asset" && subtype === "sacco" && key === "assetType";
+}
+
+/**
+ * Resolves a human-readable label for a raw figures-bag key on the approval
+ * screen, using the active catalogue/subtype's contract when one applies.
+ * Checks the field's own canonical key first, then its `aliases` — a raw
+ * AI-extraction-schema field name (e.g. from `PendingDiffTable`'s
+ * `changedFields`, which comes straight from the LLM's structured output
+ * before any contract projection) is very likely to be an ALIAS, not the
+ * canonical key. Falls back to `fallbackLabel` (or the raw key itself) for
+ * anything the active contract doesn't recognize — this function never hides
+ * a field on its own; pair it with `isInternalRoutingFigureKey` for that.
+ */
+export function resolveApprovalFigureLabel(
+  catalogue: CatalogueKey | null | undefined,
+  subtype: MarketAssetSubtype | undefined,
+  key: string,
+  fallbackLabel?: string,
+): string {
+  const contract = catalogue ? getCatalogueFieldContract(catalogue, subtype) : null;
+  if (contract) {
+    // Two passes, deliberately: some fields list another field's canonical
+    // key as one of THEIR OWN aliases (e.g. CBK's yieldPct aliases include
+    // "couponRate", which is ALSO its own separate, independently-read
+    // contract field — a real alias-purpose overlap 8g-4's audit found). A
+    // single combined pass risks matching the WRONG field's alias before
+    // ever reaching the right field's own canonical key. Canonical-key
+    // matches across every field always win first; aliases are only a
+    // fallback once no field claims the key as its own.
+    for (const field of contract.fields) {
+      if (field.key === key) return field.label;
+    }
+    for (const field of contract.fields) {
+      if (field.aliases.includes(key)) return field.label;
+    }
+  }
+  return fallbackLabel ?? key;
 }

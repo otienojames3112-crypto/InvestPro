@@ -45,6 +45,13 @@ import {
   catalogueLabel,
   type ReferenceCatalogue,
 } from "@shared/researchPipeline";
+import {
+  resolveContractCatalogueForUpdate,
+  resolveApprovalFigureLabel,
+  isInternalRoutingFigureKey,
+  type CatalogueKey,
+  type MarketAssetSubtype,
+} from "@shared/catalogueFieldContracts";
 import { useLocation } from "wouter";
 import { formatRelativeTime } from "@/lib/format";
 import AiIntake from "./AiIntake";
@@ -87,7 +94,17 @@ const ORIGIN_META: Record<string, { label: string; icon: typeof Bot; className: 
 
 /* ── Round 98: Diff table for PendingQueue ─────────────────────────────────── */
 
-function PendingDiffTable({ figures }: { figures: Record<string, unknown> | null | undefined }) {
+function PendingDiffTable({
+  figures,
+  contract,
+}: {
+  figures: Record<string, unknown> | null | undefined;
+  /** Slice 9b — the active catalogue/subtype contract for this update, if
+   *  resolved (see resolveContractCatalogueForUpdate). Used ONLY to resolve a
+   *  clean display label and to hide internal routing keys — never affects
+   *  what's compared or which rows exist otherwise. */
+  contract?: { catalogue: CatalogueKey; subtype?: MarketAssetSubtype };
+}) {
   if (!figures) return null;
   const proposalType = figures._proposalType as string | undefined;
   if (!proposalType || proposalType === "create") return null;
@@ -102,6 +119,13 @@ function PendingDiffTable({ figures }: { figures: Record<string, unknown> | null
   } catch { /* ignore */ }
 
   if (changedFields.length === 0) return null;
+
+  // Slice 9b — hide internal routing keys (e.g. SACCO's assetType) from the
+  // diff table the same way they're hidden from the flat figures list below.
+  const visibleChangedFields = changedFields.filter(
+    (field) => !isInternalRoutingFigureKey(contract?.catalogue, contract?.subtype, field),
+  );
+  if (visibleChangedFields.length === 0) return null;
 
   const currentMap = new Map(currentValues.map((c) => [c.field, c.value]));
   const matchedRow = figures._matchedCurrentRow as string | undefined;
@@ -131,13 +155,17 @@ function PendingDiffTable({ figures }: { figures: Record<string, unknown> | null
             </tr>
           </thead>
           <tbody>
-            {changedFields.map((field) => {
+            {visibleChangedFields.map((field) => {
               const current = currentMap.get(field) ?? "—";
               const proposed = figures[field];
               const proposedStr = proposed === undefined || proposed === null ? "—" : String(proposed);
+              // Slice 9b — `field` here is a raw AI-extraction-schema field
+              // name (e.g. "effectiveAnnualRate", "shareCapitalDividendRate"),
+              // not the contract's canonical key, so this checks aliases too.
+              const label = resolveApprovalFigureLabel(contract?.catalogue, contract?.subtype, field, field);
               return (
                 <tr key={field} className="border-t border-border/50">
-                  <td className="py-1.5 pr-3 text-muted-foreground whitespace-nowrap">{field}</td>
+                  <td className="py-1.5 pr-3 text-muted-foreground whitespace-nowrap">{label}</td>
                   <td className="py-1.5 pr-3 tabular-nums text-red-600/80 line-through">{current}</td>
                   <td className="py-1.5 tabular-nums font-medium text-emerald-600">{proposedStr}</td>
                 </tr>
@@ -153,8 +181,19 @@ function PendingDiffTable({ figures }: { figures: Record<string, unknown> | null
   );
 }
 
-function fmtFigures(figures: Record<string, unknown> | null | undefined): { key: string; label: string; value: string }[] {
+function fmtFigures(
+  figures: Record<string, unknown> | null | undefined,
+  /** Slice 9b — the active catalogue/subtype contract for this update, if
+   *  resolved (see resolveContractCatalogueForUpdate). Used ONLY to resolve a
+   *  clean display label and to hide internal routing keys — never affects
+   *  which figures exist or what gets approved/promoted. */
+  contract?: { catalogue: CatalogueKey; subtype?: MarketAssetSubtype },
+): { key: string; label: string; value: string }[] {
   if (!figures) return [];
+  // Pre-existing fallback label map, kept exactly as before (Slice 9b doesn't
+  // remove it — it's still the fallback for any field the active contract
+  // doesn't recognize, e.g. a legacy/manual figures bag outside the 7
+  // contracts, or when no contract could be resolved at all).
   const LABELS: Record<string, string> = {
     yieldPct: "Yield %",
     lastPrice: "Price",
@@ -172,8 +211,21 @@ function fmtFigures(figures: Record<string, unknown> | null | undefined): { key:
     instrumentType: "Product type",
   };
   return Object.entries(figures)
-    .filter(([k, v]) => !k.startsWith("_") && v !== undefined && v !== null && v !== "")
-    .map(([k, v]) => ({ key: k, label: LABELS[k] ?? k, value: String(v) }));
+    .filter(
+      ([k, v]) =>
+        !k.startsWith("_") &&
+        v !== undefined &&
+        v !== null &&
+        v !== "" &&
+        // Slice 9b — internal routing signals (SACCO's assetType) are never
+        // shown as if they were a real approval figure.
+        !isInternalRoutingFigureKey(contract?.catalogue, contract?.subtype, k),
+    )
+    .map(([k, v]) => ({
+      key: k,
+      label: resolveApprovalFigureLabel(contract?.catalogue, contract?.subtype, k, LABELS[k]),
+      value: String(v),
+    }));
 }
 
 /* ── Digest header ─────────────────────────────────────────────────────────── */
@@ -468,7 +520,17 @@ function PendingQueue() {
       </p>
       {updates.map((u) => {
         const target = promotionTargetForAssetClass(u.assetClass as AssetClass);
-        const figures = fmtFigures(u.figures as Record<string, unknown> | null);
+        // Slice 9b — resolve the active catalogue/subtype contract ONCE per
+        // update, purely for display-label purposes (see fmtFigures'/
+        // PendingDiffTable's own doc comments). Mirrors the SAME resolution
+        // reviewResearchUpdate uses at promotion time (Slice 8g-2).
+        const contract = resolveContractCatalogueForUpdate({
+          assetClass: u.assetClass as AssetClass,
+          figures: u.figures as Record<string, unknown> | null,
+          name: u.name,
+          issuer: u.issuer,
+        });
+        const figures = fmtFigures(u.figures as Record<string, unknown> | null, contract);
         const origin = ORIGIN_META[u.origin] ?? ORIGIN_META.manual;
         const OriginIcon = origin.icon;
         const busy = review.isPending && review.variables?.id === u.id;
@@ -515,7 +577,7 @@ function PendingQueue() {
             </CardHeader>
             <CardContent className="space-y-4">
               {/* Round 98: Diff table for update/stale proposals */}
-              <PendingDiffTable figures={u.figures as Record<string, unknown> | null} />
+              <PendingDiffTable figures={u.figures as Record<string, unknown> | null} contract={contract} />
 
               {figures.length > 0 ? (
                 <div className="flex flex-wrap gap-x-6 gap-y-2">

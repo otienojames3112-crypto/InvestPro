@@ -726,11 +726,11 @@ const MARKET_ASSET_EQUITY_FIELD_CONTRACT: CatalogueFieldContract = {
       label: "Exchange",
       required: true,
       aliases: ["market", "exchange"],
-      storageStatus: "extendedFields",
+      storageStatus: "column",
       managerEditable: true,
       showInTable: true,
       promoteToCatalogueRow: true,
-      note: "Key renamed from 'exchange' to 'market' during Slice 8e-1's pre-approval compatibility check (2026-07-16) — buildPromotionPlan's opportunity branch reads f.market only (no fallback to f.exchange); the gate's OWN market-rule alias table tolerates 'exchange', which made the original key LOOK compatible while the value was actually silently dropped at promotion. extendedFields.MarketAssetProfile.exchange exists; opportunities.market is a generic free-text column shared across all market-asset subtypes, not exchange-specific.",
+      note: "Key renamed from 'exchange' to 'market' during Slice 8e-1's pre-approval compatibility check (2026-07-16) — buildPromotionPlan's opportunity branch reads f.market only (no fallback to f.exchange); the gate's OWN market-rule alias table tolerates 'exchange', which made the original key LOOK compatible while the value was actually silently dropped at promotion PRE-fix. storageStatus corrected extendedFields->column during Slice 8g-2 (2026-07-17): opportunities.market IS a real column and buildPromotionPlan writes f.market to it unconditionally for every opportunity-target promotion — the field genuinely reaches a typed column today, it was simply mislabeled 'extendedFields' (a historical artifact of MarketAssetProfile.exchange also existing as the richer, subtype-flavoured concept). Corrected so Slice 8g-2's projectContractFiguresToExtendedFields doesn't duplicate an already-promoted column value into extendedFields too.",
     },
     {
       catalogue: "market_asset",
@@ -903,11 +903,11 @@ const MARKET_ASSET_REIT_FIELD_CONTRACT: CatalogueFieldContract = {
       label: "Exchange",
       required: true,
       aliases: ["market", "exchange"],
-      storageStatus: "extendedFields",
+      storageStatus: "column",
       managerEditable: true,
       showInTable: true,
       promoteToCatalogueRow: true,
-      note: "Added post-approval (2026-07-16) — omitted from the original 12-field product list, but CATALOGUE_FIELD_RULES.market_asset hard-requires figures.market (non-escapable) for EVERY market-asset finding regardless of subtype, and MARKET_ASSET_EXTRACTION_SCHEMA requires 'exchange' on every extraction too — proven directly via a live checkApprovalGate call that still reported 'market' missing with every other REIT field supplied. Same shape as Equity's already-fixed 'market' field: extendedFields.MarketAssetProfile.exchange exists (a generic field shared across all market-asset subtypes); opportunities.market is the generic promoted column.",
+      note: "Added post-approval (2026-07-16) — omitted from the original 12-field product list, but CATALOGUE_FIELD_RULES.market_asset hard-requires figures.market (non-escapable) for EVERY market-asset finding regardless of subtype, and MARKET_ASSET_EXTRACTION_SCHEMA requires 'exchange' on every extraction too — proven directly via a live checkApprovalGate call that still reported 'market' missing with every other REIT field supplied. Same shape as Equity's already-fixed 'market' field: extendedFields.MarketAssetProfile.exchange exists (a generic field shared across all market-asset subtypes); opportunities.market is the generic promoted column. storageStatus corrected extendedFields->column during Slice 8g-2 (2026-07-17) — opportunities.market genuinely IS a real, already-promoted column; the field was mislabeled.",
     },
     {
       catalogue: "market_asset",
@@ -1094,11 +1094,11 @@ const MARKET_ASSET_OFFSHORE_FUND_FIELD_CONTRACT: CatalogueFieldContract = {
       label: "Market",
       required: true,
       aliases: ["market", "exchange"],
-      storageStatus: "extendedFields",
+      storageStatus: "column",
       managerEditable: true,
       showInTable: true,
       promoteToCatalogueRow: true,
-      note: "Added post-approval (2026-07-16) — omitted from the original 12-field product list, but CATALOGUE_FIELD_RULES.market_asset hard-requires figures.market (non-escapable) for EVERY market-asset finding regardless of subtype, proven directly via a live checkApprovalGate call that still reported 'market' missing with every other offshore-fund field supplied. Labeled 'Market' rather than reusing Equity/REIT's 'Exchange' — an offshore fund is not exchange-listed the way an NSE equity or REIT is. Same underlying opportunities.market column and extendedFields.MarketAssetProfile.exchange home.",
+      note: "Added post-approval (2026-07-16) — omitted from the original 12-field product list, but CATALOGUE_FIELD_RULES.market_asset hard-requires figures.market (non-escapable) for EVERY market-asset finding regardless of subtype, proven directly via a live checkApprovalGate call that still reported 'market' missing with every other offshore-fund field supplied. Labeled 'Market' rather than reusing Equity/REIT's 'Exchange' — an offshore fund is not exchange-listed the way an NSE equity or REIT is. Same underlying opportunities.market column and extendedFields.MarketAssetProfile.exchange home. storageStatus corrected extendedFields->column during Slice 8g-2 (2026-07-17) — opportunities.market genuinely IS a real, already-promoted column; the field was mislabeled.",
     },
     {
       catalogue: "market_asset",
@@ -1620,5 +1620,93 @@ export function projectFindingToContractFigures(
   if (contract.catalogue === "market_asset" && contract.subtype === "sacco") {
     result.assetType = "sacco";
   }
+  return result;
+}
+
+/* ── Slice 8g-2 — promotion persistence for the extendedFields-only tier ────
+ *
+ * 8g-1's audit found a bug, not a design gap: contract-drafted findings never
+ * carry `_extendedFields` (the draft button submits ONLY
+ * `projectFindingToContractFigures`'s output, which never includes that raw
+ * key), so every contract field with `storageStatus: "extendedFields"` that is
+ * ALSO gate-required (CBK's whtRule/taxExempt/issueNumber/auctionDate/
+ * valueDate/couponRate; every one of SACCO's subtype-defining figures) passed
+ * `checkApprovalGate` and then vanished forever at promotion — never reaching
+ * a column (buildPromotionPlan has no field for any of them) and never
+ * reaching `extendedFields` either (nothing merges the figures bag into it
+ * except the never-populated `_extendedFields` raw blob).
+ *
+ * This is the read-side fix: given the SAME `figuresIn` bag `checkApprovalGate`
+ * already validated, project out exactly the extendedFields-tier subset a
+ * promotion should persist. Deliberately generic across all 7 contracts (not
+ * CBK/SACCO-specific) — MMF/Bank/REIT/Offshore fund naturally return `{}` or
+ * near-empty today since 8g-1's audit found no gate-required extendedFields-
+ * only gaps for them; Equity's `ticker` (extendedFields, not gate-required)
+ * will also start persisting as a side effect of using the real contract
+ * metadata instead of a hand-picked CBK/SACCO-only list — flagged separately,
+ * not a special case.
+ */
+/**
+ * Read a field's value preferring its OWN canonical key first, falling back to
+ * its `aliases`. This is the opposite priority from `readAliasValue` above,
+ * and deliberately so: `readAliasValue` reads RAW, pre-contract extraction
+ * data (which never contains the contract's own output key, only extraction-
+ * schema keys/aliases). `projectContractFiguresToExtendedFields` instead reads
+ * `figuresIn` at PROMOTION time — for a contract-drafted update this is
+ * already `projectFindingToContractFigures`'s OUTPUT, keyed by each field's
+ * canonical `key` (not its aliases). Several fields' `aliases` arrays don't
+ * happen to include their own key (SACCO's `dividendRate` reads via
+ * `shareCapitalDividendRate`/`depositRebateRate` only, CBK's
+ * `applicationDeadline`/`minInvestment` via a single differently-named alias,
+ * Offshore fund's `fxRiskNote` via `fxRisk`) — checking aliases only would
+ * silently miss real, already-gate-validated data for exactly those fields.
+ * Checking aliases too (not just the canonical key) keeps this safe for
+ * non-contract-drafted figures bags as well (manual edits, legacy raw
+ * passthrough), which may still be keyed by an alias instead.
+ */
+function readCanonicalOrAliasValue(
+  field: CatalogueFieldContractEntry,
+  figures: Record<string, unknown>,
+): string | null {
+  const direct = figures[field.key];
+  if (direct !== undefined && direct !== null) {
+    const s = String(direct).trim();
+    if (s !== "" && s !== "missing_from_source") return s;
+  }
+  return readAliasValue(field, figures);
+}
+
+export function projectContractFiguresToExtendedFields(
+  catalogue: CatalogueKey,
+  subtype: MarketAssetSubtype | undefined,
+  figures: Record<string, unknown> | null | undefined,
+): Record<string, string> {
+  const contract = getCatalogueFieldContract(catalogue, subtype);
+  if (!contract || !figures) return {};
+  const envelopeRouted = ENVELOPE_ROUTED_CONTRACT_KEYS[catalogue] ?? new Set<string>();
+  const result: Record<string, string> = {};
+  for (const field of contract.fields) {
+    // Only the extendedFields-only tier — never a typed column (already
+    // reaches the row via buildPromotionPlan), never computed/sourceOnly/
+    // missingRequiresMigration (nothing real to persist for any of those).
+    if (field.storageStatus !== "extendedFields") continue;
+    // Envelope-routed fields' real value lives on the update envelope, not
+    // figures — persisting them here would risk stale duplication of what
+    // sourceEnrichment/promotionProvenance already handle correctly.
+    if (envelopeRouted.has(field.key)) continue;
+    const value = readCanonicalOrAliasValue(field, figures);
+    if (value === null) continue;
+    result[field.key] = value;
+  }
+  // Deliberately does NOT stamp `assetType` for SACCO here (unlike
+  // projectFindingToContractFigures above). `assetType` is a projector-level
+  // routing signal for `detectMarketAssetSacco()`, checked only against the
+  // PENDING update's figures bag at gate time — no code anywhere reads a live
+  // catalogue row's `extendedFields.assetType` (verified: only the module
+  // header's own doc comment mentions it, as an aspirational example, not an
+  // implemented check). Persisting it would be extra data with no reader, and
+  // the real SACCO-row-identity gap the header describes ("a manager cannot
+  // reliably filter/find SACCO rows in the catalogue today") is a separate,
+  // already-documented, out-of-scope structural issue this slice does not fix.
   return result;
 }

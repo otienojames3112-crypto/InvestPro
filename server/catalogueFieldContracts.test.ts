@@ -580,7 +580,7 @@ describe("Catalogue field contract · gate-required fields not yet promoted are 
 });
 
 describe("Catalogue field contract · foundation-only guardrails (no behavior change yet)", () => {
-  it("only the Slice 8b/8c/8d/8e-1/8e-2/8e-3/8e-4-approved consumers import shared/catalogueFieldContracts — MMF, Bank, CBK, Equity, REIT, Offshore fund and SACCO (all market-asset subtypes are now wired)", () => {
+  it("only the Slice 8b/8c/8d/8e-1/8e-2/8e-3/8e-4/8g-2-approved consumers import shared/catalogueFieldContracts — MMF, Bank, CBK, Equity, REIT, Offshore fund and SACCO (all market-asset subtypes are now wired), plus server/db.ts's promotion-side persistence added in Slice 8g-2", () => {
     const root = join(__dirname, "..");
     const searchDirs = ["server", "shared", join("client", "src")];
     const offenders: string[] = [];
@@ -610,8 +610,12 @@ describe("Catalogue field contract · foundation-only guardrails (no behavior ch
     // CBK support the same way, Slice 8e-1 adds Equity support the same way,
     // Slice 8e-2 adds REIT support the same way, Slice 8e-3 adds Offshore fund
     // support the same way, and Slice 8e-4 adds SACCO support the same way —
-    // the LAST market-asset subtype. Any OTHER consumer must still fail this
-    // guardrail.
+    // the LAST market-asset subtype. Slice 8g-2 adds a SECOND real consumer,
+    // server/db.ts, which imports projectContractFiguresToExtendedFields to fix
+    // 8g-1's audit finding (CBK/SACCO's gate-required extendedFields-only
+    // figures were silently dropped at promotion) — the read side of the same
+    // contract, used at promotion time instead of draft time. Any OTHER
+    // consumer must still fail this guardrail.
     const allowed = new Set([
       join(root, "server", "catalogueFieldContracts.test.ts"),
       join(root, "server", "mmfContractMapping.test.ts"),
@@ -621,6 +625,8 @@ describe("Catalogue field contract · foundation-only guardrails (no behavior ch
       join(root, "server", "reitContractMapping.test.ts"),
       join(root, "server", "offshoreFundContractMapping.test.ts"),
       join(root, "server", "saccoContractMapping.test.ts"),
+      join(root, "server", "db.ts"),
+      join(root, "server", "contractPromotionExtendedFields.test.ts"),
       join(root, "client", "src", "pages", "AskAI.tsx"),
     ]);
     const unexpectedOffenders = offenders.filter((f) => !allowed.has(f));

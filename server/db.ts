@@ -2378,12 +2378,14 @@ import {
   catalogueLabel,
   describePortfolioImpact,
   agentCheckDue,
+  detectMarketAssetSacco,
   type PendingUpdateInput,
   type SourceDueStatus,
   type ReferenceCatalogue,
 } from "../shared/researchPipeline";
 import { type AssetClass } from "../shared/assetModel";
 import { humanField } from "../shared/provenance";
+import { projectContractFiguresToExtendedFields } from "../shared/catalogueFieldContracts";
 // NOTE: summariseState, FieldProvenanceMap, and FieldKey are already imported at
 // the top of this file (used by the opportunity ingestion helpers).
 
@@ -2747,17 +2749,51 @@ export async function reviewResearchUpdate(args: {
       verificationState: summariseState(prov),
       active: true as const,
     } as unknown as InsertOpportunity;
+    // Slice 8g-2 — the extendedFields-only tier of contract fields the approval
+    // gate already required for this row (see projectContractFiguresToExtendedFields,
+    // shared/catalogueFieldContracts.ts). Closes 8g-1's audit finding: contract-
+    // drafted findings never carry `_extendedFields`, so CBK's whtRule/taxExempt/
+    // issueNumber/auctionDate/valueDate/couponRate and every one of SACCO's
+    // subtype-defining figures passed the gate and then vanished forever at
+    // promotion — no typed column for them, and nothing merged the figures bag
+    // into extendedFields except the never-populated raw blob below. Uses the
+    // SAME figuresIn the gate already validated. cat/current are already in
+    // scope from earlier in this function.
+    let contractExtended: Record<string, string> = {};
+    if (cat === "cbk") {
+      contractExtended = projectContractFiguresToExtendedFields("cbk", undefined, figuresIn);
+    } else if (cat === "market_asset") {
+      let subtype: "equity" | "reit" | "offshore_fund" | "sacco" | undefined;
+      if (current.assetClass === "equity" || current.assetClass === "reit" || current.assetClass === "offshore_fund") {
+        subtype = current.assetClass;
+      } else if (
+        detectMarketAssetSacco({
+          catalogue: cat,
+          assetClass: current.assetClass as AssetClass,
+          figures: figuresIn,
+          name: current.name,
+          issuer: current.issuer,
+        })
+      ) {
+        subtype = "sacco";
+      }
+      contractExtended = projectContractFiguresToExtendedFields("market_asset", subtype, figuresIn);
+    }
     // Round 97 — persist extendedFields from structured extraction if present.
     // Slice 8f — merge in the envelope's source provenance (see sourceEnrichment
     // above) — a simpler top-level home alongside the per-figure fieldProvenance
     // map already set above — even when there was no structured extraction blob
     // to merge it into.
+    // Merge order: raw structured-extraction blob first (oldest, lowest trust),
+    // then contract-derived extendedFields (governed, gate-checked values should
+    // win over unreviewed extraction noise on the rare overlapping key), then
+    // the source envelope last (unchanged from 8f — always wins). Only written
+    // when there is something real to save from ANY of the three.
     const oppExtRaw = figuresIn._extendedFields;
-    if (oppExtRaw) {
-      const oppExtended = typeof oppExtRaw === "string" ? JSON.parse(oppExtRaw) : oppExtRaw;
-      (insert as Record<string, unknown>).extendedFields = { ...oppExtended, ...sourceEnrichment };
-    } else if (Object.keys(sourceEnrichment).length > 0) {
-      (insert as Record<string, unknown>).extendedFields = sourceEnrichment;
+    const oppRawExtended = oppExtRaw ? (typeof oppExtRaw === "string" ? JSON.parse(oppExtRaw) : oppExtRaw) : {};
+    const oppMergedExtended = { ...oppRawExtended, ...contractExtended, ...sourceEnrichment };
+    if (Object.keys(oppMergedExtended).length > 0) {
+      (insert as Record<string, unknown>).extendedFields = oppMergedExtended;
     }
     await upsertOpportunity(insert);
     promotedRef = p.ref;

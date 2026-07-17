@@ -841,6 +841,26 @@ export function FindingCard({
         (row) => row.key !== "sourceLink" && row.key !== "sourceAsOf",
       )
     : null;
+  // Slice 8e-4 — Market asset SACCO findings only, the LAST market-asset
+  // subtype. Unlike Equity/REIT/Offshore fund, SACCO shares assetClass "alt"
+  // with ETF/property/pension/other (assetClassForMarketAssetType has no
+  // distinct "sacco" value) — so it can't be gated on finding.assetClass the
+  // same way. Instead this checks the raw AI-extracted assetType directly,
+  // mirroring detectMarketAssetSacco()'s own primary detection signal in
+  // shared/researchPipeline.ts. saccoContract is null for every other
+  // catalogue/subtype, so nothing below changes for MMF/bank/CBK/Equity/REIT/
+  // Offshore-fund findings, or for ETF/property/pension/other market-asset
+  // subtypes (those have no contract at all — see UNSUPPORTED_MARKET_ASSET_SUBTYPES).
+  const saccoContract =
+    finding.targetCatalogue === "market_asset" &&
+    String(finding.extractedFields?.assetType ?? "").trim().toLowerCase() === "sacco"
+      ? getCatalogueFieldContract("market_asset", "sacco")
+      : null;
+  const saccoDisplayRows = saccoContract
+    ? projectFindingToContractDisplayRows(saccoContract, finding).filter(
+        (row) => row.key !== "sourceLink" && row.key !== "sourceAsOf",
+      )
+    : null;
   // Stage 5 — deterministic, template-based follow-up questions for each missing
   // gate field (pure, no LLM). Never implies a value was found — only asks. Stage
   // 7c sharpens the wording when Stage 7b's extraction already found a candidate
@@ -1157,13 +1177,51 @@ export function FindingCard({
           </div>
         )}
 
+        {/* Slice 8e-4 — the fixed SACCO quick-decision fields from the catalogue
+            field contract, in contract order — the LAST market-asset subtype.
+            Same purpose as the MMF/Bank/CBK/Equity/REIT/Offshore-fund blocks
+            above: PRIMARY view for a SACCO finding, raw/grouped extraction below
+            becomes secondary source context. Every other catalogue/subtype is
+            untouched (saccoDisplayRows is null for them). */}
+        {saccoDisplayRows && (
+          <div className="rounded-lg border border-primary/25 bg-primary/[0.03] overflow-hidden">
+            <div className="px-3 py-2 border-b border-primary/15 bg-primary/[0.05]">
+              <span className="text-xs font-medium text-foreground uppercase tracking-wide">
+                SACCO catalogue fields
+              </span>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-2 px-3 py-2.5">
+              {saccoDisplayRows.map((row) => (
+                <div key={row.key} className="min-w-0">
+                  <span className="text-[11px] text-muted-foreground">
+                    {row.label}
+                    {row.required && <span className="text-amber-600"> *</span>}
+                  </span>
+                  <div className="text-sm truncate">
+                    {row.value ? (
+                      <span className="font-medium tabular-nums">{row.value}</span>
+                    ) : row.storageStatus === "computed" ? (
+                      <span className="text-muted-foreground/60 italic text-xs">calculated at approval</span>
+                    ) : row.storageStatus === "missingRequiresMigration" ? (
+                      <span className="text-muted-foreground/60 italic text-xs">not yet trackable</span>
+                    ) : (
+                      <span className="text-muted-foreground/50">—</span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Round 102 — grouped instrument profile preview (replaces flat field list when _extendedFields is present) */}
         {(mmfDisplayRows ||
           bankDisplayRows ||
           cbkDisplayRows ||
           equityDisplayRows ||
           reitDisplayRows ||
-          offshoreFundDisplayRows) && (
+          offshoreFundDisplayRows ||
+          saccoDisplayRows) && (
           <p className="text-[11px] text-muted-foreground -mb-1">Additional extracted details:</p>
         )}
         {(() => {
@@ -1293,11 +1351,12 @@ export function FindingCard({
             <Button
               size="sm"
               onClick={() => {
-                // Slice 8b/8c/8d/8e-1/8e-2/8e-3 — MMF, Bank, CBK, Equity, REIT and
-                // Offshore fund findings draft ONLY their fixed catalogue contract's
-                // figures, never the raw arbitrary extraction. undefined for every
-                // other catalogue/subtype leaves draftFromFinding's existing default
-                // (the finding's raw extractedFields) completely unchanged.
+                // Slice 8b/8c/8d/8e-1/8e-2/8e-3/8e-4 — MMF, Bank, CBK, Equity, REIT,
+                // Offshore fund and SACCO findings draft ONLY their fixed catalogue
+                // contract's figures, never the raw arbitrary extraction. undefined
+                // for every other catalogue/subtype leaves draftFromFinding's
+                // existing default (the finding's raw extractedFields) completely
+                // unchanged.
                 const mmfFigures = mmfContract ? projectFindingToContractFigures(mmfContract, finding) : undefined;
                 const bankFigures = bankContract ? projectFindingToContractFigures(bankContract, finding) : undefined;
                 const cbkFigures = cbkContract ? projectFindingToContractFigures(cbkContract, finding) : undefined;
@@ -1306,10 +1365,17 @@ export function FindingCard({
                 const offshoreFundFigures = offshoreFundContract
                   ? projectFindingToContractFigures(offshoreFundContract, finding)
                   : undefined;
+                const saccoFigures = saccoContract ? projectFindingToContractFigures(saccoContract, finding) : undefined;
                 draft.mutate({
                   findingId: finding.id,
                   figures:
-                    mmfFigures ?? bankFigures ?? cbkFigures ?? equityFigures ?? reitFigures ?? offshoreFundFigures,
+                    mmfFigures ??
+                    bankFigures ??
+                    cbkFigures ??
+                    equityFigures ??
+                    reitFigures ??
+                    offshoreFundFigures ??
+                    saccoFigures,
                 });
               }}
               disabled={busy}

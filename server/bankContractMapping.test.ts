@@ -350,6 +350,7 @@ describe("Slice 8c · FindingCard wiring", () => {
       "equityDisplayRows",
       "reitDisplayRows",
       "offshoreFundDisplayRows",
+      "saccoDisplayRows",
     ]) {
       expect(before).toContain(term);
     }
@@ -362,7 +363,7 @@ describe("Slice 8c · FindingCard wiring", () => {
     );
     const mutateIdx = findingCard.indexOf("draft.mutate({");
     expect(mutateIdx).toBeGreaterThan(-1);
-    const mutateBlock = findingCard.slice(mutateIdx, mutateIdx + 300);
+    const mutateBlock = findingCard.slice(mutateIdx, mutateIdx + 400);
     for (const term of [
       "mmfFigures",
       "bankFigures",
@@ -370,6 +371,7 @@ describe("Slice 8c · FindingCard wiring", () => {
       "equityFigures",
       "reitFigures",
       "offshoreFundFigures",
+      "saccoFigures",
     ]) {
       expect(mutateBlock).toContain(term);
     }
@@ -401,7 +403,7 @@ describe("Slice 8c · FindingCard wiring", () => {
     expect(dialog).not.toContain("getCatalogueFieldContract");
   });
 
-  it("no SACCO market_asset contract lookups exist anywhere yet — only MMF, Bank, CBK, Equity, REIT and Offshore fund are wired", () => {
+  it("all seven active contract lookups (MMF, Bank, CBK, Equity, REIT, Offshore fund, SACCO) are the only ones present — every market-asset subtype is now wired", () => {
     const contractCalls = [...askAi.matchAll(/getCatalogueFieldContract\([^)]*\)/g)].map((m) => m[0]);
     expect(contractCalls.length).toBeGreaterThan(0);
     for (const call of contractCalls) {
@@ -411,7 +413,8 @@ describe("Slice 8c · FindingCard wiring", () => {
           call.includes('"cbk"') ||
           call.includes('"equity"') ||
           call.includes('"reit"') ||
-          call.includes('"offshore_fund"'),
+          call.includes('"offshore_fund"') ||
+          call.includes('"sacco"'),
       ).toBe(true);
     }
   });

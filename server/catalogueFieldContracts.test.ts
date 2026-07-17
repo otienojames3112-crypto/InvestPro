@@ -87,6 +87,30 @@
  * Equity/REIT's "Exchange" since an offshore fund isn't exchange-listed), was
  * added — proven via the same live-gate-call method as REIT's fix.
  *
+ * Amended an eighth time during Slice 8e-4's pre-approval compatibility check
+ * (2026-07-16): Market asset SACCO — the LAST market-asset subtype — grew from
+ * 11 to 12 fields. SACCO uses a full REPLACEMENT gate
+ * (SACCO_MARKET_ASSET_FIELD_RULES / SACCO_FIELD_ALIASES), not the baseline
+ * CATALOGUE_FIELD_RULES.market_asset (confirmed by reading checkApprovalGate
+ * directly: the SACCO branch returns early, never reaching the baseline
+ * market/lastPrice loop) — so no "Market" field was needed here, unlike
+ * Equity/REIT/Offshore fund. Three KEYS renamed (display labels unchanged),
+ * each confirmed via a live checkApprovalGate call that failed exactly as
+ * predicted: "lockInWithdrawalRule" → "withdrawalTerms" (only coincidentally
+ * masked when the separate liquidity field also had a value),
+ * "minContribution" → "minimumMonthlyDeposit", and "riskProtectionNote" →
+ * "regulatoryStatus". A genuinely missing field, "Minimum share capital" (key:
+ * minimumShareCapital), was added — SACCO_MARKET_ASSET_FIELD_RULES requires it
+ * as its OWN distinct figure, separate from minimumMonthlyDeposit (a real
+ * SACCO needs both a one-time share-capital buy-in and ongoing monthly
+ * deposits). A NEW kind of fix (not a contract field at all):
+ * projectFindingToContractFigures now stamps figures.assetType = "sacco" onto
+ * every SACCO projection — detectMarketAssetSacco()'s primary detection
+ * signal, which raw passthrough always carried but no SACCO product field
+ * maps to (it isn't something a manager edits); omitting it would have
+ * downgraded detection reliability from "always works" to "depends on
+ * fallback heuristics."
+ *
  * Pure tests for shared/catalogueFieldContracts.ts. This slice is documentation +
  * data only: nothing here touches the DB, Ask AI, the approval gate, the Review
  * Queue, or any catalogue UI. The guardrail tests at the bottom of this file exist
@@ -212,6 +236,7 @@ const DESIRED_LABELS: Record<string, string[]> = {
     "SACCO name",
     "Product type",
     "Dividend rate / interest rate",
+    "Minimum share capital",
     "Minimum contribution",
     "Membership requirement",
     "Lock-in or withdrawal rule",
@@ -538,9 +563,14 @@ describe("Catalogue field contract · gate-required fields not yet promoted are 
     expect(field.note).toMatch(/alsoWriteKeys/i);
   });
 
-  it("SACCO's three gate-required fields (dividendRate, minContribution, lockInWithdrawalRule) are extendedFields, not column", () => {
+  it("SACCO's four gate-required fields (dividendRate, minimumShareCapital, minimumMonthlyDeposit, withdrawalTerms) are extendedFields, not column", () => {
+    // Keys renamed/added during Slice 8e-4's pre-approval compatibility check
+    // (2026-07-16): minContribution -> minimumMonthlyDeposit,
+    // lockInWithdrawalRule -> withdrawalTerms, plus a new minimumShareCapital
+    // field (SACCO_MARKET_ASSET_FIELD_RULES requires it as its own distinct
+    // figure, separate from minimumMonthlyDeposit).
     const sacco = getCatalogueFieldContract("market_asset", "sacco")!;
-    for (const key of ["dividendRate", "minContribution", "lockInWithdrawalRule"]) {
+    for (const key of ["dividendRate", "minimumShareCapital", "minimumMonthlyDeposit", "withdrawalTerms"]) {
       const field = sacco.fields.find((f) => f.key === key)!;
       expect(field.required).toBe(true);
       expect(field.storageStatus).toBe("extendedFields");
@@ -550,7 +580,7 @@ describe("Catalogue field contract · gate-required fields not yet promoted are 
 });
 
 describe("Catalogue field contract · foundation-only guardrails (no behavior change yet)", () => {
-  it("only the Slice 8b/8c/8d/8e-1/8e-2/8e-3-approved consumers import shared/catalogueFieldContracts — MMF, Bank, CBK, Equity, REIT and Offshore fund only, nothing wired for SACCO yet", () => {
+  it("only the Slice 8b/8c/8d/8e-1/8e-2/8e-3/8e-4-approved consumers import shared/catalogueFieldContracts — MMF, Bank, CBK, Equity, REIT, Offshore fund and SACCO (all market-asset subtypes are now wired)", () => {
     const root = join(__dirname, "..");
     const searchDirs = ["server", "shared", join("client", "src")];
     const offenders: string[] = [];
@@ -578,9 +608,10 @@ describe("Catalogue field contract · foundation-only guardrails (no behavior ch
     // MMF-only support into AskAI.tsx plus its own test file, Slice 8c adds Bank
     // support to the SAME AskAI.tsx file plus its own test file, Slice 8d adds
     // CBK support the same way, Slice 8e-1 adds Equity support the same way,
-    // Slice 8e-2 adds REIT support the same way, and Slice 8e-3 adds Offshore
-    // fund support the same way. Any OTHER consumer (e.g. a premature SACCO
-    // wiring) must still fail this guardrail.
+    // Slice 8e-2 adds REIT support the same way, Slice 8e-3 adds Offshore fund
+    // support the same way, and Slice 8e-4 adds SACCO support the same way —
+    // the LAST market-asset subtype. Any OTHER consumer must still fail this
+    // guardrail.
     const allowed = new Set([
       join(root, "server", "catalogueFieldContracts.test.ts"),
       join(root, "server", "mmfContractMapping.test.ts"),
@@ -589,6 +620,7 @@ describe("Catalogue field contract · foundation-only guardrails (no behavior ch
       join(root, "server", "equityContractMapping.test.ts"),
       join(root, "server", "reitContractMapping.test.ts"),
       join(root, "server", "offshoreFundContractMapping.test.ts"),
+      join(root, "server", "saccoContractMapping.test.ts"),
       join(root, "client", "src", "pages", "AskAI.tsx"),
     ]);
     const unexpectedOffenders = offenders.filter((f) => !allowed.has(f));

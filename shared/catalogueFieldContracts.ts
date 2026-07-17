@@ -1268,7 +1268,20 @@ const MARKET_ASSET_SACCO_FIELD_CONTRACT: CatalogueFieldContract = {
     {
       catalogue: "market_asset",
       subtype: "sacco",
-      key: "minContribution",
+      key: "minimumShareCapital",
+      label: "Minimum share capital",
+      required: true,
+      aliases: ["minimumShareCapital"],
+      storageStatus: "extendedFields",
+      managerEditable: true,
+      showInTable: true,
+      promoteToCatalogueRow: false,
+      note: "Added post-approval (2026-07-16) — omitted from the original 11-field product list, but SACCO_MARKET_ASSET_FIELD_RULES hard-requires figures.minimumShareCapital (non-escapable, no fallback in SACCO_FIELD_ALIASES) as its OWN distinct requirement, separate from minimumMonthlyDeposit — a real SACCO requires both a one-time share-capital buy-in AND ongoing monthly deposits. Proven directly via a live checkApprovalGate call that still reported it missing with every other SACCO field supplied. Not a first-class column — same tier as the other SACCO-specific figures.",
+    },
+    {
+      catalogue: "market_asset",
+      subtype: "sacco",
+      key: "minimumMonthlyDeposit",
       label: "Minimum contribution",
       required: true,
       aliases: ["minimumMonthlyDeposit"],
@@ -1276,7 +1289,7 @@ const MARKET_ASSET_SACCO_FIELD_CONTRACT: CatalogueFieldContract = {
       managerEditable: true,
       showInTable: true,
       promoteToCatalogueRow: false,
-      note: "Already gate-required (SACCO_MARKET_ASSET_FIELD_RULES) but not a first-class column.",
+      note: "Key renamed from 'minContribution' to 'minimumMonthlyDeposit' during Slice 8e-4's pre-approval compatibility check (2026-07-16) — SACCO_FIELD_ALIASES.minimumMonthlyDeposit is ['minimumMonthlyDeposit', 'minimumMonthlyContribution'] only; 'minContribution' was never in it, confirmed via a live checkApprovalGate call. Display label unchanged.",
     },
     {
       catalogue: "market_asset",
@@ -1294,7 +1307,7 @@ const MARKET_ASSET_SACCO_FIELD_CONTRACT: CatalogueFieldContract = {
     {
       catalogue: "market_asset",
       subtype: "sacco",
-      key: "lockInWithdrawalRule",
+      key: "withdrawalTerms",
       label: "Lock-in or withdrawal rule",
       required: true,
       aliases: ["withdrawalTerms"],
@@ -1302,7 +1315,7 @@ const MARKET_ASSET_SACCO_FIELD_CONTRACT: CatalogueFieldContract = {
       managerEditable: true,
       showInTable: true,
       promoteToCatalogueRow: false,
-      note: "Already gate-required (SACCO_MARKET_ASSET_FIELD_RULES) but not a first-class column.",
+      note: "Key renamed from 'lockInWithdrawalRule' to 'withdrawalTerms' during Slice 8e-4's pre-approval compatibility check (2026-07-16) — confirmed via a live checkApprovalGate call: with only 'lockInWithdrawalRule' filled in (the natural case), the gate failed on 'withdrawal / liquidity terms'. SACCO_FIELD_ALIASES.withdrawalTerms is ['withdrawalTerms', 'liquidity'] — the original key was never in it (it was only coincidentally masked when the separate 'liquidity' field also had a value). Display label unchanged.",
     },
     {
       catalogue: "market_asset",
@@ -1328,12 +1341,12 @@ const MARKET_ASSET_SACCO_FIELD_CONTRACT: CatalogueFieldContract = {
       managerEditable: true,
       showInTable: true,
       promoteToCatalogueRow: true,
-      note: "Generic shared enum; SACCO's real liquidity concept is closer to lockInWithdrawalRule above.",
+      note: "Generic shared enum; SACCO's real liquidity concept is closer to withdrawalTerms above.",
     },
     {
       catalogue: "market_asset",
       subtype: "sacco",
-      key: "riskProtectionNote",
+      key: "regulatoryStatus",
       label: "Risk / protection note",
       required: false,
       aliases: ["regulatoryStatus"],
@@ -1341,7 +1354,7 @@ const MARKET_ASSET_SACCO_FIELD_CONTRACT: CatalogueFieldContract = {
       managerEditable: true,
       showInTable: false,
       promoteToCatalogueRow: false,
-      note: "Closest proxy is extendedFields.MarketAssetProfile.regulatoryStatus (gate-required, e.g. \"SASRA-regulated\") — a status flag, not really a risk/protection note. Real field is a gap.",
+      note: "Key renamed from 'riskProtectionNote' to 'regulatoryStatus' during Slice 8e-4's pre-approval compatibility check (2026-07-16) — SACCO_MARKET_ASSET_FIELD_RULES hard-requires figures.regulatoryStatus (SACCO_FIELD_ALIASES tolerance is ['regulatoryStatus'] only, no fallback); the original key was never recognised, confirmed via a live checkApprovalGate call. Closest available proxy is extendedFields.MarketAssetProfile.regulatoryStatus (e.g. \"SASRA-regulated\") — a status flag, not really a risk/protection note; a genuine risk/protection field is still a gap. Display label unchanged.",
     },
     {
       catalogue: "market_asset",
@@ -1461,21 +1474,32 @@ const ENVELOPE_ROUTED_CONTRACT_KEYS: Record<CatalogueKey, ReadonlySet<string>> =
   // opportunity branch sets `source` from the envelope only, and dataAsOf is
   // written from the pending update's own `asOf` column, never from figures.
   cbk: new Set(["sourceLink", "sourceAsOf"]),
-  // Slice 8e-1 (Equity) + Slice 8e-2 (REIT) + Slice 8e-3 (Offshore fund).
-  // companyName/reitName/fundName each mirror MMF's fundName/Bank's bankName:
+  // Slice 8e-1 (Equity) + Slice 8e-2 (REIT) + Slice 8e-3 (Offshore fund) +
+  // Slice 8e-4 (SACCO — the last market-asset subtype). companyName/reitName/
+  // fundName/saccoName each mirror MMF's fundName/Bank's bankName:
   // buildPromotionPlan's opportunity branch sets `name` from the envelope
   // (update.name, itself finding.instrumentName) only, never from figures.
   // fundManager mirrors MMF/Bank's fund-manager-equivalent field: the base
   // gate's issuer rule and buildPromotionPlan both read args.issuer/
   // update.issuer from the envelope only, never figures.fundManager (also see
   // the reconfirmed pre-existing gap: finding.issuer is always null for
-  // AI-originated market-asset findings — unaffected by envelope-routing
-  // either way). currency mirrors the same pattern: both the base gate's
-  // currency rule and the offshore-fund KES check read args.currency, never
-  // figures.currency. sourceLink/sourceAsOf mirror MMF/Bank/CBK too. SACCO has
-  // its OWN name-equivalent key (saccoName) — out of scope until its own slice
-  // wires in.
-  market_asset: new Set(["companyName", "reitName", "fundName", "fundManager", "currency", "sourceLink", "sourceAsOf"]),
+  // AI-originated market-asset findings, SACCO included — unaffected by
+  // envelope-routing either way). currency mirrors the same pattern: both the
+  // base gate's currency rule and the offshore-fund KES check read
+  // args.currency, never figures.currency. sourceLink/sourceAsOf mirror
+  // MMF/Bank/CBK too. SACCO itself does not have a contract field for issuer/
+  // currency (neither is in its 11-field product list), so fundManager/
+  // currency stay relevant to Equity/Offshore fund only.
+  market_asset: new Set([
+    "companyName",
+    "reitName",
+    "fundName",
+    "saccoName",
+    "fundManager",
+    "currency",
+    "sourceLink",
+    "sourceAsOf",
+  ]),
 };
 
 /** Read a field's value from a raw key/value bag by trying each of its
@@ -1582,6 +1606,19 @@ export function projectFindingToContractFigures(
     for (const extraKey of field.alsoWriteKeys ?? []) {
       if (!envelopeRouted.has(extraKey)) result[extraKey] = value;
     }
+  }
+  // Slice 8e-4 — SACCO only: stamp a fixed assetType marker onto the drafted
+  // figures. detectMarketAssetSacco()'s PRIMARY signal is figures.assetType
+  // === "sacco", which raw passthrough always carried (the AI extraction
+  // schema requires assetType on every market-asset finding). None of
+  // SACCO's 12 contract fields map to it — it isn't something a manager
+  // edits — so without this, contract-projected figures would silently drop
+  // that reliable primary signal and fall back to weaker heuristics (a
+  // regulatory-status/name text match, or presence of any SACCO-specific
+  // figure). Harmless at promotion time: buildPromotionPlan never reads
+  // figures.assetType for anything.
+  if (contract.catalogue === "market_asset" && contract.subtype === "sacco") {
+    result.assetType = "sacco";
   }
   return result;
 }

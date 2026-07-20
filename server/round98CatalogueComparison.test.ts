@@ -185,9 +185,13 @@ describe("Round 98 · B — Extraction schemas include proposalType/changedField
   });
 
   it("Market asset schema has proposalType in required", () => {
+    // Stage 10b-3 added 15 new per-instrument required fields (recentDividend
+    // through withdrawalTerms) between "assetType" and "currency" — the +500
+    // window no longer reaches proposalType/changedFields/currentValues at
+    // the end of the (now much longer) required array. Widened to match.
     const marketSchemaBlock = src.slice(
       src.indexOf('"instrumentName", "assetType", "ticker"'),
-      src.indexOf('"instrumentName", "assetType", "ticker"') + 500,
+      src.indexOf('"instrumentName", "assetType", "ticker"') + 1500,
     );
     expect(marketSchemaBlock).toContain('"proposalType"');
     expect(marketSchemaBlock).toContain('"changedFields"');

@@ -525,13 +525,18 @@ describe("Stage 10b-2 · D — ResearchDesk.tsx: multi-field edit path extended 
     const idx = researchDeskPage.indexOf("function EditCatalogueFieldsDialog(");
     const nextIdx = researchDeskPage.indexOf("/* ── Pending update review queue");
     const block = researchDeskPage.slice(idx, nextIdx);
-    expect(block).toContain('const isSupported = catalogue === "mmf" || catalogue === "bank" || catalogue === "cbk";');
+    // Stage 10b-3 widened isSupported to also cover market_asset (via
+    // resolveContractCatalogueForUpdate) — the mmf/bank/cbk portion is unchanged.
+    expect(block).toContain('catalogue === "mmf" || catalogue === "bank" || catalogue === "cbk"');
     expect(block).toContain("cbk: {");
   });
 
   it("the Edit fields entry points (pending card + approval modal) are both gated to include cbk", () => {
-    expect(researchDeskPage).toContain('(data?.catalogue === "mmf" || data?.catalogue === "bank" || data?.catalogue === "cbk")');
-    expect(researchDeskPage).toContain('(contract.catalogue === "mmf" || contract.catalogue === "bank" || contract.catalogue === "cbk")');
+    // Stage 10b-3 extended both gates with `|| data?.catalogue === "market_asset"`
+    // / `|| contract.catalogue === "market_asset"` — the mmf/bank/cbk portion
+    // asserted here is unchanged.
+    expect(researchDeskPage).toContain('data?.catalogue === "mmf" || data?.catalogue === "bank" || data?.catalogue === "cbk"');
+    expect(researchDeskPage).toContain('contract.catalogue === "mmf" || contract.catalogue === "bank" || contract.catalogue === "cbk"');
   });
 
   it("CBK's securityType/taxExempt display cleanly (not raw) in the review-queue card, approval modal, and Ask AI finding card", () => {

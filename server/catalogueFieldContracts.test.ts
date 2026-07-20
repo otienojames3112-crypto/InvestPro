@@ -504,24 +504,15 @@ describe("Catalogue field contract · missing fields are marked missingRequiresM
     });
   }
 
-  const knownMissingMarketAsset: Array<{ subtype: "equity" | "reit" | "offshore_fund" | "sacco"; key: string }> = [
-    { subtype: "equity", key: "recentDividend" },
-    { subtype: "equity", key: "priceChange" },
-    { subtype: "equity", key: "marketSector" },
-    { subtype: "equity", key: "minBuyAmount" },
-    { subtype: "equity", key: "riskLevel" },
-    { subtype: "reit", key: "reitType" },
-    { subtype: "reit", key: "recentDistribution" },
-    { subtype: "reit", key: "occupancyRate" },
-    { subtype: "reit", key: "minInvestment" },
-    { subtype: "reit", key: "riskLevel" },
-    { subtype: "offshore_fund", key: "fundType" },
-    { subtype: "offshore_fund", key: "minInvestment" },
-    { subtype: "offshore_fund", key: "withdrawalPeriod" },
-    { subtype: "offshore_fund", key: "riskLevel" },
-    { subtype: "sacco", key: "membershipRequirement" },
-    { subtype: "sacco", key: "fees" },
-  ];
+  // Stage 10b-3 moved every previously-missing market-asset field (recentDividend/
+  // priceChange/marketSector/minBuyAmount/riskLevel for equity; reitType/
+  // recentDistribution/occupancyRate/minInvestment/riskLevel for reit; fundType/
+  // minInvestment/withdrawalPeriod/riskLevel for offshore_fund; membershipRequirement/
+  // fees for sacco) from missingRequiresMigration to extendedFields — opportunities
+  // already has an extendedFields JSON home, the same tier CBK/Bank's own
+  // extendedFields-tier fields use. See server/marketAssetLiveWorkflowParity.test.ts
+  // for their coverage. Nothing market-asset remains in this list.
+  const knownMissingMarketAsset: Array<{ subtype: "equity" | "reit" | "offshore_fund" | "sacco"; key: string }> = [];
 
   for (const { subtype, key } of knownMissingMarketAsset) {
     it(`market_asset/${subtype}.${key} is marked missingRequiresMigration`, () => {
@@ -681,6 +672,12 @@ describe("Catalogue field contract · foundation-only guardrails (no behavior ch
       // shared net-yield computation, date normalization, and the
       // CorrectFigureDialog clean-label cleanup.
       join(root, "server", "cbkLiveWorkflowParity2.test.ts"),
+      // Stage 10b-3 — Market Assets (Equity/REIT/Offshore fund/SACCO)
+      // end-to-end field parity: per-subtype tabbed tables, extraction schema
+      // completion, the market-asset issuer fallback + asOfDate bridge, and
+      // the CorrectFigureDialog/EditCatalogueFieldsDialog generalization to
+      // all four market-asset subtypes.
+      join(root, "server", "marketAssetLiveWorkflowParity.test.ts"),
     ]);
     const unexpectedOffenders = offenders.filter((f) => !allowed.has(f));
     expect(unexpectedOffenders).toEqual([]);

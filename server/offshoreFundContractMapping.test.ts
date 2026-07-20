@@ -105,7 +105,7 @@ describe("Slice 8e-3 · projectFindingToContractFigures (Offshore fund)", () => 
     expect(figures.sourceAsOf).toBeUndefined();
   });
 
-  it("fundType, minInvestment, withdrawalPeriod and riskLevel (missingRequiresMigration) never appear, even if the raw bag happens to carry those exact keys", () => {
+  it("Stage 10b-3 — fundType, minInvestment, withdrawalPeriod and riskLevel (now extendedFields tier) DO appear when the raw bag carries those exact keys", () => {
     const finding = offshoreFundFinding({
       extractedFields: {
         trailingReturn: "8.0",
@@ -116,10 +116,10 @@ describe("Slice 8e-3 · projectFindingToContractFigures (Offshore fund)", () => 
       },
     });
     const figures = projectFindingToContractFigures(offshoreFundContract, finding);
-    expect(figures.fundType).toBeUndefined();
-    expect(figures.minInvestment).toBeUndefined();
-    expect(figures.withdrawalPeriod).toBeUndefined();
-    expect(figures.riskLevel).toBeUndefined();
+    expect(figures.fundType).toBe("Global bond fund");
+    expect(figures.minInvestment).toBe("USD 1,000");
+    expect(figures.withdrawalPeriod).toBe("T+3");
+    expect(figures.riskLevel).toBe("Medium");
     expect(figures.trailingReturnPct).toBe("8.0");
   });
 
@@ -280,7 +280,7 @@ describe("Slice 8e-3 · projectFindingToContractDisplayRows (Offshore fund)", ()
     expect(rows.map((r) => r.label)).toEqual(offshoreFundContract.fields.map((f) => f.label));
   });
 
-  it("fundType, minInvestment, withdrawalPeriod and riskLevel (missingRequiresMigration) are ALWAYS null, even when the raw bag has a matching key", () => {
+  it("Stage 10b-3 — fundType, minInvestment, withdrawalPeriod and riskLevel (now extendedFields tier) surface their real found value, when the raw bag has a matching key", () => {
     const finding = offshoreFundFinding({
       extractedFields: {
         fundType: "Global bond fund",
@@ -290,10 +290,16 @@ describe("Slice 8e-3 · projectFindingToContractDisplayRows (Offshore fund)", ()
       },
     });
     const rows = projectFindingToContractDisplayRows(offshoreFundContract, finding);
-    for (const key of ["fundType", "minInvestment", "withdrawalPeriod", "riskLevel"]) {
+    const expected: Record<string, string> = {
+      fundType: "Global bond fund",
+      minInvestment: "USD 1,000",
+      withdrawalPeriod: "T+3",
+      riskLevel: "Medium",
+    };
+    for (const key of Object.keys(expected)) {
       const row = rows.find((r) => r.key === key)!;
-      expect(row.storageStatus).toBe("missingRequiresMigration");
-      expect(row.value).toBeNull();
+      expect(row.storageStatus).toBe("extendedFields");
+      expect(row.value).toBe(expected[key]);
     }
   });
 
@@ -414,11 +420,13 @@ describe("Slice 8e-3 · FindingCard wiring", () => {
     expect(findingCard).toContain("No figures extracted — identity only.");
   });
 
-  it("CorrectFigureDialog is UNCHANGED for Offshore fund findings — Stage 10b-2b only filtered/relabeled it for CBK, everything else (Offshore fund included) still falls back to the original unfiltered fmtFields", () => {
+  it("Stage 10b-3 — CorrectFigureDialog now ALSO filters/relabels for Offshore fund (and Equity/REIT/SACCO), reusing the same established-fields dropdown CBK got in Stage 10b-2b; MMF/Bank keep the original unfiltered fmtFields fallback", () => {
     const dialogIdx = askAi.indexOf("function CorrectFigureDialog(");
     const dialog = askAi.slice(dialogIdx, askAi.indexOf("function ", dialogIdx + 30));
     expect(dialog).toContain("fmtFields(finding.extractedFields).map((f) => ({ ...f, label: f.key }))");
-    expect(dialog).toContain('finding.targetCatalogue === "cbk" ? getCatalogueFieldContract("cbk") : null');
+    expect(dialog).toContain('finding.targetCatalogue === "cbk"');
+    expect(dialog).toContain('getCatalogueFieldContract("market_asset", "offshore_fund")');
+    expect(dialog).toContain("correctionMarketAssetSubtype");
   });
 
   it("all seven active contract lookups (MMF, Bank, CBK, Equity, REIT, Offshore fund, SACCO) are the only ones present — every market-asset subtype is now wired", () => {

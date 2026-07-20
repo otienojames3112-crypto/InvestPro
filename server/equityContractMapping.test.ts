@@ -104,7 +104,7 @@ describe("Slice 8e-1 · projectFindingToContractFigures (Equity)", () => {
     expect(figures.sourceAsOf).toBeUndefined();
   });
 
-  it("recentDividend, priceChange, marketSector, minBuyAmount and riskLevel (missingRequiresMigration) never appear, even if the raw bag happens to carry those exact keys", () => {
+  it("Stage 10b-3 — recentDividend, priceChange, marketSector, minBuyAmount and riskLevel (now extendedFields tier) DO appear when the raw bag carries those exact keys", () => {
     const finding = equityFinding({
       extractedFields: {
         marketPrice: "18.50",
@@ -116,11 +116,11 @@ describe("Slice 8e-1 · projectFindingToContractFigures (Equity)", () => {
       },
     });
     const figures = projectFindingToContractFigures(equityContract, finding);
-    expect(figures.recentDividend).toBeUndefined();
-    expect(figures.priceChange).toBeUndefined();
-    expect(figures.marketSector).toBeUndefined();
-    expect(figures.minBuyAmount).toBeUndefined();
-    expect(figures.riskLevel).toBeUndefined();
+    expect(figures.recentDividend).toBe("KES 1.20 on 2026-05-01");
+    expect(figures.priceChange).toBe("+2.3%");
+    expect(figures.marketSector).toBe("Telecommunications");
+    expect(figures.minBuyAmount).toBe("100 shares");
+    expect(figures.riskLevel).toBe("Medium");
     expect(figures.lastPrice).toBe("18.50");
   });
 
@@ -270,7 +270,7 @@ describe("Slice 8e-1 · projectFindingToContractDisplayRows (Equity)", () => {
     expect(rows.map((r) => r.label)).toEqual(equityContract.fields.map((f) => f.label));
   });
 
-  it("recentDividend, priceChange, marketSector, minBuyAmount and riskLevel (missingRequiresMigration) are ALWAYS null, even when the raw bag has a matching key", () => {
+  it("Stage 10b-3 — recentDividend, priceChange, marketSector, minBuyAmount and riskLevel (now extendedFields tier) surface their real found value, when the raw bag has a matching key", () => {
     const finding = equityFinding({
       extractedFields: {
         recentDividend: "KES 1.20",
@@ -281,10 +281,17 @@ describe("Slice 8e-1 · projectFindingToContractDisplayRows (Equity)", () => {
       },
     });
     const rows = projectFindingToContractDisplayRows(equityContract, finding);
-    for (const key of ["recentDividend", "priceChange", "marketSector", "minBuyAmount", "riskLevel"]) {
+    const expected: Record<string, string> = {
+      recentDividend: "KES 1.20",
+      priceChange: "+2.3%",
+      marketSector: "Telecommunications",
+      minBuyAmount: "100 shares",
+      riskLevel: "Medium",
+    };
+    for (const key of Object.keys(expected)) {
       const row = rows.find((r) => r.key === key)!;
-      expect(row.storageStatus).toBe("missingRequiresMigration");
-      expect(row.value).toBeNull();
+      expect(row.storageStatus).toBe("extendedFields");
+      expect(row.value).toBe(expected[key]);
     }
   });
 
@@ -392,11 +399,13 @@ describe("Slice 8e-1 · FindingCard wiring", () => {
     expect(findingCard).toContain("No figures extracted — identity only.");
   });
 
-  it("CorrectFigureDialog is UNCHANGED for Equity findings — Stage 10b-2b only filtered/relabeled it for CBK, everything else (Equity included) still falls back to the original unfiltered fmtFields", () => {
+  it("Stage 10b-3 — CorrectFigureDialog now ALSO filters/relabels for Equity (and REIT/Offshore fund/SACCO), reusing the same established-fields dropdown CBK got in Stage 10b-2b; MMF/Bank keep the original unfiltered fmtFields fallback", () => {
     const dialogIdx = askAi.indexOf("function CorrectFigureDialog(");
     const dialog = askAi.slice(dialogIdx, askAi.indexOf("function ", dialogIdx + 30));
     expect(dialog).toContain("fmtFields(finding.extractedFields).map((f) => ({ ...f, label: f.key }))");
-    expect(dialog).toContain('finding.targetCatalogue === "cbk" ? getCatalogueFieldContract("cbk") : null');
+    expect(dialog).toContain('finding.targetCatalogue === "cbk"');
+    expect(dialog).toContain('getCatalogueFieldContract("market_asset", "equity")');
+    expect(dialog).toContain("correctionMarketAssetSubtype");
   });
 
   it("all seven active contract lookups (MMF, Bank, CBK, Equity, REIT, Offshore fund, SACCO) are the only ones present — every market-asset subtype is now wired", () => {

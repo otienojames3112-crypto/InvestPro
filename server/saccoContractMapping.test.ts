@@ -147,7 +147,7 @@ describe("Slice 8e-4 · projectFindingToContractFigures (SACCO)", () => {
     expect(figures.sourceAsOf).toBeUndefined();
   });
 
-  it("membershipRequirement and fees (missingRequiresMigration) never appear, even if the raw bag happens to carry those exact keys", () => {
+  it("Stage 10b-3 — membershipRequirement and fees (now extendedFields tier) DO appear when the raw bag carries those exact keys", () => {
     const finding = saccoFinding({
       extractedFields: {
         shareCapitalDividendRate: "12%",
@@ -156,8 +156,8 @@ describe("Slice 8e-4 · projectFindingToContractFigures (SACCO)", () => {
       },
     });
     const figures = projectFindingToContractFigures(saccoContract, finding);
-    expect(figures.membershipRequirement).toBeUndefined();
-    expect(figures.fees).toBeUndefined();
+    expect(figures.membershipRequirement).toBe("Must be a Kenya Power employee");
+    expect(figures.fees).toBe("KES 200 annual");
     expect(figures.dividendRate).toBe("12%");
   });
 
@@ -341,15 +341,19 @@ describe("Slice 8e-4 · projectFindingToContractDisplayRows (SACCO)", () => {
     expect(rows.map((r) => r.label)).toEqual(saccoContract.fields.map((f) => f.label));
   });
 
-  it("membershipRequirement and fees (missingRequiresMigration) are ALWAYS null, even when the raw bag has a matching key", () => {
+  it("Stage 10b-3 — membershipRequirement and fees (now extendedFields tier) surface their real found value, when the raw bag has a matching key", () => {
     const finding = saccoFinding({
       extractedFields: { membershipRequirement: "Must be a Kenya Power employee", fees: "KES 200 annual" },
     });
     const rows = projectFindingToContractDisplayRows(saccoContract, finding);
-    for (const key of ["membershipRequirement", "fees"]) {
+    const expected: Record<string, string> = {
+      membershipRequirement: "Must be a Kenya Power employee",
+      fees: "KES 200 annual",
+    };
+    for (const key of Object.keys(expected)) {
       const row = rows.find((r) => r.key === key)!;
-      expect(row.storageStatus).toBe("missingRequiresMigration");
-      expect(row.value).toBeNull();
+      expect(row.storageStatus).toBe("extendedFields");
+      expect(row.value).toBe(expected[key]);
     }
   });
 
@@ -463,11 +467,13 @@ describe("Slice 8e-4 · FindingCard wiring", () => {
     expect(findingCard).toContain("No figures extracted — identity only.");
   });
 
-  it("CorrectFigureDialog is UNCHANGED for SACCO findings — Stage 10b-2b only filtered/relabeled it for CBK, everything else (SACCO included) still falls back to the original unfiltered fmtFields", () => {
+  it("Stage 10b-3 — CorrectFigureDialog now ALSO filters/relabels for SACCO (and Equity/REIT/Offshore fund), detected via the same raw extractedFields.assetType === 'sacco' signal used elsewhere in this file; MMF/Bank keep the original unfiltered fmtFields fallback", () => {
     const dialogIdx = askAi.indexOf("function CorrectFigureDialog(");
     const dialog = askAi.slice(dialogIdx, askAi.indexOf("function ", dialogIdx + 30));
     expect(dialog).toContain("fmtFields(finding.extractedFields).map((f) => ({ ...f, label: f.key }))");
-    expect(dialog).toContain('finding.targetCatalogue === "cbk" ? getCatalogueFieldContract("cbk") : null');
+    expect(dialog).toContain('finding.targetCatalogue === "cbk"');
+    expect(dialog).toContain('getCatalogueFieldContract("market_asset", "sacco")');
+    expect(dialog).toContain('String(finding.extractedFields?.assetType ?? "").trim().toLowerCase() === "sacco"');
   });
 
   it("exactly seven getCatalogueFieldContract calls exist — MMF, Bank, CBK, Equity, REIT, Offshore fund, SACCO — no ETF/property/pension/other lookups (those have no active contract at all)", () => {

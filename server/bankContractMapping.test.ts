@@ -418,14 +418,15 @@ describe("Slice 8c · FindingCard wiring", () => {
     expect(findingCard).toContain("No figures extracted — identity only.");
   });
 
-  it("CorrectFigureDialog is UNCHANGED for Bank findings — Stage 10b-2b only filtered/relabeled it for CBK, everything else (Bank included) still falls back to the original unfiltered fmtFields", () => {
+  it("CorrectFigureDialog is UNCHANGED for Bank findings — Stage 10b-2b/10b-3 only filtered/relabeled it for CBK and market-asset subtypes (Equity/REIT/Offshore fund/SACCO); Bank still falls back to the original unfiltered fmtFields", () => {
     const dialogIdx = askAi.indexOf("function CorrectFigureDialog(");
     const dialog = askAi.slice(dialogIdx, askAi.indexOf("function ", dialogIdx + 30));
     expect(dialog).toContain("fmtFields(finding.extractedFields).map((f) => ({ ...f, label: f.key }))");
-    // The dialog now DOES reference catalogueFieldContracts/getCatalogueFieldContract
-    // (Stage 10b-2b, CBK-only) — confirm that usage is scoped to catalogue === "cbk",
-    // not applied generically to Bank or any other catalogue.
-    expect(dialog).toContain('finding.targetCatalogue === "cbk" ? getCatalogueFieldContract("cbk") : null');
+    // The dialog references catalogueFieldContracts/getCatalogueFieldContract for
+    // CBK and market-asset subtypes only — confirm that usage is scoped away from
+    // Bank specifically (no '"bank"' literal anywhere in the dialog's contract calls).
+    expect(dialog).toContain('finding.targetCatalogue === "cbk"');
+    expect(dialog).not.toContain('"bank"');
   });
 
   it("all seven active contract lookups (MMF, Bank, CBK, Equity, REIT, Offshore fund, SACCO) are the only ones present — every market-asset subtype is now wired", () => {

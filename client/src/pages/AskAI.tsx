@@ -529,19 +529,42 @@ function CorrectFigureDialog({
   onOpenChange: (v: boolean) => void;
   onDone: () => void;
 }) {
-  // Stage 10b-2b — for CBK only, the dropdown now offers established
-  // contract fields with their clean labels, sourced back to the RAW key a
-  // correction must actually overwrite (resolveRawFigureKey — never the
-  // canonical key when the raw extraction used an alias, which would leave
-  // a stale duplicate figure behind). Every other catalogue keeps the
-  // original unfiltered fmtFields behavior — raw keys, no established-field
-  // filtering — completely unchanged.
-  const cbkCorrectionContract = finding.targetCatalogue === "cbk" ? getCatalogueFieldContract("cbk") : null;
-  const cbkCorrectionFields = cbkCorrectionContract
+  // Stage 10b-2b (CBK) / Stage 10b-3 (Market Assets) — for these catalogues,
+  // the dropdown now offers established contract fields with their clean
+  // labels, sourced back to the RAW key a correction must actually
+  // overwrite (resolveRawFigureKey — never the canonical key when the raw
+  // extraction used an alias, which would leave a stale duplicate figure
+  // behind). Every other catalogue (MMF/Bank) keeps the original unfiltered
+  // fmtFields behavior — raw keys, no established-field filtering —
+  // completely unchanged. Market-asset subtype resolution mirrors this same
+  // file's equityContract/reitContract/offshoreFundContract/saccoContract
+  // blocks above (SACCO checked via the raw assetType signal, since it
+  // shares assetClass "alt" with ETF/property/pension/other).
+  const correctionMarketAssetSubtype: MarketAssetSubtype | null =
+    finding.targetCatalogue === "market_asset"
+      ? finding.assetClass === "equity" || finding.assetClass === "reit" || finding.assetClass === "offshore_fund"
+        ? finding.assetClass
+        : String(finding.extractedFields?.assetType ?? "").trim().toLowerCase() === "sacco"
+          ? "sacco"
+          : null
+      : null;
+  const correctionContract =
+    finding.targetCatalogue === "cbk"
+      ? getCatalogueFieldContract("cbk")
+      : correctionMarketAssetSubtype === "equity"
+        ? getCatalogueFieldContract("market_asset", "equity")
+        : correctionMarketAssetSubtype === "reit"
+          ? getCatalogueFieldContract("market_asset", "reit")
+          : correctionMarketAssetSubtype === "offshore_fund"
+            ? getCatalogueFieldContract("market_asset", "offshore_fund")
+            : correctionMarketAssetSubtype === "sacco"
+              ? getCatalogueFieldContract("market_asset", "sacco")
+              : null;
+  const correctionFields = correctionContract
     ? (() => {
         const raw = (finding.extractedFields ?? {}) as Record<string, unknown>;
         const out: { key: string; value: string; missing?: boolean; label: string }[] = [];
-        for (const f of cbkCorrectionContract.fields) {
+        for (const f of correctionContract.fields) {
           if (f.storageStatus !== "column" && f.storageStatus !== "extendedFields") continue;
           const rawKey = resolveRawFigureKey(f, raw);
           if (!rawKey) continue;
@@ -550,7 +573,7 @@ function CorrectFigureDialog({
         return out;
       })()
     : null;
-  const fields = cbkCorrectionFields ?? fmtFields(finding.extractedFields).map((f) => ({ ...f, label: f.key }));
+  const fields = correctionFields ?? fmtFields(finding.extractedFields).map((f) => ({ ...f, label: f.key }));
   const [field, setField] = useState<string>(fields[0]?.key ?? "");
   const [newValue, setNewValue] = useState<string>("");
   const [reason, setReason] = useState<string>("");

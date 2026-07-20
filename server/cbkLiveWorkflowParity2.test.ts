@@ -399,7 +399,8 @@ describe("Stage 10b-2b · D — CorrectFigureDialog no longer exposes raw CBK pr
   });
 
   it("11. for CBK, the dropdown resolves established contract fields with clean labels, keyed back to the RAW extraction key", () => {
-    expect(dialogBlock).toContain('finding.targetCatalogue === "cbk" ? getCatalogueFieldContract("cbk") : null');
+    expect(dialogBlock).toContain('finding.targetCatalogue === "cbk"');
+    expect(dialogBlock).toContain('getCatalogueFieldContract("cbk")');
     expect(dialogBlock).toContain("resolveRawFigureKey(f, raw)");
     expect(dialogBlock).toContain('f.storageStatus !== "column" && f.storageStatus !== "extendedFields"');
     expect(dialogBlock).toContain("{f.label} (currently {f.value})");

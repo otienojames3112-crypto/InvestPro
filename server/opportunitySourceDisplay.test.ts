@@ -177,16 +177,28 @@ describe("Slice 8h-2 · B — CbkSecuritiesReference.tsx (GovRow) wiring", () =>
   });
 });
 
-describe("Slice 8h-2 · B — MarketAssetsReference.tsx (MarketRow) wiring — covers equity/REIT/offshore fund/SACCO", () => {
+describe("Slice 8h-2 · B — MarketAssetsReference.tsx (SourceCell) wiring — covers equity/REIT/offshore fund/SACCO", () => {
+  // Stage 10b-3 replaced the single shared MarketRow (covering equity/reit/
+  // offshore_fund/alt via a MARKET_CLASSES constant) with four per-subtype
+  // tabs, each rendering rows through SubtypeRow. The source-cell logic this
+  // slice (8h-2) wired up was extracted into its own shared SourceCell
+  // component, reused identically by all four subtypes (and SACCO, which
+  // already had its own table since Stage 9c) — so the resolveCatalogueSource/
+  // firstFieldProvenanceSourceUrl wiring this describe block checks is now
+  // scoped to SourceCell instead of MarketRow, but the behavior is unchanged.
   it("imports resolveCatalogueSource and firstFieldProvenanceSourceUrl", () => {
     expect(marketAssetsPage).toContain('import { resolveCatalogueSource, firstFieldProvenanceSourceUrl } from "@/lib/format";');
   });
 
-  it("covers all four market-asset subtypes through one shared row component (MARKET_CLASSES)", () => {
-    expect(marketAssetsPage).toContain('const MARKET_CLASSES = ["equity", "reit", "offshore_fund", "alt"] as const;');
+  it("covers all four market-asset subtypes through one shared SourceCell component, rendered from every SubtypeRow branch (equity/reit/offshore_fund/sacco)", () => {
+    expect(marketAssetsPage).toContain("function SourceCell({ r }: { r: Opportunity }) {");
+    const subtypeRowIdx = marketAssetsPage.indexOf("function SubtypeRow(");
+    const subtypeRowBody = marketAssetsPage.slice(subtypeRowIdx);
+    const sourceCellUsages = subtypeRowBody.match(/<SourceCell r=\{r\} \/>/g) ?? [];
+    expect(sourceCellUsages.length).toBe(4);
   });
 
-  it("MarketRow resolves source via resolveCatalogueSource, using the field-provenance fallback and the resolved as-of for staleness", () => {
+  it("SourceCell resolves source via resolveCatalogueSource, using the field-provenance fallback and the resolved as-of for staleness", () => {
     expect(marketAssetsPage).toContain(
       "const catSource = resolveCatalogueSource(r.dataSource, r.extendedFields, r.dataAsOf, firstFieldProvenanceSourceUrl(fp));",
     );
@@ -202,12 +214,19 @@ describe("Slice 8h-2 · B — MarketAssetsReference.tsx (MarketRow) wiring — c
     expect(block).toContain("Source not recorded");
   });
 
-  it("existing table structure (headers, sort keys) is unchanged", () => {
-    expect(marketAssetsPage).toContain('<TableHead><SortHead k="name">Instrument</SortHead></TableHead>');
-    expect(marketAssetsPage).toContain('<SortHead k="lastPrice" numeric>Price</SortHead>');
-    expect(marketAssetsPage).toContain('<SortHead k="yieldPct" numeric>Yield</SortHead>');
-    expect(marketAssetsPage).toContain('<SortHead k="trailingReturnPct" numeric>Trailing 1Y</SortHead>');
-    expect(marketAssetsPage).toContain('<SortHead k="expenseRatioPct" numeric>Fee</SortHead>');
+  it("Stage 10b-3 — each subtype now gets its own explicit-column table (headersFor), replacing the single shared price/yield/trailing-return/fee header set this slice's original pin checked", () => {
+    expect(marketAssetsPage).toContain('function headersFor(subtype: Subtype, contract: CatalogueFieldContract | null)');
+    expect(marketAssetsPage).toContain('case "equity":');
+    expect(marketAssetsPage).toContain('case "reit":');
+    expect(marketAssetsPage).toContain('case "offshore_fund":');
+    expect(marketAssetsPage).toContain('case "sacco":');
+    // The underlying typed columns this slice's original table read
+    // (lastPrice/yieldPct/trailingReturnPct/expenseRatioPct) are still read
+    // by SubtypeRow — only the header/table split changed, not the data model.
+    expect(marketAssetsPage).toContain("fmtPrice(r.lastPrice, r.currency)");
+    expect(marketAssetsPage).toContain("fmtPct(r.yieldPct)");
+    expect(marketAssetsPage).toContain("fmtPct(r.trailingReturnPct)");
+    expect(marketAssetsPage).toContain("fmtPct(r.expenseRatioPct)");
   });
 });
 

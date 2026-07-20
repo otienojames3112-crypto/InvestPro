@@ -139,11 +139,19 @@ describe("Stage 9c · B — CbkSecuritiesReference.tsx: detail drawer", () => {
 });
 
 // ── B. MarketAssetsReference.tsx wiring — static source scan ──────────────
+//
+// Stage 10b-3 replaced the single generic MarketRow table (Equity/REIT/
+// Offshore fund together) plus the separate Stage-9c SaccoTable/SaccoRow with
+// FOUR per-subtype tabs, each rendering its own explicit-column table built
+// from SubtypeTable/headersFor/SubtypeRow — all four now share the SAME
+// architecture SACCO pioneered in Stage 9c (own contract, own columns, no
+// generic price/yield/trailing-return/fee shape forced onto instruments it
+// doesn't fit). isSaccoRow/detectMarketAssetSacco detection is unchanged.
 
 const marketAssetsPage = read("client/src/pages/MarketAssetsReference.tsx");
 
-describe("Stage 9c · B — MarketAssetsReference.tsx: SACCO-specific table", () => {
-  it("7. SACCO rows are detected via detectMarketAssetSacco (the SAME safe detection the gate/promotion layers use), scoped to assetClass 'alt'", () => {
+describe("Stage 10b-3 · B — MarketAssetsReference.tsx: per-subtype tabbed tables", () => {
+  it("7. SACCO rows are still detected via detectMarketAssetSacco (the SAME safe detection the gate/promotion layers use), scoped to assetClass 'alt' — unchanged from Stage 9c", () => {
     expect(marketAssetsPage).toContain('import { detectMarketAssetSacco } from "@shared/researchPipeline";');
     const idx = marketAssetsPage.indexOf("function isSaccoRow(");
     const block = marketAssetsPage.slice(idx, idx + 500);
@@ -151,17 +159,20 @@ describe("Stage 9c · B — MarketAssetsReference.tsx: SACCO-specific table", ()
     expect(block).toContain("detectMarketAssetSacco({");
   });
 
-  it("8. SACCO rows are split OUT of the generic table — nonSaccoFiltered explicitly excludes them, MarketRow (with its price/yield/trailing-return/fee cells) is never rendered for a SACCO row", () => {
-    expect(marketAssetsPage).toContain("const saccoFiltered = useMemo(() => filtered.filter(isSaccoRow), [filtered]);");
-    expect(marketAssetsPage).toContain(
-      "const nonSaccoFiltered = useMemo(() => filtered.filter((r) => !isSaccoRow(r)), [filtered]);",
-    );
-    expect(marketAssetsPage).toContain("{nonSaccoFiltered.map((r) => (");
-    expect(marketAssetsPage).not.toContain("{filtered.map((r) => (\n                            <MarketRow");
+  it("8. every subtype (including SACCO) is split into its OWN bucket via bySubtype — a shared SubtypeTable component renders each tab from its own filtered rows, never one generic table for all four", () => {
+    expect(marketAssetsPage).toContain("sacco: marketRows.filter((r) => isSaccoRow(r) && matches(r)),");
+    expect(marketAssetsPage).toContain('equity: marketRows.filter((r) => r.assetClass === "equity" && matches(r)),');
+    expect(marketAssetsPage).toContain('reit: marketRows.filter((r) => r.assetClass === "reit" && matches(r)),');
+    expect(marketAssetsPage).toContain('offshore_fund: marketRows.filter((r) => r.assetClass === "offshore_fund" && matches(r)),');
+    // Four distinct tabs, each rendering the shared SubtypeTable against its own bucket.
+    expect(marketAssetsPage).toContain('<SubtypeTable subtype="equity" rows={bySubtype.equity}');
+    expect(marketAssetsPage).toContain('<SubtypeTable subtype="reit" rows={bySubtype.reit}');
+    expect(marketAssetsPage).toContain('<SubtypeTable subtype="offshore_fund" rows={bySubtype.offshore_fund}');
+    expect(marketAssetsPage).toContain('<SubtypeTable subtype="sacco" rows={bySubtype.sacco}');
   });
 
-  it("9. SaccoRow shows dividendRate/minimumShareCapital/minimumMonthlyDeposit/withdrawalTerms/regulatoryStatus, read via readContractFieldValue against the SACCO contract", () => {
-    const idx = marketAssetsPage.indexOf("function SaccoRow(");
+  it("9. the SACCO branch of SubtypeRow shows dividendRate/minimumShareCapital/minimumMonthlyDeposit/withdrawalTerms/regulatoryStatus, read via readField (readContractFieldValue against the SACCO contract)", () => {
+    const idx = marketAssetsPage.indexOf("// sacco");
     const block = marketAssetsPage.slice(idx, marketAssetsPage.length);
     for (const key of ["dividendRate", "minimumShareCapital", "minimumMonthlyDeposit", "withdrawalTerms", "regulatoryStatus"]) {
       expect(block).toContain(`readField("${key}")`);
@@ -177,49 +188,70 @@ describe("Stage 9c · B — MarketAssetsReference.tsx: SACCO-specific table", ()
     expect(labelFor("regulatoryStatus")).toBe("Risk / protection note");
   });
 
-  it("SaccoTable's column headers use the REAL contract labels via fieldByKey, not hand-typed strings", () => {
-    const idx = marketAssetsPage.indexOf("function SaccoTable(");
-    const block = marketAssetsPage.slice(idx, marketAssetsPage.indexOf("function SaccoRow("));
-    expect(block).toContain('fieldByKey("dividendRate")?.label');
-    expect(block).toContain('fieldByKey("minimumShareCapital")?.label');
-    expect(block).toContain('fieldByKey("minimumMonthlyDeposit")?.label');
-    expect(block).toContain('fieldByKey("withdrawalTerms")?.label');
-    expect(block).toContain('fieldByKey("regulatoryStatus")?.label');
+  it("headersFor's SACCO case uses the REAL contract labels via the label() closure (contract?.fields.find), not hand-typed strings", () => {
+    const idx = marketAssetsPage.indexOf('case "sacco":', marketAssetsPage.indexOf("function headersFor("));
+    const block = marketAssetsPage.slice(idx, marketAssetsPage.indexOf("function SubtypeRow("));
+    expect(block).toContain('label("dividendRate"');
+    expect(block).toContain('label("minimumShareCapital"');
+    expect(block).toContain('label("minimumMonthlyDeposit"');
+    expect(block).toContain('label("withdrawalTerms"');
+    expect(block).toContain('label("regulatoryStatus"');
   });
 
-  it("10. SACCO source label/link/as-of use the SAME resolveCatalogueSource helper as the generic table (8h)", () => {
-    const idx = marketAssetsPage.indexOf("function SaccoRow(");
-    const block = marketAssetsPage.slice(idx);
+  it("10. SACCO (and every subtype) source label/link/as-of use the SAME shared SourceCell/resolveCatalogueSource helper (8h)", () => {
+    const idx = marketAssetsPage.indexOf("function SourceCell(");
+    const block = marketAssetsPage.slice(idx, idx + 1200);
     expect(block).toContain("resolveCatalogueSource(r.dataSource, r.extendedFields, r.dataAsOf");
     expect(block).toContain("catSource.label");
     expect(block).toContain("catSource.url");
+    // Every subtype's row renders <SourceCell r={r} /> — including SACCO.
+    const saccoIdx = marketAssetsPage.indexOf("// sacco");
+    expect(marketAssetsPage.slice(saccoIdx)).toContain("<SourceCell r={r} />");
   });
 
-  it("11. SACCO's assetType is never rendered as a user-facing field anywhere in SaccoTable/SaccoRow", () => {
-    const idx = marketAssetsPage.indexOf("function SaccoTable(");
-    const block = marketAssetsPage.slice(idx);
+  it("11. SACCO's assetType is never rendered as a user-facing field anywhere in the SACCO branch of SubtypeRow/headersFor", () => {
+    const idx = marketAssetsPage.indexOf("// sacco");
+    const block = marketAssetsPage.slice(idx, marketAssetsPage.length);
     expect(block).not.toMatch(/assetType/);
   });
 
-  it("12. Equity/REIT/offshore-fund table (MarketRow, the header block) is unchanged — same columns, same sort keys, same component", () => {
-    expect(marketAssetsPage).toContain('<TableHead><SortHead k="name">Instrument</SortHead></TableHead>');
-    expect(marketAssetsPage).toContain('<SortHead k="lastPrice" numeric>Price</SortHead>');
-    expect(marketAssetsPage).toContain('<SortHead k="yieldPct" numeric>Yield</SortHead>');
-    expect(marketAssetsPage).toContain('<SortHead k="trailingReturnPct" numeric>Trailing 1Y</SortHead>');
-    expect(marketAssetsPage).toContain('<SortHead k="expenseRatioPct" numeric>Fee</SortHead>');
-    expect(marketAssetsPage).toContain("function MarketRow({");
-    // MarketRow's own body (unchanged from 8h-2) still reads fmtPrice/fmtPct on
-    // the SAME typed columns — proving the component itself wasn't touched.
-    const idx = marketAssetsPage.indexOf("function MarketRow(");
-    const block = marketAssetsPage.slice(idx, marketAssetsPage.indexOf("function SaccoTable("));
-    expect(block).toContain("fmtPrice(r.lastPrice, r.currency)");
-    expect(block).toContain("fmtPct(r.yieldPct)");
-    expect(block).toContain("fmtPct(r.expenseRatioPct)");
+  it("12. Equity, REIT and Offshore fund each get their OWN explicit-column table now (Stage 10b-3) — no longer one generic MarketRow shape forced onto all three", () => {
+    // headersFor has a distinct case per subtype with subtype-specific columns.
+    expect(marketAssetsPage).toContain('case "equity":');
+    expect(marketAssetsPage).toContain('case "reit":');
+    expect(marketAssetsPage).toContain('case "offshore_fund":');
+    expect(marketAssetsPage).toContain('case "sacco":');
+    // Equity gets ticker/dividend/price-change/sector/min-buy columns REIT and
+    // offshore fund don't have — proving genuinely distinct column sets, not
+    // one shared shape.
+    expect(marketAssetsPage).toContain('label("ticker", "Ticker")');
+    expect(marketAssetsPage).toContain('label("recentDividend", "Recent dividend")');
+    expect(marketAssetsPage).toContain('label("occupancyRate", "Occupancy")');
+    expect(marketAssetsPage).toContain('label("expenseRatioPct", "Fees / expense ratio")');
+    // SubtypeRow's equity/reit/offshore_fund branches still read the SAME
+    // underlying typed columns (lastPrice/yieldPct/trailingReturnPct/
+    // expenseRatioPct) via fmtPrice/fmtPct — proving the promotion-side data
+    // model itself is untouched, only the display split changed.
+    const equityIdx = marketAssetsPage.indexOf('if (subtype === "equity")');
+    const reitIdx = marketAssetsPage.indexOf('if (subtype === "reit")');
+    // Search AFTER reitIdx — priceFieldFor (earlier in the file) also contains
+    // 'if (subtype === "offshore_fund")', which would otherwise match first.
+    const offshoreIdx = marketAssetsPage.indexOf('if (subtype === "offshore_fund")', reitIdx);
+    const equityBlock = marketAssetsPage.slice(equityIdx, reitIdx);
+    const reitBlock = marketAssetsPage.slice(reitIdx, offshoreIdx);
+    const offshoreBlock = marketAssetsPage.slice(offshoreIdx, marketAssetsPage.indexOf("// sacco"));
+    expect(equityBlock).toContain("fmtPrice(r.lastPrice, r.currency)");
+    expect(equityBlock).toContain("fmtPct(r.yieldPct)");
+    expect(reitBlock).toContain("fmtPrice(r.lastPrice, r.currency)");
+    expect(reitBlock).toContain("fmtPct(r.yieldPct)");
+    expect(offshoreBlock).toContain("fmtPct(r.trailingReturnPct)");
+    expect(offshoreBlock).toContain("fmtPct(r.expenseRatioPct)");
   });
 
-  it("imports the Slice 9c helpers", () => {
+  it("imports the Slice 9c / Stage 10b-3 helpers (readContractFieldValue, getCatalogueFieldContract, Tabs)", () => {
     expect(marketAssetsPage).toContain('from "@shared/catalogueFieldContracts"');
     expect(marketAssetsPage).toContain("readContractFieldValue");
+    expect(marketAssetsPage).toContain('from "@/components/ui/tabs"');
   });
 });
 

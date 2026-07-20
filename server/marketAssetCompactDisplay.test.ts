@@ -29,9 +29,19 @@ const cbkPage = read("client/src/pages/CbkSecuritiesReference.tsx");
 const mmfPage = read("client/src/pages/MmfFunds.tsx");
 const bankPage = read("client/src/pages/BankInstruments.tsx");
 
-const marketRowIdx = marketAssetsPage.indexOf("function MarketRow(");
-const saccoTableIdx = marketAssetsPage.indexOf("function SaccoTable(");
-const marketRowBlock = marketAssetsPage.slice(marketRowIdx, saccoTableIdx);
+// Stage 10b-3 replaced the single generic MarketRow (Equity/REIT/Offshore fund
+// together) with per-subtype branches inside SubtypeRow. Slice each subtype's
+// branch out individually so these tests scope to the right block, the same
+// way marketRowBlock used to scope to MarketRow as a whole.
+const subtypeRowIdx = marketAssetsPage.indexOf("function SubtypeRow(");
+const equityBranchIdx = marketAssetsPage.indexOf('if (subtype === "equity")', subtypeRowIdx);
+const reitBranchIdx = marketAssetsPage.indexOf('if (subtype === "reit")', subtypeRowIdx);
+const offshoreBranchIdx = marketAssetsPage.indexOf('if (subtype === "offshore_fund")', reitBranchIdx);
+const saccoBranchIdx = marketAssetsPage.indexOf("// sacco", offshoreBranchIdx);
+const equityBlock = marketAssetsPage.slice(equityBranchIdx, reitBranchIdx);
+const reitBlock = marketAssetsPage.slice(reitBranchIdx, offshoreBranchIdx);
+const offshoreBlock = marketAssetsPage.slice(offshoreBranchIdx, saccoBranchIdx);
+const marketRowBlock = marketAssetsPage.slice(subtypeRowIdx, marketAssetsPage.length);
 
 // ── A. Contract lookups (pure, no DB) ───────────────────────────────────────
 
@@ -72,66 +82,75 @@ describe("Stage 9d · A — Equity/REIT/offshore contract fields (pure, no DB)",
   });
 });
 
-// ── B. MarketAssetsReference.tsx: MarketRow wiring ──────────────────────────
+// ── B. MarketAssetsReference.tsx: SubtypeRow compact fields ────────────────
+//
+// Stage 10b-3 replaced the single MarketRow (shared across Equity/REIT/
+// Offshore fund) with per-subtype branches inside SubtypeRow, each with its
+// own explicit column set (see cbkSaccoCatalogueDisplay.test.ts for the
+// header-level proof). These tests re-verify the SAME field-level behaviour
+// Stage 9d established — ticker, REIT distribution yield/NAV, offshore FX
+// risk note — now inside their respective SubtypeRow branches.
 
-describe("Stage 9d · B — MarketAssetsReference.tsx: MarketRow compact fields", () => {
-  it("1. Equity row shows ticker/symbol when available — MarketRow reads it via readContractFieldValue and renders it only for assetClass 'equity'", () => {
-    expect(marketRowBlock).toContain('const ticker = subtype === "equity" ? readSubtypeField("ticker") : null;');
-    expect(marketRowBlock).toContain("{ticker && (");
+describe("Stage 10b-3 · B — MarketAssetsReference.tsx: SubtypeRow compact fields", () => {
+  it("1. Equity row shows ticker/symbol when available, read via readField (readContractFieldValue) and rendered only in the equity branch", () => {
+    expect(equityBlock).toContain('const ticker = readField("ticker");');
+    expect(equityBlock).toContain("{ticker && <Badge");
   });
 
-  it("2. Equity existing price/yield/source display remains unchanged", () => {
-    expect(marketRowBlock).toContain("fmtPrice(r.lastPrice, r.currency)");
-    expect(marketRowBlock).toContain("fmtPct(r.yieldPct)");
-    expect(marketRowBlock).toContain("fmtPct(r.expenseRatioPct)");
-    expect(marketRowBlock).toContain("resolveCatalogueSource(r.dataSource, r.extendedFields, r.dataAsOf, firstFieldProvenanceSourceUrl(fp))");
+  it("2. Equity price/yield/source display uses the same shared helpers as every other subtype", () => {
+    expect(equityBlock).toContain("fmtPrice(r.lastPrice, r.currency)");
+    expect(equityBlock).toContain("fmtPct(r.yieldPct)");
+    expect(equityBlock).toContain("<SourceCell r={r} />");
   });
 
-  it("3. REIT row shows distribution yield using the clear, contract-derived REIT-specific label, not just generic yieldKind", () => {
-    expect(marketRowBlock).toContain(
-      'const distributionYieldLabel = subtype === "reit" ? (subtypeField("distributionYield")?.label ?? null) : null;',
-    );
-    expect(marketRowBlock).toContain("{distributionYieldLabel ? (");
+  it("3. REIT's Distribution yield column header resolves the clear, contract-derived REIT-specific label via headersFor's label() closure, not a hardcoded string", () => {
+    const idx = marketAssetsPage.indexOf('case "reit":', marketAssetsPage.indexOf("function headersFor("));
+    const block = marketAssetsPage.slice(idx, marketAssetsPage.indexOf('case "offshore_fund":'));
+    expect(block).toContain('label("distributionYield", "Distribution yield")');
+    const contract = getCatalogueFieldContract("market_asset", "reit");
+    expect(contract?.fields.find((f) => f.key === "distributionYield")?.label).toBe("Distribution yield");
   });
 
-  it("4. REIT NAV is surfaced when available, formatted via the existing fmtPrice helper", () => {
-    expect(marketRowBlock).toContain('const nav = subtype === "reit" ? readSubtypeField("nav") : null;');
-    expect(marketRowBlock).toContain("{nav && <div className=\"text-[10px] text-muted-foreground font-normal\">NAV {fmtPrice(nav, r.currency)}</div>}");
+  it("4. REIT NAV is surfaced in its own dedicated column when available, formatted via the existing fmtPrice helper", () => {
+    expect(reitBlock).toContain('const nav = readField("nav");');
+    expect(reitBlock).toContain('{nav ? fmtPrice(nav, r.currency) : "—"}');
   });
 
-  it("5. Existing REIT price/source display remains unchanged (same shared cells as Equity/offshore)", () => {
-    expect(marketRowBlock).toContain("fmtPrice(r.lastPrice, r.currency)");
-    expect(marketRowBlock).toContain("catSource.label");
+  it("5. REIT price/source display uses the same shared helpers as every other subtype", () => {
+    expect(reitBlock).toContain("fmtPrice(r.lastPrice, r.currency)");
+    expect(reitBlock).toContain("<SourceCell r={r} />");
   });
 
   it("6. Offshore fund row shows FX risk note when available, via a tooltip on the existing FX-risk badge", () => {
-    expect(marketRowBlock).toContain('const fxRiskNote = subtype === "offshore_fund" ? readSubtypeField("fxRiskNote") : null;');
-    expect(marketRowBlock).toContain("fxRiskNote ? (");
-    expect(marketRowBlock).toContain('<TooltipContent side="left" className="max-w-xs text-xs">{fxRiskNote}</TooltipContent>');
+    expect(offshoreBlock).toContain('const fxRiskNote = readField("fxRiskNote");');
+    expect(offshoreBlock).toContain("fxRiskNote ? (");
+    expect(offshoreBlock).toContain('<TooltipContent side="left" className="max-w-xs text-xs">{fxRiskNote}</TooltipContent>');
   });
 
-  it("7. Existing offshore currency/return/expense/source display, and the FX-risk badge itself when no note is on record, remain unchanged", () => {
-    expect(marketRowBlock).toContain("profile.fxExposed &&");
-    expect(marketRowBlock).toContain(
+  it("7. Existing offshore currency/return/expense/source display, and the FX-risk badge itself when no note is on record, remain intact", () => {
+    expect(offshoreBlock).toContain('r.currency !== "KES"');
+    expect(offshoreBlock).toContain(
       '<Badge variant="outline" className="mt-1 text-[10px] px-1.5 py-0 gap-1 border-blue-500/30 text-blue-600 dark:text-blue-400">',
     );
-    expect(marketRowBlock).toContain('<Globe className="w-2.5 h-2.5" /> FX risk');
-    expect(marketRowBlock).toContain("fmtPct(r.expenseRatioPct)");
-    expect(marketRowBlock).toContain("trailing.toFixed(2)");
+    expect(offshoreBlock).toContain('<Globe className="w-2.5 h-2.5" /> FX risk');
+    expect(offshoreBlock).toContain("fmtPct(r.expenseRatioPct)");
+    expect(offshoreBlock).toContain("fmtPct(r.trailingReturnPct)");
   });
 
-  it("11. No raw JSON or raw camelCase keys appear in MarketRow's touched cells — every new field goes through readContractFieldValue/contract labels, never a raw extendedFields dump", () => {
+  it("11. No raw JSON or raw camelCase keys appear in SubtypeRow's touched cells — every field goes through readField/readContractFieldValue, never a raw extendedFields dump", () => {
     expect(marketRowBlock).not.toContain("Object.entries(r.extendedFields");
     expect(marketRowBlock).not.toContain("JSON.stringify");
   });
 
-  it("12. Source label/link/as-of remains clean and clickable, unchanged", () => {
-    expect(marketRowBlock).toContain('target="_blank"');
-    expect(marketRowBlock).toContain('rel="noopener noreferrer"');
-    expect(marketRowBlock).toContain("catSource.url");
+  it("12. Source label/link/as-of remains clean and clickable, unchanged — shared SourceCell component", () => {
+    const idx = marketAssetsPage.indexOf("function SourceCell(");
+    const block = marketAssetsPage.slice(idx, idx + 1200);
+    expect(block).toContain('target="_blank"');
+    expect(block).toContain('rel="noopener noreferrer"');
+    expect(block).toContain("catSource.url");
   });
 
-  it("imports the Slice 9d helpers (same imports 9c already established — no new imports needed)", () => {
+  it("imports the Slice 9d / Stage 10b-3 helpers (readContractFieldValue, getCatalogueFieldContract)", () => {
     expect(marketAssetsPage).toContain('from "@shared/catalogueFieldContracts"');
     expect(marketAssetsPage).toContain("readContractFieldValue");
     expect(marketAssetsPage).toContain("getCatalogueFieldContract");
@@ -140,31 +159,32 @@ describe("Stage 9d · B — MarketAssetsReference.tsx: MarketRow compact fields"
 
 // ── 8/9/10. Regression — SACCO table, CBK drawer, MMF/Bank untouched ────────
 
-describe("Stage 9d · Regression — 9c SACCO/CBK and MMF/Bank untouched", () => {
-  it("8. SACCO-specific table from 9c remains unchanged — SaccoTable/SaccoRow still present and still split out via isSaccoRow", () => {
-    expect(marketAssetsPage).toContain("function SaccoTable({");
-    expect(marketAssetsPage).toContain("function SaccoRow({");
+describe("Stage 10b-3 · Regression — SACCO/CBK and MMF/Bank untouched", () => {
+  it("8. SACCO detection/rendering still works — isSaccoRow is unchanged, and SACCO now renders through the SAME shared SubtypeTable/SubtypeRow every other subtype uses (Stage 10b-3 generalized 9c's own-table pattern to all four)", () => {
+    expect(marketAssetsPage).toContain("function SubtypeTable({");
+    expect(marketAssetsPage).toContain("function SubtypeRow({");
     expect(marketAssetsPage).toContain("function isSaccoRow(r: Opportunity): boolean {");
   });
 
   it("9. CBK drawer from 9c remains unchanged — CbkSecuritiesReference.tsx untouched by this slice", () => {
     expect(cbkPage).toContain("function CbkDetailDrawer(");
     expect(cbkPage).not.toContain("Stage 9d");
+    expect(cbkPage).not.toContain("Stage 10b-3");
   });
 
-  it("10. MMF and Bank display remain unchanged — neither imports any Stage 9d MarketRow addition", () => {
+  it("10. MMF and Bank display remain unchanged — neither references any market-asset-specific SubtypeRow/SubtypeTable addition", () => {
     for (const page of [mmfPage, bankPage]) {
-      expect(page).not.toContain("subtypeContract");
-      expect(page).not.toContain("distributionYieldLabel");
+      expect(page).not.toContain("SubtypeTable");
+      expect(page).not.toContain("SubtypeRow");
       expect(page).not.toContain("fxRiskNote");
     }
   });
 
-  it("Equity/REIT/offshore-fund table header block is unchanged — same columns, same sort keys (9c's own pin, re-verified after 9d's MarketRow edits)", () => {
-    expect(marketAssetsPage).toContain('<TableHead><SortHead k="name">Instrument</SortHead></TableHead>');
-    expect(marketAssetsPage).toContain('<SortHead k="lastPrice" numeric>Price</SortHead>');
-    expect(marketAssetsPage).toContain('<SortHead k="yieldPct" numeric>Yield</SortHead>');
-    expect(marketAssetsPage).toContain('<SortHead k="trailingReturnPct" numeric>Trailing 1Y</SortHead>');
-    expect(marketAssetsPage).toContain('<SortHead k="expenseRatioPct" numeric>Fee</SortHead>');
+  it("Equity/REIT/Offshore-fund/SACCO each keep their OWN distinct header set (headersFor) — re-verified after Stage 10b-3's per-subtype split", () => {
+    expect(marketAssetsPage).toContain('function headersFor(subtype: Subtype, contract: CatalogueFieldContract | null)');
+    expect(marketAssetsPage).toContain('case "equity":');
+    expect(marketAssetsPage).toContain('case "reit":');
+    expect(marketAssetsPage).toContain('case "offshore_fund":');
+    expect(marketAssetsPage).toContain('case "sacco":');
   });
 });

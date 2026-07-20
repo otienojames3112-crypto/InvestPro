@@ -445,7 +445,7 @@ function ApproveDialog({
                   <div className="text-xs font-medium text-muted-foreground flex items-center gap-1.5">
                     <ListChecks className="w-3.5 h-3.5" /> Catalogue fields
                   </div>
-                  {(data?.catalogue === "mmf" || data?.catalogue === "bank" || data?.catalogue === "cbk") && (
+                  {(data?.catalogue === "mmf" || data?.catalogue === "bank" || data?.catalogue === "cbk" || data?.catalogue === "market_asset") && (
                     <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" onClick={onEditFields}>
                       <PencilLine className="w-3 h-3 mr-1" /> Edit
                     </Button>
@@ -530,9 +530,11 @@ function ApproveDialog({
  * updatePendingFields) — distinct from Correct Figure, which versions an
  * already-drafted finding.
  * MMF + Bank + CBK (Stage 10b-1 / 10b-2) — the button that opens this is
- * gated to catalogue === "mmf" || "bank" || "cbk". Market asset gets its own
- * wiring later, the same staged rollout Slices 8b-8e already established
- * per catalogue.
+ * gated to catalogue === "mmf" || "bank" || "cbk". Stage 10b-3 extended it
+ * to Market Assets (Equity/REIT/Offshore fund/SACCO) — unlike the other
+ * three, "market_asset" alone isn't enough to resolve a contract; the
+ * SUBTYPE (equity/reit/offshore_fund/sacco) is needed too, resolved the SAME
+ * way the pending-card/approval-modal already do (resolveContractCatalogueForUpdate).
  */
 function EditCatalogueFieldsDialog({ updateId, onClose }: { updateId: number | null; onClose: () => void }) {
   const utils = trpc.useUtils();
@@ -541,9 +543,19 @@ function EditCatalogueFieldsDialog({ updateId, onClose }: { updateId: number | n
     { enabled: updateId != null, refetchOnWindowFocus: false },
   );
   const update = data?.update;
-  const catalogue = update ? catalogueForAssetClass(update.assetClass as AssetClass) : null;
-  const isSupported = catalogue === "mmf" || catalogue === "bank" || catalogue === "cbk";
-  const contract = isSupported && catalogue ? getCatalogueFieldContract(catalogue) : null;
+  const resolved = update
+    ? resolveContractCatalogueForUpdate({
+        assetClass: update.assetClass as AssetClass,
+        figures: update.figures as Record<string, unknown> | null,
+        name: update.name,
+        issuer: update.issuer,
+      })
+    : null;
+  const catalogue = resolved?.catalogue ?? null;
+  const subtype = resolved?.subtype;
+  const isSupported =
+    catalogue === "mmf" || catalogue === "bank" || catalogue === "cbk" || (catalogue === "market_asset" && subtype !== undefined);
+  const contract = isSupported && catalogue ? getCatalogueFieldContract(catalogue, subtype) : null;
   const rows =
     contract && update
       ? projectFindingToContractDisplayRows(contract, {
@@ -567,7 +579,7 @@ function EditCatalogueFieldsDialog({ updateId, onClose }: { updateId: number | n
   // to the update's `name`, but Bank's "bankName" maps to `issuer` (mirrors
   // buildContractRawValueBag's own `bankName: finding.issuer` mapping) —
   // hardcoding one shared table would have silently mis-routed one of them.
-  const ENVELOPE_KEYS_BY_CATALOGUE: Record<string, Record<string, "name" | "issuer" | "source" | "asOf">> = {
+  const ENVELOPE_KEYS_BY_CATALOGUE: Record<string, Record<string, "name" | "issuer" | "source" | "asOf" | "currency">> = {
     mmf: {
       fundName: "name",
       fundManager: "issuer",
@@ -584,6 +596,23 @@ function EditCatalogueFieldsDialog({ updateId, onClose }: { updateId: number | n
     // the contract itself has no "name" field; a security's identity is just
     // its raw instrument name, never a figures-bag key a manager edits here).
     cbk: {
+      sourceLink: "source",
+      sourceAsOf: "asOf",
+    },
+    // Stage 10b-3 — Market Assets: one flat map covers all four subtypes
+    // since each contract only ever carries ITS OWN identity key (an equity
+    // finding's rows never contain "reitName", etc. — no collision risk),
+    // mirroring ENVELOPE_ROUTED_CONTRACT_KEYS.market_asset's own flat Set.
+    // "currency" is envelope-routed only for offshore fund (the other three
+    // don't have a currency contract field at all) — updatePendingFields
+    // already supports it.
+    market_asset: {
+      companyName: "name",
+      reitName: "name",
+      fundName: "name",
+      saccoName: "name",
+      fundManager: "issuer",
+      currency: "currency",
       sourceLink: "source",
       sourceAsOf: "asOf",
     },
@@ -629,7 +658,7 @@ function EditCatalogueFieldsDialog({ updateId, onClose }: { updateId: number | n
   const handleSave = () => {
     if (updateId == null) return;
     const figures: Record<string, unknown> = {};
-    const envelope: { name?: string; issuer?: string; source?: string; asOf?: number } = {};
+    const envelope: { name?: string; issuer?: string; source?: string; asOf?: number; currency?: string } = {};
     for (const row of editableRows) {
       const v = (values[row.key] ?? "").trim();
       if (v === "") continue;
@@ -996,10 +1025,9 @@ function PendingQueue() {
                 >
                   <XCircle className="w-3.5 h-3.5 mr-1.5" /> Reject
                 </Button>
-                {/* Stage 10a (MMF) / Stage 10b-1 (Bank) — see EditCatalogueFieldsDialog's
-                    own doc comment; CBK/Market asset get their own wiring later, the
-                    same staged-rollout pattern Slices 8b-8e already established. */}
-                {fullContract && (contract.catalogue === "mmf" || contract.catalogue === "bank" || contract.catalogue === "cbk") && (
+                {/* Stage 10a (MMF) / Stage 10b-1 (Bank) / Stage 10b-2 (CBK) / Stage
+                    10b-3 (Market Assets) — see EditCatalogueFieldsDialog's own doc comment. */}
+                {fullContract && (contract.catalogue === "mmf" || contract.catalogue === "bank" || contract.catalogue === "cbk" || contract.catalogue === "market_asset") && (
                   <Button
                     size="sm"
                     variant="outline"

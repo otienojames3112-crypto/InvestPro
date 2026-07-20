@@ -1801,6 +1801,12 @@ const MARKET_ASSET_EXTRACTION_SCHEMA = {
     additionalProperties: false,
     properties: {
       answer: { type: "string" },
+      // Stage 10b-3 — a single as-of date for the whole source (e.g. a
+      // factsheet's "As of: 17 July 2026"), same bridge pattern as MMF's
+      // benchmarkDate / Bank's asOfDate / CBK's applicationDeadline. Market
+      // assets had no such bridge at all before this — a source's stated
+      // as-of date was captured nowhere, so it always fell through to null.
+      asOfDate: { type: ["string", "null"], description: "As-of date for the figures in this source, if stated, e.g. 'As of: 17 July 2026'" },
       instruments: {
         type: "array",
         items: {
@@ -1817,6 +1823,30 @@ const MARKET_ASSET_EXTRACTION_SCHEMA = {
             distributionYield: { type: ["string", "null"] },
             trailingReturn: { type: ["string", "null"] },
             fee: { type: ["string", "null"] },
+            // Stage 10b-3 — Equity established fields with nowhere to land
+            // in the schema before this.
+            recentDividend: { type: ["string", "null"], description: "Equity: the most recent per-share dividend paid, verbatim, e.g. 'KES 1.50 per share'" },
+            priceChange: { type: ["string", "null"], description: "Equity: the source's own stated price change (e.g. day change), verbatim, e.g. '+2.00% today' — only if the source states it directly, never computed from history" },
+            marketSector: { type: ["string", "null"], description: "Equity: industry/sector classification, e.g. 'Telecommunications'" },
+            minBuyAmount: { type: ["string", "null"], description: "Equity: minimum buy amount or board lot, e.g. '100 shares'" },
+            riskLevel: { type: ["string", "null"], description: "Equity/REIT/offshore fund: risk level/rating as stated by the source, e.g. 'Medium'" },
+            // Stage 10b-3 — REIT established fields with nowhere to land.
+            reitType: { type: ["string", "null"], description: "REIT: e.g. 'Income REIT', 'Development REIT'" },
+            recentDistribution: { type: ["string", "null"], description: "REIT: the most recent per-unit distribution paid, verbatim" },
+            occupancyRate: { type: ["string", "null"], description: "REIT: occupancy rate, if stated, e.g. '92%'" },
+            // Stage 10b-3 — shared between REIT and offshore fund (both established
+            // field lists include "Minimum investment", REIT's own column today).
+            minInvestment: { type: ["string", "null"], description: "REIT/offshore fund: minimum investment amount, verbatim with currency" },
+            // Stage 10b-3 — Offshore fund established fields with nowhere to
+            // land: the schema had NO manager/provider field at all, so
+            // finding.issuer was always null for every market-asset finding.
+            fundManager: { type: ["string", "null"], description: "Offshore fund: the fund manager / provider name, distinct from the fund's own name" },
+            fundType: { type: ["string", "null"], description: "Offshore fund: e.g. 'money market', 'equity fund', 'balanced fund'" },
+            withdrawalPeriod: { type: ["string", "null"], description: "Offshore fund: withdrawal notice period or settlement time, verbatim" },
+            fxRisk: { type: ["string", "null"], description: "Offshore fund: FX risk note as stated by the source" },
+            // Stage 10b-3 — SACCO established fields with nowhere to land.
+            membershipRequirement: { type: ["string", "null"], description: "SACCO: membership eligibility requirement, verbatim" },
+            fees: { type: ["string", "null"], description: "SACCO: fees / charges, verbatim" },
             shareCapitalDividendRate: { type: ["string", "null"], description: "SACCO share-capital dividend rate, % p.a." },
             depositRebateRate: { type: ["string", "null"], description: "SACCO deposit rebate / deposit interest rate, % p.a." },
             minimumShareCapital: { type: ["string", "null"], description: "Minimum SACCO share capital amount, usually KES" },
@@ -1832,11 +1862,11 @@ const MARKET_ASSET_EXTRACTION_SCHEMA = {
             changedFields: { type: "array", items: { type: "string" }, description: "List of field names that differ from current row" },
             currentValues: { type: "array", items: { type: "object", additionalProperties: false, properties: { field: { type: "string" }, value: { type: "string" } }, required: ["field", "value"] }, description: "Current values for each changed field" },
           },
-          required: ["instrumentName", "assetType", "ticker", "exchange", "marketPrice", "nav", "dividendYield", "distributionYield", "trailingReturn", "fee", "shareCapitalDividendRate", "depositRebateRate", "minimumShareCapital", "minimumMonthlyDeposit", "regulatoryStatus", "withdrawalTerms", "currency", "rawExcerpt", "warnings", "confidence", "proposalType", "matchedCurrentRow", "changedFields", "currentValues"],
+          required: ["instrumentName", "assetType", "ticker", "exchange", "marketPrice", "nav", "dividendYield", "distributionYield", "trailingReturn", "fee", "recentDividend", "priceChange", "marketSector", "minBuyAmount", "riskLevel", "reitType", "recentDistribution", "occupancyRate", "minInvestment", "fundManager", "fundType", "withdrawalPeriod", "fxRisk", "membershipRequirement", "fees", "shareCapitalDividendRate", "depositRebateRate", "minimumShareCapital", "minimumMonthlyDeposit", "regulatoryStatus", "withdrawalTerms", "currency", "rawExcerpt", "warnings", "confidence", "proposalType", "matchedCurrentRow", "changedFields", "currentValues"],
         },
       },
     },
-    required: ["answer", "instruments"],
+    required: ["answer", "asOfDate", "instruments"],
   },
 } as const;
 
@@ -1873,7 +1903,7 @@ function extractionSchemaForClass(sc: SourceClass): { schema: object; prompt: st
     case "market_asset_price":
       return {
         schema: MARKET_ASSET_EXTRACTION_SCHEMA,
-        prompt: `${STRUCTURED_EXTRACTION_PREAMBLE}\n\nThis is a MARKET ASSET factsheet or price board. Extract one entry per distinct instrument (equity, REIT, ETF, offshore fund, SACCO).\nFor each, extract: asset type, ticker, exchange, market price, NAV, dividend yield, distribution yield, trailing 12-month return, expense ratio/fee, and currency. For SACCO entries, also extract the share-capital dividend rate, deposit rebate / deposit interest rate, minimum share capital, minimum monthly deposit / contribution, SASRA-regulated or other regulatory status, and withdrawal / liquidity terms.\n\nIf a field is not printed, set it to "missing_from_source".`,
+        prompt: `${STRUCTURED_EXTRACTION_PREAMBLE}\n\nThis is a MARKET ASSET factsheet or price board. Extract one entry per distinct instrument (equity, REIT, ETF, offshore fund, SACCO).\nFor each, extract: asset type, ticker, exchange, market price, NAV, dividend yield, distribution yield, trailing 12-month return, expense ratio/fee, RISK LEVEL (as stated by the source), and currency.\nFor EQUITY entries, also extract: recent dividend (most recent per-share payout), price change (only if the source states its own day/period change directly — never compute one), market sector, and minimum buy amount / board lot.\nFor REIT entries, also extract: REIT type, recent distribution, occupancy rate (if stated), and minimum investment.\nFor OFFSHORE FUND entries, also extract: fund manager / provider (distinct from the fund's own name), fund type, minimum investment, withdrawal period, and FX risk note.\nFor SACCO entries, also extract: membership requirement, fees / charges, share-capital dividend rate, deposit rebate / deposit interest rate, minimum share capital, minimum monthly deposit / contribution, SASRA-regulated or other regulatory status, and withdrawal / liquidity terms.\nIf the source states a single AS-OF date for these figures (e.g. "As of: 17 July 2026"), extract it as asOfDate at the top level, alongside the instruments.\n\nIf a field is not printed, set it to "missing_from_source".`,
       };
     case "unknown":
       return null;
@@ -2186,6 +2216,19 @@ export function structuredInstrumentToDraft(
       ? sharedFields.asOfDate.trim()
       : null;
 
+  // Stage 10b-3 — market-asset-only: same bridge as Bank's asOfDate above
+  // (MARKET_ASSET_EXTRACTION_SCHEMA.asOfDate). Market assets had no as-of
+  // bridge at all before this — a source's stated "As of: ..." date was
+  // captured nowhere, so every equity/REIT/offshore-fund/SACCO finding's
+  // sourceAsOf fell through to null regardless of what the source said.
+  const marketAssetSourceAsOf =
+    targetCatalogue === "market_asset" &&
+    typeof sharedFields?.asOfDate === "string" &&
+    sharedFields.asOfDate.trim() !== "" &&
+    sharedFields.asOfDate !== MISSING_FROM_SOURCE
+      ? sharedFields.asOfDate.trim()
+      : null;
+
   // Round 103 — FIELD NORMALIZATION. Map extraction-schema names to catalogue
   // canonical names so the approval gate recognizes them (e.g. effectiveAnnualRate → ear).
   const normalised = normaliseExtractionFields(figures, targetCatalogue);
@@ -2308,11 +2351,30 @@ export function structuredInstrumentToDraft(
     sharedFields.auctionDate.trim() !== "" &&
     sharedFields.auctionDate !== MISSING_FROM_SOURCE
       ? sharedFields.auctionDate.trim()
-      : (mmfBenchmarkAsOf ?? bankSourceAsOf);
+      : (mmfBenchmarkAsOf ?? bankSourceAsOf ?? marketAssetSourceAsOf);
 
   return {
     instrumentName: name,
-    issuer: typeof raw.fundManager === "string" ? raw.fundManager : typeof raw.bankName === "string" ? raw.bankName : null,
+    // Stage 10b-3 — market-asset findings had NO manager/issuer concept in
+    // the extraction schema at all (fundManager was added this stage,
+    // offshore-fund-specific), so finding.issuer was ALWAYS null — and the
+    // base gate's "issuer / manager" rule (CATALOGUE_FIELD_RULES.market_
+    // asset, checked for every subtype) could never be satisfied by AI
+    // extraction alone for equity/REIT/SACCO, which have no established
+    // "issuer" field distinct from their own name at all (a listed company
+    // or a SACCO IS its own issuer). Falling back to the instrument's own
+    // name for market-asset findings with no genuinely distinct
+    // manager/provider text closes that false block without fabricating a
+    // DIFFERENT entity — offshore funds still get a real, separately
+    // extracted fundManager whenever the source states one.
+    issuer:
+      typeof raw.fundManager === "string"
+        ? raw.fundManager
+        : typeof raw.bankName === "string"
+          ? raw.bankName
+          : targetCatalogue === "market_asset"
+            ? name
+            : null,
     assetClass,
     targetCatalogue,
     currency: typeof raw.currency === "string" ? raw.currency : "KES",

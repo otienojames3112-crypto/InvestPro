@@ -2744,12 +2744,19 @@ export async function reviewResearchUpdate(args: {
     // Slice 8f — merge in the envelope's source provenance (see sourceEnrichment
     // above) so it's not lost from the live row, even when there was no structured
     // extraction blob to merge it into.
+    // Stage 10b-1 — the extendedFields-only tier of Bank's contract fields
+    // (productName, earlyWithdrawalRule) was never merged in here, unlike CBK/
+    // market_asset's own promotion branch below (Slice 8g-2) — same class of
+    // gap, closed the same way. Merge order matches the opportunity branch:
+    // raw structured-extraction blob first (lowest trust), then contract-
+    // derived extendedFields (governed, gate-checked), then the source
+    // envelope last (unchanged from 8f — always wins on any overlapping key).
     const bankExtRaw = figuresIn._extendedFields;
-    if (bankExtRaw) {
-      const bankExtended = typeof bankExtRaw === "string" ? JSON.parse(bankExtRaw) : bankExtRaw;
-      (values as Record<string, unknown>).extendedFields = { ...bankExtended, ...sourceEnrichment };
-    } else if (Object.keys(sourceEnrichment).length > 0) {
-      (values as Record<string, unknown>).extendedFields = sourceEnrichment;
+    const bankRawExtended = bankExtRaw ? (typeof bankExtRaw === "string" ? JSON.parse(bankExtRaw) : bankExtRaw) : {};
+    const bankContractExtended = projectContractFiguresToExtendedFields("bank", undefined, figuresIn);
+    const bankMergedExtended = { ...bankRawExtended, ...bankContractExtended, ...sourceEnrichment };
+    if (Object.keys(bankMergedExtended).length > 0) {
+      (values as Record<string, unknown>).extendedFields = bankMergedExtended;
     }
     if (existing[0]) {
       await db.update(bankInstruments).set(values).where(eq(bankInstruments.id, existing[0].id));

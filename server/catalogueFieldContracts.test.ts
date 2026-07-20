@@ -660,6 +660,12 @@ describe("Catalogue field contract · foundation-only guardrails (no behavior ch
       // looksLikeOwnAppUrl/displayContractRowValue; test-only import of the
       // contract module for direct behavioural proof.
       join(root, "server", "mmfFieldParity2.test.ts"),
+      // Stage 10b-1 — Bank Product Catalogue field parity: explicit table
+      // columns + clean drawer facts for Product name/Early withdrawal rule,
+      // reusing the same getCatalogueFieldContract/readContractFieldValue
+      // pattern MMF/CBK/SACCO already established.
+      join(root, "client", "src", "pages", "BankInstruments.tsx"),
+      join(root, "server", "bankFieldParity.test.ts"),
     ]);
     const unexpectedOffenders = offenders.filter((f) => !allowed.has(f));
     expect(unexpectedOffenders).toEqual([]);

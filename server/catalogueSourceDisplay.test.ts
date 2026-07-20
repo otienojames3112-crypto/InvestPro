@@ -174,8 +174,9 @@ describe("Slice 8h-1 · B — BankInstruments.tsx wiring", () => {
     expect(bankInstruments).toContain(
       "const catSource = resolveCatalogueSource(drawerRow.source, drawerRow.extendedFields, drawerRow.asOfDate);",
     );
-    const idx = bankInstruments.indexOf("const catSource = resolveCatalogueSource(");
-    const block = bankInstruments.slice(idx, idx + 1200);
+    const idx = bankInstruments.indexOf("const catSource = resolveCatalogueSource(drawerRow.source");
+    const nextIdx = bankInstruments.indexOf("Stage 10b-1", idx);
+    const block = bankInstruments.slice(idx, nextIdx);
     expect(block).toContain("catSource.url ? (");
     expect(block).toContain("href={catSource.url}");
     expect(block).toContain("No source");
@@ -185,21 +186,31 @@ describe("Slice 8h-1 · B — BankInstruments.tsx wiring", () => {
     expect(bankInstruments).toContain('value={catSource.asOf ? asOfLabel(catSource.asOf) : "—"}');
   });
 
-  it("the raw 'Full profile' dump excludes sourceLabel/sourceUrl/sourceAsOfDate — they're already shown properly above, never duplicated as raw JSON-ish text", () => {
-    const idx = bankInstruments.indexOf('Full profile');
-    const block = bankInstruments.slice(idx, idx + 1200);
-    expect(block).toContain('k !== "sourceLabel"');
-    expect(block).toContain('k !== "sourceUrl"');
-    expect(block).toContain('k !== "sourceAsOfDate"');
+  // Stage 10b-1 note: the raw 'Full profile' Object.entries dump this test
+  // originally checked is REMOVED entirely (not just re-filtered) — every
+  // established Bank field it could show (Product name, Early withdrawal
+  // rule) is now a clean, contract-labeled DrawerFact instead, same
+  // convention CBK's drawer (Stage 9c) already established. See
+  // server/bankFieldParity.test.ts test 10 for the replacement proof.
+  it("the raw 'Full profile' dump no longer exists — replaced by clean contract-labeled DrawerFacts (Stage 10b-1)", () => {
+    expect(bankInstruments).not.toContain("Full profile");
+    expect(bankInstruments).not.toContain("Object.entries(drawerRow.extendedFields)");
   });
 
-  it("existing table structure outside the drawer's source fact is unchanged — same columns, same filters", () => {
+  // Stage 10b-1 note: the table gained explicit columns for every established
+  // Bank field (Product name, Net return after WHT, WHT, Early withdrawal
+  // rule, Fees/charges, Access speed, Source & freshness) — see
+  // server/bankFieldParity.test.ts test 6 for the full column-parity proof.
+  // This test now asserts the CURRENT structure so it stays a real
+  // regression guard rather than a stale pin.
+  it("table structure reflects the Stage 10b-1 explicit-column redesign — same underlying data, more established fields visible", () => {
     expect(bankInstruments).toContain("<TableHead>Bank</TableHead>");
-    expect(bankInstruments).toContain("<TableHead>Product / type</TableHead>");
-    expect(bankInstruments).toContain('<TableHead className="text-right">Min amount</TableHead>');
+    expect(bankInstruments).toContain("<TableHead>Product name</TableHead>");
+    expect(bankInstruments).toContain("<TableHead>Product type</TableHead>");
+    expect(bankInstruments).toContain('<TableHead className="text-right">Minimum deposit</TableHead>');
     expect(bankInstruments).toContain("<TableHead>Tenor / notice</TableHead>");
-    expect(bankInstruments).toContain('<TableHead className="text-right">Indic. rate</TableHead>');
+    expect(bankInstruments).toContain('<TableHead className="text-right">Indicative rate</TableHead>');
     expect(bankInstruments).toContain("<TableHead>Negotiable</TableHead>");
-    expect(bankInstruments).toContain("<TableHead>As of</TableHead>");
+    expect(bankInstruments).toContain("<TableHead>Source &amp; freshness</TableHead>");
   });
 });

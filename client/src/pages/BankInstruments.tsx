@@ -66,6 +66,8 @@ import { Sparkles } from "lucide-react";
 import { usePortfolio } from "@/contexts/PortfolioContext";
 import { ArchivedRowsPanel, CatalogueScopeFilter, type CatalogueRowScope } from "@/components/ArchivedRowsPanel";
 import { resolveCatalogueSource } from "@/lib/format";
+import { readContractFieldValue } from "@/lib/format";
+import { getCatalogueFieldContract } from "@shared/catalogueFieldContracts";
 
 type BankInstrumentType =
   | "call_deposit"
@@ -89,6 +91,12 @@ const TYPE_LIQUIDITY: Record<BankInstrumentType, string> = {
   target_savings: "Locked for a chosen period; early break usually carries a penalty.",
   tiered_savings: "Rate rises with the balance band; needs a larger minimum for the top tier.",
 };
+
+// Stage 10b-1 — the SAME bank contract every other display layer (Ask AI,
+// review queue, approval modal, the new multi-field edit dialog) already
+// uses, so the table/drawer's field list/order/labels can never drift.
+const BANK_CONTRACT = getCatalogueFieldContract("bank");
+const bankFieldByKey = (key: string) => BANK_CONTRACT?.fields.find((f) => f.key === key);
 
 interface BankRow {
   id: number;
@@ -119,6 +127,20 @@ function asOfLabel(d: string | Date | null): string {
   const date = typeof d === "string" ? new Date(d) : d;
   if (Number.isNaN(date.getTime())) return "—";
   return date.toLocaleDateString();
+}
+
+/**
+ * Stage 10b-1 — Kenya's standard bank-interest withholding tax (final tax for
+ * residents), matching the mmf/bank field contract's own documented figure
+ * (shared/catalogueFieldContracts.ts: "Computed as indicativeRate × (1 −
+ * 0.15), Kenya's standard bank-interest WHT"). Unlike MMF's whtRate, this is
+ * NOT a per-row stored column — bank_instruments has no WHT column — it's the
+ * same fixed statutory rate for every product, so there's nothing to fetch.
+ */
+const BANK_WHT_RATE = 15;
+
+function netReturnAfterWht(indicativeRate: number | null): number | null {
+  return indicativeRate === null ? null : indicativeRate * (1 - BANK_WHT_RATE / 100);
 }
 
 const EMPTY = {
@@ -411,15 +433,30 @@ export default function BankInstruments({ embedded = false }: { embedded?: boole
             ) : (
               <div className="rounded-md border overflow-x-auto">
                 <Table>
+                  {/* Stage 10b-1 — the established Bank catalogue fields are now
+                      explicit columns, not a Product/type combined cell + a
+                      drawer-only raw dump: the Reference Catalogue is the
+                      quick-decision surface, so a manager must be able to see
+                      Product name, Net return after WHT, WHT, Early withdrawal
+                      rule, Fees/charges, and Access speed at a glance, matching
+                      the pattern established for MMF (Stage 10a-3/10a-5). The
+                      table already scrolls horizontally (overflow-x-auto above)
+                      rather than hiding any of them. */}
                   <TableHeader>
                     <TableRow>
                       <TableHead>Bank</TableHead>
-                      <TableHead>Product / type</TableHead>
-                      <TableHead className="text-right">Min amount</TableHead>
+                      <TableHead>Product name</TableHead>
+                      <TableHead>Product type</TableHead>
+                      <TableHead className="text-right">Indicative rate</TableHead>
+                      <TableHead className="text-right">Net return after WHT</TableHead>
+                      <TableHead className="text-right">WHT</TableHead>
+                      <TableHead className="text-right">Minimum deposit</TableHead>
                       <TableHead>Tenor / notice</TableHead>
-                      <TableHead className="text-right">Indic. rate</TableHead>
+                      <TableHead>Early withdrawal rule</TableHead>
+                      <TableHead>Fees / charges</TableHead>
+                      <TableHead>Access speed</TableHead>
                       <TableHead>Negotiable</TableHead>
-                      <TableHead>As of</TableHead>
+                      <TableHead>Source &amp; freshness</TableHead>
                       {isManager && <TableHead className="w-12" />}
                     </TableRow>
                   </TableHeader>
@@ -430,6 +467,11 @@ export default function BankInstruments({ embedded = false }: { embedded?: boole
                       // bank never collide.
                       const bankRef = `bank:${r.id}`;
                       const stale = staleByRef.get(bankRef);
+                      const extendedFields = r.extendedFields as Record<string, unknown> | null;
+                      const productName = readContractFieldValue(extendedFields, bankFieldByKey("productName")!);
+                      const earlyWithdrawalRule = readContractFieldValue(extendedFields, bankFieldByKey("earlyWithdrawalRule")!);
+                      const netReturn = netReturnAfterWht(r.indicativeRate);
+                      const catSource = resolveCatalogueSource(r.source, extendedFields, r.asOfDate);
                       return (
                         <TableRow
                           key={r.id}
@@ -449,13 +491,12 @@ export default function BankInstruments({ embedded = false }: { embedded?: boole
                               )}
                             </div>
                           </TableCell>
+                          <TableCell className="text-sm text-muted-foreground">{productName ?? "—"}</TableCell>
                           <TableCell>
                             <Badge variant="secondary" className="text-[10px] font-normal">
                               {TYPE_LABEL[r.instrumentType]}
                             </Badge>
                           </TableCell>
-                          <TableCell className="text-right tabular-nums">{kes(r.minAmount)}</TableCell>
-                          <TableCell>{r.typicalTenor ?? "—"}</TableCell>
                           <TableCell className="text-right tabular-nums">
                             {r.indicativeRate === null ? (
                               <span className="text-muted-foreground">Rate unavailable</span>
@@ -463,6 +504,19 @@ export default function BankInstruments({ embedded = false }: { embedded?: boole
                               `${r.indicativeRate.toFixed(2)}%`
                             )}
                           </TableCell>
+                          <TableCell className="text-right tabular-nums text-muted-foreground">
+                            {netReturn === null ? "—" : `${netReturn.toFixed(2)}%`}
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums text-muted-foreground">{BANK_WHT_RATE.toFixed(2)}%</TableCell>
+                          <TableCell className="text-right tabular-nums">{kes(r.minAmount)}</TableCell>
+                          <TableCell>{r.typicalTenor ?? "—"}</TableCell>
+                          <TableCell className="text-sm text-muted-foreground max-w-[180px] truncate">{earlyWithdrawalRule ?? "—"}</TableCell>
+                          {/* Fees/charges and Access speed have no storage anywhere in the
+                              schema today (the bank contract's own note: storageStatus
+                              "missingRequiresMigration") — shown honestly as unavailable,
+                              never fabricated, same convention MMF's Risk profile uses. */}
+                          <TableCell className="text-sm text-muted-foreground">Not available</TableCell>
+                          <TableCell className="text-sm text-muted-foreground">Not available</TableCell>
                           <TableCell>
                             {r.isNegotiable ? (
                               <Badge variant="secondary" className="text-[10px]">Negotiable</Badge>
@@ -470,7 +524,30 @@ export default function BankInstruments({ embedded = false }: { embedded?: boole
                               <Badge variant="outline" className="text-[10px]">Fixed</Badge>
                             )}
                           </TableCell>
-                          <TableCell className="text-xs text-muted-foreground">{asOfLabel(r.asOfDate)}</TableCell>
+                          <TableCell>
+                            <div className="flex flex-col gap-0.5">
+                              {catSource.label ? (
+                                catSource.url ? (
+                                  <a
+                                    href={catSource.url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    onClick={(e) => e.stopPropagation()}
+                                    className="text-xs text-primary underline underline-offset-2 inline-flex items-center gap-1 max-w-[160px] truncate"
+                                  >
+                                    {catSource.label} <ExternalLink className="w-2.5 h-2.5 shrink-0" />
+                                  </a>
+                                ) : (
+                                  <span className="text-xs text-foreground max-w-[160px] truncate">{catSource.label}</span>
+                                )
+                              ) : (
+                                <span className="text-xs text-amber-600 dark:text-amber-400">No source</span>
+                              )}
+                              <span className="text-[10px] text-muted-foreground">
+                                {catSource.asOf ? `as of ${asOfLabel(catSource.asOf)}` : "no as-of date"}
+                              </span>
+                            </div>
+                          </TableCell>
                           {isManager && (
                             <TableCell onClick={(e) => e.stopPropagation()}>
                               <CatalogueRowControls
@@ -515,12 +592,33 @@ export default function BankInstruments({ embedded = false }: { embedded?: boole
                 <DrawerFact label="How it works" value={TYPE_LIQUIDITY[drawerRow.instrumentType]} />
                 <div className="grid grid-cols-2 gap-3">
                   <DrawerFact
-                    label="Indicative rate"
+                    label={bankFieldByKey("productName")?.label ?? "Product name"}
+                    value={readContractFieldValue(drawerRow.extendedFields, bankFieldByKey("productName")!) ?? "—"}
+                  />
+                  <DrawerFact
+                    label={bankFieldByKey("indicativeRate")?.label ?? "Indicative rate"}
                     value={drawerRow.indicativeRate === null ? "Rate unavailable" : `${drawerRow.indicativeRate.toFixed(2)}%`}
                   />
+                  <DrawerFact
+                    label={bankFieldByKey("netReturnAfterWht")?.label ?? "Net return after WHT"}
+                    value={(() => {
+                      const net = netReturnAfterWht(drawerRow.indicativeRate);
+                      return net === null ? "—" : `${net.toFixed(2)}%`;
+                    })()}
+                  />
+                  <DrawerFact label="WHT" value={`${BANK_WHT_RATE.toFixed(2)}%`} />
                   <DrawerFact label="Negotiable" value={drawerRow.isNegotiable ? "Yes — for larger balances" : "No"} />
                   <DrawerFact label="Minimum" value={kes(drawerRow.minAmount)} />
                   <DrawerFact label="Tenor / notice" value={drawerRow.typicalTenor ?? "—"} />
+                  <DrawerFact
+                    label={bankFieldByKey("earlyWithdrawalRule")?.label ?? "Early withdrawal rule"}
+                    value={readContractFieldValue(drawerRow.extendedFields, bankFieldByKey("earlyWithdrawalRule")!) ?? "—"}
+                  />
+                  {/* Fees/charges and Access speed have no storage anywhere in the
+                      schema today — shown honestly as unavailable, never fabricated,
+                      same convention MMF's Risk profile uses. */}
+                  <DrawerFact label={bankFieldByKey("fees")?.label ?? "Fees / charges"} value="Not available" />
+                  <DrawerFact label={bankFieldByKey("accessSpeed")?.label ?? "Access speed"} value="Not available" />
                 </div>
                 {drawerRow.notes && <DrawerFact label="Notes" value={drawerRow.notes} />}
                 {(() => {
@@ -551,38 +649,13 @@ export default function BankInstruments({ embedded = false }: { embedded?: boole
                   );
                 })()}
 
-                {/* Round 97 — Extended profile fields from structured extraction */}
-                {drawerRow.extendedFields && Object.keys(drawerRow.extendedFields).length > 0 && (
-                  <div className="border-t pt-3 space-y-2">
-                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Full profile</p>
-                    <div className="grid grid-cols-2 gap-x-4 gap-y-2">
-                      {Object.entries(drawerRow.extendedFields)
-                        .filter(
-                          ([k]) =>
-                            !k.startsWith("_") &&
-                            k !== "catalogueType" &&
-                            k !== "instrumentName" &&
-                            k !== "sourceClass" &&
-                            // Slice 8h-1 — already shown properly above (clickable link +
-                            // as-of); including them again here would just duplicate them
-                            // as raw, unlinked "key: value" text.
-                            k !== "sourceLabel" &&
-                            k !== "sourceUrl" &&
-                            k !== "sourceAsOfDate",
-                        )
-                        .map(([k, v]) => (
-                          <div key={k} className="text-sm">
-                            <span className="text-muted-foreground text-xs">{k}: </span>
-                            {String(v) === "missing_from_source" ? (
-                              <span className="italic text-amber-600 text-xs">Missing from source</span>
-                            ) : (
-                              <span className="font-medium">{String(v)}</span>
-                            )}
-                          </div>
-                        ))}
-                    </div>
-                  </div>
-                )}
+                {/* Stage 10b-1 — the raw Object.entries(extendedFields) dump (Round 97)
+                    is removed: every established Bank field it could show is now a
+                    clean, contract-labeled fact above (Product name, Early withdrawal
+                    rule) or already a typed column (Product type, Indicative rate,
+                    Minimum, Tenor, Negotiable) — matching the same convention CBK's
+                    drawer (Stage 9c) already established: only the established field
+                    set, never raw camelCase keys or unlabeled extraction noise. */}
 
                 {/* Safe actions — never "invest now" / "recommended".
                     Round 93: opening a deposit now goes through the confirm-first

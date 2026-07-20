@@ -460,7 +460,13 @@ describe("Round 97 · G — Client renders extended fields correctly", () => {
   it("BankInstruments detail sheet renders extendedFields", () => {
     const bankInst = readFileSync(join(ROOT, "client/src/pages/BankInstruments.tsx"), "utf-8");
     expect(bankInst).toContain("extendedFields");
-    expect(bankInst).toContain("Full profile");
+    // Stage 10b-1 removed the raw "Full profile" Object.entries dump this
+    // test originally pinned — extendedFields is now rendered as clean,
+    // contract-labeled DrawerFacts (Product name, Early withdrawal rule,
+    // etc.) instead, matching CBK's Stage 9c drawer. See
+    // server/bankFieldParity.test.ts test 10 and
+    // server/catalogueSourceDisplay.test.ts for the replacement proof.
+    expect(bankInst).toContain("DrawerFact");
   });
 
   it("OpportunityDetail renders extendedFields as instrument profile", () => {

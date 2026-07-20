@@ -212,17 +212,31 @@ describe("Stage 9c · B — MarketAssetsReference.tsx: SACCO-specific table", ()
   });
 });
 
-// ── 13. MMF and Bank pages are untouched by this slice ─────────────────────
+// ── 13. MMF and Bank pages never import CBK/SACCO-SPECIFIC components ──────
 
 describe("Stage 9c · MMF/Bank untouched", () => {
-  it("13. MmfFunds.tsx and BankInstruments.tsx do not import any Slice 9c helper (isSaccoRow, readContractFieldValue, CbkDetailDrawer, SaccoTable)", () => {
+  // Stage 10b-1 note: `readContractFieldValue` was originally grouped into
+  // this exclusion list only because neither MMF nor Bank needed it YET at
+  // Slice 9c — it's a generic, catalogue-agnostic helper (client/src/lib/
+  // format.ts), not a CBK/SACCO-specific one, unlike the other three
+  // (isSaccoRow, CbkDetailDrawer, SaccoTable, which genuinely ARE CBK/SACCO-
+  // only components/functions). Bank now legitimately uses it (Stage 10b-1,
+  // same as CBK/SACCO already did) for Product name/Early withdrawal rule —
+  // see server/bankFieldParity.test.ts. The real invariant this test
+  // protects — MMF/Bank never importing a CBK/SACCO-SPECIFIC identifier —
+  // still holds and is still checked below.
+  it("13. MmfFunds.tsx and BankInstruments.tsx do not import any CBK/SACCO-SPECIFIC component (isSaccoRow, CbkDetailDrawer, SaccoTable)", () => {
     const mmf = read("client/src/pages/MmfFunds.tsx");
     const bank = read("client/src/pages/BankInstruments.tsx");
     for (const src of [mmf, bank]) {
       expect(src).not.toContain("isSaccoRow");
-      expect(src).not.toContain("readContractFieldValue");
       expect(src).not.toContain("CbkDetailDrawer");
       expect(src).not.toContain("SaccoTable");
     }
+  });
+
+  it("MmfFunds.tsx still does not use readContractFieldValue (it reads extendedFields directly) — Bank's new Stage 10b-1 usage is the only change", () => {
+    const mmf = read("client/src/pages/MmfFunds.tsx");
+    expect(mmf).not.toContain("readContractFieldValue");
   });
 });

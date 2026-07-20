@@ -307,20 +307,20 @@ describe("Stage 10a · B — ResearchDesk.tsx: approval modal shows full fields 
 });
 
 describe("Stage 10a · B — ResearchDesk.tsx: multi-field edit dialog", () => {
-  it("EditCatalogueFieldsDialog exists, is MMF-scoped, and calls the new updatePendingFields mutation", () => {
+  it("EditCatalogueFieldsDialog exists and calls the updatePendingFields mutation (Stage 10b-1 generalized this from MMF-only to MMF + Bank)", () => {
     expect(researchDeskPage).toContain("function EditCatalogueFieldsDialog(");
     expect(researchDeskPage).toContain("trpc.researchPipeline.updatePendingFields.useMutation(");
     const idx = researchDeskPage.indexOf("function EditCatalogueFieldsDialog(");
     const nextIdx = researchDeskPage.indexOf("/* ── Pending update review queue");
     const block = researchDeskPage.slice(idx, nextIdx);
-    expect(block).toContain('catalogueForAssetClass(update.assetClass as AssetClass) === "mmf"');
+    expect(block).toContain('const isSupported = catalogue === "mmf" || catalogue === "bank";');
     // Renders one labeled input per editable contract field, not a single field.
     expect(block).toContain("editableRows.map((row) =>");
     expect(block).toContain("managerEditable === true");
   });
 
-  it("the Edit fields entry point on the pending card is gated to MMF only, per this slice's explicit scope", () => {
-    expect(researchDeskPage).toContain('contract.catalogue === "mmf" && (');
+  it("the Edit fields entry point on the pending card is gated to MMF or Bank (Stage 10b-1 extended it from MMF-only) — see server/bankFieldParity.test.ts for the Bank-specific proof", () => {
+    expect(researchDeskPage).toContain('(contract.catalogue === "mmf" || contract.catalogue === "bank") && (');
     expect(researchDeskPage).toContain("Edit fields");
   });
 

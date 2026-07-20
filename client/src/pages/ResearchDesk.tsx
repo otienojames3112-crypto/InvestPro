@@ -423,7 +423,7 @@ function ApproveDialog({
                   <div className="text-xs font-medium text-muted-foreground flex items-center gap-1.5">
                     <ListChecks className="w-3.5 h-3.5" /> Catalogue fields
                   </div>
-                  {data?.catalogue === "mmf" && (
+                  {(data?.catalogue === "mmf" || data?.catalogue === "bank") && (
                     <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" onClick={onEditFields}>
                       <PencilLine className="w-3 h-3 mr-1" /> Edit
                     </Button>
@@ -475,13 +475,15 @@ function ApproveDialog({
  * one place before drafting/approving — closes the gap where Correct Figure
  * (AskAI.tsx) only versions ONE field on a FINDING and then dead-ends, with no
  * path back to correct a second field without starting over. Built from the
- * same mmf contract every other display layer already uses, so the field
- * list/order/labels can never drift from what the review queue and approval
- * modal show. Edits the PENDING update in place (via updatePendingFields) —
- * distinct from Correct Figure, which versions an already-drafted finding.
- * MMF-only for this slice (the button that opens this is itself gated to
- * catalogue === "mmf") — Bank/CBK/Market asset get their own wiring later,
- * the same staged rollout Slices 8b-8e already established per catalogue.
+ * same catalogue contract every other display layer already uses, so the
+ * field list/order/labels can never drift from what the review queue and
+ * approval modal show. Edits the PENDING update in place (via
+ * updatePendingFields) — distinct from Correct Figure, which versions an
+ * already-drafted finding.
+ * MMF + Bank for this slice (Stage 10b-1) — the button that opens this is
+ * gated to catalogue === "mmf" || "bank". CBK/Market asset get their own
+ * wiring later, the same staged rollout Slices 8b-8e already established
+ * per catalogue.
  */
 function EditCatalogueFieldsDialog({ updateId, onClose }: { updateId: number | null; onClose: () => void }) {
   const utils = trpc.useUtils();
@@ -490,8 +492,9 @@ function EditCatalogueFieldsDialog({ updateId, onClose }: { updateId: number | n
     { enabled: updateId != null, refetchOnWindowFocus: false },
   );
   const update = data?.update;
-  const isMmf = update ? catalogueForAssetClass(update.assetClass as AssetClass) === "mmf" : false;
-  const contract = isMmf ? getCatalogueFieldContract("mmf") : null;
+  const catalogue = update ? catalogueForAssetClass(update.assetClass as AssetClass) : null;
+  const isSupported = catalogue === "mmf" || catalogue === "bank";
+  const contract = isSupported && catalogue ? getCatalogueFieldContract(catalogue) : null;
   const rows =
     contract && update
       ? projectFindingToContractDisplayRows(contract, {
@@ -505,17 +508,30 @@ function EditCatalogueFieldsDialog({ updateId, onClose }: { updateId: number | n
       : [];
   const editableRows = rows.filter((row) => contract?.fields.find((f) => f.key === row.key)?.managerEditable === true);
 
-  // Stage 10a — the canonical contract keys that route to the update's ENVELOPE
-  // columns (name/issuer/source/asOf), not the figures bag — mirrors the SAME
-  // routing buildPromotionPlan's MMF branch and ENVELOPE_ROUTED_CONTRACT_KEYS.mmf
-  // (shared/catalogueFieldContracts.ts) already encode, kept local here rather
-  // than exported since this dialog is the only UI consumer today.
-  const MMF_ENVELOPE_KEYS: Record<string, "name" | "issuer" | "source" | "asOf"> = {
-    fundName: "name",
-    fundManager: "issuer",
-    sourceLink: "source",
-    sourceAsOf: "asOf",
+  // Stage 10a (MMF) / Stage 10b-1 (Bank) — the canonical contract keys that
+  // route to the update's ENVELOPE columns (name/issuer/source/asOf), not the
+  // figures bag — mirrors the SAME routing buildPromotionPlan's MMF/Bank
+  // branches and ENVELOPE_ROUTED_CONTRACT_KEYS.mmf/.bank
+  // (shared/catalogueFieldContracts.ts) already encode, kept local here
+  // rather than exported since this dialog is the only UI consumer today.
+  // Per-catalogue because the envelope column differs: MMF's "fundName" maps
+  // to the update's `name`, but Bank's "bankName" maps to `issuer` (mirrors
+  // buildContractRawValueBag's own `bankName: finding.issuer` mapping) —
+  // hardcoding one shared table would have silently mis-routed one of them.
+  const ENVELOPE_KEYS_BY_CATALOGUE: Record<string, Record<string, "name" | "issuer" | "source" | "asOf">> = {
+    mmf: {
+      fundName: "name",
+      fundManager: "issuer",
+      sourceLink: "source",
+      sourceAsOf: "asOf",
+    },
+    bank: {
+      bankName: "issuer",
+      sourceLink: "source",
+      sourceAsOf: "asOf",
+    },
   };
+  const envelopeKeys = catalogue ? (ENVELOPE_KEYS_BY_CATALOGUE[catalogue] ?? {}) : {};
 
   const [values, setValues] = useState<Record<string, string>>({});
   useEffect(() => {
@@ -560,7 +576,7 @@ function EditCatalogueFieldsDialog({ updateId, onClose }: { updateId: number | n
     for (const row of editableRows) {
       const v = (values[row.key] ?? "").trim();
       if (v === "") continue;
-      const envelopeField = MMF_ENVELOPE_KEYS[row.key];
+      const envelopeField = envelopeKeys[row.key];
       if (envelopeField === "asOf") {
         const ms = Date.parse(v);
         if (Number.isFinite(ms)) envelope.asOf = ms;
@@ -581,8 +597,8 @@ function EditCatalogueFieldsDialog({ updateId, onClose }: { updateId: number | n
             <PencilLine className="w-5 h-5 text-primary" /> Edit catalogue fields
           </DialogTitle>
           <DialogDescription>
-            Correct or fill in any of the established MMF fields below. Saved to this pending update only — nothing
-            changes in the live catalogue until you approve it.
+            Correct or fill in any of the established {contract?.label ?? ""} fields below. Saved to this pending
+            update only — nothing changes in the live catalogue until you approve it.
           </DialogDescription>
         </DialogHeader>
         {isLoading || !update ? (
@@ -900,10 +916,10 @@ function PendingQueue() {
                 >
                   <XCircle className="w-3.5 h-3.5 mr-1.5" /> Reject
                 </Button>
-                {/* Stage 10a — MMF-only for this slice (see EditCatalogueFieldsDialog's
-                    own doc comment); Bank/CBK/Market asset get their own wiring later,
-                    the same staged-rollout pattern Slices 8b-8e already established. */}
-                {fullContract && contract.catalogue === "mmf" && (
+                {/* Stage 10a (MMF) / Stage 10b-1 (Bank) — see EditCatalogueFieldsDialog's
+                    own doc comment; CBK/Market asset get their own wiring later, the
+                    same staged-rollout pattern Slices 8b-8e already established. */}
+                {fullContract && (contract.catalogue === "mmf" || contract.catalogue === "bank") && (
                   <Button
                     size="sm"
                     variant="outline"

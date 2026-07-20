@@ -422,15 +422,20 @@ describe("Stage 10b-1b · D — Bank productType displays cleanly (not the raw e
   });
 
   it("the approval modal's contractRows render maps bank productType through bankInstrumentTypeLabel", () => {
+    // Stage 10b-2b widened this window — the block grew (CBK's isCbk/
+    // securityType/taxExempt/netYieldAfterWht branches) — landmark-bounded
+    // instead of a fixed offset so it doesn't re-break as the block grows again.
     const idx = researchDeskPage.indexOf("{contractRows.map((row) => {");
-    const block = researchDeskPage.slice(idx, idx + 500);
+    const nextIdx = researchDeskPage.indexOf("</div>", idx);
+    const block = researchDeskPage.slice(idx, nextIdx);
     expect(block).toContain('data?.catalogue === "bank" && row.key === "productType"');
     expect(block).toContain("bankInstrumentTypeLabel(raw)");
   });
 
   it("the pending-card contractRows render maps bank productType through bankInstrumentTypeLabel", () => {
     const idx = researchDeskPage.indexOf("{contractRows.map((row) => {", researchDeskPage.indexOf("{contractRows.map((row) => {") + 1);
-    const block = researchDeskPage.slice(idx, idx + 500);
+    const nextIdx = researchDeskPage.indexOf("</div>", idx);
+    const block = researchDeskPage.slice(idx, nextIdx);
     expect(block).toContain('contract.catalogue === "bank" && row.key === "productType"');
     expect(block).toContain("bankInstrumentTypeLabel(raw)");
   });

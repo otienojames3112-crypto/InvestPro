@@ -47,6 +47,7 @@ import {
   bankInstrumentTypeLabel,
   cbkSecurityTypeLabel,
   cbkTaxExemptLabel,
+  cbkNetYieldAfterWht,
 } from "@shared/researchPipeline";
 import {
   resolveContractCatalogueForUpdate,
@@ -453,21 +454,38 @@ function ApproveDialog({
                 <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
                   {contractRows.map((row) => {
                     const raw = displayContractRowValue(row);
+                    const isCbk = data?.catalogue === "cbk";
                     // Stage 10b-1b/10b-2 — same Bank productType / CBK securityType /
                     // CBK taxExempt label fix as fmtFigures above.
+                    // Stage 10b-2b — CBK's netYieldAfterWht is a "computed"
+                    // contract field (never a real stored value, always null
+                    // from the projection) — compute it here from the SAME
+                    // yieldPct/whtRule/taxExempt sibling rows the live
+                    // catalogue table already uses, instead of leaving it to
+                    // fall through to the generic "Missing" warning below.
                     const displayValue =
                       data?.catalogue === "bank" && row.key === "productType"
                         ? (bankInstrumentTypeLabel(raw) ?? raw)
-                        : data?.catalogue === "cbk" && row.key === "securityType"
+                        : isCbk && row.key === "securityType"
                           ? (cbkSecurityTypeLabel(raw) ?? raw)
-                          : data?.catalogue === "cbk" && row.key === "taxExempt"
+                          : isCbk && row.key === "taxExempt"
                             ? (cbkTaxExemptLabel(raw) ?? raw)
-                            : raw;
+                            : isCbk && row.key === "netYieldAfterWht"
+                              ? (() => {
+                                  const y = contractRows.find((r) => r.key === "yieldPct")?.value ?? null;
+                                  const w = contractRows.find((r) => r.key === "whtRule")?.value ?? null;
+                                  const t = contractRows.find((r) => r.key === "taxExempt")?.value ?? null;
+                                  const net = cbkNetYieldAfterWht(y, w, t);
+                                  return net === null ? null : `${net.toFixed(2)}%`;
+                                })()
+                              : raw;
                     return (
                       <div key={row.key} className="text-xs">
                         <span className="text-muted-foreground">{row.label}: </span>
                         {displayValue != null ? (
                           <span className="font-medium">{displayValue}</span>
+                        ) : isCbk && row.key === "netYieldAfterWht" ? (
+                          <span className="text-muted-foreground">—</span>
                         ) : (
                           <span className="italic text-amber-600 dark:text-amber-400">Missing</span>
                         )}
@@ -893,21 +911,34 @@ function PendingQueue() {
                   <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-1.5">
                     {contractRows.map((row) => {
                       const raw = displayContractRowValue(row);
+                      const isCbk = contract.catalogue === "cbk";
                       // Stage 10b-1b/10b-2 — same Bank productType / CBK securityType /
                       // CBK taxExempt label fix as fmtFigures above.
+                      // Stage 10b-2b — CBK's netYieldAfterWht computed from
+                      // sibling rows, same as the approval modal above.
                       const displayValue =
                         contract.catalogue === "bank" && row.key === "productType"
                           ? (bankInstrumentTypeLabel(raw) ?? raw)
-                          : contract.catalogue === "cbk" && row.key === "securityType"
+                          : isCbk && row.key === "securityType"
                             ? (cbkSecurityTypeLabel(raw) ?? raw)
-                            : contract.catalogue === "cbk" && row.key === "taxExempt"
+                            : isCbk && row.key === "taxExempt"
                               ? (cbkTaxExemptLabel(raw) ?? raw)
-                              : raw;
+                              : isCbk && row.key === "netYieldAfterWht"
+                                ? (() => {
+                                    const y = contractRows.find((r) => r.key === "yieldPct")?.value ?? null;
+                                    const w = contractRows.find((r) => r.key === "whtRule")?.value ?? null;
+                                    const t = contractRows.find((r) => r.key === "taxExempt")?.value ?? null;
+                                    const net = cbkNetYieldAfterWht(y, w, t);
+                                    return net === null ? null : `${net.toFixed(2)}%`;
+                                  })()
+                                : raw;
                       return (
                       <div key={row.key} className="text-xs">
                         <span className="text-muted-foreground">{row.label}: </span>
                         {displayValue != null ? (
                           <span className="font-medium">{displayValue}</span>
+                        ) : isCbk && row.key === "netYieldAfterWht" ? (
+                          <span className="text-muted-foreground">—</span>
                         ) : (
                           <span className="italic text-amber-600 dark:text-amber-400">Missing</span>
                         )}

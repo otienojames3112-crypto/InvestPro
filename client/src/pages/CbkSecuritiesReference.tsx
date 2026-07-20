@@ -61,7 +61,7 @@ import { rateStaleness } from "@/lib/rateStaleness";
 import { resolveCatalogueSource, firstFieldProvenanceSourceUrl } from "@/lib/format";
 import { readContractFieldValue } from "@/lib/format";
 import { getCatalogueFieldContract } from "@shared/catalogueFieldContracts";
-import { cbkSecurityTypeLabel, cbkTaxExemptLabel } from "@shared/researchPipeline";
+import { cbkSecurityTypeLabel, cbkTaxExemptLabel, cbkNetYieldAfterWht, normalizeDateToYmd } from "@shared/researchPipeline";
 import { dashboardHref } from "@shared/navigation";
 import { useDepositDrawer, type DepositPrefill } from "@/contexts/DepositDrawerContext";
 import type { inferRouterOutputs } from "@trpc/server";
@@ -92,26 +92,6 @@ const GOV_CLASSES = ["gov_discount", "gov_coupon"] as const;
 const CBK_CONTRACT = getCatalogueFieldContract("cbk");
 const cbkFieldByKey = (key: string) => CBK_CONTRACT?.fields.find((f) => f.key === key);
 
-/**
- * Stage 10b-2 — net yield after WHT, computed where safely possible:
- *   - an infrastructure bond (taxExempt true) nets to its gross yield (0% WHT);
- *   - otherwise, the first "N%" figure in the whtRule free text (e.g. "15%
- *     withholding tax on the discount") is treated as the WHT rate.
- * Returns null (rendered as a dash) when yieldPct is unknown, or when
- * whtRule doesn't state a parseable rate and taxExempt isn't true — never a
- * guessed or fabricated rate.
- */
-function netYieldAfterWht(yieldPct: string | null, whtRule: string | null, taxExempt: string | null): number | null {
-  const y = num(yieldPct);
-  if (y === null) return null;
-  if ((taxExempt ?? "").trim().toLowerCase() === "true") return y;
-  const m = (whtRule ?? "").match(/(\d+(?:\.\d+)?)\s*%/);
-  if (!m) return null;
-  const whtPct = Number(m[1]);
-  if (!Number.isFinite(whtPct)) return null;
-  return y * (1 - whtPct / 100);
-}
-
 function num(v: string | null): number | null {
   if (v === null || v === undefined) return null;
   const n = Number(v);
@@ -139,14 +119,6 @@ function fmtPct(v: string | null): string {
   const n = num(v);
   return n === null ? "—" : `${n.toFixed(2)}%`;
 }
-function fmtDate(v: string | Date | null): string {
-  if (!v) return "—";
-  const d = new Date(v);
-  return isNaN(d.getTime())
-    ? "—"
-    : d.toLocaleDateString("en-KE", { year: "numeric", month: "short", day: "numeric" });
-}
-
 /**
  * Map a catalog gov instrument to the deposit drawer's gov bucket + (for T-bills)
  * a tenor in days. We read the tenor from the factNote/name where present but
@@ -554,7 +526,7 @@ function GovRow({
   const auctionDate = readContractFieldValue(extendedFields, cbkFieldByKey("auctionDate")!);
   const valueDate = readContractFieldValue(extendedFields, cbkFieldByKey("valueDate")!);
   const minInvestment = readContractFieldValue(extendedFields, cbkFieldByKey("minInvestment")!);
-  const netYield = netYieldAfterWht(r.yieldPct, whtRule, taxExemptRaw);
+  const netYield = cbkNetYieldAfterWht(r.yieldPct, whtRule, taxExemptRaw);
   // Stage 10b-2 — replaces the previous name/factNote REGEX guess (flagged in
   // the contract's own whtRule note as "fragile") with the real structured
   // taxExempt figure Slice 8g-2 already persists.
@@ -597,9 +569,13 @@ function GovRow({
       <TableCell className="text-right tabular-nums text-sm">
         {num(r.tenorYears) === null ? "—" : `${Number(r.tenorYears)} yr`}
       </TableCell>
-      <TableCell className="text-sm text-muted-foreground whitespace-nowrap">{fmtDate(auctionDate)}</TableCell>
-      <TableCell className="text-sm text-muted-foreground whitespace-nowrap">{fmtDate(valueDate)}</TableCell>
-      <TableCell className="text-right tabular-nums text-sm whitespace-nowrap">{fmtDate(r.maturityDate)}</TableCell>
+      {/* Stage 10b-2b — YYYY-MM-DD via normalizeDateToYmd, not the locale-
+          formatted fmtDate: these are now normalized at promotion time, and
+          a stable ISO date reads unambiguously across every source format
+          the source text originally used ("17 July 2026", "2026-07-17", …). */}
+      <TableCell className="text-sm text-muted-foreground whitespace-nowrap">{normalizeDateToYmd(auctionDate) ?? "—"}</TableCell>
+      <TableCell className="text-sm text-muted-foreground whitespace-nowrap">{normalizeDateToYmd(valueDate) ?? "—"}</TableCell>
+      <TableCell className="text-right tabular-nums text-sm whitespace-nowrap">{normalizeDateToYmd(r.maturityDate) ?? "—"}</TableCell>
       <TableCell className="text-right tabular-nums text-sm whitespace-nowrap">
         {(() => {
           const amt = parseAmount(minInvestment);
@@ -750,9 +726,10 @@ function CbkDetailDrawer({
   const taxExemptRaw = row ? readContractFieldValue(extendedFields, fieldByKey("taxExempt")!) : null;
   const taxExempt = fmtYesNo(taxExemptRaw);
   const minInvestment = row ? readContractFieldValue(extendedFields, fieldByKey("minInvestment")!) : null;
-  // Stage 10b-2 — computed where safely possible (see netYieldAfterWht's own
-  // doc comment above); null renders as a clean dash, never a guess.
-  const netYield = row ? netYieldAfterWht(row.yieldPct, whtRule, taxExemptRaw) : null;
+  // Stage 10b-2b — moved to shared/researchPipeline.ts's cbkNetYieldAfterWht
+  // (see its doc comment) so the review queue/approval modal/Ask AI card can
+  // reuse the SAME math; null renders as a clean dash, never a guess.
+  const netYield = row ? cbkNetYieldAfterWht(row.yieldPct, whtRule, taxExemptRaw) : null;
 
   const fp = (row?.fieldProvenance ?? {}) as FieldProvenanceMap;
   const catSource = row
@@ -778,7 +755,7 @@ function CbkDetailDrawer({
                   value={num(row.tenorYears) === null ? "—" : `${Number(row.tenorYears)} yr`}
                 />
                 <DrawerFact label={fieldByKey("yieldPct")?.label ?? "Yield"} value={fmtPct(row.yieldPct)} />
-                <DrawerFact label="Maturity date" value={fmtDate(row.maturityDate)} />
+                <DrawerFact label="Maturity date" value={normalizeDateToYmd(row.maturityDate) ?? "—"} />
               </div>
 
               <div className="border-t pt-3 grid grid-cols-2 gap-3">
@@ -793,10 +770,10 @@ function CbkDetailDrawer({
               {(applicationDeadline || auctionDate || valueDate) && (
                 <div className="border-t pt-3 grid grid-cols-2 gap-3">
                   {applicationDeadline && (
-                    <DrawerFact label={fieldByKey("applicationDeadline")!.label} value={applicationDeadline} />
+                    <DrawerFact label={fieldByKey("applicationDeadline")!.label} value={normalizeDateToYmd(applicationDeadline) ?? applicationDeadline} />
                   )}
-                  {auctionDate && <DrawerFact label={fieldByKey("auctionDate")!.label} value={auctionDate} />}
-                  {valueDate && <DrawerFact label={fieldByKey("valueDate")!.label} value={valueDate} />}
+                  {auctionDate && <DrawerFact label={fieldByKey("auctionDate")!.label} value={normalizeDateToYmd(auctionDate) ?? auctionDate} />}
+                  {valueDate && <DrawerFact label={fieldByKey("valueDate")!.label} value={normalizeDateToYmd(valueDate) ?? valueDate} />}
                 </div>
               )}
 
@@ -827,7 +804,12 @@ function CbkDetailDrawer({
                   <p className="text-sm text-amber-600 dark:text-amber-400">No source</p>
                 )}
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  {catSource?.asOf ? `As of ${fmtDate(catSource.asOf as string | Date)}` : "No as-of date"}
+                  {/* Stage 10b-2b — normalizeDateToYmd, not fmtDate: catSource.asOf
+                      can be a UTC-anchored Date (DB column) or an ISO string, and
+                      fmtDate's local toLocaleDateString reinterpretation risked a
+                      day shift for either — the same class of bug Stage 10a-2 fixed
+                      for MMF/Bank via formatUtcYmd. */}
+                  {catSource?.asOf ? `As of ${normalizeDateToYmd(catSource.asOf) ?? "—"}` : "No as-of date"}
                 </p>
               </div>
 

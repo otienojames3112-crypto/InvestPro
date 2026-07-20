@@ -329,9 +329,12 @@ const findingCard = askAi.slice(findingCardIdx, askAi.indexOf("export function",
 describe("Slice 8b · FindingCard wiring", () => {
   it("imports the three new projection helpers from @shared/catalogueFieldContracts", () => {
     // AskAI.tsx uses CRLF line endings, so match line-by-line rather than
-    // asserting an exact literal block with embedded \n.
+    // asserting an exact literal block with embedded \n. Stage 10b-2b added
+    // a 4th import (resolveRawFigureKey, CBK's CorrectFigureDialog fix) to
+    // this same block — the regex now tolerates it without requiring it,
+    // since this test's own scope is the original three.
     expect(askAi).toMatch(
-      /import \{\r?\n\s*getCatalogueFieldContract,\r?\n\s*projectFindingToContractDisplayRows,\r?\n\s*projectFindingToContractFigures,\r?\n\} from "@shared\/catalogueFieldContracts";/,
+      /import \{\r?\n\s*getCatalogueFieldContract,\r?\n\s*projectFindingToContractDisplayRows,\r?\n\s*projectFindingToContractFigures,\r?\n(\s*resolveRawFigureKey,\r?\n)?\} from "@shared\/catalogueFieldContracts";/,
     );
   });
 
@@ -406,12 +409,11 @@ describe("Slice 8b · FindingCard wiring", () => {
     expect(findingCard).toContain("No figures extracted — identity only.");
   });
 
-  it("CorrectFigureDialog is UNCHANGED by this slice — still uses fmtFields(raw extractedFields) for its field selector, not the contract", () => {
+  it("CorrectFigureDialog is UNCHANGED for MMF findings — Stage 10b-2b only filtered/relabeled it for CBK, everything else (MMF included) still falls back to the original unfiltered fmtFields", () => {
     const dialogIdx = askAi.indexOf("function CorrectFigureDialog(");
     const dialog = askAi.slice(dialogIdx, askAi.indexOf("function ", dialogIdx + 30));
-    expect(dialog).toContain("const fields = fmtFields(finding.extractedFields);");
-    expect(dialog).not.toContain("catalogueFieldContracts");
-    expect(dialog).not.toContain("getCatalogueFieldContract");
+    expect(dialog).toContain("fmtFields(finding.extractedFields).map((f) => ({ ...f, label: f.key }))");
+    expect(dialog).toContain('finding.targetCatalogue === "cbk" ? getCatalogueFieldContract("cbk") : null');
   });
 
   it("all seven active contract lookups (MMF, Bank, CBK, Equity, REIT, Offshore fund, SACCO) are the only ones present — every market-asset subtype is now wired", () => {

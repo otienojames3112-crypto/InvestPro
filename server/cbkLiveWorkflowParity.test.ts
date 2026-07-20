@@ -472,12 +472,15 @@ describe("Stage 10b-2 · D — CBK Reference Catalogue table has explicit column
   });
 
   it("Net yield after WHT is computed where safely possible, and shows a clean dash otherwise (D)", () => {
-    expect(cbkPage).toContain("function netYieldAfterWht(");
-    // IFB (tax-exempt) path: gross yield unchanged.
-    expect(cbkPage).toContain('if ((taxExempt ?? "").trim().toLowerCase() === "true") return y;');
-    // Parses the WHT % out of the free-text whtRule instead of assuming a fixed rate.
-    expect(cbkPage).toContain('const m = (whtRule ?? "").match(/(\\d+(?:\\.\\d+)?)\\s*%/);');
-    expect(cbkPage).toContain("if (!m) return null;");
+    // Stage 10b-2b moved this math to shared/researchPipeline.ts's
+    // cbkNetYieldAfterWht (see server/cbkLiveWorkflowParity2.test.ts D for
+    // the shared function's own behavioural proof and its reuse in
+    // ResearchDesk.tsx/AskAI.tsx) so the review queue/approval modal/Ask AI
+    // card can share the SAME computation, not just the live table.
+    expect(cbkPage).toContain("cbkNetYieldAfterWht(r.yieldPct, whtRule, taxExemptRaw)");
+    expect(cbkPage).toContain("cbkNetYieldAfterWht(row.yieldPct, whtRule, taxExemptRaw)");
+    expect(cbkPage).toContain('from "@shared/researchPipeline"');
+    expect(cbkPage).not.toContain("function netYieldAfterWht(");
   });
 
   it("the table replaces the fragile name/factNote tax-exempt REGEX with the real structured taxExempt figure", () => {
@@ -534,8 +537,12 @@ describe("Stage 10b-2 · D — ResearchDesk.tsx: multi-field edit path extended 
   it("CBK's securityType/taxExempt display cleanly (not raw) in the review-queue card, approval modal, and Ask AI finding card", () => {
     expect(researchDeskPage).toContain('contract?.catalogue === "cbk" && k === "securityType"');
     expect(researchDeskPage).toContain('contract?.catalogue === "cbk" && k === "taxExempt"');
-    expect(researchDeskPage).toContain('data?.catalogue === "cbk" && row.key === "securityType"');
-    expect(researchDeskPage).toContain('contract.catalogue === "cbk" && row.key === "securityType"');
+    // Stage 10b-2b refactored both contractRows renders to a local `isCbk`
+    // (needed for the new netYieldAfterWht branch alongside these) — the
+    // per-catalogue check itself is unchanged, just no longer inlined.
+    expect(researchDeskPage).toContain('const isCbk = data?.catalogue === "cbk";');
+    expect(researchDeskPage).toContain('isCbk && row.key === "securityType"');
+    expect(researchDeskPage).toContain('const isCbk = contract.catalogue === "cbk";');
     const idx = askAiPage.indexOf("CBK catalogue fields");
     const nextIdx = askAiPage.indexOf("Slice 8e-1", idx);
     const block = askAiPage.slice(idx, nextIdx);

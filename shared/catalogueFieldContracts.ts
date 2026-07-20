@@ -87,7 +87,7 @@
 // Slice 9b — one-directional dependency on researchPipeline.ts (which itself
 // only imports ./assetModel, never this module), used by
 // resolveContractCatalogueForUpdate below.
-import { catalogueForAssetClass, detectMarketAssetSacco } from "./researchPipeline";
+import { catalogueForAssetClass, detectMarketAssetSacco, normalizeDateToYmd } from "./researchPipeline";
 import type { AssetClass } from "./assetModel";
 
 /** The four top-level catalogue categories a manager reviews findings into. */
@@ -1550,6 +1550,27 @@ function readAliasValue(field: CatalogueFieldContractEntry, raw: Record<string, 
   return null;
 }
 
+/**
+ * Stage 10b-2b — like readAliasValue above, but returns the RAW KEY that
+ * matched instead of its value. A one-field "correct a figure" UI must
+ * overwrite the SAME raw key a finding's extraction actually used (e.g.
+ * CBK's "weightedAvgRate"), not silently write a second, canonical-named key
+ * (e.g. "yieldPct") alongside the untouched original — that would leave two
+ * conflicting values in the same figures bag. Never invents a match; returns
+ * null when nothing present-and-real is found under any candidate.
+ */
+export function resolveRawFigureKey(field: CatalogueFieldContractEntry, raw: Record<string, unknown>): string | null {
+  const candidates = field.aliases.length > 0 ? [field.key, ...field.aliases] : field.aliases;
+  for (const candidate of candidates) {
+    const v = raw[candidate];
+    if (v === undefined || v === null) continue;
+    const s = String(v).trim();
+    if (s === "" || s === "missing_from_source") continue;
+    return candidate;
+  }
+  return null;
+}
+
 /** Merge a finding's raw AI-extracted figures with its envelope identity/
  *  provenance fields under the synthetic keys the contracts' own `aliases`
  *  already expect (e.g. MMF's `fundManager` field lists `"company"` as an
@@ -1728,8 +1749,18 @@ export function projectContractFiguresToExtendedFields(
     // figures — persisting them here would risk stale duplication of what
     // sourceEnrichment/promotionProvenance already handle correctly.
     if (envelopeRouted.has(field.key)) continue;
-    const value = readCanonicalOrAliasValue(field, figures);
+    let value = readCanonicalOrAliasValue(field, figures);
     if (value === null) continue;
+    // Stage 10b-2b — CBK's date-like extendedFields-tier figures (auction/
+    // value/application-deadline dates) normalized to stable "YYYY-MM-DD",
+    // same fix as maturityDate's typed-column promotion (buildPromotionPlan,
+    // shared/researchPipeline.ts) — these live in a JSON blob so an
+    // unnormalized human date string wouldn't crash the write, but would
+    // leave the catalogue's stored dates inconsistently formatted. Falls
+    // back to the raw text (never drops a real, if unparseable, value).
+    if (catalogue === "cbk" && (field.key === "auctionDate" || field.key === "valueDate" || field.key === "applicationDeadline")) {
+      value = normalizeDateToYmd(value) ?? value;
+    }
     result[field.key] = value;
   }
   // Deliberately does NOT stamp `assetType` for SACCO here (unlike

@@ -34,9 +34,10 @@ describe("Stage 5 · FindingCard suggestion chips", () => {
     );
     // Stage 10b-1b added bankInstrumentTypeLabel to this same import line
     // (Bank productType display fix); Stage 10b-2 added
-    // cbkSecurityTypeLabel/cbkTaxExemptLabel (CBK equivalent) — anchor updated to match.
+    // cbkSecurityTypeLabel/cbkTaxExemptLabel (CBK equivalent); Stage 10b-2b
+    // added cbkNetYieldAfterWht (CBK net-yield display fix) — anchor updated to match.
     expect(askAi).toContain(
-      'import { catalogueLabel, suggestFollowUpQuestions, type ReferenceCatalogue, bankInstrumentTypeLabel, cbkSecurityTypeLabel, cbkTaxExemptLabel } from "@shared/researchPipeline";',
+      'import { catalogueLabel, suggestFollowUpQuestions, type ReferenceCatalogue, bankInstrumentTypeLabel, cbkSecurityTypeLabel, cbkTaxExemptLabel, cbkNetYieldAfterWht } from "@shared/researchPipeline";',
     );
   });
 

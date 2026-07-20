@@ -368,6 +368,90 @@ export function cbkTaxExemptLabel(value: unknown): string | null {
 }
 
 /**
+ * Stage 10b-2b — normalizes a date-like value to a stable "YYYY-MM-DD"
+ * string. CBK sources (and the LLM extraction that reads them) commonly
+ * state dates as human text ("19 October 2026"), which — unlike MMF/Bank's
+ * plain numeric figures — cannot be written as-is into a typed DB date
+ * column (opportunities.maturityDate is a native MySQL DATE column; the
+ * live QA repro's "Approve & promote" failure was exactly this: the raw
+ * string reaching a typed date column untouched).
+ *
+ * Two input shapes, two different safe read-backs:
+ *   - An already-ISO "YYYY-MM-DD" string is returned unchanged — no Date
+ *     object involved, so there is no parsing/timezone step to get wrong.
+ *   - Any OTHER string (e.g. "19 October 2026") is parsed via `new Date()`,
+ *     which JS treats as LOCAL midnight for non-ISO formats — so it must be
+ *     read back with LOCAL getters, or the day could shift by one in a
+ *     negative-UTC-offset timezone.
+ *   - A Date object (e.g. what a DB driver hands back for a DATE column) is
+ *     UTC-anchored — the SAME convention client/src/lib/format.ts's
+ *     formatUtcYmd already established for this app's date-only DB values —
+ *     so it must be read back with UTC getters instead.
+ * Returns null for anything unparseable — never fabricates a date.
+ */
+export function normalizeDateToYmd(v: string | Date | null | undefined): string | null {
+  if (v === null || v === undefined) return null;
+  if (typeof v === "string") {
+    const trimmed = v.trim();
+    if (trimmed === "") return null;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
+    const d = new Date(trimmed);
+    if (Number.isNaN(d.getTime())) return null;
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
+  }
+  if (Number.isNaN(v.getTime())) return null;
+  const y = v.getUTCFullYear();
+  const m = String(v.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(v.getUTCDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+/**
+ * Stage 10b-2b — CBK net yield after WHT, computed where safely possible:
+ *   - an infrastructure bond (taxExempt true) nets to its gross yield/rate
+ *     (0% WHT);
+ *   - otherwise, the first "N%" figure in the whtRule free text (e.g. "15%
+ *     withholding tax on the discount") is treated as the WHT rate.
+ * Returns null (rendered as a dash, never a raw "Missing") when yieldPct is
+ * unknown/unparseable, or when whtRule doesn't state a parseable rate and
+ * taxExempt isn't true. yieldPct is accepted as a raw string (e.g. "10.50%")
+ * since that's what both the live catalogue's typed column and a pending
+ * finding's extracted figure can hold. Reused by the CBK catalogue table,
+ * the review queue, the approval modal, and the Ask AI finding card — the
+ * ONE place this math lives, per Stage 10b-2's original design (moved here
+ * from being CbkSecuritiesReference.tsx-local so the other three surfaces
+ * can share it too).
+ */
+export function cbkNetYieldAfterWht(
+  yieldPctRaw: string | null,
+  whtRule: string | null,
+  taxExempt: string | null,
+): number | null {
+  if (yieldPctRaw === null) return null;
+  const ym = yieldPctRaw.replace(/,/g, "").match(/-?\d+(?:\.\d+)?/);
+  if (!ym) return null;
+  const y = Number(ym[0]);
+  if (!Number.isFinite(y)) return null;
+  if ((taxExempt ?? "").trim().toLowerCase() === "true") return y;
+  const wm = (whtRule ?? "").match(/(\d+(?:\.\d+)?)\s*%/);
+  if (!wm) return null;
+  const whtPct = Number(wm[1]);
+  if (!Number.isFinite(whtPct)) return null;
+  // `y * (100 - whtPct) / 100` (one division, at the end) instead of
+  // `y * (1 - whtPct / 100)` (a division INSIDE the multiplication) — the
+  // latter's intermediate `whtPct / 100` compounds binary-float rounding
+  // error, e.g. 10.5 * 0.85 evaluates to 8.924999999999999 in IEEE 754
+  // double precision, whose .toFixed(2) rounds DOWN to "8.92" instead of
+  // the mathematically-correct "8.93". The reordered form is exact for
+  // this case (yields 8.925) and equally or more precise for every other
+  // input tested — every display site's .toFixed(2) reads correctly.
+  return (y * (100 - whtPct)) / 100;
+}
+
+/**
  * Build the typed promotion plan for an APPROVED update. Pure: the db layer calls
  * this then persists `payload` into the matching table. Throws if the asset class
  * is invalid (validation should have caught it earlier).
@@ -446,7 +530,13 @@ export function buildPromotionPlan(update: {
       lastPrice: num(f.lastPrice ?? f.price),
       trailingReturnPct: num(f.trailingReturnPct ?? f.trailingReturn),
       tenorYears: num(f.tenorYears ?? f.tenor),
-      maturityDate: str(f.maturityDate),
+      // Stage 10b-2b — opportunities.maturityDate is a typed MySQL DATE
+      // column; a CBK source's human date text ("19 October 2026") reached
+      // it unnormalized and failed the write. normalizeDateToYmd() is a
+      // pure passthrough for an already-clean "YYYY-MM-DD" value (every
+      // OTHER promotion target that ever populates this field), so this is
+      // additive for CBK only, not a behavior change for anything else.
+      maturityDate: normalizeDateToYmd(str(f.maturityDate)),
       expenseRatioPct: num(f.expenseRatioPct ?? f.expense ?? f.fee),
       liquidity: str(f.liquidity),
       factNote: str(f.factNote ?? f.notes),
@@ -861,7 +951,16 @@ function figurePresent(figures: Record<string, unknown> | null | undefined, key:
   const aliases: Record<string, string[]> = {
     ear: ["ear", "netYield", "yieldPct", "yield", "grossYield"],
     indicativeRate: ["indicativeRate", "rate", "yieldPct"],
-    yieldPct: ["yieldPct", "yield", "coupon", "rate", "previousAvgRate"],
+    // Stage 10b-2b — CBK_TBILL_EXTRACTION_SCHEMA's actual field names are
+    // "weightedAvgRate" and "prevAvgRate" (not "previousAvgRate", which this
+    // list had instead — a spelling mismatch, not a genuinely-recognised
+    // alias). The CBK contract's own yieldPct aliases (shared/catalogueField
+    // Contracts.ts) already recognised "weightedAvgRate", so the finding
+    // card's contract-driven display resolved 10.50% correctly while this
+    // gate's separate, narrower alias list still reported "rate / coupon /
+    // previous average rate" missing for the exact same value — a live QA
+    // repro. "previousAvgRate" is kept for backward compatibility.
+    yieldPct: ["yieldPct", "yield", "coupon", "rate", "previousAvgRate", "prevAvgRate", "weightedAvgRate"],
     lastPrice: ["lastPrice", "price", "nav", "yieldPct", "yield", "trailingReturnPct", "trailingReturn", "distributionYield"],
     managementFee: ["managementFee", "expenseRatioPct", "fee"],
     // Stage 3b.3 — market-asset sub-type fields. The extraction schema's own field

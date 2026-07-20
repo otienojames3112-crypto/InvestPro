@@ -61,12 +61,13 @@ import {
   Search,
 } from "lucide-react";
 import { InfoHint } from "@/components/InfoHint";
-import { catalogueLabel, suggestFollowUpQuestions, type ReferenceCatalogue, bankInstrumentTypeLabel, cbkSecurityTypeLabel, cbkTaxExemptLabel } from "@shared/researchPipeline";
+import { catalogueLabel, suggestFollowUpQuestions, type ReferenceCatalogue, bankInstrumentTypeLabel, cbkSecurityTypeLabel, cbkTaxExemptLabel, cbkNetYieldAfterWht } from "@shared/researchPipeline";
 import { parseCandidatePhrases } from "@shared/candidatePhrases";
 import {
   getCatalogueFieldContract,
   projectFindingToContractDisplayRows,
   projectFindingToContractFigures,
+  resolveRawFigureKey,
 } from "@shared/catalogueFieldContracts";
 import { SOURCE_CLASS_LABELS, isSourceClass } from "@shared/instrumentProfile";
 import { formatRelativeTime } from "@/lib/format";
@@ -528,7 +529,28 @@ function CorrectFigureDialog({
   onOpenChange: (v: boolean) => void;
   onDone: () => void;
 }) {
-  const fields = fmtFields(finding.extractedFields);
+  // Stage 10b-2b — for CBK only, the dropdown now offers established
+  // contract fields with their clean labels, sourced back to the RAW key a
+  // correction must actually overwrite (resolveRawFigureKey — never the
+  // canonical key when the raw extraction used an alias, which would leave
+  // a stale duplicate figure behind). Every other catalogue keeps the
+  // original unfiltered fmtFields behavior — raw keys, no established-field
+  // filtering — completely unchanged.
+  const cbkCorrectionContract = finding.targetCatalogue === "cbk" ? getCatalogueFieldContract("cbk") : null;
+  const cbkCorrectionFields = cbkCorrectionContract
+    ? (() => {
+        const raw = (finding.extractedFields ?? {}) as Record<string, unknown>;
+        const out: { key: string; value: string; missing?: boolean; label: string }[] = [];
+        for (const f of cbkCorrectionContract.fields) {
+          if (f.storageStatus !== "column" && f.storageStatus !== "extendedFields") continue;
+          const rawKey = resolveRawFigureKey(f, raw);
+          if (!rawKey) continue;
+          out.push({ key: rawKey, value: String(raw[rawKey]), missing: false, label: f.label });
+        }
+        return out;
+      })()
+    : null;
+  const fields = cbkCorrectionFields ?? fmtFields(finding.extractedFields).map((f) => ({ ...f, label: f.key }));
   const [field, setField] = useState<string>(fields[0]?.key ?? "");
   const [newValue, setNewValue] = useState<string>("");
   const [reason, setReason] = useState<string>("");
@@ -590,7 +612,7 @@ function CorrectFigureDialog({
                 <SelectContent>
                   {fields.map((f) => (
                     <SelectItem key={f.key} value={f.key}>
-                      {f.key} (currently {f.value})
+                      {f.label} (currently {f.value})
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -1059,12 +1081,25 @@ export function FindingCard({
                 // extraction value ("treasury_bill", "true"/"false") until
                 // promotion/display formats them; show the same clean labels
                 // the CBK catalogue table and ResearchDesk.tsx use.
+                // Stage 10b-2b — netYieldAfterWht computed from the SAME
+                // sibling rows (yieldPct/whtRule/taxExempt), instead of
+                // always falling through to the generic "calculated at
+                // approval" placeholder below — a live QA repro showed this
+                // computable value ("10.50% at 15% WHT") going unshown.
                 const displayValue =
                   row.key === "securityType"
                     ? (cbkSecurityTypeLabel(row.value) ?? row.value)
                     : row.key === "taxExempt"
                       ? (cbkTaxExemptLabel(row.value) ?? row.value)
-                      : row.value;
+                      : row.key === "netYieldAfterWht"
+                        ? (() => {
+                            const y = cbkDisplayRows.find((r) => r.key === "yieldPct")?.value ?? null;
+                            const w = cbkDisplayRows.find((r) => r.key === "whtRule")?.value ?? null;
+                            const t = cbkDisplayRows.find((r) => r.key === "taxExempt")?.value ?? null;
+                            const net = cbkNetYieldAfterWht(y, w, t);
+                            return net === null ? null : `${net.toFixed(2)}%`;
+                          })()
+                        : row.value;
                 return (
                 <div key={row.key} className="min-w-0">
                   <span className="text-[11px] text-muted-foreground">

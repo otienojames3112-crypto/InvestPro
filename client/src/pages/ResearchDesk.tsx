@@ -44,6 +44,7 @@ import {
   catalogueForAssetClass,
   catalogueLabel,
   type ReferenceCatalogue,
+  bankInstrumentTypeLabel,
 } from "@shared/researchPipeline";
 import {
   resolveContractCatalogueForUpdate,
@@ -225,11 +226,23 @@ function fmtFigures(
         // shown as if they were a real approval figure.
         !isInternalRoutingFigureKey(contract?.catalogue, contract?.subtype, k),
     )
-    .map(([k, v]) => ({
-      key: k,
-      label: resolveApprovalFigureLabel(contract?.catalogue, contract?.subtype, k, LABELS[k]),
-      value: String(v),
-    }));
+    .map(([k, v]) => {
+      const raw = String(v);
+      // Stage 10b-1b — Bank's productType/instrumentType figure is still the
+      // raw enum ("fixed_deposit") until promotion canonicalizes it; shown
+      // through the same label map BankInstruments.tsx's own catalogue table
+      // already uses, so a manager reviewing a pending Bank finding never
+      // sees a raw underscored value.
+      const value =
+        contract?.catalogue === "bank" && (k === "productType" || k === "instrumentType")
+          ? (bankInstrumentTypeLabel(raw) ?? raw)
+          : raw;
+      return {
+        key: k,
+        label: resolveApprovalFigureLabel(contract?.catalogue, contract?.subtype, k, LABELS[k]),
+        value,
+      };
+    });
 }
 
 /* ── Digest header ─────────────────────────────────────────────────────────── */
@@ -431,7 +444,12 @@ function ApproveDialog({
                 </div>
                 <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
                   {contractRows.map((row) => {
-                    const displayValue = displayContractRowValue(row);
+                    const raw = displayContractRowValue(row);
+                    // Stage 10b-1b — same Bank productType label fix as fmtFigures above.
+                    const displayValue =
+                      data?.catalogue === "bank" && row.key === "productType"
+                        ? (bankInstrumentTypeLabel(raw) ?? raw)
+                        : raw;
                     return (
                       <div key={row.key} className="text-xs">
                         <span className="text-muted-foreground">{row.label}: </span>
@@ -853,7 +871,12 @@ function PendingQueue() {
                   </div>
                   <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-1.5">
                     {contractRows.map((row) => {
-                      const displayValue = displayContractRowValue(row);
+                      const raw = displayContractRowValue(row);
+                      // Stage 10b-1b — same Bank productType label fix as fmtFigures above.
+                      const displayValue =
+                        contract.catalogue === "bank" && row.key === "productType"
+                          ? (bankInstrumentTypeLabel(raw) ?? raw)
+                          : raw;
                       return (
                       <div key={row.key} className="text-xs">
                         <span className="text-muted-foreground">{row.label}: </span>

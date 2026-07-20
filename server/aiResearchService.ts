@@ -1718,6 +1718,13 @@ const BANK_EXTRACTION_SCHEMA = {
     additionalProperties: false,
     properties: {
       answer: { type: "string" },
+      // Stage 10b-1b — a single as-of / effective date for the whole source
+      // (e.g. a rate card's "As of: 17 July 2026"), mirroring MMF_EXTRACTION_
+      // SCHEMA's benchmarkDate. Bank had no equivalent field at all before
+      // this, so a source-stated as-of date was never captured anywhere —
+      // every bank finding's sourceAsOf fell through to null regardless of
+      // what the source said.
+      asOfDate: { type: ["string", "null"], description: "As-of / effective date for the rates and terms in this source, if stated, e.g. 'As of: 17 July 2026'" },
       instruments: {
         type: "array",
         items: {
@@ -1726,6 +1733,13 @@ const BANK_EXTRACTION_SCHEMA = {
           properties: {
             instrumentName: { type: "string", description: "Bank + product name" },
             bankName: { type: ["string", "null"] },
+            // Stage 10b-1b — the product's own distinguishing name/label
+            // (e.g. "90-Day Fixed Deposit"), distinct from bankName and from
+            // instrumentName (which combines the two for display). Before
+            // this field existed, a source's "Product name: ..." line had
+            // nowhere to go — instrumentName is metadata, dropped before it
+            // ever reaches the figures bag.
+            productName: { type: ["string", "null"], description: "The product's own name, distinct from the bank name, e.g. '90-Day Fixed Deposit'" },
             productType: { type: ["string", "null"], description: "call_deposit, fixed_deposit, ordinary_savings, target_goal_savings, tiered_high_yield_savings" },
             indicativeRate: { type: ["string", "null"], description: "% p.a." },
             rateType: { type: ["string", "null"], description: "indicative, negotiated, confirmed" },
@@ -1734,6 +1748,11 @@ const BANK_EXTRACTION_SCHEMA = {
             noticePeriod: { type: ["string", "null"] },
             payoutFrequency: { type: ["string", "null"] },
             earlyWithdrawalPenalty: { type: ["string", "null"] },
+            // Stage 10b-1b — established Bank contract fields with nowhere to
+            // land in the schema before this: a source's "Fees / charges: ..."
+            // and "Access speed: ..." lines were simply never extracted.
+            feesCharges: { type: ["string", "null"], description: "Fees or charges, e.g. a monthly maintenance fee, or 'no fee' if the source says so" },
+            accessSpeed: { type: ["string", "null"], description: "How quickly funds become available/withdrawable, e.g. 'available at maturity within 1 business day'" },
             negotiable: { type: ["string", "null"], description: "'true' or 'false'" },
             whtRate: { type: ["string", "null"] },
             rateSchedule: { type: ["string", "null"], description: "Verbatim tiered savings balance-band/rate schedule, or 'missing_from_source'" },
@@ -1745,11 +1764,11 @@ const BANK_EXTRACTION_SCHEMA = {
             changedFields: { type: "array", items: { type: "string" }, description: "List of field names that differ from current row" },
             currentValues: { type: "array", items: { type: "object", additionalProperties: false, properties: { field: { type: "string" }, value: { type: "string" } }, required: ["field", "value"] }, description: "Current values for each changed field" },
           },
-          required: ["instrumentName", "bankName", "productType", "indicativeRate", "rateType", "minimumAmount", "tenor", "noticePeriod", "payoutFrequency", "earlyWithdrawalPenalty", "negotiable", "whtRate", "rateSchedule", "rawExcerpt", "warnings", "confidence", "proposalType", "matchedCurrentRow", "changedFields", "currentValues"],
+          required: ["instrumentName", "bankName", "productName", "productType", "indicativeRate", "rateType", "minimumAmount", "tenor", "noticePeriod", "payoutFrequency", "earlyWithdrawalPenalty", "feesCharges", "accessSpeed", "negotiable", "whtRate", "rateSchedule", "rawExcerpt", "warnings", "confidence", "proposalType", "matchedCurrentRow", "changedFields", "currentValues"],
         },
       },
     },
-    required: ["answer", "instruments"],
+    required: ["answer", "asOfDate", "instruments"],
   },
 } as const;
 
@@ -1828,7 +1847,7 @@ function extractionSchemaForClass(sc: SourceClass): { schema: object; prompt: st
     case "bank_rate_card":
       return {
         schema: BANK_EXTRACTION_SCHEMA,
-        prompt: `${STRUCTURED_EXTRACTION_PREAMBLE}\n\nThis is a BANK PRODUCT PAGE or RATE CARD. Extract one entry per distinct product (call deposit, fixed deposit, savings account).\nFor each, extract: bank name, product type, indicative rate, rate type, minimum amount, tenor, notice period, payout frequency, early withdrawal penalty, whether negotiable, and WHT rate. For tiered savings products, also extract the full rate schedule / balance bands verbatim.\nBank rates are typically INDICATIVE and quoted GROSS of the 15% WHT — note this in warnings.\n\nIf a field is not printed, set it to "missing_from_source".`,
+        prompt: `${STRUCTURED_EXTRACTION_PREAMBLE}\n\nThis is a BANK PRODUCT PAGE or RATE CARD. Extract one entry per distinct product (call deposit, fixed deposit, savings account).\nFor each, extract: bank name, PRODUCT NAME (the product's own distinguishing name/label, e.g. "90-Day Fixed Deposit" — distinct from the bank name), product type, indicative rate, rate type, minimum amount, tenor, notice period, payout frequency, early withdrawal penalty, FEES / CHARGES (e.g. a monthly maintenance fee, or "no fee" if the source says so), ACCESS SPEED (how quickly funds become available/withdrawable, e.g. "at maturity within 1 business day"), whether negotiable, and WHT rate. For tiered savings products, also extract the full rate schedule / balance bands verbatim.\nIf the source states a single AS-OF or EFFECTIVE date for these rates and terms (e.g. "As of: 17 July 2026"), extract it as asOfDate at the top level, alongside the products.\nBank rates are typically INDICATIVE and quoted GROSS of the 15% WHT — note this in warnings.\n\nIf a field is not printed, set it to "missing_from_source".`,
       };
     case "market_asset_factsheet":
     case "market_asset_price":
@@ -1884,6 +1903,8 @@ async function runStructuredExtraction(
   if (parsed.valueDate) sharedFields.valueDate = parsed.valueDate;
   // MMF benchmark date
   if (parsed.benchmarkDate) sharedFields.benchmarkDate = parsed.benchmarkDate;
+  // Stage 10b-1b — Bank source-wide as-of date (BANK_EXTRACTION_SCHEMA.asOfDate)
+  if (parsed.asOfDate) sharedFields.asOfDate = parsed.asOfDate;
 
   return { answer, rawInstruments: instruments as Record<string, unknown>[], sharedFields };
 }
@@ -2130,6 +2151,20 @@ export function structuredInstrumentToDraft(
   const mmfBenchmarkAsOfMs =
     mmfBenchmarkAsOf && Number.isFinite(Date.parse(mmfBenchmarkAsOf)) ? Date.parse(mmfBenchmarkAsOf) : null;
 
+  // Stage 10b-1b — Bank-only: the source-wide as-of date the extraction schema
+  // captured (BANK_EXTRACTION_SCHEMA.asOfDate), same bridge pattern as MMF's
+  // benchmarkDate above and CBK's auctionDate below. Bank had no such bridge at
+  // all before this — a source's stated "As of: ..." date was captured nowhere,
+  // so every bank finding's sourceAsOf fell through to null regardless of what
+  // the source said, and the review queue/approval modal showed it as Missing.
+  const bankSourceAsOf =
+    targetCatalogue === "bank" &&
+    typeof sharedFields?.asOfDate === "string" &&
+    sharedFields.asOfDate.trim() !== "" &&
+    sharedFields.asOfDate !== MISSING_FROM_SOURCE
+      ? sharedFields.asOfDate.trim()
+      : null;
+
   // Round 103 — FIELD NORMALIZATION. Map extraction-schema names to catalogue
   // canonical names so the approval gate recognizes them (e.g. effectiveAnnualRate → ear).
   const normalised = normaliseExtractionFields(figures, targetCatalogue);
@@ -2252,7 +2287,7 @@ export function structuredInstrumentToDraft(
     sharedFields.auctionDate.trim() !== "" &&
     sharedFields.auctionDate !== MISSING_FROM_SOURCE
       ? sharedFields.auctionDate.trim()
-      : mmfBenchmarkAsOf;
+      : (mmfBenchmarkAsOf ?? bankSourceAsOf);
 
   return {
     instrumentName: name,

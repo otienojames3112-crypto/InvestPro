@@ -32,8 +32,10 @@ describe("Stage 5 · FindingCard suggestion chips", () => {
     expect(findingCard).toContain(
       "suggestFollowUpQuestions(finding.missingRules ?? [], finding.instrumentName, candidatePhrases)",
     );
+    // Stage 10b-1b added bankInstrumentTypeLabel to this same import line
+    // (Bank productType display fix) — anchor updated to match.
     expect(askAi).toContain(
-      'import { catalogueLabel, suggestFollowUpQuestions, type ReferenceCatalogue } from "@shared/researchPipeline";',
+      'import { catalogueLabel, suggestFollowUpQuestions, type ReferenceCatalogue, bankInstrumentTypeLabel } from "@shared/researchPipeline";',
     );
   });
 

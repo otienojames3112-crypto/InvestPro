@@ -254,10 +254,14 @@ describe("Stage 9b · B — ResearchDesk.tsx wiring", () => {
   });
 
   it("5. fmtFigures resolves the contract-aware label and filters internal routing keys, keeping the existing LABELS map as a fallback", () => {
+    // Stage 10b-1b changed the .map callback from an implicit-object-return
+    // arrow (`=> ({`) to a block body (`=> {`) so it could branch the value
+    // through bankInstrumentTypeLabel for Bank's productType/instrumentType —
+    // the anchor was updated to match.
     const fnIdx = researchDesk.indexOf("function fmtFigures(");
-    const mapIdx = researchDesk.indexOf(".map(([k, v]) => ({", fnIdx);
+    const mapIdx = researchDesk.indexOf(".map(([k, v]) => {", fnIdx);
     expect(mapIdx).toBeGreaterThan(fnIdx);
-    const block = researchDesk.slice(fnIdx, mapIdx + 400);
+    const block = researchDesk.slice(fnIdx, mapIdx + 900);
     expect(block).toContain("resolveApprovalFigureLabel(contract?.catalogue, contract?.subtype, k, LABELS[k])");
     expect(block).toContain("isInternalRoutingFigureKey(contract?.catalogue, contract?.subtype, k)");
     // The pre-existing fallback map is still there, not deleted.

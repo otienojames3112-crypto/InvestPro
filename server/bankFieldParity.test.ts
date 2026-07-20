@@ -98,10 +98,10 @@ describe("Stage 10b-1 · A — projectContractFiguresToExtendedFields (bank)", (
     expect(result.productName).toBe("Example Product");
   });
 
-  it("fields with no storage (fees, accessSpeed) never appear — nothing real to persist", () => {
+  it("Stage 10b-1b — fees and accessSpeed (now extendedFields, moved off missingRequiresMigration) DO persist", () => {
     const result = projectContractFiguresToExtendedFields("bank", undefined, { fees: "1% arrangement fee", accessSpeed: "instant" });
-    expect(result.fees).toBeUndefined();
-    expect(result.accessSpeed).toBeUndefined();
+    expect(result.fees).toBe("1% arrangement fee");
+    expect(result.accessSpeed).toBe("instant");
   });
 
   it("an empty/absent figures bag produces an empty object, never a throw", () => {

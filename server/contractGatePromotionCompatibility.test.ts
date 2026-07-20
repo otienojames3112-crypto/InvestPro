@@ -246,7 +246,7 @@ describe("Slice 8g-3 · consolidated cross-catalogue regression matrix", () => {
     }
   });
 
-  it("Bank: full contract-projected draft passes the gate (except the known orphaned liquidity gap); indicativeRate/minAmount/isNegotiable reach the typed bank payload under their renamed keys", () => {
+  it("Bank: full contract-projected draft passes the gate outright; indicativeRate/minAmount/isNegotiable reach the typed bank payload under their renamed keys", () => {
     const contract = getCatalogueFieldContract("bank");
     const { finding, assetClass } = FIXTURES.bank;
     const figures = projectFindingToContractFigures(contract!, finding);
@@ -259,10 +259,14 @@ describe("Slice 8g-3 · consolidated cross-catalogue regression matrix", () => {
       source: finding.sourceLabel,
       asOf: Number(finding.sourceAsOf),
     });
-    // The fixture supplies liquidity via the raw 'liquidity' extraction key,
-    // which has no contract field/alias — same pre-existing, documented gap
-    // bankContractMapping.test.ts already isolates. Confirm it's the ONLY gap.
-    expect(gate.missing).toEqual(["liquidity / withdrawal terms"]);
+    // Stage 10b-1b — the fixture's raw 'liquidity' extraction key still has no
+    // contract field/alias and is still dropped by the projection (unchanged);
+    // what changed is that figurePresent's "liquidity" alias list now also
+    // accepts tenor/earlyWithdrawalRule/accessSpeed, and this fixture's
+    // typicalTenor ("12 months") survives projection as figures.tenor — so the
+    // gate is satisfied through THAT established field, not the dropped one.
+    // See server/bankLiveWorkflowParity.test.ts for the dedicated coverage.
+    expect(gate.missing).toEqual([]);
     const plan = buildPromotionPlan({
       target: "bank",
       name: finding.instrumentName,
@@ -571,7 +575,7 @@ describe("Slice 8g-3 · known-gap pins — accepted current behavior, not bugs t
     expect(plan.payload.aumMillions).toBe(500);
   });
 
-  it("Bank: liquidity is gate-required but has no extraction source and no DB column — approving a bank draft without a manually-supplied liquidity value stays blocked, by design (not fixed by 8g-2, which is opportunity-only)", () => {
+  it("Bank: liquidity/withdrawal terms — FIXED in Stage 10b-1b (previously pinned here as a known, accepted gap; a bank draft with tenor/notice already present is no longer falsely blocked, closing the exact gap the Stage 10b-1 live QA test exposed)", () => {
     const gate = checkApprovalGate({
       assetClass: "bank_deposit",
       changeKind: "create",
@@ -581,7 +585,27 @@ describe("Slice 8g-3 · known-gap pins — accepted current behavior, not bugs t
         minAmount: "50000",
         typicalTenor: "12 months",
         isNegotiable: "false",
-        // liquidity deliberately omitted.
+        // liquidity deliberately omitted — tenor now satisfies the same rule.
+      },
+      name: "Fixed Deposit",
+      issuer: "Equity Bank",
+      source: "Equity Bank product page",
+      asOf: Date.UTC(2026, 6, 1),
+    });
+    expect(gate.ok).toBe(true);
+    expect(gate.missing).toEqual([]);
+  });
+
+  it("Bank: with NONE of tenor/earlyWithdrawalRule/accessSpeed/liquidity present, the gate still correctly blocks — Stage 10b-1b widened what SATISFIES the rule, it did not remove the requirement", () => {
+    const gate = checkApprovalGate({
+      assetClass: "bank_deposit",
+      changeKind: "create",
+      figures: {
+        instrumentType: "fixed_deposit",
+        indicativeRate: "13.5",
+        minAmount: "50000",
+        isNegotiable: "false",
+        fullyLiquid: true, // escapes the SEPARATE typicalTenor rule so this isolates the liquidity rule
       },
       name: "Fixed Deposit",
       issuer: "Equity Bank",
@@ -589,7 +613,7 @@ describe("Slice 8g-3 · known-gap pins — accepted current behavior, not bugs t
       asOf: Date.UTC(2026, 6, 1),
     });
     expect(gate.ok).toBe(false);
-    expect(gate.missing).toEqual(["liquidity / withdrawal terms"]);
+    expect(gate.missing).toEqual(["tenor / notice, early withdrawal rule, or access speed"]);
   });
 });
 

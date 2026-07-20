@@ -101,8 +101,11 @@ describe("Stage 5 · A — checkApprovalGate.missingRules is additive, missing s
       },
     });
     expect(gate.ok).toBe(false);
-    expect(gate.missing).toContain("liquidity / withdrawal terms");
-    expect(gate.missingRules).toContainEqual({ key: "liquidity", label: "liquidity / withdrawal terms" });
+    // Stage 10b-1b renamed this rule's label to name the established Bank
+    // fields that actually satisfy it (tenor/notice, early withdrawal rule,
+    // access speed) — the rule's key is unchanged, only the label text.
+    expect(gate.missing).toContain("tenor / notice, early withdrawal rule, or access speed");
+    expect(gate.missingRules).toContainEqual({ key: "liquidity", label: "tenor / notice, early withdrawal rule, or access speed" });
   });
 
   it("REIT missing distribution yield carries its key", () => {

@@ -165,14 +165,23 @@ export function requiresHumanApproval(_origin: UpdateOrigin): boolean {
 
 function num(v: unknown): number | null {
   if (v === null || v === undefined || v === "") return null;
-  // Stage 10a — strip thousands separators AND a trailing "%" before parsing.
-  // AI extraction (and pasted source text) commonly keeps the "%" a source
-  // printed verbatim (e.g. "12.50%"); without this, Number() returns NaN and
-  // every caller silently falls back to null/0 — the Stage 9f-1 MMF repro's
-  // EAR 12.50%/gross yield 14.20% both promoted as 0.00% for exactly this
-  // reason (documented as a known gap since Slice 8b — see
-  // server/mmfContractMapping.test.ts's compatibility-test comment).
-  const n = typeof v === "number" ? v : Number(String(v).replace(/,/g, "").replace(/%/g, "").trim());
+  if (typeof v === "number") return Number.isFinite(v) ? v : null;
+  // Stage 10a stripped thousands separators and a trailing "%" before parsing
+  // (source text commonly keeps the "%" verbatim, e.g. "12.50%") — without it,
+  // Number() returned NaN and every caller silently fell back to null/0 (the
+  // Stage 9f-1 MMF repro's EAR/gross yield both promoted as 0.00%).
+  // Stage 10b-1b — that fix still failed on a currency PREFIX ("KES 50,000",
+  // "Ksh 50,000") or a trailing unit/word SUFFIX ("10.50% per annum"): neither
+  // is stripped by a fixed set of replacements, so Number() saw "KES 50000" or
+  // "10.50 per annum" and returned NaN — the Stage 10b-1 live QA repro's
+  // indicativeRate/minAmount both promoted as null (displayed "Rate
+  // unavailable" / "Ksh 0"). Matching the first numeric token anywhere in the
+  // string (after stripping thousands separators) tolerates any prefix/suffix
+  // text without needing to enumerate every currency symbol or unit word a
+  // source might use.
+  const stripped = String(v).replace(/,/g, "").trim();
+  const match = stripped.match(/-?\d+(?:\.\d+)?/);
+  const n = match ? Number(match[0]) : NaN;
   return Number.isFinite(n) ? n : null;
 }
 function str(v: unknown): string | null {
@@ -282,6 +291,34 @@ export function canonicalizeBankInstrumentType(value: unknown): BankInstrumentTy
   if (typeof value !== "string") return null;
   const key = value.trim().toLowerCase().replace(/[\s-]+/g, "_");
   return BANK_INSTRUMENT_TYPE_ALIASES[key] ?? null;
+}
+
+const BANK_INSTRUMENT_TYPE_LABELS: Record<BankInstrumentType, string> = {
+  call_deposit: "Call deposit",
+  fixed_deposit: "Fixed deposit",
+  ordinary_savings: "Ordinary savings",
+  target_savings: "Target savings",
+  tiered_savings: "Tiered savings",
+};
+
+/**
+ * Stage 10b-1b — human-readable label for a bank product type, wherever it's
+ * displayed OUTSIDE the live catalogue table (BankInstruments.tsx already has
+ * its own equivalent map for the catalogue row itself). Tolerates the same
+ * raw values `canonicalizeBankInstrumentType` accepts (short enum, the
+ * extraction schema's longer form, or already-canonical) so a pending
+ * finding's raw `productType`/`instrumentType` figure — still "fixed_deposit"
+ * before promotion ever canonicalizes it — renders cleanly in the review
+ * queue and approval modal, not as a raw enum. Falls back to the raw value
+ * with underscores turned to spaces for anything unrecognised — never blank,
+ * never a guess at a DIFFERENT type.
+ */
+export function bankInstrumentTypeLabel(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  const canonical = canonicalizeBankInstrumentType(value);
+  if (canonical) return BANK_INSTRUMENT_TYPE_LABELS[canonical];
+  const s = String(value).trim();
+  return s === "" ? null : s.replace(/_/g, " ");
 }
 
 /**
@@ -523,7 +560,13 @@ export const CATALOGUE_FIELD_RULES: Record<ReferenceCatalogue, CatalogueFieldRul
     { key: "typicalTenor", label: "tenor / notice period", source: "figures", escapable: true, escapeFlag: "fullyLiquid" },
     { key: "indicativeRate", label: "indicative rate", source: "figures", escapable: true, escapeFlag: "rateUnavailable" },
     { key: "isNegotiable", label: "negotiable (yes/no)", source: "figures" },
-    { key: "liquidity", label: "liquidity / withdrawal terms", source: "figures" },
+    // Stage 10b-1b — label rewritten from "liquidity / withdrawal terms" to
+    // name the established Bank fields that actually satisfy it (see
+    // figurePresent's widened "liquidity" alias list below). The old label
+    // named a field ("liquidity") that Bank's extraction schema and contract
+    // never produce — every bank finding failed this rule regardless of how
+    // complete the source was, a false block, not a genuine gap.
+    { key: "liquidity", label: "tenor / notice, early withdrawal rule, or access speed", source: "figures" },
     { key: "source", label: "source", source: "provenanceSource" },
     { key: "asOf", label: "as-of date", source: "asOf" },
   ],
@@ -785,7 +828,23 @@ function figurePresent(figures: Record<string, unknown> | null | undefined, key:
     instrumentType: ["instrumentType", "productType", "type"],
     typicalTenor: ["typicalTenor", "tenor", "noticePeriod"],
     isNegotiable: ["isNegotiable", "negotiable"],
-    liquidity: ["liquidity", "withdrawalTerms"],
+    // Stage 10b-1b — Bank's own established fields (tenor/notice, early
+    // withdrawal rule, access speed) describe exactly what "liquidity /
+    // withdrawal terms" is asking for; Bank's extraction schema and contract
+    // have never produced a literal "liquidity" or "withdrawalTerms" key, so
+    // this rule blocked every bank finding regardless of completeness. Any ONE
+    // of these being present now satisfies it — the same alias-tolerance
+    // mechanism SACCO's withdrawalTerms rule already relies on above.
+    liquidity: [
+      "liquidity",
+      "withdrawalTerms",
+      "typicalTenor",
+      "tenor",
+      "noticePeriod",
+      "earlyWithdrawalPenalty",
+      "earlyWithdrawalRule",
+      "accessSpeed",
+    ],
     securityType: ["securityType", "instrumentType", "type"],
     tenor: ["tenor", "tenorYears", "typicalTenor"],
     whtRule: ["whtRule", "wht", "withholdingTax", "whtRate"],

@@ -470,6 +470,12 @@ export default function BankInstruments({ embedded = false }: { embedded?: boole
                       const extendedFields = r.extendedFields as Record<string, unknown> | null;
                       const productName = readContractFieldValue(extendedFields, bankFieldByKey("productName")!);
                       const earlyWithdrawalRule = readContractFieldValue(extendedFields, bankFieldByKey("earlyWithdrawalRule")!);
+                      // Stage 10b-1b — fees/accessSpeed moved from
+                      // missingRequiresMigration to extendedFields (they have
+                      // an extendedFields JSON home like productName/
+                      // earlyWithdrawalRule always did); read the same way.
+                      const fees = readContractFieldValue(extendedFields, bankFieldByKey("fees")!);
+                      const accessSpeed = readContractFieldValue(extendedFields, bankFieldByKey("accessSpeed")!);
                       const netReturn = netReturnAfterWht(r.indicativeRate);
                       const catSource = resolveCatalogueSource(r.source, extendedFields, r.asOfDate);
                       return (
@@ -511,12 +517,12 @@ export default function BankInstruments({ embedded = false }: { embedded?: boole
                           <TableCell className="text-right tabular-nums">{kes(r.minAmount)}</TableCell>
                           <TableCell>{r.typicalTenor ?? "—"}</TableCell>
                           <TableCell className="text-sm text-muted-foreground max-w-[180px] truncate">{earlyWithdrawalRule ?? "—"}</TableCell>
-                          {/* Fees/charges and Access speed have no storage anywhere in the
-                              schema today (the bank contract's own note: storageStatus
-                              "missingRequiresMigration") — shown honestly as unavailable,
-                              never fabricated, same convention MMF's Risk profile uses. */}
-                          <TableCell className="text-sm text-muted-foreground">Not available</TableCell>
-                          <TableCell className="text-sm text-muted-foreground">Not available</TableCell>
+                          {/* Stage 10b-1b — fees/accessSpeed now read from extendedFields
+                              (same tier as productName/earlyWithdrawalRule); "Not
+                              available" is the honest fallback only when a source never
+                              stated them, never a fabricated value. */}
+                          <TableCell className="text-sm text-muted-foreground max-w-[160px] truncate">{fees ?? "Not available"}</TableCell>
+                          <TableCell className="text-sm text-muted-foreground max-w-[160px] truncate">{accessSpeed ?? "Not available"}</TableCell>
                           <TableCell>
                             {r.isNegotiable ? (
                               <Badge variant="secondary" className="text-[10px]">Negotiable</Badge>
@@ -614,11 +620,18 @@ export default function BankInstruments({ embedded = false }: { embedded?: boole
                     label={bankFieldByKey("earlyWithdrawalRule")?.label ?? "Early withdrawal rule"}
                     value={readContractFieldValue(drawerRow.extendedFields, bankFieldByKey("earlyWithdrawalRule")!) ?? "—"}
                   />
-                  {/* Fees/charges and Access speed have no storage anywhere in the
-                      schema today — shown honestly as unavailable, never fabricated,
-                      same convention MMF's Risk profile uses. */}
-                  <DrawerFact label={bankFieldByKey("fees")?.label ?? "Fees / charges"} value="Not available" />
-                  <DrawerFact label={bankFieldByKey("accessSpeed")?.label ?? "Access speed"} value="Not available" />
+                  {/* Stage 10b-1b — fees/accessSpeed now read from extendedFields
+                      (same tier as productName/earlyWithdrawalRule above); "Not
+                      available" is the honest fallback only when a source never
+                      stated them, never a fabricated value. */}
+                  <DrawerFact
+                    label={bankFieldByKey("fees")?.label ?? "Fees / charges"}
+                    value={readContractFieldValue(drawerRow.extendedFields, bankFieldByKey("fees")!) ?? "Not available"}
+                  />
+                  <DrawerFact
+                    label={bankFieldByKey("accessSpeed")?.label ?? "Access speed"}
+                    value={readContractFieldValue(drawerRow.extendedFields, bankFieldByKey("accessSpeed")!) ?? "Not available"}
+                  />
                 </div>
                 {drawerRow.notes && <DrawerFact label="Notes" value={drawerRow.notes} />}
                 {(() => {

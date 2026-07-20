@@ -486,11 +486,13 @@ describe("Catalogue field contract · computed fields are marked computed, not c
 });
 
 describe("Catalogue field contract · missing fields are marked missingRequiresMigration, never silently treated as existing", () => {
+  // Stage 10b-1b moved bank.fees/bank.accessSpeed from missingRequiresMigration
+  // to extendedFields (bank_instruments already has an extendedFields JSON
+  // home, the same one productName/earlyWithdrawalRule use) — removed from
+  // this list. See server/bankLiveWorkflowParity.test.ts for their coverage.
   const knownMissing: Array<{ catalogue: "mmf" | "bank"; subtype?: undefined; key: string }> = [
     { catalogue: "mmf", key: "riskProfile" },
     { catalogue: "mmf", key: "dailyYield" },
-    { catalogue: "bank", key: "fees" },
-    { catalogue: "bank", key: "accessSpeed" },
   ];
 
   for (const { catalogue, key } of knownMissing) {
@@ -666,6 +668,10 @@ describe("Catalogue field contract · foundation-only guardrails (no behavior ch
       // pattern MMF/CBK/SACCO already established.
       join(root, "client", "src", "pages", "BankInstruments.tsx"),
       join(root, "server", "bankFieldParity.test.ts"),
+      // Stage 10b-1b — Bank live workflow parity repair: extraction/gate-
+      // alias/parsing/promotion fixes surfaced by live QA; test-only import
+      // of the contract module for direct behavioural proof.
+      join(root, "server", "bankLiveWorkflowParity.test.ts"),
     ]);
     const unexpectedOffenders = offenders.filter((f) => !allowed.has(f));
     expect(unexpectedOffenders).toEqual([]);

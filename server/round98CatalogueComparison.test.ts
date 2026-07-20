@@ -173,9 +173,11 @@ describe("Round 98 · B — Extraction schemas include proposalType/changedField
   });
 
   it("Bank schema has proposalType in required", () => {
+    // Stage 10b-1b added "productName" to the required list, between
+    // "bankName" and "productType" — this anchor was updated to match.
     const bankSchemaBlock = src.slice(
-      src.indexOf('"instrumentName", "bankName", "productType"'),
-      src.indexOf('"instrumentName", "bankName", "productType"') + 500,
+      src.indexOf('"instrumentName", "bankName", "productName", "productType"'),
+      src.indexOf('"instrumentName", "bankName", "productName", "productType"') + 500,
     );
     expect(bankSchemaBlock).toContain('"proposalType"');
     expect(bankSchemaBlock).toContain('"changedFields"');

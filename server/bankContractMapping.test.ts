@@ -86,13 +86,13 @@ describe("Slice 8c · projectFindingToContractFigures (Bank)", () => {
     expect(figures.sourceAsOf).toBeUndefined();
   });
 
-  it("fees and accessSpeed (missingRequiresMigration) never appear, even if the raw bag happens to carry those exact keys", () => {
+  it("Stage 10b-1b — fees and accessSpeed (now extendedFields, moved off missingRequiresMigration) DO appear when the raw bag carries a matching key", () => {
     const finding = bankFinding({
       extractedFields: { indicativeRate: "10", fees: "KES 500 annual", accessSpeed: "same-day" },
     });
     const figures = projectFindingToContractFigures(bankContract, finding);
-    expect(figures.fees).toBeUndefined();
-    expect(figures.accessSpeed).toBeUndefined();
+    expect(figures.fees).toBe("KES 500 annual");
+    expect(figures.accessSpeed).toBe("same-day");
     expect(figures.indicativeRate).toBe("10");
   });
 
@@ -183,7 +183,15 @@ describe("Slice 8c · compatibility with the existing Bank approval gate and pro
     expect(figures.sourceUrl).toBeUndefined();
   });
 
-  it("checkApprovalGate: every field this slice is responsible for now passes — the ONLY remaining gap is 'liquidity', a pre-existing, orphaned gate requirement with no extraction source and no DB column, unrelated to this slice", () => {
+  it("Stage 10b-1b — checkApprovalGate: the gate now passes outright — 'liquidity / withdrawal terms' is satisfied by the tenor this finding already carries (figures.tenor, from typicalTenor), not a separate legacy field", () => {
+    // Prior to Stage 10b-1b, this same figures bag (which has never carried a
+    // literal "liquidity" key — Bank's extraction schema and contract don't
+    // produce one) was reported blocked on "liquidity / withdrawal terms": a
+    // false block, since the finding's tenor/12 months already answers the
+    // same question. figurePresent's widened "liquidity" alias list (shared/
+    // researchPipeline.ts) now recognises tenor/earlyWithdrawalRule/
+    // accessSpeed as satisfying it. See the false-block regression test below
+    // for the negative case (none of those present → still correctly missing).
     const gate = checkApprovalGate({
       assetClass: "bank_deposit",
       changeKind: "create",
@@ -193,11 +201,26 @@ describe("Slice 8c · compatibility with the existing Bank approval gate and pro
       source: finding.sourceLabel,
       asOf: finding.sourceAsOf as number,
     });
-    expect(gate.ok).toBe(false);
-    expect(gate.missing).toEqual(["liquidity / withdrawal terms"]);
+    expect(gate.ok).toBe(true);
+    expect(gate.missing).toEqual([]);
   });
 
-  it("control: the gate fully passes once 'liquidity' is manually supplied — proving every field THIS slice is responsible for is genuinely compatible, and the one remaining gap is isolated and understood, not a symptom of something else broken", () => {
+  it("regression guard: with NONE of tenor/earlyWithdrawalRule/accessSpeed/liquidity present, the gate still correctly reports the field missing — the Stage 10b-1b fix widened what SATISFIES the rule, it did not disable the rule", () => {
+    const { tenor: _tenor, ...figuresNoTenor } = figures;
+    const gate = checkApprovalGate({
+      assetClass: "bank_deposit",
+      changeKind: "create",
+      figures: figuresNoTenor,
+      name: finding.instrumentName,
+      issuer: finding.issuer,
+      source: finding.sourceLabel,
+      asOf: finding.sourceAsOf as number,
+    });
+    expect(gate.ok).toBe(false);
+    expect(gate.missing).toContain("tenor / notice, early withdrawal rule, or access speed");
+  });
+
+  it("control: the gate fully passes once 'liquidity' is manually supplied (legacy key still recognised, now just one of several that satisfy the rule)", () => {
     const gateWithLiquidity = checkApprovalGate({
       assetClass: "bank_deposit",
       changeKind: "create",
@@ -272,7 +295,7 @@ describe("Slice 8c · projectFindingToContractDisplayRows (Bank)", () => {
     expect(rows.map((r) => r.label)).toEqual(bankContract.fields.map((f) => f.label));
   });
 
-  it("netReturnAfterWht (computed) and fees/accessSpeed (missingRequiresMigration) are ALWAYS null, even when the raw bag has a matching key", () => {
+  it("netReturnAfterWht (computed) is ALWAYS null, even when the raw bag has a matching key; fees/accessSpeed (Stage 10b-1b: extendedFields, not missingRequiresMigration) now surface their real found value", () => {
     const finding = bankFinding({
       extractedFields: { indicativeRate: "10", netReturnAfterWht: "8.5", fees: "KES 500", accessSpeed: "same-day" },
     });
@@ -282,10 +305,10 @@ describe("Slice 8c · projectFindingToContractDisplayRows (Bank)", () => {
     const accessSpeedRow = rows.find((r) => r.key === "accessSpeed")!;
     expect(netReturnRow.storageStatus).toBe("computed");
     expect(netReturnRow.value).toBeNull();
-    expect(feesRow.storageStatus).toBe("missingRequiresMigration");
-    expect(feesRow.value).toBeNull();
-    expect(accessSpeedRow.storageStatus).toBe("missingRequiresMigration");
-    expect(accessSpeedRow.value).toBeNull();
+    expect(feesRow.storageStatus).toBe("extendedFields");
+    expect(feesRow.value).toBe("KES 500");
+    expect(accessSpeedRow.storageStatus).toBe("extendedFields");
+    expect(accessSpeedRow.value).toBe("same-day");
   });
 
   it("a genuinely found value surfaces correctly", () => {

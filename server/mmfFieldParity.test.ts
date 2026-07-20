@@ -269,8 +269,13 @@ describe("Stage 10a · B — ResearchDesk.tsx: review queue shows the full estab
   });
 
   it("missing values render as a clean 'Missing' label, never a raw camelCase key", () => {
+    // Stage 10b-1b widened the gap between "Catalogue fields" and the
+    // "Missing" fallback (the Bank productType label-formatting lines) —
+    // bounded by the next DialogFooter landmark instead of a fixed offset so
+    // this doesn't re-break the next time this block grows.
     const idx = researchDeskPage.indexOf("Catalogue fields");
-    const block = researchDeskPage.slice(idx, idx + 1200);
+    const nextIdx = researchDeskPage.indexOf("<DialogFooter>", idx);
+    const block = researchDeskPage.slice(idx, nextIdx);
     expect(block).toContain("Missing");
     expect(block).toContain("row.label");
     expect(block).not.toContain("{row.key}:");

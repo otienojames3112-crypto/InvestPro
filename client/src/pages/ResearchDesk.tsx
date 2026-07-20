@@ -45,6 +45,8 @@ import {
   catalogueLabel,
   type ReferenceCatalogue,
   bankInstrumentTypeLabel,
+  cbkSecurityTypeLabel,
+  cbkTaxExemptLabel,
 } from "@shared/researchPipeline";
 import {
   resolveContractCatalogueForUpdate,
@@ -233,10 +235,16 @@ function fmtFigures(
       // through the same label map BankInstruments.tsx's own catalogue table
       // already uses, so a manager reviewing a pending Bank finding never
       // sees a raw underscored value.
+      // Stage 10b-2 — same fix for CBK's securityType (raw enum, e.g.
+      // "treasury_bill") and taxExempt (raw "true"/"false" boolean-ish string).
       const value =
         contract?.catalogue === "bank" && (k === "productType" || k === "instrumentType")
           ? (bankInstrumentTypeLabel(raw) ?? raw)
-          : raw;
+          : contract?.catalogue === "cbk" && k === "securityType"
+            ? (cbkSecurityTypeLabel(raw) ?? raw)
+            : contract?.catalogue === "cbk" && k === "taxExempt"
+              ? (cbkTaxExemptLabel(raw) ?? raw)
+              : raw;
       return {
         key: k,
         label: resolveApprovalFigureLabel(contract?.catalogue, contract?.subtype, k, LABELS[k]),
@@ -436,7 +444,7 @@ function ApproveDialog({
                   <div className="text-xs font-medium text-muted-foreground flex items-center gap-1.5">
                     <ListChecks className="w-3.5 h-3.5" /> Catalogue fields
                   </div>
-                  {(data?.catalogue === "mmf" || data?.catalogue === "bank") && (
+                  {(data?.catalogue === "mmf" || data?.catalogue === "bank" || data?.catalogue === "cbk") && (
                     <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" onClick={onEditFields}>
                       <PencilLine className="w-3 h-3 mr-1" /> Edit
                     </Button>
@@ -445,11 +453,16 @@ function ApproveDialog({
                 <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
                   {contractRows.map((row) => {
                     const raw = displayContractRowValue(row);
-                    // Stage 10b-1b — same Bank productType label fix as fmtFigures above.
+                    // Stage 10b-1b/10b-2 — same Bank productType / CBK securityType /
+                    // CBK taxExempt label fix as fmtFigures above.
                     const displayValue =
                       data?.catalogue === "bank" && row.key === "productType"
                         ? (bankInstrumentTypeLabel(raw) ?? raw)
-                        : raw;
+                        : data?.catalogue === "cbk" && row.key === "securityType"
+                          ? (cbkSecurityTypeLabel(raw) ?? raw)
+                          : data?.catalogue === "cbk" && row.key === "taxExempt"
+                            ? (cbkTaxExemptLabel(raw) ?? raw)
+                            : raw;
                     return (
                       <div key={row.key} className="text-xs">
                         <span className="text-muted-foreground">{row.label}: </span>
@@ -498,8 +511,8 @@ function ApproveDialog({
  * approval modal show. Edits the PENDING update in place (via
  * updatePendingFields) — distinct from Correct Figure, which versions an
  * already-drafted finding.
- * MMF + Bank for this slice (Stage 10b-1) — the button that opens this is
- * gated to catalogue === "mmf" || "bank". CBK/Market asset get their own
+ * MMF + Bank + CBK (Stage 10b-1 / 10b-2) — the button that opens this is
+ * gated to catalogue === "mmf" || "bank" || "cbk". Market asset gets its own
  * wiring later, the same staged rollout Slices 8b-8e already established
  * per catalogue.
  */
@@ -511,7 +524,7 @@ function EditCatalogueFieldsDialog({ updateId, onClose }: { updateId: number | n
   );
   const update = data?.update;
   const catalogue = update ? catalogueForAssetClass(update.assetClass as AssetClass) : null;
-  const isSupported = catalogue === "mmf" || catalogue === "bank";
+  const isSupported = catalogue === "mmf" || catalogue === "bank" || catalogue === "cbk";
   const contract = isSupported && catalogue ? getCatalogueFieldContract(catalogue) : null;
   const rows =
     contract && update
@@ -545,6 +558,14 @@ function EditCatalogueFieldsDialog({ updateId, onClose }: { updateId: number | n
     },
     bank: {
       bankName: "issuer",
+      sourceLink: "source",
+      sourceAsOf: "asOf",
+    },
+    // Stage 10b-2 — CBK has no name-equivalent envelope field at all (see
+    // ENVELOPE_ROUTED_CONTRACT_KEYS.cbk, shared/catalogueFieldContracts.ts —
+    // the contract itself has no "name" field; a security's identity is just
+    // its raw instrument name, never a figures-bag key a manager edits here).
+    cbk: {
       sourceLink: "source",
       sourceAsOf: "asOf",
     },
@@ -872,11 +893,16 @@ function PendingQueue() {
                   <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-1.5">
                     {contractRows.map((row) => {
                       const raw = displayContractRowValue(row);
-                      // Stage 10b-1b — same Bank productType label fix as fmtFigures above.
+                      // Stage 10b-1b/10b-2 — same Bank productType / CBK securityType /
+                      // CBK taxExempt label fix as fmtFigures above.
                       const displayValue =
                         contract.catalogue === "bank" && row.key === "productType"
                           ? (bankInstrumentTypeLabel(raw) ?? raw)
-                          : raw;
+                          : contract.catalogue === "cbk" && row.key === "securityType"
+                            ? (cbkSecurityTypeLabel(raw) ?? raw)
+                            : contract.catalogue === "cbk" && row.key === "taxExempt"
+                              ? (cbkTaxExemptLabel(raw) ?? raw)
+                              : raw;
                       return (
                       <div key={row.key} className="text-xs">
                         <span className="text-muted-foreground">{row.label}: </span>
@@ -942,7 +968,7 @@ function PendingQueue() {
                 {/* Stage 10a (MMF) / Stage 10b-1 (Bank) — see EditCatalogueFieldsDialog's
                     own doc comment; CBK/Market asset get their own wiring later, the
                     same staged-rollout pattern Slices 8b-8e already established. */}
-                {fullContract && (contract.catalogue === "mmf" || contract.catalogue === "bank") && (
+                {fullContract && (contract.catalogue === "mmf" || contract.catalogue === "bank" || contract.catalogue === "cbk") && (
                   <Button
                     size="sm"
                     variant="outline"

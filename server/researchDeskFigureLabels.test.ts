@@ -261,7 +261,7 @@ describe("Stage 9b · B — ResearchDesk.tsx wiring", () => {
     const fnIdx = researchDesk.indexOf("function fmtFigures(");
     const mapIdx = researchDesk.indexOf(".map(([k, v]) => {", fnIdx);
     expect(mapIdx).toBeGreaterThan(fnIdx);
-    const block = researchDesk.slice(fnIdx, mapIdx + 900);
+    const block = researchDesk.slice(fnIdx, mapIdx + 1300);
     expect(block).toContain("resolveApprovalFigureLabel(contract?.catalogue, contract?.subtype, k, LABELS[k])");
     expect(block).toContain("isInternalRoutingFigureKey(contract?.catalogue, contract?.subtype, k)");
     // The pre-existing fallback map is still there, not deleted.

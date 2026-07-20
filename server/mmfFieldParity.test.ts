@@ -312,20 +312,20 @@ describe("Stage 10a · B — ResearchDesk.tsx: approval modal shows full fields 
 });
 
 describe("Stage 10a · B — ResearchDesk.tsx: multi-field edit dialog", () => {
-  it("EditCatalogueFieldsDialog exists and calls the updatePendingFields mutation (Stage 10b-1 generalized this from MMF-only to MMF + Bank)", () => {
+  it("EditCatalogueFieldsDialog exists and calls the updatePendingFields mutation (Stage 10b-1 generalized this from MMF-only to MMF + Bank, Stage 10b-2 extended it further to CBK)", () => {
     expect(researchDeskPage).toContain("function EditCatalogueFieldsDialog(");
     expect(researchDeskPage).toContain("trpc.researchPipeline.updatePendingFields.useMutation(");
     const idx = researchDeskPage.indexOf("function EditCatalogueFieldsDialog(");
     const nextIdx = researchDeskPage.indexOf("/* ── Pending update review queue");
     const block = researchDeskPage.slice(idx, nextIdx);
-    expect(block).toContain('const isSupported = catalogue === "mmf" || catalogue === "bank";');
+    expect(block).toContain('const isSupported = catalogue === "mmf" || catalogue === "bank" || catalogue === "cbk";');
     // Renders one labeled input per editable contract field, not a single field.
     expect(block).toContain("editableRows.map((row) =>");
     expect(block).toContain("managerEditable === true");
   });
 
-  it("the Edit fields entry point on the pending card is gated to MMF or Bank (Stage 10b-1 extended it from MMF-only) — see server/bankFieldParity.test.ts for the Bank-specific proof", () => {
-    expect(researchDeskPage).toContain('(contract.catalogue === "mmf" || contract.catalogue === "bank") && (');
+  it("the Edit fields entry point on the pending card is gated to MMF, Bank, or CBK (Stage 10b-1 extended it from MMF-only, Stage 10b-2 added CBK) — see server/bankFieldParity.test.ts and server/cbkLiveWorkflowParity.test.ts for the catalogue-specific proofs", () => {
+    expect(researchDeskPage).toContain('(contract.catalogue === "mmf" || contract.catalogue === "bank" || contract.catalogue === "cbk") && (');
     expect(researchDeskPage).toContain("Edit fields");
   });
 

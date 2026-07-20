@@ -61,7 +61,7 @@ import {
   Search,
 } from "lucide-react";
 import { InfoHint } from "@/components/InfoHint";
-import { catalogueLabel, suggestFollowUpQuestions, type ReferenceCatalogue, bankInstrumentTypeLabel } from "@shared/researchPipeline";
+import { catalogueLabel, suggestFollowUpQuestions, type ReferenceCatalogue, bankInstrumentTypeLabel, cbkSecurityTypeLabel, cbkTaxExemptLabel } from "@shared/researchPipeline";
 import { parseCandidatePhrases } from "@shared/candidatePhrases";
 import {
   getCatalogueFieldContract,
@@ -1054,15 +1054,26 @@ export function FindingCard({
               </span>
             </div>
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-2 px-3 py-2.5">
-              {cbkDisplayRows.map((row) => (
+              {cbkDisplayRows.map((row) => {
+                // Stage 10b-2 — securityType/taxExempt are still the raw
+                // extraction value ("treasury_bill", "true"/"false") until
+                // promotion/display formats them; show the same clean labels
+                // the CBK catalogue table and ResearchDesk.tsx use.
+                const displayValue =
+                  row.key === "securityType"
+                    ? (cbkSecurityTypeLabel(row.value) ?? row.value)
+                    : row.key === "taxExempt"
+                      ? (cbkTaxExemptLabel(row.value) ?? row.value)
+                      : row.value;
+                return (
                 <div key={row.key} className="min-w-0">
                   <span className="text-[11px] text-muted-foreground">
                     {row.label}
                     {row.required && <span className="text-amber-600"> *</span>}
                   </span>
                   <div className="text-sm truncate">
-                    {row.value ? (
-                      <span className="font-medium tabular-nums">{row.value}</span>
+                    {displayValue ? (
+                      <span className="font-medium tabular-nums">{displayValue}</span>
                     ) : row.storageStatus === "computed" ? (
                       <span className="text-muted-foreground/60 italic text-xs">calculated at approval</span>
                     ) : row.storageStatus === "missingRequiresMigration" ? (
@@ -1072,7 +1083,8 @@ export function FindingCard({
                     )}
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         )}

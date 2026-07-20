@@ -61,10 +61,21 @@ describe("Stage 9c · A — readContractFieldValue (pure, no DB)", () => {
 const cbkPage = read("client/src/pages/CbkSecuritiesReference.tsx");
 
 describe("Stage 9c · B — CbkSecuritiesReference.tsx: detail drawer", () => {
-  it("1. the existing baseline table columns are unchanged (Security, Type, Yield/coupon, Tenor, Maturity, Source & freshness, Action)", () => {
+  // Stage 10b-2 note: the table grew from 7 to 14 explicit columns (Security,
+  // Security type, Yield/rate, Coupon rate, Net yield after WHT, Tax
+  // treatment, Tax-exempt, Tenor, Auction date, Value date, Maturity,
+  // Minimum investment, Source & freshness, Action) — the Security/Tenor/
+  // Maturity/Source/Action columns are unchanged, "Type" became the real
+  // "Security type" figure instead of the generic asset-class label. This
+  // test now asserts the CURRENT structure so it stays a real regression
+  // guard rather than a stale pin. See server/cbkLiveWorkflowParity.test.ts
+  // for the full column-parity proof.
+  it("1. the table shows the established CBK fields as explicit columns", () => {
     expect(cbkPage).toContain('<TableHead><SortHead k="name">Security</SortHead></TableHead>');
-    expect(cbkPage).toContain("Type");
-    expect(cbkPage).toContain('<SortHead k="yieldPct" numeric>Yield / coupon</SortHead>');
+    expect(cbkPage).toContain("<TableHead>Security type</TableHead>");
+    expect(cbkPage).toContain('<SortHead k="yieldPct" numeric>Yield / rate</SortHead>');
+    expect(cbkPage).toContain("<TableHead>Auction date</TableHead>");
+    expect(cbkPage).toContain("<TableHead>Value date</TableHead>");
     expect(cbkPage).toContain('<SortHead k="tenorYears" numeric>Tenor</SortHead>');
     expect(cbkPage).toContain('<SortHead k="maturityDate" numeric>Maturity</SortHead>');
     expect(cbkPage).toContain("Source &amp; freshness");

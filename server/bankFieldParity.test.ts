@@ -188,14 +188,15 @@ describe("Stage 10b-1 · B — ResearchDesk.tsx: multi-field edit path extended 
     const idx = researchDeskPage.indexOf("function EditCatalogueFieldsDialog(");
     const nextIdx = researchDeskPage.indexOf("/* ── Pending update review queue");
     const block = researchDeskPage.slice(idx, nextIdx);
-    expect(block).toContain('const isSupported = catalogue === "mmf" || catalogue === "bank";');
+    // Stage 10b-2 extended this further to also support "cbk" — anchor updated to match.
+    expect(block).toContain('const isSupported = catalogue === "mmf" || catalogue === "bank" || catalogue === "cbk";');
     expect(block).toContain("bankName: \"issuer\",");
     expect(block).toContain("fundName: \"name\",");
   });
 
-  it("the Edit fields entry points (pending card + approval modal) are both gated to mmf OR bank", () => {
-    expect(researchDeskPage).toContain('(data?.catalogue === "mmf" || data?.catalogue === "bank")');
-    expect(researchDeskPage).toContain('(contract.catalogue === "mmf" || contract.catalogue === "bank")');
+  it("the Edit fields entry points (pending card + approval modal) are both gated to mmf OR bank (OR cbk, Stage 10b-2)", () => {
+    expect(researchDeskPage).toContain('(data?.catalogue === "mmf" || data?.catalogue === "bank" || data?.catalogue === "cbk")');
+    expect(researchDeskPage).toContain('(contract.catalogue === "mmf" || contract.catalogue === "bank" || contract.catalogue === "cbk")');
   });
 
   it("3/5. the review-queue card and the approval modal already resolve the full Bank contract field block generically (no MMF-only special case) — verified, not newly added", () => {

@@ -1635,6 +1635,12 @@ const CBK_TBILL_EXTRACTION_SCHEMA = {
       answer: { type: "string" },
       auctionDate: { type: ["string", "null"] },
       valueDate: { type: ["string", "null"] },
+      // Stage 10b-2 — the bid submission / application deadline, mirroring
+      // the bond schema's sharedAuctionFields.bidSubmissionDeadline (same
+      // established CBK field, different schema shape since T-bills don't
+      // have a sharedAuctionFields wrapper). Before this, a T-bill source's
+      // stated application deadline had nowhere to go.
+      applicationDeadline: { type: ["string", "null"], description: "Bid submission / application deadline, if stated" },
       instruments: {
         type: "array",
         items: {
@@ -1644,12 +1650,26 @@ const CBK_TBILL_EXTRACTION_SCHEMA = {
             instrumentName: { type: "string", description: "e.g. '91-Day Treasury Bill'" },
             issueNumber: { type: ["string", "null"] },
             tenorDays: { type: ["number", "null"], description: "91, 182, or 364" },
+            // Stage 10b-2 — explicit securityType so a source that names its
+            // own type verbatim is captured directly, not left entirely to
+            // applyCbkRuleFill's tenor/keyword convention-based guess.
+            securityType: { type: ["string", "null"], description: "e.g. 'treasury_bill'" },
             yieldPct: { type: ["string", "null"], description: "Annualised yield %" },
             prevAvgRate: { type: ["string", "null"] },
             amountOnOffer: { type: ["string", "null"] },
             amountReceived: { type: ["string", "null"] },
             amountAccepted: { type: ["string", "null"] },
             weightedAvgRate: { type: ["string", "null"] },
+            // Stage 10b-2 — established CBK fields the T-bill schema never
+            // captured: a source's stated tax treatment / tax-exempt flag /
+            // maturity date / minimum investment were previously discarded
+            // (falling back entirely to applyCbkRuleFill's convention-based
+            // fill, which never sets a literal maturityDate for a T-bill at
+            // all — only the generic maturityRule text).
+            whtRule: { type: ["string", "null"], description: "Tax treatment description, e.g. '15% withholding tax on the discount'" },
+            taxExempt: { type: ["string", "null"], description: "'true' or 'false'" },
+            maturityDate: { type: ["string", "null"], description: "The bill's redemption date, if stated" },
+            minInvestment: { type: ["string", "null"], description: "KES minimum (non-competitive) bid amount" },
             rawExcerpt: { type: ["string", "null"] },
             warnings: { type: "array", items: { type: "string" } },
             confidence: { type: ["number", "null"] },
@@ -1658,11 +1678,11 @@ const CBK_TBILL_EXTRACTION_SCHEMA = {
             changedFields: { type: "array", items: { type: "string" }, description: "List of field names that differ from current row" },
             currentValues: { type: "array", items: { type: "object", additionalProperties: false, properties: { field: { type: "string" }, value: { type: "string" } }, required: ["field", "value"] }, description: "Current values for each changed field" },
           },
-          required: ["instrumentName", "issueNumber", "tenorDays", "yieldPct", "prevAvgRate", "amountOnOffer", "amountReceived", "amountAccepted", "weightedAvgRate", "rawExcerpt", "warnings", "confidence", "proposalType", "matchedCurrentRow", "changedFields", "currentValues"],
+          required: ["instrumentName", "issueNumber", "tenorDays", "securityType", "yieldPct", "prevAvgRate", "amountOnOffer", "amountReceived", "amountAccepted", "weightedAvgRate", "whtRule", "taxExempt", "maturityDate", "minInvestment", "rawExcerpt", "warnings", "confidence", "proposalType", "matchedCurrentRow", "changedFields", "currentValues"],
         },
       },
     },
-    required: ["answer", "auctionDate", "valueDate", "instruments"],
+    required: ["answer", "auctionDate", "valueDate", "applicationDeadline", "instruments"],
   },
 } as const;
 
@@ -1835,7 +1855,7 @@ function extractionSchemaForClass(sc: SourceClass): { schema: object; prompt: st
     case "cbk_tbill_auction_result":
       return {
         schema: CBK_TBILL_EXTRACTION_SCHEMA,
-        prompt: `${STRUCTURED_EXTRACTION_PREAMBLE}\n\nThis is a CBK TREASURY BILL auction notice or result. Extract one entry per tenor (91-day, 182-day, 364-day) that appears.\nFor each, extract: issue number, tenor in days, annualised yield %, previous average rate, amount on offer/received/accepted, and weighted average rate.\n\nCRITICAL: Do NOT invent issue numbers or rates. If a field is not printed, set it to "missing_from_source".`,
+        prompt: `${STRUCTURED_EXTRACTION_PREAMBLE}\n\nThis is a CBK TREASURY BILL auction notice or result. Extract one entry per tenor (91-day, 182-day, 364-day) that appears.\nFor each, extract: issue number, SECURITY TYPE (e.g. "treasury_bill"), tenor in days, annualised yield %, previous average rate, amount on offer/received/accepted, weighted average rate, TAX TREATMENT (e.g. "15% withholding tax on the discount"), whether TAX-EXEMPT ("true"/"false"), MATURITY DATE (the bill's redemption date, if stated), and MINIMUM INVESTMENT (KES minimum non-competitive bid amount).\nIf the source states an APPLICATION or BID SUBMISSION DEADLINE, extract it as applicationDeadline at the top level, alongside auctionDate and valueDate.\n\nCRITICAL: Do NOT invent issue numbers or rates. If a field is not printed, set it to "missing_from_source".`,
       };
     case "mmf_factsheet":
     case "mmf_benchmark":
@@ -1898,9 +1918,10 @@ async function runStructuredExtraction(
   if (parsed.sharedAuctionFields && typeof parsed.sharedAuctionFields === "object") {
     Object.assign(sharedFields, parsed.sharedAuctionFields);
   }
-  // T-bill auction date/value date
+  // T-bill auction date/value date/application deadline
   if (parsed.auctionDate) sharedFields.auctionDate = parsed.auctionDate;
   if (parsed.valueDate) sharedFields.valueDate = parsed.valueDate;
+  if (parsed.applicationDeadline) sharedFields.applicationDeadline = parsed.applicationDeadline;
   // MMF benchmark date
   if (parsed.benchmarkDate) sharedFields.benchmarkDate = parsed.benchmarkDate;
   // Stage 10b-1b — Bank source-wide as-of date (BANK_EXTRACTION_SCHEMA.asOfDate)

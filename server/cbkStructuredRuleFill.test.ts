@@ -90,10 +90,17 @@ describe("Stage 4 follow-up · structuredInstrumentToDraft applies CBK rule-fill
   });
 
   it("182-day and 364-day tenors rule-fill correctly", () => {
+    // Stage 10b-2 — both sub-cases now explicitly supply valueDate (matching
+    // the 91-day test above). They previously omitted it and still asserted
+    // an empty `missing` list, which only passed because of the sentinel-
+    // masking bug fixed this stage (figurePresent was treating CBK's force-
+    // filled "missing_from_source" settlementDate/valueDate alias as a real
+    // value). Supplying it explicitly keeps this test verifying what it always
+    // intended — rule-fill across tenors — without depending on that bug.
     const d182 = structuredInstrumentToDraft(
       tbillRaw({ instrumentName: "182-Day Treasury Bill", tenorDays: 182 }),
       "cbk_tbill_auction_result",
-      { auctionDate: "2026-07-09" },
+      { auctionDate: "2026-07-09", valueDate: "2026-07-14" },
     );
     expect(d182!.extractedFields.securityType).toBe("treasury_bill");
     expect(d182!.extractedFields.tenor).toBe("182-day");
@@ -103,7 +110,7 @@ describe("Stage 4 follow-up · structuredInstrumentToDraft applies CBK rule-fill
     const d364 = structuredInstrumentToDraft(
       tbillRaw({ instrumentName: "364-Day Treasury Bill", tenorDays: 364 }),
       "cbk_tbill_auction_result",
-      { auctionDate: "2026-07-09" },
+      { auctionDate: "2026-07-09", valueDate: "2026-07-14" },
     );
     expect(d364!.extractedFields.securityType).toBe("treasury_bill");
     expect(d364!.extractedFields.tenor).toBe("364-day");
@@ -227,8 +234,8 @@ describe("Stage 4 follow-up · CBK rule-fill never overwrites a model-provided v
   });
 });
 
-describe("Stage 4 follow-up · KNOWN DEFERRED bug — sentinel-masking is NOT fixed by this change", () => {
-  it("when rule-fill cannot determine a tenor/type at all, whtRule/maturityRule are STILL wrongly reported as present (NEVER_INVENT_FIELDS sentinel leaking through the gate's alias check) — this is a pre-existing, separately-tracked issue, left untouched here", () => {
+describe("Stage 10b-2 · sentinel-masking — FIXED (previously a known, deferred bug)", () => {
+  it("when rule-fill cannot determine a tenor/type at all, whtRule/maturityRule are now correctly reported as MISSING, not silently satisfied by the missing_from_source sentinel", () => {
     // No tenor digits, no t-bill/ifb/fxd/bond keyword anywhere in name/securityType —
     // applyCbkRuleFill's blob-detection cannot classify this, so it fills nothing.
     const draft = structuredInstrumentToDraft(
@@ -263,15 +270,19 @@ describe("Stage 4 follow-up · KNOWN DEFERRED bug — sentinel-masking is NOT fi
     expect(draft!.extractedFields.securityType).toBeUndefined();
     const missing = gateMissingFor(draft!);
     expect(missing).toContain("security type");
-    // KNOWN BUG, unchanged by this commit: NEVER_INVENT_FIELDS stamps withholdingTaxRate
-    // and maturityDate with the "missing_from_source" SENTINEL, normaliseExtractionFields
-    // copies it onto the whtRule/maturityRule ALIASES (whtRate / maturityDate), and the
-    // gate's alias check treats any non-empty string — including the sentinel — as
-    // "present". So whtRule/maturityRule are silently accepted here even though nothing
-    // was ever really extracted. Documented as a deferred follow-up, not fixed in this
-    // commit — this test pins the CURRENT (buggy) behaviour so a future fix changes it
-    // deliberately rather than by accident.
-    expect(missing).not.toContain("WHT rule");
-    expect(missing).not.toContain("maturity rule");
+    // Stage 10b-2 — FIXED: shared/researchPipeline.ts's figurePresent() now
+    // reuses the same isRealSourceValue() absence-marker check the SACCO
+    // rules already relied on, so a NEVER_INVENT_FIELDS sentinel
+    // ("missing_from_source", force-stamped onto withholdingTaxRate/
+    // maturityDate for every CBK finding, then duplicated onto the whtRate/
+    // maturityDate ALIASES by normaliseExtractionFields) no longer counts as
+    // "present". Nothing was ever really extracted here, so the gate now
+    // correctly says so — see server/bankLiveWorkflowParity.test.ts's Bank
+    // precedent and server/cbkContractMapping.test.ts for the positive-path
+    // coverage (a genuinely-grounded T-bill/FXD/IFB finding is unaffected,
+    // since its real values satisfy these rules directly, never relying on
+    // the sentinel).
+    expect(missing).toContain("WHT rule");
+    expect(missing).toContain("maturity rule");
   });
 });

@@ -61,6 +61,7 @@ import { rateStaleness } from "@/lib/rateStaleness";
 import { resolveCatalogueSource, firstFieldProvenanceSourceUrl } from "@/lib/format";
 import { readContractFieldValue } from "@/lib/format";
 import { getCatalogueFieldContract } from "@shared/catalogueFieldContracts";
+import { cbkSecurityTypeLabel, cbkTaxExemptLabel } from "@shared/researchPipeline";
 import { dashboardHref } from "@shared/navigation";
 import { useDepositDrawer, type DepositPrefill } from "@/contexts/DepositDrawerContext";
 import type { inferRouterOutputs } from "@trpc/server";
@@ -85,10 +86,54 @@ type SortDir = "asc" | "desc";
 
 const GOV_CLASSES = ["gov_discount", "gov_coupon"] as const;
 
+// Stage 10b-2 — the SAME CBK contract every other display layer (Ask AI,
+// review queue, approval modal, the multi-field edit dialog) already uses,
+// so the table/drawer's field list/order/labels can never drift.
+const CBK_CONTRACT = getCatalogueFieldContract("cbk");
+const cbkFieldByKey = (key: string) => CBK_CONTRACT?.fields.find((f) => f.key === key);
+
+/**
+ * Stage 10b-2 — net yield after WHT, computed where safely possible:
+ *   - an infrastructure bond (taxExempt true) nets to its gross yield (0% WHT);
+ *   - otherwise, the first "N%" figure in the whtRule free text (e.g. "15%
+ *     withholding tax on the discount") is treated as the WHT rate.
+ * Returns null (rendered as a dash) when yieldPct is unknown, or when
+ * whtRule doesn't state a parseable rate and taxExempt isn't true — never a
+ * guessed or fabricated rate.
+ */
+function netYieldAfterWht(yieldPct: string | null, whtRule: string | null, taxExempt: string | null): number | null {
+  const y = num(yieldPct);
+  if (y === null) return null;
+  if ((taxExempt ?? "").trim().toLowerCase() === "true") return y;
+  const m = (whtRule ?? "").match(/(\d+(?:\.\d+)?)\s*%/);
+  if (!m) return null;
+  const whtPct = Number(m[1]);
+  if (!Number.isFinite(whtPct)) return null;
+  return y * (1 - whtPct / 100);
+}
+
 function num(v: string | null): number | null {
   if (v === null || v === undefined) return null;
   const n = Number(v);
   return isFinite(n) ? n : null;
+}
+/** Tolerates a currency prefix/commas (e.g. "KES 50,000"), same fix as
+ *  shared/researchPipeline.ts's num() — minInvestment is free text, not
+ *  guaranteed to already be a clean number. */
+function parseAmount(v: string | null): number | null {
+  if (v === null) return null;
+  const m = v.replace(/,/g, "").trim().match(/-?\d+(?:\.\d+)?/);
+  if (!m) return null;
+  const n = Number(m[0]);
+  return Number.isFinite(n) ? n : null;
+}
+function kes(n: number): string {
+  return n.toLocaleString("en-KE", {
+    style: "currency",
+    currency: "KES",
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
+  });
 }
 function fmtPct(v: string | null): string {
   const n = num(v);
@@ -283,7 +328,7 @@ export default function CbkSecuritiesReference({ embedded = false }: { embedded?
 
   return (
     <AppShell embedded={embedded}>
-      <div className="p-6 lg:p-8 space-y-6 max-w-6xl">
+      <div className="p-6 lg:p-8 space-y-6 max-w-[1900px]">
         {/* Header */}
         <div className="flex items-start justify-between gap-4 flex-wrap">
           <div>
@@ -403,15 +448,27 @@ export default function CbkSecuritiesReference({ embedded = false }: { embedded?
                   <TableHeader>
                     <TableRow>
                       <TableHead><SortHead k="name">Security</SortHead></TableHead>
-                      <TableHead>Type</TableHead>
+                      <TableHead>Security type</TableHead>
                       <TableHead className="text-right">
                         <span className="inline-flex items-center justify-end gap-1 w-full">
-                          <SortHead k="yieldPct" numeric>Yield / coupon</SortHead>
-                          <InfoHint side="left">For T-bills this is the discount / annualised yield; for bonds it is the coupon rate. Figures are indicative and before tax (IFB coupons are tax-exempt).</InfoHint>
+                          <SortHead k="yieldPct" numeric>Yield / rate</SortHead>
+                          <InfoHint side="left">For T-bills this is the discount / annualised yield; for bonds it is the auction/yield-to-maturity figure. Indicative, before tax.</InfoHint>
                         </span>
                       </TableHead>
+                      <TableHead className="text-right">Coupon rate</TableHead>
+                      <TableHead className="text-right">
+                        <span className="inline-flex items-center justify-end gap-1 w-full">
+                          Net yield after WHT
+                          <InfoHint side="left">Yield after withholding tax, computed from the tax treatment stated for this security. Shown as a dash when the WHT rate can't be read reliably.</InfoHint>
+                        </span>
+                      </TableHead>
+                      <TableHead>Tax treatment</TableHead>
+                      <TableHead>Tax-exempt</TableHead>
                       <TableHead className="text-right"><SortHead k="tenorYears" numeric>Tenor</SortHead></TableHead>
+                      <TableHead>Auction date</TableHead>
+                      <TableHead>Value date</TableHead>
                       <TableHead className="text-right"><SortHead k="maturityDate" numeric>Maturity</SortHead></TableHead>
+                      <TableHead className="text-right">Minimum investment</TableHead>
                       <TableHead>
                         <span className="inline-flex items-center gap-1">
                           Source &amp; freshness
@@ -479,14 +536,29 @@ function GovRow({
   staleByRef: Map<string, boolean>;
   refFocus: RefFocus;
 }) {
-  const profile = profileFor(r.assetClass as AssetClass);
   const fp = (r.fieldProvenance ?? {}) as FieldProvenanceMap;
   const catSource = resolveCatalogueSource(r.dataSource, r.extendedFields, r.dataAsOf, firstFieldProvenanceSourceUrl(fp));
   const stale = rateStaleness(catSource.asOf);
   const markedStale = staleByRef.get(r.ref);
   const total = figureCount(fp);
   const checked = humanCheckedCount(fp);
-  const isTaxExempt = /ifb|infrastructure/i.test(`${r.name} ${r.factNote ?? ""}`);
+
+  // Stage 10b-2 — established CBK fields, read the SAME way Bank/MMF read
+  // their extendedFields-tier fields (readContractFieldValue against the
+  // shared contract), never a raw camelCase key.
+  const extendedFields = r.extendedFields as Record<string, unknown> | null;
+  const securityType = readContractFieldValue(extendedFields, cbkFieldByKey("securityType")!);
+  const couponRate = readContractFieldValue(extendedFields, cbkFieldByKey("couponRate")!);
+  const whtRule = readContractFieldValue(extendedFields, cbkFieldByKey("whtRule")!);
+  const taxExemptRaw = readContractFieldValue(extendedFields, cbkFieldByKey("taxExempt")!);
+  const auctionDate = readContractFieldValue(extendedFields, cbkFieldByKey("auctionDate")!);
+  const valueDate = readContractFieldValue(extendedFields, cbkFieldByKey("valueDate")!);
+  const minInvestment = readContractFieldValue(extendedFields, cbkFieldByKey("minInvestment")!);
+  const netYield = netYieldAfterWht(r.yieldPct, whtRule, taxExemptRaw);
+  // Stage 10b-2 — replaces the previous name/factNote REGEX guess (flagged in
+  // the contract's own whtRule note as "fragile") with the real structured
+  // taxExempt figure Slice 8g-2 already persists.
+  const isTaxExempt = (taxExemptRaw ?? "").trim().toLowerCase() === "true";
   return (
     <TableRow
       ref={refFocus.registerRow(r.ref, r.name)}
@@ -507,15 +579,33 @@ function GovRow({
           </Badge>
         )}
       </TableCell>
-      <TableCell className="text-sm text-muted-foreground whitespace-nowrap">{profile.label}</TableCell>
+      <TableCell className="text-sm text-muted-foreground whitespace-nowrap">
+        {cbkSecurityTypeLabel(securityType) ?? "—"}
+      </TableCell>
       <TableCell className="text-right tabular-nums">
         <div>{fmtPct(r.yieldPct)}</div>
         {r.yieldKind && <div className="text-[10px] text-muted-foreground">{r.yieldKind}</div>}
       </TableCell>
+      <TableCell className="text-right tabular-nums text-sm">{couponRate === null ? "—" : `${couponRate}%`}</TableCell>
+      <TableCell className="text-right tabular-nums text-sm text-muted-foreground">
+        {netYield === null ? "—" : `${netYield.toFixed(2)}%`}
+      </TableCell>
+      <TableCell className="text-xs text-muted-foreground max-w-[200px] truncate" title={whtRule ?? undefined}>
+        {whtRule ?? "—"}
+      </TableCell>
+      <TableCell className="text-sm">{cbkTaxExemptLabel(taxExemptRaw) ?? "—"}</TableCell>
       <TableCell className="text-right tabular-nums text-sm">
         {num(r.tenorYears) === null ? "—" : `${Number(r.tenorYears)} yr`}
       </TableCell>
+      <TableCell className="text-sm text-muted-foreground whitespace-nowrap">{fmtDate(auctionDate)}</TableCell>
+      <TableCell className="text-sm text-muted-foreground whitespace-nowrap">{fmtDate(valueDate)}</TableCell>
       <TableCell className="text-right tabular-nums text-sm whitespace-nowrap">{fmtDate(r.maturityDate)}</TableCell>
+      <TableCell className="text-right tabular-nums text-sm whitespace-nowrap">
+        {(() => {
+          const amt = parseAmount(minInvestment);
+          return amt === null ? "—" : kes(amt);
+        })()}
+      </TableCell>
       <TableCell>
         {catSource.label ? (
           catSource.url ? (
@@ -657,8 +747,12 @@ function CbkDetailDrawer({
   const valueDate = row ? readContractFieldValue(extendedFields, fieldByKey("valueDate")!) : null;
   const couponRate = row ? readContractFieldValue(extendedFields, fieldByKey("couponRate")!) : null;
   const whtRule = row ? readContractFieldValue(extendedFields, fieldByKey("whtRule")!) : null;
-  const taxExempt = row ? fmtYesNo(readContractFieldValue(extendedFields, fieldByKey("taxExempt")!)) : null;
+  const taxExemptRaw = row ? readContractFieldValue(extendedFields, fieldByKey("taxExempt")!) : null;
+  const taxExempt = fmtYesNo(taxExemptRaw);
   const minInvestment = row ? readContractFieldValue(extendedFields, fieldByKey("minInvestment")!) : null;
+  // Stage 10b-2 — computed where safely possible (see netYieldAfterWht's own
+  // doc comment above); null renders as a clean dash, never a guess.
+  const netYield = row ? netYieldAfterWht(row.yieldPct, whtRule, taxExemptRaw) : null;
 
   const fp = (row?.fieldProvenance ?? {}) as FieldProvenanceMap;
   const catSource = row
@@ -678,7 +772,7 @@ function CbkDetailDrawer({
             </SheetHeader>
             <div className="mt-5 space-y-4">
               <div className="grid grid-cols-2 gap-3">
-                <DrawerFact label={fieldByKey("securityType")!.label} value={securityType ?? "—"} />
+                <DrawerFact label={fieldByKey("securityType")!.label} value={cbkSecurityTypeLabel(securityType) ?? "—"} />
                 <DrawerFact
                   label="Tenor"
                   value={num(row.tenorYears) === null ? "—" : `${Number(row.tenorYears)} yr`}
@@ -690,6 +784,10 @@ function CbkDetailDrawer({
               <div className="border-t pt-3 grid grid-cols-2 gap-3">
                 <DrawerFact label={fieldByKey("whtRule")!.label} value={whtRule ?? "—"} />
                 <DrawerFact label={fieldByKey("taxExempt")!.label} value={taxExempt ?? "—"} />
+                <DrawerFact
+                  label={fieldByKey("netYieldAfterWht")?.label ?? "Net yield after WHT"}
+                  value={netYield === null ? "—" : `${netYield.toFixed(2)}%`}
+                />
               </div>
 
               {(applicationDeadline || auctionDate || valueDate) && (

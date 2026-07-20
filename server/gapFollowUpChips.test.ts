@@ -33,9 +33,10 @@ describe("Stage 5 · FindingCard suggestion chips", () => {
       "suggestFollowUpQuestions(finding.missingRules ?? [], finding.instrumentName, candidatePhrases)",
     );
     // Stage 10b-1b added bankInstrumentTypeLabel to this same import line
-    // (Bank productType display fix) — anchor updated to match.
+    // (Bank productType display fix); Stage 10b-2 added
+    // cbkSecurityTypeLabel/cbkTaxExemptLabel (CBK equivalent) — anchor updated to match.
     expect(askAi).toContain(
-      'import { catalogueLabel, suggestFollowUpQuestions, type ReferenceCatalogue, bankInstrumentTypeLabel } from "@shared/researchPipeline";',
+      'import { catalogueLabel, suggestFollowUpQuestions, type ReferenceCatalogue, bankInstrumentTypeLabel, cbkSecurityTypeLabel, cbkTaxExemptLabel } from "@shared/researchPipeline";',
     );
   });
 

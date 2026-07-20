@@ -164,9 +164,14 @@ describe("Slice 8h-2 · B — CbkSecuritiesReference.tsx (GovRow) wiring", () =>
     expect(cbkPage).toContain('{stale.label}{stale.isStale ? " · may be stale" : ""}');
   });
 
+  // Stage 10b-2 note: the CBK table's Yield header label changed from
+  // "Yield / coupon" to "Yield / rate" as part of the explicit-column
+  // redesign (the coupon rate now has its OWN dedicated column) — see
+  // server/cbkLiveWorkflowParity.test.ts for the full column-parity proof.
+  // Name/Tenor/Maturity sort keys are unchanged.
   it("existing table structure (headers, sort keys) is unchanged", () => {
     expect(cbkPage).toContain('<TableHead><SortHead k="name">Security</SortHead></TableHead>');
-    expect(cbkPage).toContain('<SortHead k="yieldPct" numeric>Yield / coupon</SortHead>');
+    expect(cbkPage).toContain('<SortHead k="yieldPct" numeric>Yield / rate</SortHead>');
     expect(cbkPage).toContain('<SortHead k="tenorYears" numeric>Tenor</SortHead>');
     expect(cbkPage).toContain('<SortHead k="maturityDate" numeric>Maturity</SortHead>');
   });

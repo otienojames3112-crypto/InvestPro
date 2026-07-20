@@ -321,6 +321,52 @@ export function bankInstrumentTypeLabel(value: unknown): string | null {
   return s === "" ? null : s.replace(/_/g, " ");
 }
 
+const CBK_SECURITY_TYPE_LABELS: Record<string, string> = {
+  treasury_bill: "Treasury bill",
+  tbill: "Treasury bill",
+  zero_coupon: "Zero-coupon bond",
+  fxd: "Fixed coupon bond (FXD)",
+  treasury_bond: "Treasury bond",
+  ifb: "Infrastructure bond (IFB)",
+  infrastructure_bond: "Infrastructure bond (IFB)",
+  floating: "Floating-rate bond",
+  floating_rate: "Floating-rate bond",
+};
+
+/**
+ * Stage 10b-2 — human-readable label for a CBK security type, same pattern
+ * and same purpose as bankInstrumentTypeLabel above: the raw figure
+ * ("treasury_bill", "fxd", "ifb" — applyCbkRuleFill's convention-based
+ * vocabulary and the bond extraction schema's own vocabulary both land in the
+ * same `securityType` key) is never shown to a manager as a raw enum. Falls
+ * back to the raw value with underscores turned to spaces for anything
+ * unrecognised — never blank, never a guess at a DIFFERENT type.
+ */
+export function cbkSecurityTypeLabel(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  const s = String(value).trim();
+  if (s === "") return null;
+  const key = s.toLowerCase().replace(/[\s-]+/g, "_");
+  return CBK_SECURITY_TYPE_LABELS[key] ?? s.replace(/_/g, " ");
+}
+
+/**
+ * Stage 10b-2 — human-readable Yes/No for CBK's boolean-ish taxExempt figure
+ * ("true"/"false" strings, as applyCbkRuleFill and the extraction schemas
+ * both write it), reused wherever the raw figure value is shown outside the
+ * CBK catalogue page itself (which already has its own equivalent fmtYesNo).
+ * Passes anything else through unchanged — never fabricates a value.
+ */
+export function cbkTaxExemptLabel(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  const s = String(value).trim();
+  if (s === "") return null;
+  const t = s.toLowerCase();
+  if (t === "true") return "Yes";
+  if (t === "false") return "No";
+  return s;
+}
+
 /**
  * Build the typed promotion plan for an APPROVED update. Pure: the db layer calls
  * this then persists `payload` into the matching table. Throws if the asset class
@@ -863,7 +909,21 @@ function figurePresent(figures: Record<string, unknown> | null | undefined, key:
     const v = figures[k];
     // Booleans (e.g. taxExempt=false, isNegotiable=false) count as present.
     if (typeof v === "boolean") return true;
-    return v !== undefined && v !== null && String(v).trim() !== "";
+    // Stage 10b-2 — this bare truthy/non-empty check treated the
+    // "missing_from_source" sentinel (and other explicit absence markers) as
+    // PRESENT, a documented, previously-deferred gap (see
+    // server/cbkStructuredRuleFill.test.ts's old "KNOWN DEFERRED bug" block):
+    // structuredInstrumentToDraft force-fills every NEVER_INVENT_FIELDS key
+    // with this sentinel for every CBK finding, so an FXD/IFB bond genuinely
+    // missing its issueNumber/couponRate/maturityDate silently passed the
+    // "hard, no escape" subtype gate anyway. isRealSourceValue (already used
+    // by the SACCO-specific checks above) is the SAME absence-marker
+    // vocabulary the rest of the pipeline already treats as "not really
+    // there" — reusing it here closes the gap without inventing a new rule.
+    // MMF/Bank/market_asset never pass this sentinel into gate-checked
+    // figures (only CBK's extraction path force-fills it), so this is a
+    // behavioural no-op for every catalogue except CBK.
+    return isRealSourceValue(v);
   });
 }
 

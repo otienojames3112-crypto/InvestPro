@@ -672,6 +672,11 @@ describe("Catalogue field contract · foundation-only guardrails (no behavior ch
       // alias/parsing/promotion fixes surfaced by live QA; test-only import
       // of the contract module for direct behavioural proof.
       join(root, "server", "bankLiveWorkflowParity.test.ts"),
+      // Stage 10b-2 — CBK Securities end-to-end field parity: explicit table
+      // columns, multi-field edit path, clean securityType/taxExempt labels,
+      // extraction schema completion, and the figurePresent sentinel-gate fix.
+      // CbkSecuritiesReference.tsx is already allow-listed above (Stage 9c).
+      join(root, "server", "cbkLiveWorkflowParity.test.ts"),
     ]);
     const unexpectedOffenders = offenders.filter((f) => !allowed.has(f));
     expect(unexpectedOffenders).toEqual([]);

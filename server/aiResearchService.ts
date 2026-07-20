@@ -40,6 +40,7 @@ import {
   checkApprovalGate,
   assetClassForCatalogue,
   canonicalizeBankInstrumentType,
+  normalizeDateToYmd,
 } from "../shared/researchPipeline";
 import {
   SOURCE_CLASSES,
@@ -603,7 +604,16 @@ export function findingsToRows(taskId: number, drafts: ResearchFindingDraft[], t
     issuer: d.issuer,
     assetClass: d.assetClass,
     targetCatalogue: d.targetCatalogue,
-    currency: d.currency,
+    // Stage 10b-3b — research_findings.currency is varchar(8); a draft can carry
+    // model text that doesn't fit (the live failure: the market-asset extraction
+    // schema's per-instrument `currency` returned the literal 19-char
+    // "missing_from_source" sentinel, crashing the whole insert). This is the
+    // single choke point every finding-persist path funnels through, so guard
+    // here for ALL catalogues: an unfit value becomes null (the draft's verbatim
+    // value still lives on in extractedFields where applicable) — a value that
+    // already fits, like "KES"/"USD", is passed through byte-identical.
+    currency:
+      d.currency && d.currency !== MISSING_FROM_SOURCE && d.currency.length <= 8 ? d.currency : null,
     extractedFields: d.extractedFields,
     sourceLabel: d.sourceLabel,
     sourceUrl: d.sourceUrl,
@@ -2057,6 +2067,22 @@ function assetClassForSourceClass(sc: SourceClass, marketAssetType?: unknown): A
 }
 
 /**
+ * Stage 10b-3b — sanitize a structured extraction's envelope `currency` so it
+ * always fits research_findings.currency (varchar(8)) and never carries the
+ * "missing_from_source" sentinel. See the call site's comment for the live
+ * failure this fixes. Fallback semantics deliberately match the pre-existing
+ * default (`"KES"` whenever the model gave nothing usable).
+ */
+export function normaliseDraftCurrency(v: unknown): string {
+  if (typeof v !== "string") return "KES";
+  const t = v.trim();
+  if (t === "" || t === MISSING_FROM_SOURCE) return "KES";
+  if (t.length <= 8) return t;
+  const code = t.match(/\b[A-Z]{3}\b/);
+  return code ? code[0] : "KES";
+}
+
+/**
  * Convert a raw extracted instrument object into a ResearchFindingDraft.
  * Flattens all extracted fields into the `extractedFields` string bag.
  * Applies NEVER_INVENT_FIELDS enforcement: null/empty → MISSING_FROM_SOURCE.
@@ -2221,13 +2247,22 @@ export function structuredInstrumentToDraft(
   // bridge at all before this — a source's stated "As of: ..." date was
   // captured nowhere, so every equity/REIT/offshore-fund/SACCO finding's
   // sourceAsOf fell through to null regardless of what the source said.
-  const marketAssetSourceAsOf =
+  // Stage 10b-3b — normalize a human date string ("17 July 2026") to stable
+  // "YYYY-MM-DD" here, the same normalizeDateToYmd treatment CBK's date
+  // figures already get: an un-normalized string was Date.parse'd in LOCAL
+  // time at findingsToRows (a silent timezone skew), and every downstream
+  // reader of draft.sourceAsOf expects ISO. ISO input passes through
+  // unchanged; an unparseable string is kept verbatim rather than dropped.
+  const marketAssetSourceAsOfRaw =
     targetCatalogue === "market_asset" &&
     typeof sharedFields?.asOfDate === "string" &&
     sharedFields.asOfDate.trim() !== "" &&
     sharedFields.asOfDate !== MISSING_FROM_SOURCE
       ? sharedFields.asOfDate.trim()
       : null;
+  const marketAssetSourceAsOf = marketAssetSourceAsOfRaw
+    ? (normalizeDateToYmd(marketAssetSourceAsOfRaw) ?? marketAssetSourceAsOfRaw)
+    : null;
 
   // Round 103 — FIELD NORMALIZATION. Map extraction-schema names to catalogue
   // canonical names so the approval gate recognizes them (e.g. effectiveAnnualRate → ear).
@@ -2367,17 +2402,32 @@ export function structuredInstrumentToDraft(
     // manager/provider text closes that false block without fabricating a
     // DIFFERENT entity — offshore funds still get a real, separately
     // extracted fundManager whenever the source states one.
+    // Stage 10b-3b — a fundManager/bankName that came back as the literal
+    // "missing_from_source" sentinel (or blank) must be treated as ABSENT
+    // here, not used verbatim: the sentinel would otherwise become the
+    // finding's displayed issuer AND silently defeat the market-asset
+    // name fallback below.
     issuer:
-      typeof raw.fundManager === "string"
+      typeof raw.fundManager === "string" && raw.fundManager.trim() !== "" && raw.fundManager !== MISSING_FROM_SOURCE
         ? raw.fundManager
-        : typeof raw.bankName === "string"
+        : typeof raw.bankName === "string" && raw.bankName.trim() !== "" && raw.bankName !== MISSING_FROM_SOURCE
           ? raw.bankName
           : targetCatalogue === "market_asset"
             ? name
             : null,
     assetClass,
     targetCatalogue,
-    currency: typeof raw.currency === "string" ? raw.currency : "KES",
+    // Stage 10b-3b — the market-asset extraction schema is the only structured
+    // schema with a per-instrument `currency`, and the prompt's standard
+    // "missing_from_source" rule means an unprinted currency comes back as the
+    // 19-char sentinel — which this line used to pass through verbatim into a
+    // draft whose research_findings column is varchar(8), crashing the insert
+    // on the FIRST live market-asset extraction (Stage 10b-3 QA). Sentinel or
+    // blank falls back to the pre-existing "KES" default; genuinely-stated
+    // codes ("KES"/"USD") pass through unchanged; longer real text keeps an
+    // embedded 3-letter code when one exists (the verbatim string is still in
+    // extractedFields.currency for the manager to see).
+    currency: normaliseDraftCurrency(raw.currency),
     extractedFields,
     sourceLabel: null, // filled by provenance fallback
     sourceUrl: null,

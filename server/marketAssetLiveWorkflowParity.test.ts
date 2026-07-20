@@ -236,9 +236,9 @@ describe("Stage 10b-3 · C — the user's Equity QA fixture, end to end", () => 
   const draft = structuredInstrumentToDraft(rawEquity, SC, { asOfDate: "17 July 2026" })!;
   const equityContract = getCatalogueFieldContract("market_asset", "equity")!;
 
-  it("the draft carries the fallback issuer and the bridged sourceAsOf", () => {
+  it("the draft carries the fallback issuer and the bridged sourceAsOf (Stage 10b-3b: normalized to YYYY-MM-DD)", () => {
     expect(draft.issuer).toBe("Test Safaricom PLC");
-    expect(draft.sourceAsOf).toBe("17 July 2026");
+    expect(draft.sourceAsOf).toBe("2026-07-17");
   });
 
   it("every established Equity field the fixture states projects through the contract under its canonical key, including the 5 fields Stage 10b-3 moved to extendedFields", () => {
@@ -308,7 +308,7 @@ describe("Stage 10b-3 · C — synthesized REIT/Offshore fund/SACCO QA fixtures 
     };
     const draft = structuredInstrumentToDraft(raw, SC, { asOfDate: "17 July 2026" })!;
     expect(draft.issuer).toBe("Test Acorn Income REIT (Stage 10b-3 QA)");
-    expect(draft.sourceAsOf).toBe("17 July 2026");
+    expect(draft.sourceAsOf).toBe("2026-07-17"); // Stage 10b-3b: bridge normalizes human dates
 
     const reitContract = getCatalogueFieldContract("market_asset", "reit")!;
     const figures = projectFindingToContractFigures(reitContract, draft);

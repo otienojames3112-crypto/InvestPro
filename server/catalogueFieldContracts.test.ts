@@ -678,6 +678,11 @@ describe("Catalogue field contract · foundation-only guardrails (no behavior ch
       // the CorrectFigureDialog/EditCatalogueFieldsDialog generalization to
       // all four market-asset subtypes.
       join(root, "server", "marketAssetLiveWorkflowParity.test.ts"),
+      // Stage 10b-3b — Market Assets live insert repair: currency
+      // sanitization, as-of bridge normalization, and issuer sentinel-
+      // guarding; test-only import of the contract module for the
+      // still-projects/still-gates regression proofs.
+      join(root, "server", "marketAssetLiveWorkflowParity2.test.ts"),
     ]);
     const unexpectedOffenders = offenders.filter((f) => !allowed.has(f));
     expect(unexpectedOffenders).toEqual([]);

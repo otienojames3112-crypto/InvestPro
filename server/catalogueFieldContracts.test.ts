@@ -689,6 +689,11 @@ describe("Catalogue field contract · foundation-only guardrails (no behavior ch
       // Stage 10b-3d — live SACCO product-type recovery, REIT NAV rendering,
       // and subtype-aware Market Asset missing-field/preview cleanup.
       join(root, "server", "marketAssetSubtypeCleanup3d.test.ts"),
+      // Stage 10b-4d — Source Library display hygiene reuses approved
+      // catalogue labels before applying its acronym-aware fallback. This
+      // helper is read-only UI classification/formatting and cannot affect
+      // extraction, gates, promotion, approval, or catalogue persistence.
+      join(root, "client", "src", "lib", "sourceIdentity.ts"),
     ]);
     const unexpectedOffenders = offenders.filter((f) => !allowed.has(f));
     expect(unexpectedOffenders).toEqual([]);

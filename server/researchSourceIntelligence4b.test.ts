@@ -37,7 +37,7 @@ describe("Stage 10b-4b · Source Library", () => {
   it("derives approved source patterns from immutable approval history", () => {
     expect(desk).toContain("researchPipeline.recentlyApproved.useQuery");
     expect(desk).toContain("entry.sourceUrl ?? entry.source");
-    expect(desk).toContain("existing.fields.add(entry.field)");
+    expect(desk).toContain("existing.fields.set(entry.field, catalogue)");
     expect(desk).toContain("existing.linkedRows.set");
   });
 
@@ -53,10 +53,11 @@ describe("Stage 10b-4b · Source Library", () => {
       "Last approved use",
       "Approved decisions",
       "Linked catalogue rows",
-      "Manager-approved use",
     ]) {
       expect(desk).toContain(label);
     }
+    expect(desk).toContain("source.identity.badge");
+    expect(desk).toContain("source.identity.readiness");
     expect(desk).toContain("Approved sources will appear here automatically.");
     expect(desk).toContain("Open source");
     expect(desk).toContain("publishedRowHref");

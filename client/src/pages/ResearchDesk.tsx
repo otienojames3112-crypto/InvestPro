@@ -89,6 +89,11 @@ import {
   SelectItem,
 } from "@/components/ui/select";
 import { Plus } from "lucide-react";
+import {
+  classifySourceIdentity,
+  sourceLibraryFieldLabel,
+  type SourceIdentity,
+} from "@/lib/sourceIdentity";
 
 /** Human label for an asset class, falling back to the raw class. */
 function classLabel(ac: string): string {
@@ -1537,8 +1542,12 @@ type ApprovedSourceSummary = {
   approvedCount: number;
   lastApprovedAt: number;
   catalogues: Set<ReferenceCatalogue>;
-  fields: Set<string>;
+  fields: Map<string, ReferenceCatalogue>;
   linkedRows: Map<string, { catalogue: ReferenceCatalogue; targetRef: string | null; name: string }>;
+};
+
+type ApprovedSourceCard = ApprovedSourceSummary & {
+  identity: SourceIdentity;
 };
 
 const REFERENCE_CATALOGUES = new Set<ReferenceCatalogue>(["mmf", "bank", "cbk", "market_asset"]);
@@ -1550,6 +1559,109 @@ function sourceHost(url: string | null): string | null {
   } catch {
     return null;
   }
+}
+
+function SourceLibraryCards({ sources }: { sources: ApprovedSourceCard[] }) {
+  return (
+    <div className="grid gap-3 md:grid-cols-2">
+      {sources.map((source) => {
+        const linkedRows = Array.from(source.linkedRows.values());
+        const latestRow = linkedRows[0];
+        const originalIdentity = [source.label, sourceHost(source.url)]
+          .filter((value, index, all): value is string => Boolean(value) && all.indexOf(value) === index)
+          .join(" · ");
+        return (
+          <Card key={source.key} className="border-border/70 shadow-sm">
+            <CardContent className="space-y-3 py-4">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <h4 className="truncate text-sm font-semibold" title={source.identity.displayName}>
+                    {source.identity.displayName}
+                  </h4>
+                  {originalIdentity && originalIdentity !== source.identity.displayName && (
+                    <p className="mt-0.5 truncate text-xs text-muted-foreground" title={originalIdentity}>
+                      Recorded as {originalIdentity}
+                    </p>
+                  )}
+                </div>
+                <Badge variant="outline" className="shrink-0 font-normal text-[10px]">
+                  {source.identity.badge}
+                </Badge>
+              </div>
+
+              {source.identity.helperText && (
+                <p className="rounded-md bg-muted/45 px-2.5 py-2 text-[11px] leading-relaxed text-muted-foreground">
+                  {source.identity.helperText}
+                </p>
+              )}
+
+              <div className="flex flex-wrap gap-1.5">
+                <Badge variant={source.identity.trusted ? "secondary" : "outline"} className="font-normal text-[10px]">
+                  {source.identity.readiness}
+                </Badge>
+                {Array.from(source.catalogues).map((catalogue) => (
+                  <Badge key={catalogue} variant="secondary" className="font-normal text-[10px]">
+                    {catalogueLabel(catalogue)}
+                  </Badge>
+                ))}
+              </div>
+
+              <dl className="grid grid-cols-2 gap-x-3 gap-y-2 text-xs">
+                <div>
+                  <dt className="text-muted-foreground">Fields supported</dt>
+                  <dd className="mt-0.5 font-medium text-foreground">
+                    {source.fields.size > 0
+                      ? Array.from(source.fields.entries())
+                          .slice(0, 3)
+                          .map(([field, catalogue]) => sourceLibraryFieldLabel(catalogue, field))
+                          .join(", ")
+                      : "Catalogue entry"}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-muted-foreground">Last approved use</dt>
+                  <dd className="mt-0.5 font-medium text-foreground">
+                    {formatRelativeTime(source.lastApprovedAt)}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-muted-foreground">Approved decisions</dt>
+                  <dd className="mt-0.5 font-medium text-foreground">{source.approvedCount}</dd>
+                </div>
+                <div>
+                  <dt className="text-muted-foreground">Linked catalogue rows</dt>
+                  <dd className="mt-0.5 font-medium text-foreground">{linkedRows.length}</dd>
+                </div>
+              </dl>
+
+              <div className="flex flex-wrap items-center gap-3 border-t border-border/60 pt-3 text-xs">
+                {source.url && (
+                  <a
+                    href={source.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1 text-primary hover:underline"
+                  >
+                    {source.identity.trusted ? "Open source" : "Open recorded link"}{" "}
+                    <ExternalLink className="h-3 w-3" />
+                  </a>
+                )}
+                {latestRow && (
+                  <a
+                    href={publishedRowHref(latestRow.catalogue, latestRow.targetRef)}
+                    className="inline-flex min-w-0 items-center gap-1 text-primary hover:underline"
+                  >
+                    <span className="max-w-48 truncate">Open {latestRow.name}</span>
+                    <ExternalLink className="h-3 w-3 shrink-0" />
+                  </a>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        );
+      })}
+    </div>
+  );
 }
 
 function SourceLibraryPanel() {
@@ -1572,13 +1684,13 @@ function SourceLibraryPanel() {
       approvedCount: 0,
       lastApprovedAt: 0,
       catalogues: new Set<ReferenceCatalogue>(),
-      fields: new Set<string>(),
+      fields: new Map<string, ReferenceCatalogue>(),
       linkedRows: new Map<string, { catalogue: ReferenceCatalogue; targetRef: string | null; name: string }>(),
     };
     existing.approvedCount += 1;
     existing.lastApprovedAt = Math.max(existing.lastApprovedAt, entry.approvedAt);
     existing.catalogues.add(catalogue);
-    if (entry.field) existing.fields.add(entry.field);
+    if (entry.field) existing.fields.set(entry.field, catalogue);
     const rowKey = `${catalogue}:${entry.targetRef ?? entry.instrumentName ?? entry.id}`;
     existing.linkedRows.set(rowKey, {
       catalogue,
@@ -1589,7 +1701,15 @@ function SourceLibraryPanel() {
     grouped.set(key, existing);
   }
 
-  const approvedSources = Array.from(grouped.values()).sort((a, b) => b.lastApprovedAt - a.lastApprovedAt);
+  const appHostname = typeof window === "undefined" ? null : window.location.hostname;
+  const approvedSources: ApprovedSourceCard[] = Array.from(grouped.values())
+    .map((source) => ({
+      ...source,
+      identity: classifySourceIdentity({ label: source.label, url: source.url, appHostname }),
+    }))
+    .sort((a, b) => b.lastApprovedAt - a.lastApprovedAt);
+  const reusableSources = approvedSources.filter((source) => source.identity.trusted);
+  const auditOnlySources = approvedSources.filter((source) => !source.identity.trusted);
 
   return (
     <div className="space-y-5">
@@ -1609,13 +1729,18 @@ function SourceLibraryPanel() {
         </div>
       </div>
 
-      <section className="space-y-3" aria-labelledby="approved-sources-heading">
+      <p className="text-xs leading-relaxed text-muted-foreground">
+        Trusted patterns are the source types future AI refreshes should try first. Manual, pasted, and internal
+        sources remain in the audit trail but are not preferred automation sources.
+      </p>
+
+      <section className="space-y-3" aria-labelledby="reusable-sources-heading">
         <div>
-          <h3 id="approved-sources-heading" className="text-sm font-semibold">
-            Approved sources
+          <h3 id="reusable-sources-heading" className="text-sm font-semibold">
+            Trusted / reusable source patterns
           </h3>
           <p className="mt-0.5 text-xs text-muted-foreground">
-            Read-only history derived from catalogue approvals—not a list you need to maintain.
+            Conservative candidates from official, regulator, exchange, and issuer source history.
           </p>
         </div>
 
@@ -1635,9 +1760,16 @@ function SourceLibraryPanel() {
               </p>
             </div>
           </Empty>
+        ) : reusableSources.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-border px-4 py-6 text-center">
+            <p className="text-sm font-medium">No reusable source patterns identified yet.</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Approved audit history remains available below without being treated as trusted.
+            </p>
+          </div>
         ) : (
           <div className="grid gap-3 md:grid-cols-2">
-            {approvedSources.map((source) => {
+            {reusableSources.map((source) => {
               const linkedRows = Array.from(source.linkedRows.values());
               const latestRow = linkedRows[0];
               return (
@@ -1645,19 +1777,22 @@ function SourceLibraryPanel() {
                   <CardContent className="space-y-3 py-4">
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
-                        <h4 className="truncate text-sm font-semibold" title={source.label}>
-                          {source.label}
+                        <h4 className="truncate text-sm font-semibold" title={source.identity.displayName}>
+                          {source.identity.displayName}
                         </h4>
                         <p className="mt-0.5 truncate text-xs text-muted-foreground">
-                          {sourceHost(source.url) ?? "Approved source record"}
+                          Recorded as {[source.label, sourceHost(source.url)].filter(Boolean).join(" · ")}
                         </p>
                       </div>
                       <Badge variant="outline" className="shrink-0 font-normal text-[10px]">
-                        Manager-approved use
+                        {source.identity.badge}
                       </Badge>
                     </div>
 
                     <div className="flex flex-wrap gap-1.5">
+                      <Badge variant="secondary" className="font-normal text-[10px]">
+                        {source.identity.readiness}
+                      </Badge>
                       {Array.from(source.catalogues).map((catalogue) => (
                         <Badge key={catalogue} variant="secondary" className="font-normal text-[10px]">
                           {catalogueLabel(catalogue)}
@@ -1670,7 +1805,10 @@ function SourceLibraryPanel() {
                         <dt className="text-muted-foreground">Fields supported</dt>
                         <dd className="mt-0.5 font-medium text-foreground">
                           {source.fields.size > 0
-                            ? Array.from(source.fields).slice(0, 3).join(", ")
+                            ? Array.from(source.fields.entries())
+                                .slice(0, 3)
+                                .map(([field, catalogue]) => sourceLibraryFieldLabel(catalogue, field))
+                                .join(", ")
                             : "Catalogue entry"}
                         </dd>
                       </div>
@@ -1718,6 +1856,26 @@ function SourceLibraryPanel() {
           </div>
         )}
       </section>
+
+      {approvedSources.length > 0 && (
+        <section className="space-y-3" aria-labelledby="audit-only-sources-heading">
+          <div>
+            <h3 id="audit-only-sources-heading" className="text-sm font-semibold">
+              Manual, pasted, and internal sources
+            </h3>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              Read-only approval evidence retained for audit, not preferred for future refreshes.
+            </p>
+          </div>
+          {auditOnlySources.length > 0 ? (
+            <SourceLibraryCards sources={auditOnlySources} />
+          ) : (
+            <p className="rounded-xl border border-dashed border-border px-4 py-5 text-center text-xs text-muted-foreground">
+              No manual, pasted, internal, or unknown source records.
+            </p>
+          )}
+        </section>
+      )}
 
       <details className="group rounded-xl border border-border/70 bg-muted/10">
         <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">

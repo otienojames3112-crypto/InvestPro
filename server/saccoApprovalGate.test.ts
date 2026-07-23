@@ -157,7 +157,7 @@ describe("Stage 3b.4b - SACCO replacement gate", () => {
     const cases: Array<[string, keyof typeof completeSaccoFigures]> = [
       ["minimum share capital", "minimumShareCapital"],
       ["minimum monthly deposit / contribution", "minimumMonthlyDeposit"],
-      ["SASRA / regulatory status", "regulatoryStatus"],
+      ["Risk / protection note", "regulatoryStatus"],
       ["withdrawal / liquidity terms", "withdrawalTerms"],
     ];
 
@@ -186,7 +186,7 @@ describe("Stage 3b.4b - SACCO replacement gate", () => {
       expect.arrayContaining([
         "minimum share capital",
         "minimum monthly deposit / contribution",
-        "SASRA / regulatory status",
+        "Risk / protection note",
         "withdrawal / liquidity terms",
         "share-capital dividend rate or deposit rebate / interest rate",
       ]),

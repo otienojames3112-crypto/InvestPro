@@ -1251,12 +1251,12 @@ const MARKET_ASSET_SACCO_FIELD_CONTRACT: CatalogueFieldContract = {
       key: "productType",
       label: "Product type",
       required: false,
-      aliases: [],
+      aliases: ["productType"],
       storageStatus: "extendedFields",
       managerEditable: true,
       showInTable: false,
       promoteToCatalogueRow: false,
-      note: "Inferred today from which SACCO-specific extendedFields keys are present — no single explicit product-type key exists.",
+      note: "Stage 10b-3c — extracted explicitly for SACCOs and persisted in extendedFields.",
     },
     {
       catalogue: "market_asset",
@@ -1290,7 +1290,7 @@ const MARKET_ASSET_SACCO_FIELD_CONTRACT: CatalogueFieldContract = {
       key: "minimumMonthlyDeposit",
       label: "Minimum contribution",
       required: true,
-      aliases: ["minimumMonthlyDeposit"],
+      aliases: ["minimumMonthlyDeposit", "minimumMonthlyContribution"],
       storageStatus: "extendedFields",
       managerEditable: true,
       showInTable: true,
@@ -1355,12 +1355,12 @@ const MARKET_ASSET_SACCO_FIELD_CONTRACT: CatalogueFieldContract = {
       key: "regulatoryStatus",
       label: "Risk / protection note",
       required: false,
-      aliases: ["regulatoryStatus"],
+      aliases: ["regulatoryStatus", "riskNote", "riskProtectionNote"],
       storageStatus: "extendedFields",
       managerEditable: true,
       showInTable: false,
       promoteToCatalogueRow: false,
-      note: "Key renamed from 'riskProtectionNote' to 'regulatoryStatus' during Slice 8e-4's pre-approval compatibility check (2026-07-16) — SACCO_MARKET_ASSET_FIELD_RULES hard-requires figures.regulatoryStatus (SACCO_FIELD_ALIASES tolerance is ['regulatoryStatus'] only, no fallback); the original key was never recognised, confirmed via a live checkApprovalGate call. Closest available proxy is extendedFields.MarketAssetProfile.regulatoryStatus (e.g. \"SASRA-regulated\") — a status flag, not really a risk/protection note; a genuine risk/protection field is still a gap. Display label unchanged.",
+      note: "Stage 10b-3c — canonical regulatoryStatus accepts structured regulatory output plus generic riskNote/riskProtectionNote extraction, matching the manager-facing Risk / protection note field and approval gate.",
     },
     {
       catalogue: "market_asset",
@@ -1529,15 +1529,9 @@ const ENVELOPE_ROUTED_CONTRACT_KEYS: Record<CatalogueKey, ReadonlySet<string>> =
  *  already-correct key-first convention `readContractFieldValue`
  *  (client/src/lib/format.ts) already uses.
  *
- *  The `field.aliases.length > 0` guard matters: SACCO's `productType` field
- *  (storageStatus "extendedFields", so it DOES reach this function, unlike
- *  most other `aliases: []` fields which are "missingRequiresMigration"/
- *  "computed" and short-circuit before ever calling it) uses a deliberately
- *  EMPTY aliases array as an explicit "no reliable source exists today, never
- *  resolve this" marker (its own note: "no single explicit product-type key
- *  exists"). Checking its canonical key too would silently start surfacing
- *  whatever raw noise happens to land under a coincidental `productType`
- *  key — the opposite of what that empty array was designed to guarantee. */
+ *  The `field.aliases.length > 0` guard matters: an empty alias list remains
+ *  the contract's explicit marker that extraction has no supported source for
+ *  that field, so even a coincidental raw key must not be surfaced. */
 function readAliasValue(field: CatalogueFieldContractEntry, raw: Record<string, unknown>): string | null {
   const candidates = field.aliases.length > 0 ? [field.key, ...field.aliases] : field.aliases;
   for (const candidate of candidates) {
@@ -1763,16 +1757,19 @@ export function projectContractFiguresToExtendedFields(
     }
     result[field.key] = value;
   }
-  // Deliberately does NOT stamp `assetType` for SACCO here (unlike
-  // projectFindingToContractFigures above). `assetType` is a projector-level
-  // routing signal for `detectMarketAssetSacco()`, checked only against the
-  // PENDING update's figures bag at gate time — no code anywhere reads a live
-  // catalogue row's `extendedFields.assetType` (verified: only the module
-  // header's own doc comment mentions it, as an aspirational example, not an
-  // implemented check). Persisting it would be extra data with no reader, and
-  // the real SACCO-row-identity gap the header describes ("a manager cannot
-  // reliably filter/find SACCO rows in the catalogue today") is a separate,
-  // already-documented, out-of-scope structural issue this slice does not fix.
+  // The typed opportunities.liquidity column is intentionally compact
+  // (varchar(32)). Keep the source's full wording alongside it so subtype
+  // tables can show the manager the verbatim liquidity/tradability terms.
+  if (catalogue === "market_asset") {
+    const liquidity = figures.liquidity;
+    if (liquidity !== undefined && liquidity !== null) {
+      const value = String(liquidity).trim();
+      if (value !== "" && value !== "missing_from_source") result.liquidity = value;
+    }
+  }
+  // SACCO shares the generic `alt` asset class, so the persisted subtype marker
+  // is required by the live catalogue reader to route the row reliably.
+  if (catalogue === "market_asset" && subtype === "sacco") result.assetType = "sacco";
   return result;
 }
 

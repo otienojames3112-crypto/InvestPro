@@ -108,7 +108,7 @@ const MARKET_ASSET_SYNONYMS: FieldSynonyms[] = [
   { key: "distributionYield", label: "distribution yield", synonyms: ["distribution yield", "income yield"] },
   { key: "expenseRatioPct", label: "expense ratio / fee", synonyms: ["total expense ratio", "expense ratio", "ter"] },
   { key: "asOf", label: "as-of date", synonyms: ["reporting date", "factsheet date", "as at"] },
-  { key: "regulatoryStatus", label: "SASRA / regulatory status", synonyms: ["sasra-regulated", "sasra status", "regulated by"] },
+  { key: "regulatoryStatus", label: "Risk / protection note", synonyms: ["risk note", "protection note", "sasra-regulated", "sasra status", "regulated by"] },
   { key: "minimumShareCapital", label: "minimum share capital", synonyms: ["minimum share capital", "minimum shares"] },
   {
     key: "minimumMonthlyDeposit",

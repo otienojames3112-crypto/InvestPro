@@ -287,6 +287,8 @@ export interface MarketAssetProfile extends SharedProfileFields {
   trailingReturn?: ProfileField<number>;
   /** Expense ratio / fee (%). */
   fee?: ProfileField<number>;
+  /** SACCO product type, e.g. member deposits or share capital. */
+  productType?: ProfileField<string>;
   /** SACCO share-capital dividend rate (% p.a.). */
   shareCapitalDividendRate?: ProfileField<number>;
   /** SACCO deposit rebate / deposit interest rate (% p.a.). */

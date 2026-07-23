@@ -683,6 +683,9 @@ describe("Catalogue field contract · foundation-only guardrails (no behavior ch
       // guarding; test-only import of the contract module for the
       // still-projects/still-gates regression proofs.
       join(root, "server", "marketAssetLiveWorkflowParity2.test.ts"),
+      // Stage 10b-3c — SACCO/REIT/Offshore promotion parity and exact live
+      // SACCO regression, including contract-to-extendedFields proof.
+      join(root, "server", "marketAssetSubtypePromotionParity3.test.ts"),
     ]);
     const unexpectedOffenders = offenders.filter((f) => !allowed.has(f));
     expect(unexpectedOffenders).toEqual([]);

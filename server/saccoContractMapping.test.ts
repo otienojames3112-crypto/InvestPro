@@ -268,7 +268,7 @@ describe("Slice 8e-4 · compatibility with the existing market-asset approval ga
     });
     expect(gate.ok).toBe(false);
     expect(gate.missing.sort()).toEqual(
-      ["minimum share capital", "minimum monthly deposit / contribution", "SASRA / regulatory status"].sort(),
+      ["minimum share capital", "minimum monthly deposit / contribution", "Risk / protection note"].sort(),
     );
   });
 
@@ -378,10 +378,10 @@ describe("Slice 8e-4 · projectFindingToContractDisplayRows (SACCO)", () => {
     expect(rows.find((r) => r.key === "saccoName")!.value).toBe("Real SACCO Ltd");
   });
 
-  it("productType is always null — it has no aliases at all (intentional: no explicit product-type extraction field exists today, per the contract's own note)", () => {
+  it("productType surfaces from the explicit SACCO extraction field", () => {
     const finding = saccoFinding({ extractedFields: { productType: "Ordinary savings" } });
     const rows = projectFindingToContractDisplayRows(saccoContract, finding);
-    expect(rows.find((r) => r.key === "productType")!.value).toBeNull();
+    expect(rows.find((r) => r.key === "productType")!.value).toBe("Ordinary savings");
   });
 
   it("a field with no aliases matching anything in the bag is null, never a fabricated placeholder", () => {

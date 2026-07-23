@@ -452,6 +452,27 @@ export function cbkNetYieldAfterWht(
 }
 
 /**
+ * opportunities.liquidity is varchar(32), while research sources commonly
+ * provide a full sentence. Preserve already-safe established values verbatim;
+ * otherwise reduce the source wording to a stable storage facet. The verbatim
+ * wording is retained separately in market-asset extendedFields.
+ */
+export function normaliseOpportunityLiquidity(value: unknown): string | null {
+  const raw = str(value);
+  if (!raw) return null;
+  if (raw.length <= 32) return raw;
+
+  const key = raw.toLowerCase();
+  if (/(?:\blow liquidity\b|\billiquid\b|not tradable|hard to sell)/.test(key)) return "illiquid";
+  if (/(?:notice|withdrawal window|maturity|locked|lock-in)/.test(key)) return "term";
+  if (/(?:t\+\d|settlement|trade through|\btraded\b|\btradable\b|moderate liquidity)/.test(key)) {
+    return "t_plus_settlement";
+  }
+  if (/(?:\bdaily\b|same day|on demand|immediate)/.test(key)) return "daily";
+  return null;
+}
+
+/**
  * Build the typed promotion plan for an APPROVED update. Pure: the db layer calls
  * this then persists `payload` into the matching table. Throws if the asset class
  * is invalid (validation should have caught it earlier).
@@ -538,7 +559,7 @@ export function buildPromotionPlan(update: {
       // additive for CBK only, not a behavior change for anything else.
       maturityDate: normalizeDateToYmd(str(f.maturityDate)),
       expenseRatioPct: num(f.expenseRatioPct ?? f.expense ?? f.fee),
-      liquidity: str(f.liquidity),
+      liquidity: normaliseOpportunityLiquidity(f.liquidity),
       factNote: str(f.factNote ?? f.notes),
       source,
     },
@@ -845,7 +866,7 @@ const SACCO_FIELD_ALIASES: Record<(typeof SACCO_SPECIFIC_VALUE_KEYS)[number], st
   depositRebateRate: ["depositRebateRate", "depositInterestRate"],
   minimumShareCapital: ["minimumShareCapital"],
   minimumMonthlyDeposit: ["minimumMonthlyDeposit", "minimumMonthlyContribution"],
-  regulatoryStatus: ["regulatoryStatus"],
+  regulatoryStatus: ["regulatoryStatus", "riskNote", "riskProtectionNote"],
   withdrawalTerms: ["withdrawalTerms", "liquidity"],
 };
 
@@ -855,7 +876,7 @@ export const SACCO_MARKET_ASSET_FIELD_RULES: CatalogueFieldRule[] = [
   { key: "currency", label: "currency", source: "currency" },
   { key: "minimumShareCapital", label: "minimum share capital", source: "figures" },
   { key: "minimumMonthlyDeposit", label: "minimum monthly deposit / contribution", source: "figures" },
-  { key: "regulatoryStatus", label: "SASRA / regulatory status", source: "figures" },
+  { key: "regulatoryStatus", label: "Risk / protection note", source: "figures" },
   { key: "withdrawalTerms", label: "withdrawal / liquidity terms", source: "figures" },
   { key: "source", label: "source", source: "provenanceSource" },
   { key: "asOf", label: "as-of date", source: "asOf" },

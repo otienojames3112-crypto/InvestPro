@@ -191,6 +191,7 @@ describe("Slice 8g-2 · A — projectContractFiguresToExtendedFields (pure, no D
         regulatoryStatus: "SASRA-regulated",
       });
       expect(result).toEqual({
+        assetType: "sacco",
         productType: "BOSA",
         dividendRate: "12%",
         minimumShareCapital: "5000",
@@ -207,22 +208,22 @@ describe("Slice 8g-2 · A — projectContractFiguresToExtendedFields (pure, no D
       expect(result.dividendRate).toBe("12%");
     });
 
-    it("8. never includes assetType — a routing signal, deliberately NOT persisted (see file header decision)", () => {
+    it("8. persists assetType so generic alt rows remain reliably routable as SACCO", () => {
       const result = projectContractFiguresToExtendedFields("market_asset", "sacco", {
         assetType: "sacco",
         dividendRate: "12%",
       });
-      expect(result).not.toHaveProperty("assetType");
+      expect(result.assetType).toBe("sacco");
     });
 
-    it("never includes a typed-column field (saccoName, liquidity already reach columns)", () => {
+    it("excludes typed identity but also preserves verbatim liquidity beside its compact typed facet", () => {
       const result = projectContractFiguresToExtendedFields("market_asset", "sacco", {
         saccoName: "Stima SACCO",
         liquidity: "withdrawable",
         dividendRate: "12%",
       });
       expect(result).not.toHaveProperty("saccoName");
-      expect(result).not.toHaveProperty("liquidity");
+      expect(result.liquidity).toBe("withdrawable");
     });
   });
 

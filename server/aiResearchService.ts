@@ -1840,6 +1840,7 @@ const MARKET_ASSET_EXTRACTION_SCHEMA = {
             marketSector: { type: ["string", "null"], description: "Equity: industry/sector classification, e.g. 'Telecommunications'" },
             minBuyAmount: { type: ["string", "null"], description: "Equity: minimum buy amount or board lot, e.g. '100 shares'" },
             riskLevel: { type: ["string", "null"], description: "Equity/REIT/offshore fund: risk level/rating as stated by the source, e.g. 'Medium'" },
+            liquidity: { type: ["string", "null"], description: "Equity/REIT/SACCO: liquidity, tradability, withdrawal, or notice wording, verbatim from source" },
             // Stage 10b-3 — REIT established fields with nowhere to land.
             reitType: { type: ["string", "null"], description: "REIT: e.g. 'Income REIT', 'Development REIT'" },
             recentDistribution: { type: ["string", "null"], description: "REIT: the most recent per-unit distribution paid, verbatim" },
@@ -1855,13 +1856,14 @@ const MARKET_ASSET_EXTRACTION_SCHEMA = {
             withdrawalPeriod: { type: ["string", "null"], description: "Offshore fund: withdrawal notice period or settlement time, verbatim" },
             fxRisk: { type: ["string", "null"], description: "Offshore fund: FX risk note as stated by the source" },
             // Stage 10b-3 — SACCO established fields with nowhere to land.
+            productType: { type: ["string", "null"], description: "SACCO: product type, e.g. member deposits, share capital, or loan product" },
             membershipRequirement: { type: ["string", "null"], description: "SACCO: membership eligibility requirement, verbatim" },
             fees: { type: ["string", "null"], description: "SACCO: fees / charges, verbatim" },
             shareCapitalDividendRate: { type: ["string", "null"], description: "SACCO share-capital dividend rate, % p.a." },
             depositRebateRate: { type: ["string", "null"], description: "SACCO deposit rebate / deposit interest rate, % p.a." },
             minimumShareCapital: { type: ["string", "null"], description: "Minimum SACCO share capital amount, usually KES" },
             minimumMonthlyDeposit: { type: ["string", "null"], description: "Minimum SACCO monthly deposit / contribution amount, usually KES" },
-            regulatoryStatus: { type: ["string", "null"], description: "SASRA-regulated / regulatory status, verbatim from source" },
+            regulatoryStatus: { type: ["string", "null"], description: "SACCO risk, protection, or SASRA/regulatory note, verbatim from source" },
             withdrawalTerms: { type: ["string", "null"], description: "SACCO withdrawal, exit, or liquidity terms" },
             currency: { type: ["string", "null"] },
             rawExcerpt: { type: ["string", "null"] },
@@ -1872,7 +1874,7 @@ const MARKET_ASSET_EXTRACTION_SCHEMA = {
             changedFields: { type: "array", items: { type: "string" }, description: "List of field names that differ from current row" },
             currentValues: { type: "array", items: { type: "object", additionalProperties: false, properties: { field: { type: "string" }, value: { type: "string" } }, required: ["field", "value"] }, description: "Current values for each changed field" },
           },
-          required: ["instrumentName", "assetType", "ticker", "exchange", "marketPrice", "nav", "dividendYield", "distributionYield", "trailingReturn", "fee", "recentDividend", "priceChange", "marketSector", "minBuyAmount", "riskLevel", "reitType", "recentDistribution", "occupancyRate", "minInvestment", "fundManager", "fundType", "withdrawalPeriod", "fxRisk", "membershipRequirement", "fees", "shareCapitalDividendRate", "depositRebateRate", "minimumShareCapital", "minimumMonthlyDeposit", "regulatoryStatus", "withdrawalTerms", "currency", "rawExcerpt", "warnings", "confidence", "proposalType", "matchedCurrentRow", "changedFields", "currentValues"],
+          required: ["instrumentName", "assetType", "ticker", "exchange", "marketPrice", "nav", "dividendYield", "distributionYield", "trailingReturn", "fee", "recentDividend", "priceChange", "marketSector", "minBuyAmount", "riskLevel", "liquidity", "reitType", "recentDistribution", "occupancyRate", "minInvestment", "fundManager", "fundType", "withdrawalPeriod", "fxRisk", "productType", "membershipRequirement", "fees", "shareCapitalDividendRate", "depositRebateRate", "minimumShareCapital", "minimumMonthlyDeposit", "regulatoryStatus", "withdrawalTerms", "currency", "rawExcerpt", "warnings", "confidence", "proposalType", "matchedCurrentRow", "changedFields", "currentValues"],
         },
       },
     },
@@ -1913,7 +1915,7 @@ function extractionSchemaForClass(sc: SourceClass): { schema: object; prompt: st
     case "market_asset_price":
       return {
         schema: MARKET_ASSET_EXTRACTION_SCHEMA,
-        prompt: `${STRUCTURED_EXTRACTION_PREAMBLE}\n\nThis is a MARKET ASSET factsheet or price board. Extract one entry per distinct instrument (equity, REIT, ETF, offshore fund, SACCO).\nFor each, extract: asset type, ticker, exchange, market price, NAV, dividend yield, distribution yield, trailing 12-month return, expense ratio/fee, RISK LEVEL (as stated by the source), and currency.\nFor EQUITY entries, also extract: recent dividend (most recent per-share payout), price change (only if the source states its own day/period change directly — never compute one), market sector, and minimum buy amount / board lot.\nFor REIT entries, also extract: REIT type, recent distribution, occupancy rate (if stated), and minimum investment.\nFor OFFSHORE FUND entries, also extract: fund manager / provider (distinct from the fund's own name), fund type, minimum investment, withdrawal period, and FX risk note.\nFor SACCO entries, also extract: membership requirement, fees / charges, share-capital dividend rate, deposit rebate / deposit interest rate, minimum share capital, minimum monthly deposit / contribution, SASRA-regulated or other regulatory status, and withdrawal / liquidity terms.\nIf the source states a single AS-OF date for these figures (e.g. "As of: 17 July 2026"), extract it as asOfDate at the top level, alongside the instruments.\n\nIf a field is not printed, set it to "missing_from_source".`,
+        prompt: `${STRUCTURED_EXTRACTION_PREAMBLE}\n\nThis is a MARKET ASSET factsheet or price board. Extract one entry per distinct instrument (equity, REIT, ETF, offshore fund, SACCO).\nFor each, extract: asset type, ticker, exchange, market price, NAV, dividend yield, distribution yield, trailing 12-month return, expense ratio/fee, RISK LEVEL (as stated by the source), and currency.\nFor EQUITY entries, also extract: recent dividend (most recent per-share payout), price change (only if the source states its own day/period change directly — never compute one), market sector, minimum buy amount / board lot, and liquidity/trading activity.\nFor REIT entries, also extract: REIT type, recent distribution, occupancy rate (if stated), minimum investment, and liquidity/tradability wording.\nFor OFFSHORE FUND entries, also extract: fund manager / provider (distinct from the fund's own name), fund type, minimum investment, withdrawal period, and FX risk note.\nFor SACCO entries, also extract: product type, membership requirement, fees / charges, share-capital dividend rate, deposit rebate / deposit interest rate, minimum share capital, minimum monthly deposit / contribution, a separate liquidity/withdrawal-notice description, a risk/protection or SASRA/regulatory note, and withdrawal / exit terms.\nIf the source states a single AS-OF date for these figures (e.g. "As of: 17 July 2026"), extract it as asOfDate at the top level, alongside the instruments.\n\nIf a field is not printed, set it to "missing_from_source".`,
       };
     case "unknown":
       return null;

@@ -133,15 +133,15 @@ describe("Stage 10a-2 · A — WHT/Withdrawal period saved under their canonical
     expect(rows.find((r) => r.key === "wht")!.value).toBe("15%");
   });
 
-  it("regression guard: SACCO's productType (aliases: [], the ONE field this fix must NOT start resolving) still always returns null, even when raw data happens to carry that exact key — an empty aliases array is a deliberate 'no reliable source exists' marker, not an oversight", () => {
+  it("SACCO productType now has an explicit extraction alias and resolves its canonical raw key", () => {
     const saccoContract = getCatalogueFieldContract("market_asset", "sacco")!;
     const productTypeField = saccoContract.fields.find((f) => f.key === "productType")!;
-    expect(productTypeField.aliases).toEqual([]);
+    expect(productTypeField.aliases).toEqual(["productType"]);
     const rows = projectFindingToContractDisplayRows(saccoContract, {
       instrumentName: "Example SACCO",
       extractedFields: { productType: "Ordinary savings" },
     });
-    expect(rows.find((r) => r.key === "productType")!.value).toBeNull();
+    expect(rows.find((r) => r.key === "productType")!.value).toBe("Ordinary savings");
   });
 });
 

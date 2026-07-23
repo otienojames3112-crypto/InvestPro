@@ -419,7 +419,7 @@ describe("Slice 8g-3 · consolidated cross-catalogue regression matrix", () => {
     expect(extended.fxRiskNote).toBe("USD-denominated, KES investor bears FX risk");
   });
 
-  it("SACCO: full contract-projected draft satisfies the REPLACEMENT gate; all 5 subtype-defining figures land in extendedFields via 8g-2, none in the typed opportunity payload except liquidity", () => {
+  it("SACCO: full contract-projected draft satisfies the replacement gate and persists its subtype marker and subtype fields", () => {
     const contract = getCatalogueFieldContract("market_asset", "sacco");
     const { finding, assetClass, issuer } = FIXTURES.sacco;
     const figures = projectFindingToContractFigures(contract!, finding);
@@ -456,7 +456,7 @@ describe("Slice 8g-3 · consolidated cross-catalogue regression matrix", () => {
     expect(extended.minimumMonthlyDeposit).toBe("1000");
     expect(extended.withdrawalTerms).toBe("30 days notice");
     expect(extended.regulatoryStatus).toBe("SASRA-regulated");
-    expect(extended).not.toHaveProperty("assetType"); // routing signal, not persisted (8g-2 decision)
+    expect(extended.assetType).toBe("sacco");
   });
 });
 
@@ -486,11 +486,10 @@ describe("Slice 8g-3 · chained pipeline — projectFindingToContractFigures com
     expect(extended.minimumMonthlyDeposit).toBe("1000");
     expect(extended.withdrawalTerms).toBe("30 days notice");
     expect(extended.regulatoryStatus).toBe("SASRA-regulated");
-    // assetType was stamped by stage 1 (draft-time) but stage 2 (promotion-time)
-    // deliberately drops it — proves the two stages' DIFFERENT treatment of the
-    // same key composes correctly, not just independently.
+    // assetType is stamped at draft time and retained at promotion time so a
+    // generic `alt` catalogue row remains reliably routable as SACCO.
     expect(figures.assetType).toBe("sacco");
-    expect(extended).not.toHaveProperty("assetType");
+    expect(extended.assetType).toBe("sacco");
   });
 });
 

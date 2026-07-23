@@ -649,6 +649,7 @@ function SubtypeRow({
     const marketSector = readField("marketSector");
     const minBuyAmount = readField("minBuyAmount");
     const riskLevel = readField("riskLevel");
+    const liquidity = readField("liquidity") ?? r.liquidity;
     return (
       <TableRow ref={refFocus.registerRow(r.ref, r.name)} data-ref={r.ref} className={rowClass}>
         <TableCell>
@@ -668,7 +669,7 @@ function SubtypeRow({
         <TableCell className="text-sm max-w-[140px] truncate">{priceChange ?? "—"}</TableCell>
         <TableCell className="text-sm text-muted-foreground whitespace-nowrap">{marketSector ?? "—"}</TableCell>
         <TableCell className="text-sm whitespace-nowrap">{minBuyAmount ?? "—"}</TableCell>
-        <TableCell className="text-sm whitespace-nowrap">{r.liquidity ? r.liquidity.replace(/_/g, " ") : "—"}</TableCell>
+        <TableCell className="text-sm whitespace-nowrap">{liquidity ? liquidity.replace(/_/g, " ") : "—"}</TableCell>
         <TableCell className="text-sm whitespace-nowrap">{riskLevel ?? "—"}</TableCell>
         <TableCell><SourceCell r={r} /></TableCell>
         <ActionsCells r={r} onTrack={onTrack} isManager={isManager} staleByRef={staleByRef} refFocus={refFocus} />
@@ -683,6 +684,7 @@ function SubtypeRow({
     const occupancyRate = readField("occupancyRate");
     const minInvestment = readField("minInvestment");
     const riskLevel = readField("riskLevel");
+    const liquidity = readField("liquidity") ?? r.liquidity;
     return (
       <TableRow ref={refFocus.registerRow(r.ref, r.name)} data-ref={r.ref} className={rowClass}>
         {nameCell}
@@ -693,7 +695,7 @@ function SubtypeRow({
         <TableCell className="text-right tabular-nums text-sm">{nav ? fmtPrice(nav, r.currency) : "—"}</TableCell>
         <TableCell className="text-sm whitespace-nowrap">{occupancyRate ?? "—"}</TableCell>
         <TableCell className="text-sm whitespace-nowrap">{minInvestment ?? "—"}</TableCell>
-        <TableCell className="text-sm whitespace-nowrap">{r.liquidity ? r.liquidity.replace(/_/g, " ") : "—"}</TableCell>
+        <TableCell className="text-sm whitespace-nowrap">{liquidity ? liquidity.replace(/_/g, " ") : "—"}</TableCell>
         <TableCell className="text-sm whitespace-nowrap">{riskLevel ?? "—"}</TableCell>
         <TableCell><SourceCell r={r} /></TableCell>
         <ActionsCells r={r} onTrack={onTrack} isManager={isManager} staleByRef={staleByRef} refFocus={refFocus} />
@@ -758,6 +760,7 @@ function SubtypeRow({
   const withdrawalTerms = readField("withdrawalTerms");
   const fees = readField("fees");
   const regulatoryStatus = readField("regulatoryStatus");
+  const liquidity = readField("liquidity") ?? r.liquidity;
   return (
     <TableRow ref={refFocus.registerRow(r.ref, r.name)} data-ref={r.ref} className={rowClass}>
       {nameCell}
@@ -768,7 +771,7 @@ function SubtypeRow({
       <TableCell className="text-sm max-w-[160px] truncate">{membershipRequirement ?? "—"}</TableCell>
       <TableCell className="text-sm max-w-[160px] truncate">{withdrawalTerms ?? "—"}</TableCell>
       <TableCell className="text-sm max-w-[140px] truncate">{fees ?? "—"}</TableCell>
-      <TableCell className="text-sm whitespace-nowrap">{r.liquidity ? r.liquidity.replace(/_/g, " ") : "—"}</TableCell>
+      <TableCell className="text-sm whitespace-nowrap">{liquidity ? liquidity.replace(/_/g, " ") : "—"}</TableCell>
       <TableCell className="text-sm max-w-[160px] truncate">{regulatoryStatus ?? "—"}</TableCell>
       <TableCell><SourceCell r={r} /></TableCell>
       <ActionsCells r={r} onTrack={onTrack} isManager={isManager} staleByRef={staleByRef} refFocus={refFocus} />

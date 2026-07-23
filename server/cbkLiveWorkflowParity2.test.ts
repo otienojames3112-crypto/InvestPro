@@ -398,16 +398,17 @@ describe("Stage 10b-2b · D — CorrectFigureDialog no longer exposes raw CBK pr
     expect(dialogBlock).not.toContain("accruedInterestPer100");
   });
 
-  it("11. for CBK, the dropdown resolves established contract fields with clean labels, keyed back to the RAW extraction key", () => {
+  it("11. for CBK, the multi-field form resolves established contract fields with clean labels", () => {
     expect(dialogBlock).toContain('finding.targetCatalogue === "cbk"');
     expect(dialogBlock).toContain('getCatalogueFieldContract("cbk")');
-    expect(dialogBlock).toContain("resolveRawFigureKey(f, raw)");
-    expect(dialogBlock).toContain('f.storageStatus !== "column" && f.storageStatus !== "extendedFields"');
-    expect(dialogBlock).toContain("{f.label} (currently {f.value})");
+    expect(dialogBlock).toContain("projectFindingToContractDisplayRows");
+    expect(dialogBlock).toContain("managerEditable");
+    expect(dialogBlock).toContain("{field.label}");
   });
 
-  it("non-CBK findings are completely unaffected — same fmtFields output, just labeled with the raw key (byte-identical rendered text)", () => {
-    expect(dialogBlock).toContain("fmtFields(finding.extractedFields).map((f) => ({ ...f, label: f.key }))");
+  it("MMF and Bank use their own established contracts in the same correction form", () => {
+    expect(dialogBlock).toContain('getCatalogueFieldContract("mmf")');
+    expect(dialogBlock).toContain('getCatalogueFieldContract("bank")');
   });
 
   it("resolveRawFigureKey is exported from shared/catalogueFieldContracts.ts and correctly resolves an alias-matched raw key, not the canonical one", () => {

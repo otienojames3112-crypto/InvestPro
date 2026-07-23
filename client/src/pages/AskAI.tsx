@@ -67,7 +67,6 @@ import {
   getCatalogueFieldContract,
   projectFindingToContractDisplayRows,
   projectFindingToContractFigures,
-  resolveRawFigureKey,
 } from "@shared/catalogueFieldContracts";
 import { SOURCE_CLASS_LABELS, isSourceClass } from "@shared/instrumentProfile";
 import { formatRelativeTime } from "@/lib/format";
@@ -516,7 +515,7 @@ export function useResearchTaskPoller() {
   return { run, stage, running, reset };
 }
 
-/* ── Correct-a-figure dialog: versions the finding + drafts the fix ─────────── */
+/* ── Correct fields dialog: versions the finding + drafts one governed fix ─── */
 
 function CorrectFigureDialog({
   finding,
@@ -529,17 +528,9 @@ function CorrectFigureDialog({
   onOpenChange: (v: boolean) => void;
   onDone: () => void;
 }) {
-  // Stage 10b-2b (CBK) / Stage 10b-3 (Market Assets) — for these catalogues,
-  // the dropdown now offers established contract fields with their clean
-  // labels, sourced back to the RAW key a correction must actually
-  // overwrite (resolveRawFigureKey — never the canonical key when the raw
-  // extraction used an alias, which would leave a stale duplicate figure
-  // behind). Every other catalogue (MMF/Bank) keeps the original unfiltered
-  // fmtFields behavior — raw keys, no established-field filtering —
-  // completely unchanged. Market-asset subtype resolution mirrors this same
-  // file's equityContract/reitContract/offshoreFundContract/saccoContract
-  // blocks above (SACCO checked via the raw assetType signal, since it
-  // shares assetClass "alt" with ETF/property/pension/other).
+  // Stage 10b-3e — use the same established contracts as Edit fields for every
+  // supported catalogue. Market-asset subtype resolution mirrors the finding
+  // card blocks (SACCO uses assetType because its assetClass is shared "alt").
   const correctionMarketAssetSubtype: MarketAssetSubtype | null =
     finding.targetCatalogue === "market_asset"
       ? finding.assetClass === "equity" || finding.assetClass === "reit" || finding.assetClass === "offshore_fund"
@@ -549,34 +540,43 @@ function CorrectFigureDialog({
           : null
       : null;
   const correctionContract =
-    finding.targetCatalogue === "cbk"
-      ? getCatalogueFieldContract("cbk")
-      : correctionMarketAssetSubtype === "equity"
-        ? getCatalogueFieldContract("market_asset", "equity")
-        : correctionMarketAssetSubtype === "reit"
-          ? getCatalogueFieldContract("market_asset", "reit")
-          : correctionMarketAssetSubtype === "offshore_fund"
-            ? getCatalogueFieldContract("market_asset", "offshore_fund")
-            : correctionMarketAssetSubtype === "sacco"
-              ? getCatalogueFieldContract("market_asset", "sacco")
-              : null;
+    finding.targetCatalogue === "mmf"
+      ? getCatalogueFieldContract("mmf")
+      : finding.targetCatalogue === "bank"
+        ? getCatalogueFieldContract("bank")
+        : finding.targetCatalogue === "cbk"
+          ? getCatalogueFieldContract("cbk")
+          : correctionMarketAssetSubtype === "equity"
+            ? getCatalogueFieldContract("market_asset", "equity")
+            : correctionMarketAssetSubtype === "reit"
+              ? getCatalogueFieldContract("market_asset", "reit")
+              : correctionMarketAssetSubtype === "offshore_fund"
+                ? getCatalogueFieldContract("market_asset", "offshore_fund")
+                : correctionMarketAssetSubtype === "sacco"
+                  ? getCatalogueFieldContract("market_asset", "sacco")
+                  : null;
+  const contractRows = correctionContract
+    ? projectFindingToContractDisplayRows(correctionContract, finding)
+    : [];
   const correctionFields = correctionContract
-    ? (() => {
-        const raw = (finding.extractedFields ?? {}) as Record<string, unknown>;
-        const out: { key: string; value: string; missing?: boolean; label: string }[] = [];
-        for (const f of correctionContract.fields) {
-          if (f.storageStatus !== "column" && f.storageStatus !== "extendedFields") continue;
-          const rawKey = resolveRawFigureKey(f, raw);
-          if (!rawKey) continue;
-          out.push({ key: rawKey, value: String(raw[rawKey]), missing: false, label: f.label });
-        }
-        return out;
-      })()
-    : null;
-  const fields = correctionFields ?? fmtFields(finding.extractedFields).map((f) => ({ ...f, label: f.key }));
-  const [field, setField] = useState<string>(fields[0]?.key ?? "");
-  const [newValue, setNewValue] = useState<string>("");
+    ? contractRows
+        .filter((row) => {
+          const contractField = correctionContract.fields.find((field) => field.key === row.key);
+          return (
+            contractField?.managerEditable === true &&
+            row.key !== "sourceLink" &&
+            row.key !== "sourceAsOf"
+          );
+        })
+        .map((row) => ({ key: row.key, label: row.label, value: row.value ?? "" }))
+    : fmtFields(finding.extractedFields).map((field) => ({
+        key: field.key,
+        label: field.key,
+        value: field.value,
+      }));
+  const [correctedValues, setCorrectedValues] = useState<Record<string, string>>({});
   const [reason, setReason] = useState<string>("");
+  const [validationMessage, setValidationMessage] = useState<string>("");
 
   // Round 2 — a manager-cited source for THIS corrected value, first-class alongside an
   // AI-found one. The original finding's source (if any) is reused by default; a manager
@@ -588,12 +588,21 @@ function CorrectFigureDialog({
   const [sourceUrl, setSourceUrl] = useState<string>("");
   const [sourceAsOf, setSourceAsOf] = useState<string>(() => new Date().toISOString().slice(0, 10));
 
+  useEffect(() => {
+    if (!open) return;
+    setCorrectedValues(Object.fromEntries(correctionFields.map((field) => [field.key, field.value])));
+    setValidationMessage("");
+    // Re-initialize only when opening this finding; field arrays are derived.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, finding.id]);
+
   const correct = trpc.research.correctFinding.useMutation({
     onSuccess: () => {
       toast.success("Correction recorded and drafted into the review queue — approve it there to update the catalogue.");
       onOpenChange(false);
-      setNewValue("");
+      setCorrectedValues({});
       setReason("");
+      setValidationMessage("");
       setUseOwnSource(!hasOriginalSource);
       setSourceLabel("");
       setSourceUrl("");
@@ -602,71 +611,91 @@ function CorrectFigureDialog({
     onError: (err) => toast.error(err.message),
   });
 
-  const oldValue = fields.find((f) => f.key === field)?.value ?? "—";
+  const changedFields = correctionFields
+    .map((field) => ({
+      field: field.key,
+      oldValue: field.value.trim(),
+      newValue: (correctedValues[field.key] ?? "").trim(),
+    }))
+    .filter((field) => field.oldValue !== field.newValue);
   const sourceRequired = useOwnSource || !hasOriginalSource;
   const canSubmit =
-    field.trim() !== "" &&
-    newValue.trim() !== "" &&
     reason.trim().length >= 3 &&
     (!sourceRequired || sourceLabel.trim() !== "") &&
     !correct.isPending;
 
+  const submitCorrection = () => {
+    if (changedFields.length === 0) {
+      setValidationMessage("No fields have changed. Update at least one corrected value before saving.");
+      return;
+    }
+    if (changedFields.some((field) => field.newValue === "")) {
+      setValidationMessage("Corrected values cannot be blank. Restore the current value or enter a replacement.");
+      return;
+    }
+    setValidationMessage("");
+    correct.mutate({
+      findingId: finding.id,
+      changes: changedFields.map(({ field, newValue }) => ({ field, newValue })),
+      reason: reason.trim(),
+      ...(sourceRequired
+        ? {
+            sourceLabel: sourceLabel.trim(),
+            ...(sourceUrl.trim() !== "" ? { sourceUrl: sourceUrl.trim() } : {}),
+            ...(sourceAsOf.trim() !== "" ? { sourceAsOf: sourceAsOf.trim() } : {}),
+          }
+        : {}),
+    });
+  };
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="sm:max-w-2xl max-h-[85vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <Pencil className="w-4 h-4 text-primary" /> Correct a figure
+            <Pencil className="w-4 h-4 text-primary" /> Correct fields
           </DialogTitle>
           <DialogDescription>
-            This never edits the original finding or any catalogue. It records a new, corrected version and drafts a
-            governed edit (old → new + your reason) into the review queue for you to approve.
+            Draft a governed correction for approval. This creates a new version and one review item; it does not
+            directly edit the original finding or live catalogue.
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-3">
-          <div className="space-y-1">
-            <Label className="text-xs text-muted-foreground">Figure to correct</Label>
-            {fields.length > 0 ? (
-              <Select value={field} onValueChange={setField}>
-                <SelectTrigger className="bg-background">
-                  <SelectValue placeholder="Pick a figure" />
-                </SelectTrigger>
-                <SelectContent>
-                  {fields.map((f) => (
-                    <SelectItem key={f.key} value={f.key}>
-                      {f.label} (currently {f.value})
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            ) : (
-              <Input
-                placeholder="Figure key, e.g. yieldPct"
-                value={field}
-                onChange={(e) => setField(e.target.value)}
-                className="bg-background"
-              />
-            )}
-          </div>
-
-          <div className="flex items-center gap-3 text-sm">
-            <div className="flex-1">
-              <Label className="text-xs text-muted-foreground">Current value</Label>
-              <div className="mt-1 rounded-md border border-border bg-muted/40 px-3 py-2 tabular-nums text-muted-foreground line-through">
-                {oldValue}
+          <div className="rounded-md border border-border overflow-hidden">
+            <div className="grid grid-cols-[minmax(9rem,0.8fr)_1fr_1fr] gap-3 bg-muted/40 px-3 py-2 text-xs font-medium text-muted-foreground">
+              <span>Catalogue field</span>
+              <span>Current extracted value</span>
+              <span>Corrected value</span>
+            </div>
+            {correctionFields.map((field) => (
+              <div
+                key={field.key}
+                className="grid grid-cols-[minmax(9rem,0.8fr)_1fr_1fr] items-center gap-3 border-t border-border px-3 py-2"
+              >
+                <Label htmlFor={`correction-${field.key}`} className="text-xs font-medium">
+                  {field.label}
+                </Label>
+                <div className="rounded-md bg-muted/30 px-3 py-2 text-sm text-muted-foreground break-words">
+                  {field.value || "—"}
+                </div>
+                <Input
+                  id={`correction-${field.key}`}
+                  value={correctedValues[field.key] ?? ""}
+                  onChange={(event) => {
+                    setCorrectedValues((values) => ({ ...values, [field.key]: event.target.value }));
+                    setValidationMessage("");
+                  }}
+                  placeholder="Not on record"
+                  className="bg-background"
+                />
               </div>
-            </div>
-            <ArrowRight className="w-4 h-4 mt-5 shrink-0 text-muted-foreground" />
-            <div className="flex-1">
-              <Label className="text-xs text-muted-foreground">Corrected value</Label>
-              <Input
-                value={newValue}
-                onChange={(e) => setNewValue(e.target.value)}
-                placeholder="e.g. 15.98"
-                className="mt-1 bg-background tabular-nums"
-              />
-            </div>
+            ))}
+            {correctionFields.length === 0 && (
+              <p className="border-t border-border px-3 py-4 text-sm text-muted-foreground">
+                No editable catalogue fields are available for this finding.
+              </p>
+            )}
           </div>
 
           <div className="space-y-1">
@@ -742,6 +771,9 @@ function CorrectFigureDialog({
               </div>
             )}
           </div>
+          {validationMessage && (
+            <p className="text-sm text-amber-600 dark:text-amber-500">{validationMessage}</p>
+          )}
         </div>
 
         <DialogFooter>
@@ -749,21 +781,7 @@ function CorrectFigureDialog({
             Cancel
           </Button>
           <Button
-            onClick={() =>
-              correct.mutate({
-                findingId: finding.id,
-                field: field.trim(),
-                newValue: newValue.trim(),
-                reason: reason.trim(),
-                ...(sourceRequired
-                  ? {
-                      sourceLabel: sourceLabel.trim(),
-                      ...(sourceUrl.trim() !== "" ? { sourceUrl: sourceUrl.trim() } : {}),
-                      ...(sourceAsOf.trim() !== "" ? { sourceAsOf: sourceAsOf.trim() } : {}),
-                    }
-                  : {}),
-              })
-            }
+            onClick={submitCorrection}
             disabled={!canSubmit}
           >
             {correct.isPending ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <Pencil className="w-3.5 h-3.5 mr-1.5" />}
@@ -1480,7 +1498,7 @@ export function FindingCard({
               onClick={() => setCorrectOpen(true)}
               disabled={busy}
             >
-              <Pencil className="w-3.5 h-3.5 mr-1.5" /> Correct a figure
+              <Pencil className="w-3.5 h-3.5 mr-1.5" /> Correct fields
             </Button>
             <Button
               size="sm"

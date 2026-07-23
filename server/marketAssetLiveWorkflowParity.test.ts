@@ -586,10 +586,10 @@ describe("Stage 10b-3 · D — AskAI.tsx: CorrectFigureDialog generalized to all
     expect(dialog).toContain('getCatalogueFieldContract("market_asset", "sacco")');
   });
 
-  it("MMF/Bank findings are unaffected — the dialog still falls back to fmtFields for them", () => {
-    expect(dialog).toContain("fmtFields(finding.extractedFields).map((f) => ({ ...f, label: f.key }))");
-    expect(dialog).not.toContain('"mmf"');
-    expect(dialog).not.toContain('"bank"');
+  it("Stage 10b-3e extends the same contract-driven correction form to MMF and Bank", () => {
+    expect(dialog).toContain('getCatalogueFieldContract("mmf")');
+    expect(dialog).toContain('getCatalogueFieldContract("bank")');
+    expect(dialog).toContain("projectFindingToContractDisplayRows");
   });
 });
 

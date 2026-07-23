@@ -479,16 +479,13 @@ describe("Slice 8d · FindingCard wiring", () => {
     expect(findingCard).toContain("No figures extracted — identity only.");
   });
 
-  it("CorrectFigureDialog is UNCHANGED for MMF/Bank catalogues — still falls back to fmtFields(raw extractedFields) for its field selector when no CBK/market-asset contract applies", () => {
+  it("Stage 10b-3e uses established contracts for MMF, Bank, and CBK corrections", () => {
     const dialogIdx = askAi.indexOf("function CorrectFigureDialog(");
     const dialog = askAi.slice(dialogIdx, askAi.indexOf("function ", dialogIdx + 30));
-    // Stage 10b-2b — CBK gets a filtered, clean-labeled dropdown (see
-    // server/cbkLiveWorkflowParity.test.ts for the dedicated proof). Stage
-    // 10b-3 extended the SAME filtering to market-asset subtypes (Equity/
-    // REIT/Offshore fund/SACCO). MMF/Bank findings still resolve fields via
-    // the original unfiltered fmtFields fallback, byte-identical in output.
-    expect(dialog).toContain("fmtFields(finding.extractedFields).map((f) => ({ ...f, label: f.key }))");
-    expect(dialog).toContain('finding.targetCatalogue === "cbk"');
+    expect(dialog).toContain('getCatalogueFieldContract("mmf")');
+    expect(dialog).toContain('getCatalogueFieldContract("bank")');
+    expect(dialog).toContain('getCatalogueFieldContract("cbk")');
+    expect(dialog).toContain("projectFindingToContractDisplayRows");
   });
 
   it("all seven active contract lookups (MMF, Bank, CBK, Equity, REIT, Offshore fund, SACCO) are the only ones present — every market-asset subtype is now wired", () => {

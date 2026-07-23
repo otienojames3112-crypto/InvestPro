@@ -467,13 +467,12 @@ describe("Slice 8e-4 · FindingCard wiring", () => {
     expect(findingCard).toContain("No figures extracted — identity only.");
   });
 
-  it("Stage 10b-3 — CorrectFigureDialog now ALSO filters/relabels for SACCO (and Equity/REIT/Offshore fund), detected via the same raw extractedFields.assetType === 'sacco' signal used elsewhere in this file; MMF/Bank keep the original unfiltered fmtFields fallback", () => {
+  it("Stage 10b-3e renders the SACCO contract as a multi-field correction form", () => {
     const dialogIdx = askAi.indexOf("function CorrectFigureDialog(");
     const dialog = askAi.slice(dialogIdx, askAi.indexOf("function ", dialogIdx + 30));
-    expect(dialog).toContain("fmtFields(finding.extractedFields).map((f) => ({ ...f, label: f.key }))");
-    expect(dialog).toContain('finding.targetCatalogue === "cbk"');
     expect(dialog).toContain('getCatalogueFieldContract("market_asset", "sacco")');
     expect(dialog).toContain('String(finding.extractedFields?.assetType ?? "").trim().toLowerCase() === "sacco"');
+    expect(dialog).toContain("correctedValues");
   });
 
   it("exactly seven getCatalogueFieldContract calls exist — MMF, Bank, CBK, Equity, REIT, Offshore fund, SACCO — no ETF/property/pension/other lookups (those have no active contract at all)", () => {

@@ -2385,7 +2385,12 @@ import {
 } from "../shared/researchPipeline";
 import { type AssetClass } from "../shared/assetModel";
 import { humanField } from "../shared/provenance";
-import { projectContractFiguresToExtendedFields } from "../shared/catalogueFieldContracts";
+import {
+  getCatalogueFieldContract,
+  projectContractFiguresToExtendedFields,
+  projectFindingToContractDisplayRows,
+  projectFindingToContractFigures,
+} from "../shared/catalogueFieldContracts";
 // NOTE: summariseState, FieldProvenanceMap, and FieldKey are already imported at
 // the top of this file (used by the opportunity ingestion helpers).
 
@@ -2675,11 +2680,15 @@ export async function reviewResearchUpdate(args: {
 
   if (plan.target === "mmf") {
     const p = plan.payload;
-    // Find an existing fund by name to edit, else insert.
+    // For an edit, resolve by the ORIGINAL targetRef so correcting fundName
+    // renames the governed row instead of inserting a duplicate under the new
+    // name. Creates keep the normal payload-name lookup.
+    const lookupFundName =
+      current.changeKind === "edit" && current.targetRef ? current.targetRef : p.fundName;
     const existing = await db
       .select({ id: mmfFunds.id })
       .from(mmfFunds)
-      .where(eq(mmfFunds.fundName, p.fundName))
+      .where(eq(mmfFunds.fundName, lookupFundName))
       .limit(1);
     const values = {
       fundName: p.fundName,
@@ -2967,22 +2976,44 @@ export async function reviewResearchUpdate(args: {
       : current.field
         ? cleanAuditValue(figuresIn[current.field])
         : null;
-  await insertCatalogueAuditLog({
-    catalogue: auditCatalogue,
-    targetRef: promotedRef,
-    instrumentName: current.name,
-    changeKind: current.changeKind,
-    field: current.field ?? null,
-    oldValue: current.oldValue ?? null,
-    newValue,
-    source: current.source,
-    sourceUrl: current.sourceUrl ?? null,
-    researchUpdateId: current.id,
-    researchTaskId,
-    approvedBy: args.reviewedBy,
-    approvedAt: now,
-    note: args.reviewNote ?? null,
-  });
+  const correctionChanges = parseCorrectionChanges(figuresIn._correctionChanges);
+  if (correctionChanges.length > 0) {
+    for (const correction of correctionChanges) {
+      await insertCatalogueAuditLog({
+        catalogue: auditCatalogue,
+        targetRef: promotedRef,
+        instrumentName: current.name,
+        changeKind: current.changeKind,
+        field: correction.field,
+        oldValue: correction.oldValue,
+        newValue: correction.newValue,
+        source: current.source,
+        sourceUrl: current.sourceUrl ?? null,
+        researchUpdateId: current.id,
+        researchTaskId,
+        approvedBy: args.reviewedBy,
+        approvedAt: now,
+        note: cleanAuditValue(figuresIn._correctionReason) ?? args.reviewNote ?? null,
+      });
+    }
+  } else {
+    await insertCatalogueAuditLog({
+      catalogue: auditCatalogue,
+      targetRef: promotedRef,
+      instrumentName: current.name,
+      changeKind: current.changeKind,
+      field: current.field ?? null,
+      oldValue: current.oldValue ?? null,
+      newValue,
+      source: current.source,
+      sourceUrl: current.sourceUrl ?? null,
+      researchUpdateId: current.id,
+      researchTaskId,
+      approvedBy: args.reviewedBy,
+      approvedAt: now,
+      note: args.reviewNote ?? null,
+    });
+  }
 
   // If this update was drafted from a finding, close the loop on that finding.
   if (current.findingId != null) {
@@ -3000,6 +3031,30 @@ function cleanAuditValue(v: unknown): string | null {
   if (v === null || v === undefined) return null;
   const s = String(v).trim();
   return s === "" ? null : s.slice(0, 300);
+}
+
+type CorrectionAuditChange = { field: string; oldValue: string | null; newValue: string };
+
+/** Parse Stage 10b-3e per-field correction metadata defensively. */
+export function parseCorrectionChanges(raw: unknown): CorrectionAuditChange[] {
+  try {
+    const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.flatMap((item) => {
+      if (!item || typeof item !== "object") return [];
+      const candidate = item as Record<string, unknown>;
+      const field = typeof candidate.field === "string" ? candidate.field.trim() : "";
+      const newValue = typeof candidate.newValue === "string" ? candidate.newValue.trim() : "";
+      if (!field || !newValue) return [];
+      const oldValue =
+        candidate.oldValue === null || candidate.oldValue === undefined
+          ? null
+          : String(candidate.oldValue).slice(0, 300);
+      return [{ field: field.slice(0, 48), oldValue, newValue: newValue.slice(0, 300) }];
+    });
+  } catch {
+    return [];
+  }
 }
 
 /**
@@ -3334,8 +3389,8 @@ export async function listResearchMessages(threadId: number): Promise<ResearchMe
 }
 
 /**
- * Round 88 — VERSIONED FINDING CORRECTION. A manager edits one extracted figure on
- * a finding. We do NOT mutate the original: we write a NEW finding row (the
+ * Round 88 / Stage 10b-3e — VERSIONED FINDING CORRECTION. A manager edits one or
+ * more established fields on a finding. We do NOT mutate the original: we write a NEW finding row (the
  * corrected version) carrying the edited figures, link the two (old.supersededById
  * → new, new.supersedesId → old, old.status → 'superseded'), and — crucially —
  * draft a PENDING research_update (a governed catalogue-edit proposal) so the
@@ -3345,8 +3400,10 @@ export async function listResearchMessages(threadId: number): Promise<ResearchMe
  */
 export async function correctResearchFinding(args: {
   findingId: number;
-  field: string;
-  newValue: string;
+  changes?: Array<{ field: string; newValue: string }>;
+  /** Legacy one-field input retained as a special case. */
+  field?: string;
+  newValue?: string;
   reason: string;
   by: string;
   byName?: string | null;
@@ -3370,12 +3427,26 @@ export async function correctResearchFinding(args: {
   if (original.status === "superseded" || original.supersededById != null) {
     return { error: "This finding has already been corrected; correct its latest version instead." };
   }
-  const field = args.field.trim();
-  const newValue = args.newValue.trim();
   const reason = args.reason.trim();
-  if (field === "") return { error: "A field to correct is required." };
-  if (newValue === "") return { error: "A corrected value is required." };
   if (reason === "") return { error: "A plain-English reason for the correction is required." };
+
+  const requestedChanges =
+    args.changes && args.changes.length > 0
+      ? args.changes
+      : args.field !== undefined && args.newValue !== undefined
+        ? [{ field: args.field, newValue: args.newValue }]
+        : [];
+  const uniqueChanges = new Map<string, string>();
+  for (const change of requestedChanges) {
+    const field = change.field.trim();
+    const newValue = change.newValue.trim();
+    if (field === "") return { error: "A field to correct is required." };
+    if (newValue === "") return { error: "A corrected value is required." };
+    uniqueChanges.set(field, newValue);
+  }
+  if (uniqueChanges.size === 0) {
+    return { error: "No fields have changed. Update at least one value before recording a correction." };
+  }
 
   // A manager-cited source for THIS value, if supplied.
   const managerSourceLabel = args.sourceLabel?.trim() || null;
@@ -3398,9 +3469,89 @@ export async function correctResearchFinding(args: {
   const resolvedAsOf = managerAsOfMs ?? original.sourceAsOf ?? null;
 
   const oldFigures = (original.extractedFields ?? {}) as Record<string, unknown>;
-  const oldValueRaw = oldFigures[field];
-  const oldValue = oldValueRaw === undefined || oldValueRaw === null ? null : String(oldValueRaw);
-  const nextFigures: Record<string, unknown> = { ...oldFigures, [field]: newValue };
+  const marketAssetSubtype =
+    original.targetCatalogue === "market_asset"
+      ? original.assetClass === "equity" || original.assetClass === "reit" || original.assetClass === "offshore_fund"
+        ? original.assetClass
+        : detectMarketAssetSacco({
+              catalogue: "market_asset",
+              assetClass: original.assetClass as AssetClass,
+              figures: oldFigures,
+              name: original.instrumentName,
+              issuer: original.issuer,
+            })
+          ? "sacco"
+          : undefined
+      : undefined;
+  const correctionContract =
+    original.targetCatalogue === "market_asset"
+      ? getCatalogueFieldContract("market_asset", marketAssetSubtype)
+      : original.targetCatalogue === "mmf" ||
+          original.targetCatalogue === "bank" ||
+          original.targetCatalogue === "cbk"
+        ? getCatalogueFieldContract(original.targetCatalogue)
+        : null;
+  const currentContractValues = new Map(
+    (correctionContract
+      ? projectFindingToContractDisplayRows(correctionContract, {
+          instrumentName: original.instrumentName,
+          issuer: original.issuer,
+          sourceLabel: original.sourceLabel,
+          sourceUrl: original.sourceUrl,
+          sourceAsOf: original.sourceAsOf,
+          extractedFields: oldFigures,
+        })
+      : []
+    ).map((row) => [row.key, row.value] as const),
+  );
+  let nextInstrumentName = original.instrumentName;
+  let nextIssuer = original.issuer;
+  let nextCurrency = original.currency;
+  const nextFigures: Record<string, unknown> = { ...oldFigures };
+
+  const envelopeTarget = (field: string): "name" | "issuer" | "currency" | null => {
+    if (
+      (original.targetCatalogue === "mmf" && field === "fundName") ||
+      (original.targetCatalogue === "market_asset" &&
+        ["companyName", "reitName", "fundName", "saccoName"].includes(field))
+    ) {
+      return "name";
+    }
+    if (
+      (original.targetCatalogue === "mmf" && field === "fundManager") ||
+      (original.targetCatalogue === "bank" && field === "bankName") ||
+      (original.targetCatalogue === "market_asset" && field === "fundManager")
+    ) {
+      return "issuer";
+    }
+    if (original.targetCatalogue === "market_asset" && field === "currency") return "currency";
+    return null;
+  };
+  const currentValueFor = (field: string): string | null => {
+    const envelope = envelopeTarget(field);
+    const raw =
+      envelope === "name"
+        ? original.instrumentName
+        : envelope === "issuer"
+          ? original.issuer
+          : envelope === "currency"
+            ? original.currency
+            : (oldFigures[field] ?? currentContractValues.get(field));
+    return raw === undefined || raw === null ? null : String(raw).trim();
+  };
+  const effectiveChanges = Array.from(uniqueChanges.entries())
+    .map(([field, newValue]) => ({ field, oldValue: currentValueFor(field), newValue }))
+    .filter((change) => change.oldValue !== change.newValue);
+  if (effectiveChanges.length === 0) {
+    return { error: "No fields have changed. Update at least one value before recording a correction." };
+  }
+  for (const change of effectiveChanges) {
+    const envelope = envelopeTarget(change.field);
+    if (envelope === "name") nextInstrumentName = change.newValue;
+    else if (envelope === "issuer") nextIssuer = change.newValue;
+    else if (envelope === "currency") nextCurrency = change.newValue;
+    else nextFigures[change.field] = change.newValue;
+  }
 
   const now = Date.now();
 
@@ -3409,11 +3560,11 @@ export async function correctResearchFinding(args: {
   const correctedRow: InsertResearchFinding = {
     taskId: original.taskId,
     threadId: original.threadId ?? null,
-    instrumentName: original.instrumentName,
-    issuer: original.issuer,
+    instrumentName: nextInstrumentName,
+    issuer: nextIssuer,
     assetClass: original.assetClass,
     targetCatalogue: original.targetCatalogue,
-    currency: original.currency,
+    currency: nextCurrency,
     extractedFields: nextFigures,
     sourceLabel: resolvedSourceLabel,
     sourceUrl: resolvedSourceUrl,
@@ -3444,23 +3595,46 @@ export async function correctResearchFinding(args: {
   //    Source of record: the manager's own citation when supplied, else the finding's
   //    original source — matching what was just written onto the corrected finding row.
   const source = (resolvedSourceLabel ?? "Manager correction").slice(0, 300);
+  const reviewFigures: Record<string, unknown> = correctionContract
+    ? projectFindingToContractFigures(correctionContract, {
+        instrumentName: nextInstrumentName,
+        issuer: nextIssuer,
+        sourceLabel: resolvedSourceLabel,
+        sourceUrl: resolvedSourceUrl,
+        sourceAsOf: resolvedAsOf,
+        extractedFields: nextFigures,
+      })
+    : { ...nextFigures };
+  reviewFigures._proposalType = "update";
+  reviewFigures._matchedCurrentRow = original.instrumentName;
+  reviewFigures._changedFields = JSON.stringify(effectiveChanges.map((change) => change.field));
+  reviewFigures._currentValues = JSON.stringify(
+    effectiveChanges.map((change) => ({ field: change.field, value: change.oldValue ?? "—" })),
+  );
+  reviewFigures._correctionChanges = JSON.stringify(effectiveChanges);
+  reviewFigures._correctionReason = reason;
+  reviewFigures._impactNote = `Manager correction to ${effectiveChanges.length} field${effectiveChanges.length === 1 ? "" : "s"} on ${original.instrumentName}`;
+
+  const legacySingle = effectiveChanges.length === 1 ? effectiveChanges[0] : null;
+  const newValue = legacySingle?.newValue;
   let updateId: number | null = null;
   try {
     updateId = await enqueueResearchUpdate({
       changeKind: "edit",
       targetRef: original.instrumentName,
-      name: original.instrumentName,
+      name: nextInstrumentName,
       assetClass: original.assetClass ?? "alt",
-      issuer: original.issuer,
-      currency: original.currency,
-      figures: { [field]: newValue },
+      issuer: nextIssuer,
+      currency: nextCurrency,
+      figures: reviewFigures,
       source,
       sourceUrl: resolvedSourceUrl,
       asOf: resolvedAsOf,
       origin: "manual",
       findingId: newFindingId,
-      field,
-      oldValue,
+      field: legacySingle?.field,
+      oldValue: legacySingle?.oldValue,
+      // Keep scalar metadata for the existing one-field correction special case.
       managerValue: newValue,
     });
   } catch (err) {

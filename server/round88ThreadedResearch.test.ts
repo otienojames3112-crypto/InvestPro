@@ -251,7 +251,7 @@ describe("Round 88 · D — correctFinding versions, never mutates, and stays qu
 
   it("the tRPC correctFinding procedure is admin-only and requires a plain-English reason", () => {
     const proc = routers.slice(routers.indexOf("correctFinding: adminProcedure"));
-    const procBody = proc.slice(0, 1200);
+    const procBody = proc.slice(0, 3500);
     expect(procBody).toContain("adminProcedure");
     expect(procBody).toMatch(/reason:\s*z\.string\(\)\.min\(3\)/);
     expect(procBody).toContain("correctResearchFinding");

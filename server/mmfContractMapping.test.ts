@@ -409,12 +409,12 @@ describe("Slice 8b · FindingCard wiring", () => {
     expect(findingCard).toContain("No figures extracted — identity only.");
   });
 
-  it("CorrectFigureDialog is UNCHANGED for MMF findings — Stage 10b-2b/10b-3 only filtered/relabeled it for CBK and market-asset subtypes (Equity/REIT/Offshore fund/SACCO); MMF still falls back to the original unfiltered fmtFields", () => {
+  it("Stage 10b-3e uses the MMF contract for the multi-field correction form", () => {
     const dialogIdx = askAi.indexOf("function CorrectFigureDialog(");
     const dialog = askAi.slice(dialogIdx, askAi.indexOf("function ", dialogIdx + 30));
-    expect(dialog).toContain("fmtFields(finding.extractedFields).map((f) => ({ ...f, label: f.key }))");
-    expect(dialog).toContain('finding.targetCatalogue === "cbk"');
-    expect(dialog).not.toContain('"mmf"');
+    expect(dialog).toContain('getCatalogueFieldContract("mmf")');
+    expect(dialog).toContain("projectFindingToContractDisplayRows");
+    expect(dialog).toContain("correctedValues");
   });
 
   it("all seven active contract lookups (MMF, Bank, CBK, Equity, REIT, Offshore fund, SACCO) are the only ones present — every market-asset subtype is now wired", () => {

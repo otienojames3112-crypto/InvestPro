@@ -9060,7 +9060,7 @@ export const appRouter = router({
         return { ok: true };
       }),
 
-    // Round 88 — CORRECT a finding's extracted figure. This does NOT mutate the
+    // Round 88 / Stage 10b-3e — CORRECT one or more finding fields. This does NOT mutate the
     // original: it versions the finding (writes a corrected successor, links the two,
     // supersedes the original) and drafts a governed PENDING catalogue-edit carrying
     // old → new + the manager's reason + the finding's source. It NEVER touches a
@@ -9070,8 +9070,20 @@ export const appRouter = router({
       .input(
         z.object({
           findingId: z.number().int().positive(),
-          field: z.string().min(1).max(48),
-          newValue: z.string().min(1).max(300),
+          changes: z
+            .array(
+              z.object({
+                field: z.string().min(1).max(48),
+                newValue: z.string().min(1).max(300),
+              }),
+            )
+            .min(1)
+            .max(50)
+            .optional(),
+          // Legacy one-field callers remain valid; the DB helper normalizes
+          // both shapes into one changed-fields-only correction array.
+          field: z.string().min(1).max(48).optional(),
+          newValue: z.string().min(1).max(300).optional(),
           reason: z.string().min(3).max(600),
           // A manager-cited source for THIS corrected value — first-class alongside an
           // AI-found one. Optional when the original finding already has a source (the
@@ -9087,6 +9099,7 @@ export const appRouter = router({
         const byName = ctx.user.name ?? ctx.user.email ?? "You";
         const result = await correctResearchFinding({
           findingId: input.findingId,
+          changes: input.changes,
           field: input.field,
           newValue: input.newValue,
           reason: input.reason,

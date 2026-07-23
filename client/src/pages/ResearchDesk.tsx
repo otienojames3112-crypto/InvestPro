@@ -73,7 +73,6 @@ import { formatRelativeTime } from "@/lib/format";
 import { formatUtcYmd } from "@/lib/format";
 import { looksLikeOwnAppUrl, displayContractRowValue } from "@/lib/format";
 import AiIntake from "./AiIntake";
-import AiReview from "./AiReview";
 import SourceConflicts from "./SourceConflicts";
 import AskAI from "./AskAI";
 import RecentlyApproved from "./RecentlyApproved";
@@ -1799,7 +1798,7 @@ function DeskTabs() {
               }`}
             >
               <SlidersHorizontal className="h-3.5 w-3.5" />
-              Source tools
+              {active === "sources" ? "Source Library" : active === "conflicts" ? "Conflict Review" : "Source tools"}
               <ChevronDown className="h-3.5 w-3.5" />
             </Button>
           </DropdownMenuTrigger>
@@ -1834,14 +1833,7 @@ function DeskTabs() {
         <PendingQueue />
       </TabsContent>
       <TabsContent value="conflicts" className="mt-4">
-        {/* AI figure review + source-conflict resolution live together as a compact
-            "what disagrees" surface. Document/image import now lives inside Ask AI. */}
-        <div className="space-y-8">
-          <SourceConflicts embedded />
-          <div className="border-t border-border/60 pt-6">
-            <AiReview embedded />
-          </div>
-        </div>
+        <SourceConflicts embedded />
       </TabsContent>
       <TabsContent value="sources" className="mt-4">
         <SourceLibraryPanel />

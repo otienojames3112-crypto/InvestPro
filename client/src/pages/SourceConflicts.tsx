@@ -103,14 +103,16 @@ export default function SourceConflicts({ embedded = false }: { embedded?: boole
           </p>
         </div>
 
-        <div className="flex items-start gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-          <Info className="w-3.5 h-3.5 mt-0.5 shrink-0" />
-          <span>
-            <strong className="text-foreground">Keep approved value</strong> dismisses the new figure.{" "}
-            <strong className="text-foreground">Use new value</strong> records it as <em>entered by you</em>. Conflict
-            decisions remain deliberate and auditable; nothing is changed silently.
-          </span>
-        </div>
+        {!isLoading && conflicts.length > 0 && (
+          <div className="flex items-start gap-2 rounded-lg border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+            <Info className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+            <span>
+              <strong className="text-foreground">Keep approved value</strong> leaves the catalogue unchanged.{" "}
+              <strong className="text-foreground">Use new value</strong> records the newer value according to the
+              existing conflict workflow. Every decision remains auditable.
+            </span>
+          </div>
+        )}
 
         {isLoading ? (
           <div className="space-y-3">
@@ -127,6 +129,9 @@ export default function SourceConflicts({ embedded = false }: { embedded?: boole
                 <p className="font-medium">No source conflicts.</p>
                 <p className="text-sm text-muted-foreground">
                   Conflicts appear when a new source disagrees with an approved catalogue value.
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Approved values stay unchanged until a manager chooses how to resolve the disagreement.
                 </p>
               </div>
             </div>
@@ -163,7 +168,7 @@ export default function SourceConflicts({ embedded = false }: { embedded?: boole
                       </div>
                       <div className="rounded-lg border border-border bg-muted/30 p-3">
                         <p className="text-[11px] uppercase tracking-wide text-muted-foreground font-semibold flex items-center gap-1">
-                          <Download className="w-3 h-3" /> New extracted value
+                          <Download className="w-3 h-3" /> New source value
                           <InfoHint side="top" iconClassName="normal-case">The number an automated pull read from the source most recently. “Scraped” means collected by a program, not yet checked by a person.</InfoHint>
                         </p>
                         <p className="text-lg font-semibold tabular-nums mt-1">{c.scrapedValue ?? "—"}</p>

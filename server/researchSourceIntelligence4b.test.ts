@@ -73,7 +73,7 @@ describe("Stage 10b-4b · Conflict Review", () => {
   it("frames conflicts as pre-change source disagreements", () => {
     expect(conflicts).toContain("Conflict Review captures disagreements before catalogue values change.");
     expect(conflicts).toContain("Current approved value");
-    expect(conflicts).toContain("New extracted value");
+    expect(conflicts).toContain("New source value");
   });
 
   it("retains deliberate manager actions and a professional empty state", () => {

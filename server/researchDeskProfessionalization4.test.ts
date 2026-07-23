@@ -23,10 +23,13 @@ describe("Stage 10b-4 · Research Desk professionalization", () => {
     expect(desk).not.toContain("Research Desk digest");
   });
 
-  it("keeps all five desk tabs with quieter underline styling", () => {
-    for (const tab of ["Ask AI", "Review queue", "Source conflicts", "Source registry", "Recently approved"]) {
+  it("keeps the primary workflow tabs with quieter underline styling", () => {
+    for (const tab of ["Ask AI", "Review queue", "Recently approved"]) {
       expect(desk).toContain(tab);
     }
+    expect(desk).toContain("Source tools");
+    expect(desk).toContain("Source Library");
+    expect(desk).toContain("Conflict Review");
     expect(desk).toContain("data-[state=active]:border-primary");
   });
 

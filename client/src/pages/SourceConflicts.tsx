@@ -51,8 +51,8 @@ export default function SourceConflicts({ embedded = false }: { embedded?: boole
     onSuccess: (_res, vars) => {
       toast.success(
         vars.resolution === "apply"
-          ? "Scraped value applied — the figure is now marked as entered by you."
-          : "Kept your value — the scraped figure was dismissed.",
+          ? "New value applied — the figure is now marked as entered by you."
+          : "Kept the approved value — the new figure was dismissed.",
       );
       utils.opportunities.conflicts.invalidate();
       utils.opportunities.openConflictCount.invalidate();
@@ -69,7 +69,7 @@ export default function SourceConflicts({ embedded = false }: { embedded?: boole
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
-                <GitCompareArrows className="w-5 h-5 text-primary" /> Source Conflicts
+                <GitCompareArrows className="w-5 h-5 text-primary" /> Conflict Review
               </CardTitle>
               <CardDescription>
                 {isAuthenticated
@@ -95,21 +95,20 @@ export default function SourceConflicts({ embedded = false }: { embedded?: boole
       <div className="container py-8 max-w-4xl space-y-6">
         <div>
           <h1 className="text-2xl font-semibold flex items-center gap-2">
-            <GitCompareArrows className="w-6 h-6 text-primary" /> Source Conflicts
+            <GitCompareArrows className="w-6 h-6 text-primary" /> Conflict Review
           </h1>
           <p className="text-muted-foreground mt-1 text-sm leading-relaxed">
-            When the automated data pull finds a number that disagrees with a figure{" "}
-            <strong className="text-foreground">you</strong> verified or entered, it never overwrites your value —
-            it flags the disagreement here. Your number stays in place until you decide.
+            Conflict Review captures disagreements before catalogue values change. When a new source conflicts with a
+            checked figure, the approved value stays in place until a manager decides.
           </p>
         </div>
 
         <div className="flex items-start gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
           <Info className="w-3.5 h-3.5 mt-0.5 shrink-0" />
           <span>
-            <strong className="text-foreground">Keep mine</strong> dismisses the scrape and keeps your value.{" "}
-            <strong className="text-foreground">Use scraped value</strong> records the new number as{" "}
-            <em>entered by you</em> — applying it is itself a deliberate human action, not a silent overwrite.
+            <strong className="text-foreground">Keep approved value</strong> dismisses the new figure.{" "}
+            <strong className="text-foreground">Use new value</strong> records it as <em>entered by you</em>. Conflict
+            decisions remain deliberate and auditable; nothing is changed silently.
           </span>
         </div>
 
@@ -125,9 +124,9 @@ export default function SourceConflicts({ embedded = false }: { embedded?: boole
                 <ShieldCheck className="w-6 h-6 text-emerald-500" />
               </div>
               <div>
-                <p className="font-medium">No open conflicts</p>
+                <p className="font-medium">No source conflicts.</p>
                 <p className="text-sm text-muted-foreground">
-                  Every checked figure agrees with the latest pull, or hasn't been re-checked yet.
+                  Conflicts appear when a new source disagrees with an approved catalogue value.
                 </p>
               </div>
             </div>
@@ -156,7 +155,7 @@ export default function SourceConflicts({ embedded = false }: { embedded?: boole
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3">
                         <p className="text-[11px] uppercase tracking-wide text-emerald-500 font-semibold flex items-center gap-1">
-                          <ShieldCheck className="w-3 h-3" /> Your value
+                          <ShieldCheck className="w-3 h-3" /> Current approved value
                           <InfoHint side="top" iconClassName="normal-case">The figure a person checked or typed in. It is the trusted value and is never overwritten automatically.</InfoHint>
                         </p>
                         <p className="text-lg font-semibold tabular-nums mt-1">{c.humanValue ?? "—"}</p>
@@ -164,7 +163,7 @@ export default function SourceConflicts({ embedded = false }: { embedded?: boole
                       </div>
                       <div className="rounded-lg border border-border bg-muted/30 p-3">
                         <p className="text-[11px] uppercase tracking-wide text-muted-foreground font-semibold flex items-center gap-1">
-                          <Download className="w-3 h-3" /> Latest scraped value
+                          <Download className="w-3 h-3" /> New extracted value
                           <InfoHint side="top" iconClassName="normal-case">The number an automated pull read from the source most recently. “Scraped” means collected by a program, not yet checked by a person.</InfoHint>
                         </p>
                         <p className="text-lg font-semibold tabular-nums mt-1">{c.scrapedValue ?? "—"}</p>
@@ -181,15 +180,15 @@ export default function SourceConflicts({ embedded = false }: { embedded?: boole
                         disabled={busy}
                         onClick={() => resolve.mutate({ id: c.id, resolution: "dismiss" })}
                       >
-                        <Check className="w-3.5 h-3.5 mr-1" /> Keep mine
+                        <Check className="w-3.5 h-3.5 mr-1" /> Keep approved value
                       </Button>
-                      <InfoHint side="bottom">“Keep mine” dismisses the scraped number and leaves your value untouched. “Use scraped value” adopts the new number and records it as entered by you — a deliberate choice, never a silent overwrite.</InfoHint>
+                      <InfoHint side="bottom">Keeping the approved value dismisses the new number. Using the new value adopts it and records it as entered by you — a deliberate choice, never a silent overwrite.</InfoHint>
                       <Button
                         size="sm"
                         disabled={busy}
                         onClick={() => resolve.mutate({ id: c.id, resolution: "apply" })}
                       >
-                        <Download className="w-3.5 h-3.5 mr-1" /> Use scraped value
+                        <Download className="w-3.5 h-3.5 mr-1" /> Use new value
                       </Button>
                       <span className="text-xs text-muted-foreground inline-flex items-center gap-1">
                         <ExternalLink className="w-3 h-3" /> from {c.sourceId}

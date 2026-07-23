@@ -11,6 +11,14 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
   Dialog,
   DialogContent,
   DialogHeader,
@@ -33,6 +41,9 @@ import {
   Bot,
   PencilLine,
   ListChecks,
+  BookOpen,
+  ChevronDown,
+  SlidersHorizontal,
 } from "lucide-react";
 import { InfoHint } from "@/components/InfoHint";
 import { ASSET_PROFILES } from "@shared/assetModel";
@@ -256,6 +267,7 @@ function fmtFigures(
 /* ── Digest header ─────────────────────────────────────────────────────────── */
 
 function DigestHeader() {
+  const [params, setParams] = useSearchParams();
   const { data, isLoading } = trpc.researchPipeline.digest.useQuery(undefined, {
     refetchOnWindowFocus: false,
   });
@@ -269,26 +281,37 @@ function DigestHeader() {
       value: d?.pendingUpdates ?? 0,
       icon: Inbox,
       tone: (d?.pendingUpdates ?? 0) > 0 ? "text-primary" : "text-muted-foreground",
+      target: "queue",
     },
     {
       label: "Sources due refresh",
       value: d?.sourcesDue ?? 0,
       icon: Clock,
       tone: (d?.sourcesDue ?? 0) > 0 ? "text-primary" : "text-muted-foreground",
+      target: "sources",
     },
     {
       label: "Open conflicts",
       value: d?.openConflicts ?? 0,
       icon: GitCompareArrows,
       tone: (d?.openConflicts ?? 0) > 0 ? "text-primary" : "text-muted-foreground",
+      target: "conflicts",
     },
   ];
+  const openDeskView = (target: string) => {
+    const next = new URLSearchParams(params);
+    next.set("desk", target);
+    setParams(next, { replace: false });
+  };
   return (
     <div className="grid grid-cols-1 gap-2 sm:grid-cols-3" aria-label="Research Desk status">
       {tiles.map((t) => (
-        <div
+        <button
+          type="button"
           key={t.label}
-          className="flex min-h-[68px] items-center gap-3 rounded-xl border border-border/70 bg-card/60 px-4 py-3 shadow-sm"
+          onClick={() => openDeskView(t.target)}
+          aria-label={`Open ${t.label}`}
+          className="flex min-h-[68px] items-center gap-3 rounded-xl border border-border/70 bg-card/60 px-4 py-3 text-left shadow-sm transition-colors hover:border-primary/30 hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-muted/70">
             <t.icon className={`h-4 w-4 ${t.tone}`} />
@@ -297,7 +320,7 @@ function DigestHeader() {
             <div className="text-xl font-semibold leading-none tabular-nums text-foreground">{t.value}</div>
             <div className="mt-1 text-xs text-muted-foreground">{t.label}</div>
           </div>
-        </div>
+        </button>
       ))}
     </div>
   );
@@ -1326,7 +1349,7 @@ function catalogueForFeed(feeds: string): CatalogueKind | null {
   }
 }
 
-function SourceRegistryPanel() {
+function RegisteredSourcePatterns() {
   const utils = trpc.useUtils();
   const { userMode } = usePortfolio();
   const isManager = userMode === "manager";
@@ -1366,8 +1389,8 @@ function SourceRegistryPanel() {
     <div className="space-y-3">
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <p className="text-xs text-muted-foreground leading-relaxed max-w-xl">
-          Operational metadata only — this tracks when each source was last reviewed and how often it should be. It
-          never stores figures or ranks a source by quality.
+          Optional operational patterns for known recurring sources. These records track cadence and freshness; they
+          do not determine trust or publish catalogue values.
         </p>
         <div className="flex items-center gap-3">
           <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
@@ -1385,10 +1408,10 @@ function SourceRegistryPanel() {
         <Empty className="py-12">
           <div className="flex flex-col items-center gap-2 text-center">
             <Clock className="w-9 h-9 text-muted-foreground/60" />
-            <p className="font-medium">No sources registered yet.</p>
+            <p className="font-medium">No recurring source patterns yet.</p>
             <p className="text-sm text-muted-foreground max-w-sm">
-              Register the data sources this desk draws from (CBK auctions, the NSE price board, fund fact-sheets) with
-              a review cadence, and the digest will flag which are due.
+              Approved-source history still appears in the library automatically. Add a recurring pattern only when a
+              source needs an explicit refresh cadence.
             </p>
             <Button size="sm" className="mt-2" onClick={openAdd}>
               <Plus className="w-3.5 h-3.5 mr-1.5" /> Add your first source
@@ -1497,6 +1520,221 @@ function SourceRegistryPanel() {
   );
 }
 
+type ApprovedSourceEntry = {
+  id: number;
+  catalogue: string;
+  targetRef: string | null;
+  instrumentName: string | null;
+  field: string | null;
+  source: string | null;
+  sourceUrl: string | null;
+  approvedAt: number;
+};
+
+type ApprovedSourceSummary = {
+  key: string;
+  label: string;
+  url: string | null;
+  approvedCount: number;
+  lastApprovedAt: number;
+  catalogues: Set<ReferenceCatalogue>;
+  fields: Set<string>;
+  linkedRows: Map<string, { catalogue: ReferenceCatalogue; targetRef: string | null; name: string }>;
+};
+
+const REFERENCE_CATALOGUES = new Set<ReferenceCatalogue>(["mmf", "bank", "cbk", "market_asset"]);
+
+function sourceHost(url: string | null): string | null {
+  if (!url) return null;
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return null;
+  }
+}
+
+function SourceLibraryPanel() {
+  const { data, isLoading } = trpc.researchPipeline.recentlyApproved.useQuery(
+    { limit: 200 },
+    { refetchOnWindowFocus: false },
+  );
+  const entries = (data?.entries ?? []) as ApprovedSourceEntry[];
+  const grouped = new Map<string, ApprovedSourceSummary>();
+
+  for (const entry of entries) {
+    if (!entry.source && !entry.sourceUrl) continue;
+    if (!REFERENCE_CATALOGUES.has(entry.catalogue as ReferenceCatalogue)) continue;
+    const catalogue = entry.catalogue as ReferenceCatalogue;
+    const key = (entry.sourceUrl ?? entry.source ?? "unknown").trim().toLowerCase();
+    const existing = grouped.get(key) ?? {
+      key,
+      label: entry.source ?? sourceHost(entry.sourceUrl) ?? "Approved source",
+      url: entry.sourceUrl,
+      approvedCount: 0,
+      lastApprovedAt: 0,
+      catalogues: new Set<ReferenceCatalogue>(),
+      fields: new Set<string>(),
+      linkedRows: new Map<string, { catalogue: ReferenceCatalogue; targetRef: string | null; name: string }>(),
+    };
+    existing.approvedCount += 1;
+    existing.lastApprovedAt = Math.max(existing.lastApprovedAt, entry.approvedAt);
+    existing.catalogues.add(catalogue);
+    if (entry.field) existing.fields.add(entry.field);
+    const rowKey = `${catalogue}:${entry.targetRef ?? entry.instrumentName ?? entry.id}`;
+    existing.linkedRows.set(rowKey, {
+      catalogue,
+      targetRef: entry.targetRef,
+      name: entry.instrumentName ?? entry.targetRef ?? "Catalogue item",
+    });
+    if (!existing.url && entry.sourceUrl) existing.url = entry.sourceUrl;
+    grouped.set(key, existing);
+  }
+
+  const approvedSources = Array.from(grouped.values()).sort((a, b) => b.lastApprovedAt - a.lastApprovedAt);
+
+  return (
+    <div className="space-y-5">
+      <div className="rounded-xl border border-primary/15 bg-primary/[0.035] px-4 py-3">
+        <div className="flex items-start gap-3">
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10">
+            <BookOpen className="h-4 w-4 text-primary" />
+          </div>
+          <div>
+            <h2 className="text-sm font-semibold">Source Library</h2>
+            <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+              Source Library learns from manager-approved source decisions so future AI refreshes know which source
+              patterns supported each catalogue item. Future refreshes can use these patterns to look for newer official
+              sources; they will still require governed review.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <section className="space-y-3" aria-labelledby="approved-sources-heading">
+        <div>
+          <h3 id="approved-sources-heading" className="text-sm font-semibold">
+            Approved sources
+          </h3>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            Read-only history derived from catalogue approvals—not a list you need to maintain.
+          </p>
+        </div>
+
+        {isLoading ? (
+          <div className="grid gap-3 md:grid-cols-2">
+            <Skeleton className="h-36 w-full rounded-xl" />
+            <Skeleton className="h-36 w-full rounded-xl" />
+          </div>
+        ) : approvedSources.length === 0 ? (
+          <Empty className="py-12">
+            <div className="flex flex-col items-center gap-2 text-center">
+              <BookOpen className="h-9 w-9 text-muted-foreground/60" />
+              <p className="font-medium">Approved sources will appear here automatically.</p>
+              <p className="max-w-md text-sm text-muted-foreground">
+                As managers approve catalogue updates, InvestPro learns which sources support each instrument family
+                and which fields they provide.
+              </p>
+            </div>
+          </Empty>
+        ) : (
+          <div className="grid gap-3 md:grid-cols-2">
+            {approvedSources.map((source) => {
+              const linkedRows = Array.from(source.linkedRows.values());
+              const latestRow = linkedRows[0];
+              return (
+                <Card key={source.key} className="border-border/70 shadow-sm">
+                  <CardContent className="space-y-3 py-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <h4 className="truncate text-sm font-semibold" title={source.label}>
+                          {source.label}
+                        </h4>
+                        <p className="mt-0.5 truncate text-xs text-muted-foreground">
+                          {sourceHost(source.url) ?? "Approved source record"}
+                        </p>
+                      </div>
+                      <Badge variant="outline" className="shrink-0 font-normal text-[10px]">
+                        Manager-approved use
+                      </Badge>
+                    </div>
+
+                    <div className="flex flex-wrap gap-1.5">
+                      {Array.from(source.catalogues).map((catalogue) => (
+                        <Badge key={catalogue} variant="secondary" className="font-normal text-[10px]">
+                          {catalogueLabel(catalogue)}
+                        </Badge>
+                      ))}
+                    </div>
+
+                    <dl className="grid grid-cols-2 gap-x-3 gap-y-2 text-xs">
+                      <div>
+                        <dt className="text-muted-foreground">Fields supported</dt>
+                        <dd className="mt-0.5 font-medium text-foreground">
+                          {source.fields.size > 0
+                            ? Array.from(source.fields).slice(0, 3).join(", ")
+                            : "Catalogue entry"}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt className="text-muted-foreground">Last approved use</dt>
+                        <dd className="mt-0.5 font-medium text-foreground">
+                          {formatRelativeTime(source.lastApprovedAt)}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt className="text-muted-foreground">Approved decisions</dt>
+                        <dd className="mt-0.5 font-medium text-foreground">{source.approvedCount}</dd>
+                      </div>
+                      <div>
+                        <dt className="text-muted-foreground">Linked catalogue rows</dt>
+                        <dd className="mt-0.5 font-medium text-foreground">{linkedRows.length}</dd>
+                      </div>
+                    </dl>
+
+                    <div className="flex flex-wrap items-center gap-3 border-t border-border/60 pt-3 text-xs">
+                      {source.url && (
+                        <a
+                          href={source.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex items-center gap-1 text-primary hover:underline"
+                        >
+                          Open source <ExternalLink className="h-3 w-3" />
+                        </a>
+                      )}
+                      {latestRow && (
+                        <a
+                          href={publishedRowHref(latestRow.catalogue, latestRow.targetRef)}
+                          className="inline-flex min-w-0 items-center gap-1 text-primary hover:underline"
+                        >
+                          <span className="max-w-48 truncate">Open {latestRow.name}</span>
+                          <ExternalLink className="h-3 w-3 shrink-0" />
+                        </a>
+                      )}
+                    </div>
+                  </CardContent>
+                </Card>
+              );
+            })}
+          </div>
+        )}
+      </section>
+
+      <details className="group rounded-xl border border-border/70 bg-muted/10">
+        <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
+          <SlidersHorizontal className="h-4 w-4 text-muted-foreground" />
+          Registered source patterns
+          <span className="ml-1 text-xs font-normal text-muted-foreground">Optional cadence settings</span>
+          <ChevronDown className="ml-auto h-4 w-4 text-muted-foreground transition-transform group-open:rotate-180" />
+        </summary>
+        <div className="border-t border-border/60 p-4">
+          <RegisteredSourcePatterns />
+        </div>
+      </details>
+    </div>
+  );
+}
+
 /* ── Desk sub-tabs (URL-driven via ?desk=) ─────────────────────────────────── */
 
 function ConflictsBadge() {
@@ -1510,7 +1748,7 @@ function ConflictsBadge() {
   );
 }
 
-const DESK_TABS = ["ask", "queue", "conflicts", "sources", "approved"] as const;
+const DESK_TABS = ["ask", "queue", "approved", "sources", "conflicts"] as const;
 type DeskTab = (typeof DESK_TABS)[number];
 
 function DeskTabs() {
@@ -1526,43 +1764,68 @@ function DeskTabs() {
   };
   return (
     <Tabs value={active} onValueChange={select} className="w-full gap-0">
-      <TabsList className="h-auto w-full justify-start gap-1 overflow-x-auto rounded-none border-b border-border/70 bg-transparent p-0">
-        <TabsTrigger
-          value="ask"
-          className="flex-none rounded-none border-x-0 border-t-0 border-b-2 border-transparent bg-transparent px-3 py-2.5 shadow-none data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none"
-        >
-          Ask AI
-        </TabsTrigger>
-        <TabsTrigger
-          value="queue"
-          className="flex-none rounded-none border-x-0 border-t-0 border-b-2 border-transparent bg-transparent px-3 py-2.5 shadow-none data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none"
-        >
-          Review queue
-          <PendingBadge />
-        </TabsTrigger>
-        <TabsTrigger
-          value="conflicts"
-          className="flex-none rounded-none border-x-0 border-t-0 border-b-2 border-transparent bg-transparent px-3 py-2.5 shadow-none data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none"
-        >
-          Source conflicts
-          <ConflictsBadge />
-        </TabsTrigger>
-        <TabsTrigger
-          value="sources"
-          className="flex-none rounded-none border-x-0 border-t-0 border-b-2 border-transparent bg-transparent px-3 py-2.5 shadow-none data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none"
-        >
-          Source registry
-          <InfoHint side="bottom" iconClassName="ml-1.5">
-            Registered sources and their review cadence.
-          </InfoHint>
-        </TabsTrigger>
-        <TabsTrigger
-          value="approved"
-          className="flex-none rounded-none border-x-0 border-t-0 border-b-2 border-transparent bg-transparent px-3 py-2.5 shadow-none data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none"
-        >
-          Recently approved
-        </TabsTrigger>
-      </TabsList>
+      <div className="flex items-end justify-between gap-2 border-b border-border/70">
+        <TabsList className="h-auto min-w-0 justify-start gap-1 overflow-x-auto rounded-none bg-transparent p-0">
+          <TabsTrigger
+            value="ask"
+            className="flex-none rounded-none border-x-0 border-t-0 border-b-2 border-transparent bg-transparent px-3 py-2.5 shadow-none data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none"
+          >
+            Ask AI
+          </TabsTrigger>
+          <TabsTrigger
+            value="queue"
+            className="flex-none rounded-none border-x-0 border-t-0 border-b-2 border-transparent bg-transparent px-3 py-2.5 shadow-none data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none"
+          >
+            Review queue
+            <PendingBadge />
+          </TabsTrigger>
+          <TabsTrigger
+            value="approved"
+            className="flex-none rounded-none border-x-0 border-t-0 border-b-2 border-transparent bg-transparent px-3 py-2.5 shadow-none data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none"
+          >
+            Recently approved
+          </TabsTrigger>
+        </TabsList>
+
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              aria-label="Open source tools"
+              className={`mb-1 shrink-0 gap-1.5 text-xs ${
+                active === "sources" || active === "conflicts" ? "bg-muted text-foreground" : "text-muted-foreground"
+              }`}
+            >
+              <SlidersHorizontal className="h-3.5 w-3.5" />
+              Source tools
+              <ChevronDown className="h-3.5 w-3.5" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-56">
+            <DropdownMenuLabel className="text-xs text-muted-foreground">Source intelligence</DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={() => select("sources")}>
+              <BookOpen className="h-4 w-4" />
+              <div>
+                <div>Source Library</div>
+                <div className="text-[11px] text-muted-foreground">Approved source patterns</div>
+              </div>
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => select("conflicts")}>
+              <GitCompareArrows className="h-4 w-4" />
+              <div className="flex min-w-0 flex-1 items-center">
+                <div>
+                  <div>Conflict Review</div>
+                  <div className="text-[11px] text-muted-foreground">Source disagreements</div>
+                </div>
+                <ConflictsBadge />
+              </div>
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
 
       <TabsContent value="ask" className="mt-4">
         <AskAI embedded />
@@ -1581,7 +1844,7 @@ function DeskTabs() {
         </div>
       </TabsContent>
       <TabsContent value="sources" className="mt-4">
-        <SourceRegistryPanel />
+        <SourceLibraryPanel />
       </TabsContent>
       <TabsContent value="approved" className="mt-4">
         <RecentlyApproved embedded />

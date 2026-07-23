@@ -2084,6 +2084,15 @@ export function normaliseDraftCurrency(v: unknown): string {
   return code ? code[0] : "KES";
 }
 
+/** Read a value from an explicit, source-grounded `Label: value` line. */
+function extractLabelledSourceValue(sourceText: string | undefined, label: string): string | null {
+  if (!sourceText) return null;
+  const escapedLabel = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = sourceText.match(new RegExp(`^\\s*(?:[-*]\\s*)?${escapedLabel}\\s*:\\s*(.+?)\\s*$`, "im"));
+  const value = match?.[1]?.trim();
+  return value && value !== MISSING_FROM_SOURCE ? value : null;
+}
+
 /**
  * Convert a raw extracted instrument object into a ResearchFindingDraft.
  * Flattens all extracted fields into the `extractedFields` string bag.
@@ -2266,6 +2275,17 @@ export function structuredInstrumentToDraft(
     ? (normalizeDateToYmd(marketAssetSourceAsOfRaw) ?? marketAssetSourceAsOfRaw)
     : null;
 
+  // Stage 10b-3d — recover an explicit SACCO "Product type: ..." source line
+  // only when structured extraction missed it. Never overwrite a model value.
+  if (
+    targetCatalogue === "market_asset" &&
+    String(raw.assetType ?? figures.assetType ?? "").trim().toLowerCase() === "sacco" &&
+    (!figures.productType || figures.productType === MISSING_FROM_SOURCE)
+  ) {
+    const sourceProductType = extractLabelledSourceValue(sourceText, "Product type");
+    if (sourceProductType) figures.productType = sourceProductType;
+  }
+
   // Round 103 — FIELD NORMALIZATION. Map extraction-schema names to catalogue
   // canonical names so the approval gate recognizes them (e.g. effectiveAnnualRate → ear).
   const normalised = normaliseExtractionFields(figures, targetCatalogue);
@@ -2310,12 +2330,32 @@ export function structuredInstrumentToDraft(
   const confidence = clampConfidence(raw.confidence);
   const rawExcerpt = typeof raw.rawExcerpt === "string" ? raw.rawExcerpt.trim() || null : null;
 
-  // Compute missing fields: those explicitly set to MISSING_FROM_SOURCE in the figures bag.
-  // Note: the approval gate (missingFieldsForFinding) may report ADDITIONAL missing fields
-  // beyond these; this list is for the finding card's immediate display.
-  const missingFields = Object.entries(figures)
-    .filter(([, v]) => v === MISSING_FROM_SOURCE)
-    .map(([k]) => k);
+  const draftIssuer =
+    typeof raw.fundManager === "string" && raw.fundManager.trim() !== "" && raw.fundManager !== MISSING_FROM_SOURCE
+      ? raw.fundManager
+      : typeof raw.bankName === "string" && raw.bankName.trim() !== "" && raw.bankName !== MISSING_FROM_SOURCE
+        ? raw.bankName
+        : targetCatalogue === "market_asset"
+          ? name
+          : null;
+  // Stage 10b-3d — the strict market-asset schema carries every subtype's
+  // fields, so raw sentinel scanning falsely reported other-subtype fields as
+  // missing. Use the same subtype-aware gate rules for figure gaps. Placeholder
+  // provenance is intentional: real provenance is stamped later, while this
+  // immediate list describes extracted figures only.
+  const missingFields =
+    targetCatalogue === "market_asset"
+      ? missingFieldsForFinding(targetCatalogue, figures, {
+          name,
+          issuer: draftIssuer,
+          currency: normaliseDraftCurrency(raw.currency),
+          source: "structured extraction",
+          asOf: 1,
+          assetClass,
+        })
+      : Object.entries(figures)
+          .filter(([, v]) => v === MISSING_FROM_SOURCE)
+          .map(([k]) => k);
 
   // Build the full structured profile for the _extendedFields key.
   // This carries the rich profile through the draft/approve pipeline into the
@@ -2409,14 +2449,7 @@ export function structuredInstrumentToDraft(
     // here, not used verbatim: the sentinel would otherwise become the
     // finding's displayed issuer AND silently defeat the market-asset
     // name fallback below.
-    issuer:
-      typeof raw.fundManager === "string" && raw.fundManager.trim() !== "" && raw.fundManager !== MISSING_FROM_SOURCE
-        ? raw.fundManager
-        : typeof raw.bankName === "string" && raw.bankName.trim() !== "" && raw.bankName !== MISSING_FROM_SOURCE
-          ? raw.bankName
-          : targetCatalogue === "market_asset"
-            ? name
-            : null,
+    issuer: draftIssuer,
     assetClass,
     targetCatalogue,
     // Stage 10b-3b — the market-asset extraction schema is the only structured

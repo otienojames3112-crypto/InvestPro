@@ -111,9 +111,10 @@ describe("Stage 10b-3 · B — MarketAssetsReference.tsx: SubtypeRow compact fie
     expect(contract?.fields.find((f) => f.key === "distributionYield")?.label).toBe("Distribution yield");
   });
 
-  it("4. REIT NAV is surfaced in its own dedicated column when available, formatted via the existing fmtPrice helper", () => {
+  it("4. REIT NAV is surfaced verbatim in its own dedicated column when available", () => {
     expect(reitBlock).toContain('const nav = readField("nav");');
-    expect(reitBlock).toContain('{nav ? fmtPrice(nav, r.currency) : "—"}');
+    expect(reitBlock).toContain('{nav ?? "—"}');
+    expect(reitBlock).not.toContain("fmtPrice(nav, r.currency)");
   });
 
   it("5. REIT price/source display uses the same shared helpers as every other subtype", () => {

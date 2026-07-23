@@ -692,7 +692,7 @@ function SubtypeRow({
         <TableCell className="text-right tabular-nums text-sm">{fmtPrice(r.lastPrice, r.currency)}</TableCell>
         <TableCell className="text-right tabular-nums text-sm">{fmtPct(r.yieldPct)}</TableCell>
         <TableCell className="text-sm max-w-[160px] truncate">{recentDistribution ?? "—"}</TableCell>
-        <TableCell className="text-right tabular-nums text-sm">{nav ? fmtPrice(nav, r.currency) : "—"}</TableCell>
+        <TableCell className="text-right tabular-nums text-sm">{nav ?? "—"}</TableCell>
         <TableCell className="text-sm whitespace-nowrap">{occupancyRate ?? "—"}</TableCell>
         <TableCell className="text-sm whitespace-nowrap">{minInvestment ?? "—"}</TableCell>
         <TableCell className="text-sm whitespace-nowrap">{liquidity ? liquidity.replace(/_/g, " ") : "—"}</TableCell>

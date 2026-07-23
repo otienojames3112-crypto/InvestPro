@@ -686,6 +686,9 @@ describe("Catalogue field contract · foundation-only guardrails (no behavior ch
       // Stage 10b-3c — SACCO/REIT/Offshore promotion parity and exact live
       // SACCO regression, including contract-to-extendedFields proof.
       join(root, "server", "marketAssetSubtypePromotionParity3.test.ts"),
+      // Stage 10b-3d — live SACCO product-type recovery, REIT NAV rendering,
+      // and subtype-aware Market Asset missing-field/preview cleanup.
+      join(root, "server", "marketAssetSubtypeCleanup3d.test.ts"),
     ]);
     const unexpectedOffenders = offenders.filter((f) => !allowed.has(f));
     expect(unexpectedOffenders).toEqual([]);

@@ -907,6 +907,9 @@ export function FindingCard({
         (row) => row.key !== "sourceLink" && row.key !== "sourceAsOf",
       )
     : null;
+  const hasMarketAssetContractBlock = Boolean(
+    equityDisplayRows || reitDisplayRows || offshoreFundDisplayRows || saccoDisplayRows,
+  );
   // Stage 5 — deterministic, template-based follow-up questions for each missing
   // gate field (pure, no LLM). Never implies a value was found — only asks. Stage
   // 7c sharpens the wording when Stage 7b's extraction already found a candidate
@@ -1301,9 +1304,11 @@ export function FindingCard({
           reitDisplayRows ||
           offshoreFundDisplayRows ||
           saccoDisplayRows) && (
+          !hasMarketAssetContractBlock &&
           <p className="text-[11px] text-muted-foreground -mb-1">Additional extracted details:</p>
         )}
         {(() => {
+          if (hasMarketAssetContractBlock) return null;
           const extRaw = finding.extractedFields?._extendedFields;
           if (extRaw) {
             return <InstrumentProfilePreview extendedFieldsRaw={extRaw} missingFields={finding.missingFields} />;

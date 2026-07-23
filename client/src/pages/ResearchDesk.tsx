@@ -23,7 +23,6 @@ import {
   Inbox,
   ClipboardCheck,
   GitCompareArrows,
-  Sparkles,
   CheckCircle2,
   XCircle,
   RefreshCw,
@@ -261,54 +260,46 @@ function DigestHeader() {
     refetchOnWindowFocus: false,
   });
   if (isLoading) {
-    return <Skeleton className="h-24 w-full rounded-xl" />;
+    return <Skeleton className="h-[72px] w-full rounded-xl" />;
   }
   const d = data;
   const tiles = [
     {
-      label: "Changes awaiting review",
+      label: "Awaiting review",
       value: d?.pendingUpdates ?? 0,
       icon: Inbox,
-      tone: (d?.pendingUpdates ?? 0) > 0 ? "text-amber-600" : "text-muted-foreground",
+      tone: (d?.pendingUpdates ?? 0) > 0 ? "text-primary" : "text-muted-foreground",
     },
     {
-      label: "Sources due for a refresh",
+      label: "Sources due refresh",
       value: d?.sourcesDue ?? 0,
       icon: Clock,
-      tone: (d?.sourcesDue ?? 0) > 0 ? "text-amber-600" : "text-muted-foreground",
+      tone: (d?.sourcesDue ?? 0) > 0 ? "text-primary" : "text-muted-foreground",
     },
     {
-      label: "Open source conflicts",
+      label: "Open conflicts",
       value: d?.openConflicts ?? 0,
       icon: GitCompareArrows,
-      tone: (d?.openConflicts ?? 0) > 0 ? "text-rose-600" : "text-muted-foreground",
+      tone: (d?.openConflicts ?? 0) > 0 ? "text-primary" : "text-muted-foreground",
     },
   ];
   return (
-    <Card className="border-primary/15 bg-gradient-to-br from-primary/[0.04] to-transparent">
-      <CardContent className="py-5">
-        <div className="flex items-center justify-between gap-4 flex-wrap">
-          <div>
-            <h2 className="text-sm font-semibold flex items-center gap-2">
-              <ListChecks className="w-4 h-4 text-primary" /> Research Desk digest
-            </h2>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              A daily snapshot of what needs your attention. Nothing changes the live catalogues until you approve it.
-            </p>
+    <div className="grid grid-cols-1 gap-2 sm:grid-cols-3" aria-label="Research Desk status">
+      {tiles.map((t) => (
+        <div
+          key={t.label}
+          className="flex min-h-[68px] items-center gap-3 rounded-xl border border-border/70 bg-card/60 px-4 py-3 shadow-sm"
+        >
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-muted/70">
+            <t.icon className={`h-4 w-4 ${t.tone}`} />
           </div>
-          <div className="grid grid-cols-3 gap-6">
-            {tiles.map((t) => (
-              <div key={t.label} className="text-center">
-                <div className={`text-2xl font-bold tabular-nums ${t.tone}`}>{t.value}</div>
-                <div className="text-[11px] text-muted-foreground leading-tight mt-1 max-w-[7.5rem] mx-auto flex items-center justify-center gap-1">
-                  <t.icon className="w-3 h-3 shrink-0" /> {t.label}
-                </div>
-              </div>
-            ))}
+          <div className="min-w-0">
+            <div className="text-xl font-semibold leading-none tabular-nums text-foreground">{t.value}</div>
+            <div className="mt-1 text-xs text-muted-foreground">{t.label}</div>
           </div>
         </div>
-      </CardContent>
-    </Card>
+      ))}
+    </div>
   );
 }
 
@@ -811,14 +802,24 @@ function PendingQueue() {
   const updates = data?.updates ?? [];
   if (updates.length === 0) {
     return (
-      <Empty className="py-14">
-        <div className="flex flex-col items-center gap-2 text-center">
-          <CheckCircle2 className="w-10 h-10 text-emerald-500/70" />
-          <p className="font-medium">The queue is clear.</p>
+      <Empty className="py-12">
+        <div className="flex flex-col items-center gap-2.5 text-center">
+          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-emerald-500/10">
+            <CheckCircle2 className="h-5 w-5 text-emerald-600" />
+          </div>
+          <p className="font-medium">No drafts awaiting review.</p>
           <p className="text-sm text-muted-foreground max-w-sm">
-            No proposed changes are waiting. When an AI import, an automated source, or a manual entry proposes a
-            figure, it lands here for you to approve before it touches any live catalogue.
+            Ask AI to extract facts from a source, then draft findings into the queue.
           </p>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="mt-1 bg-background"
+            onClick={() => navigate("/research?tab=research-desk&desk=ask")}
+          >
+            Start new enquiry
+          </Button>
         </div>
       </Empty>
     );
@@ -1524,38 +1525,52 @@ function DeskTabs() {
     setParams(next, { replace: false });
   };
   return (
-    <Tabs value={active} onValueChange={select} className="w-full">
-      <TabsList className="flex-wrap h-auto">
-        <TabsTrigger value="ask">
-          <Sparkles className="w-3.5 h-3.5 mr-1.5" /> Ask AI
+    <Tabs value={active} onValueChange={select} className="w-full gap-0">
+      <TabsList className="h-auto w-full justify-start gap-1 overflow-x-auto rounded-none border-b border-border/70 bg-transparent p-0">
+        <TabsTrigger
+          value="ask"
+          className="flex-none rounded-none border-x-0 border-t-0 border-b-2 border-transparent bg-transparent px-3 py-2.5 shadow-none data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none"
+        >
+          Ask AI
         </TabsTrigger>
-        <TabsTrigger value="queue">
-          <Inbox className="w-3.5 h-3.5 mr-1.5" /> Review queue
+        <TabsTrigger
+          value="queue"
+          className="flex-none rounded-none border-x-0 border-t-0 border-b-2 border-transparent bg-transparent px-3 py-2.5 shadow-none data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none"
+        >
+          Review queue
           <PendingBadge />
         </TabsTrigger>
-        <TabsTrigger value="conflicts">
-          <GitCompareArrows className="w-3.5 h-3.5 mr-1.5" /> Source conflicts
+        <TabsTrigger
+          value="conflicts"
+          className="flex-none rounded-none border-x-0 border-t-0 border-b-2 border-transparent bg-transparent px-3 py-2.5 shadow-none data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none"
+        >
+          Source conflicts
           <ConflictsBadge />
         </TabsTrigger>
-        <TabsTrigger value="sources">
-          <Clock className="w-3.5 h-3.5 mr-1.5" /> Source registry
+        <TabsTrigger
+          value="sources"
+          className="flex-none rounded-none border-x-0 border-t-0 border-b-2 border-transparent bg-transparent px-3 py-2.5 shadow-none data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none"
+        >
+          Source registry
           <InfoHint side="bottom" iconClassName="ml-1.5">
-            The registry of data sources this desk draws from, each with a review cadence so the digest can flag which
-            are due for a refresh.
+            Registered sources and their review cadence.
           </InfoHint>
         </TabsTrigger>
-        <TabsTrigger value="approved">
-          <ShieldCheck className="w-3.5 h-3.5 mr-1.5" /> Recently approved
+        <TabsTrigger
+          value="approved"
+          className="flex-none rounded-none border-x-0 border-t-0 border-b-2 border-transparent bg-transparent px-3 py-2.5 shadow-none data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none"
+        >
+          Recently approved
         </TabsTrigger>
       </TabsList>
 
-      <TabsContent value="ask" className="mt-5">
+      <TabsContent value="ask" className="mt-4">
         <AskAI embedded />
       </TabsContent>
-      <TabsContent value="queue" className="mt-5">
+      <TabsContent value="queue" className="mt-4">
         <PendingQueue />
       </TabsContent>
-      <TabsContent value="conflicts" className="mt-5">
+      <TabsContent value="conflicts" className="mt-4">
         {/* AI figure review + source-conflict resolution live together as a compact
             "what disagrees" surface. Document/image import now lives inside Ask AI. */}
         <div className="space-y-8">
@@ -1565,10 +1580,10 @@ function DeskTabs() {
           </div>
         </div>
       </TabsContent>
-      <TabsContent value="sources" className="mt-5">
+      <TabsContent value="sources" className="mt-4">
         <SourceRegistryPanel />
       </TabsContent>
-      <TabsContent value="approved" className="mt-5">
+      <TabsContent value="approved" className="mt-4">
         <RecentlyApproved embedded />
       </TabsContent>
     </Tabs>
@@ -1607,16 +1622,23 @@ export default function ResearchDesk({ embedded = false }: { embedded?: boolean 
   }
 
   return (
-    <div className="container py-8 max-w-5xl space-y-6">
+    <div className="container max-w-5xl space-y-5 py-6 md:py-8">
       <div>
-        <h1 className="text-2xl font-semibold flex items-center gap-2">
-          <Inbox className="w-6 h-6 text-primary" /> Research Desk
-        </h1>
-        <p className="text-muted-foreground mt-1 text-sm leading-relaxed">
-          The single governed workbench between raw intake and the live reference catalogues. Import data, review what
-          an AI or a source proposed, resolve disagreements, and approve changes — every promotion is an explicit,
-          auditable decision that you make.
+        <h1 className="text-2xl font-semibold tracking-tight">Research Desk</h1>
+        <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
+          Research market facts, review AI drafts, and approve only what should enter your reference catalogues.
         </p>
+      </div>
+
+      <div
+        role="note"
+        className="flex items-start gap-2.5 rounded-lg border border-primary/15 bg-muted/30 px-3 py-2 text-xs text-muted-foreground"
+      >
+        <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" />
+        <span>
+          AI drafts are unverified until approved. Approval updates reference catalogues only; holdings change only
+          when you record an actual holding.
+        </span>
       </div>
 
       <DigestHeader />

@@ -1550,7 +1550,6 @@ export type AskSource =
  * composer so every turn can carry its OWN source.
  */
 export function useSourceAttachment(opts?: { followUp?: boolean; initialUrl?: string }) {
-  const followUp = opts?.followUp ?? false;
   const upload = trpc.opportunities.aiUploadDocument.useMutation();
   const [show, setShow] = useState(!!opts?.initialUrl);
   const [mode, setMode] = useState<SourceMode>("url");
@@ -1618,31 +1617,31 @@ export function useSourceAttachment(opts?: { followUp?: boolean; initialUrl?: st
   const node = (
     <Collapsible open={show} onOpenChange={setShow}>
       <CollapsibleTrigger asChild>
-        <Button type="button" variant="ghost" size="sm" className="text-xs text-muted-foreground -ml-2">
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="text-xs text-muted-foreground -ml-2 focus-visible:ring-2 focus-visible:ring-ring"
+        >
           <Paperclip className="w-3.5 h-3.5 mr-1.5" />
-          {show
-            ? "Hide source"
-            : followUp
-              ? "Add another source for this follow-up (optional)"
-              : "Add a source for this question (optional)"}
+          {show ? "Hide source" : "Add source"}
           <ChevronDown className={`w-3.5 h-3.5 ml-1 transition-transform ${show ? "rotate-180" : ""}`} />
         </Button>
       </CollapsibleTrigger>
-      <CollapsibleContent className="space-y-3 rounded-lg border border-dashed p-3 mt-2">
+      <CollapsibleContent className="mt-2 space-y-3 rounded-lg border border-border/70 bg-muted/20 p-3">
         <p className="text-[11px] text-muted-foreground leading-relaxed">
-          Attach one source and the assistant grounds its answer in it. A URL is fetched and stripped to text; a PDF or
-          screenshot is read directly. Nothing is written to a catalogue — findings land in the review queue for you to
-          approve.
+          Ground this enquiry in a URL, pasted text, PDF, or image.
         </p>
-        <div className="flex flex-wrap gap-1 rounded-lg border border-border p-1 w-fit">
+        <div className="flex w-fit max-w-full flex-wrap gap-1 rounded-lg bg-muted/70 p-1">
           {MODE_TABS.map((m) => (
             <button
               key={m.value}
               type="button"
               onClick={() => setMode(m.value)}
+              aria-pressed={mode === m.value}
               className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-md transition-colors ${
                 mode === m.value ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
-              }`}
+              } focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring`}
             >
               {m.icon}
               {m.label}
@@ -2304,29 +2303,27 @@ function OpeningPanel({ onStarted }: { onStarted: (threadId: number) => void }) 
   }
 
   return (
-    <Card className="border-primary/15 bg-gradient-to-br from-primary/[0.04] to-transparent">
+    <Card className="border-border/70 shadow-sm">
       <CardHeader className="pb-3">
-        <CardTitle className="text-base flex items-center gap-2">
-          <Sparkles className="w-4 h-4 text-primary" /> Ask AI a question — then keep the conversation going
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Sparkles className="h-4 w-4 text-primary" /> Ask AI
           <InfoHint side="bottom" iconClassName="ml-0.5">
-            Ask in plain English. Your question opens an enquiry you can follow up on — each follow-up keeps the earlier
-            context, and each turn can attach its own source (URL, pasted text, PDF, or screenshot). You get a briefing
-            plus structured findings you can triage into the review queue. It can sort and compare the facts it finds,
-            but it never writes to a catalogue, never tells you what to buy or sell, and never recommends one instrument
-            over another — you make every decision.
+            Each enquiry can produce structured findings for manager review. The assistant can sort and compare facts,
+            but it never publishes directly and never recommends what to buy or sell.
           </InfoHint>
         </CardTitle>
         <CardDescription>
-          e.g. &ldquo;What are the current 91/182/364-day T-bill yields, and the top KES money-market fund effective
-          rates?&rdquo;
+          Search, extract, or explain reference data before sending it to review.
         </CardDescription>
       </CardHeader>
-      <CardContent className="space-y-3">
+      <CardContent className="space-y-4">
         <Textarea
-          placeholder="Ask about yields, rates, prices, tenors…"
+          aria-label="Research question"
+          placeholder="Ask about yields, rates, prices, tenors, or paste a source below..."
           value={question}
           onChange={(e) => setQuestion(e.target.value)}
-          rows={3}
+          rows={4}
+          className="min-h-28 resize-y"
           onKeyDown={(e) => {
             if ((e.metaKey || e.ctrlKey) && e.key === "Enter") void submit();
           }}
@@ -2334,7 +2331,7 @@ function OpeningPanel({ onStarted }: { onStarted: (threadId: number) => void }) 
         {poller.running && <TaskStageProgress stage={poller.stage} />}
         {sourceStatus && <SourceStatusPanel status={sourceStatus} />}
         {src.provided && (
-          <label className="flex items-start gap-2 rounded-md border border-border bg-background px-3 py-2 text-xs text-muted-foreground cursor-pointer">
+          <label className="flex items-start gap-2 rounded-md bg-muted/30 px-2.5 py-2 text-xs text-muted-foreground cursor-pointer">
             <input
               type="checkbox"
               className="mt-0.5 accent-primary"
@@ -2360,7 +2357,7 @@ function OpeningPanel({ onStarted }: { onStarted: (threadId: number) => void }) 
         {!src.provided && (
           <label
             className={cn(
-              "flex items-start gap-2 rounded-md border border-border bg-background px-3 py-2 text-xs cursor-pointer",
+              "flex items-start gap-2 rounded-md bg-muted/30 px-2.5 py-2 text-xs cursor-pointer",
               scope === "cbk" || scope === "mmf" || scope === "bank" || marketAssetSearchReady
                 ? "text-muted-foreground"
                 : "text-muted-foreground/60 cursor-not-allowed",
@@ -2373,7 +2370,7 @@ function OpeningPanel({ onStarted }: { onStarted: (threadId: number) => void }) 
               disabled={scope !== "cbk" && scope !== "mmf" && scope !== "bank" && !marketAssetSearchReady}
               onChange={(e) => setAllowSearch(e.target.checked)}
             />
-            <span>
+            <span className="leading-relaxed">
               <span
                 className={cn(
                   "font-medium",
@@ -2395,24 +2392,26 @@ function OpeningPanel({ onStarted }: { onStarted: (threadId: number) => void }) 
                             ? "Search for a cited SACCO source if I don’t attach a source."
                             : "Search for a cited NSE/REIT source if I don’t attach a source."
                       : "Search authoritative CBK sources if I don’t attach a source."}
-              </span>{" "}
-              {scope === "cbk"
-                ? "The AI looks up a current, cited CBK source — never from its own memory — and grounds the answer in it, exactly as if you’d pasted the link yourself."
-                : scope === "mmf"
-                  ? "The AI searches for a current, cited fund-manager factsheet (or CMA data as a cross-check) — never from its own memory. MMF sources vary by fund manager, so please verify the cited source before relying on it."
-                  : scope === "bank"
-                    ? "The AI searches for a current, cited bank rates/product page — never from its own memory. Bank sources vary by bank, so please verify the cited source before relying on it."
-                    : marketAssetSearchReady
-                      ? marketAssetSubtype === "equity"
-                        ? "The AI searches for a current, cited NSE listing or equity source — never from its own memory. Please verify the cited source before relying on it."
-                        : marketAssetSubtype === "offshore_fund"
-                          ? "The AI searches for a current, cited fund-manager NAV/factsheet source — never from its own memory. Offshore fund sources vary by fund manager, so please verify the cited source before relying on it."
-                          : marketAssetSubtype === "sacco"
-                            ? "The AI searches for a current, cited SACCO source (or SASRA as a regulatory-status cross-check only — never a source of dividend or rebate figures) — never from its own memory. SACCO sources vary widely and are less consistently published than other market assets, so please verify the cited source carefully before relying on it."
-                            : "The AI searches for a current, cited NSE listing or REIT source — never from its own memory. Please verify the cited source before relying on it."
-                      : scope === "market_asset"
-                        ? "Select “REIT,” “Equity,” “Offshore fund,” or “SACCO” as the Asset type above to enable search for this Focus."
-                        : "Only available when Focus (below) is set to “CBK securities,” “MMF market,” “Bank products,” or “Market assets” with Asset type = REIT, Equity, Offshore fund, or SACCO."}
+              </span>
+              <InfoHint side="bottom" iconClassName="ml-1 align-middle">
+                {scope === "cbk"
+                  ? "The AI looks up a current, cited CBK source — never from its own memory — and grounds the answer in it, exactly as if you’d pasted the link yourself."
+                  : scope === "mmf"
+                    ? "The AI searches for a current, cited fund-manager factsheet (or CMA data as a cross-check) — never from its own memory. MMF sources vary by fund manager, so please verify the cited source before relying on it."
+                    : scope === "bank"
+                      ? "The AI searches for a current, cited bank rates/product page — never from its own memory. Bank sources vary by bank, so please verify the cited source before relying on it."
+                      : marketAssetSearchReady
+                        ? marketAssetSubtype === "equity"
+                          ? "The AI searches for a current, cited NSE listing or equity source — never from its own memory. Please verify the cited source before relying on it."
+                          : marketAssetSubtype === "offshore_fund"
+                            ? "The AI searches for a current, cited fund-manager NAV/factsheet source — never from its own memory. Offshore fund sources vary by fund manager, so please verify the cited source before relying on it."
+                            : marketAssetSubtype === "sacco"
+                              ? "The AI searches for a current, cited SACCO source (or SASRA as a regulatory-status cross-check only — never a source of dividend or rebate figures) — never from its own memory. SACCO sources vary widely and are less consistently published than other market assets, so please verify the cited source carefully before relying on it."
+                              : "The AI searches for a current, cited NSE listing or REIT source — never from its own memory. Please verify the cited source before relying on it."
+                        : scope === "market_asset"
+                          ? "Select “REIT,” “Equity,” “Offshore fund,” or “SACCO” as the Asset type above to enable search for this Focus."
+                          : "Only available when Focus (below) is set to “CBK securities,” “MMF market,” “Bank products,” or “Market assets” with Asset type = REIT, Equity, Offshore fund, or SACCO."}
+              </InfoHint>
             </span>
           </label>
         )}
@@ -2492,8 +2491,9 @@ function OpeningPanel({ onStarted }: { onStarted: (threadId: number) => void }) 
                   key={m}
                   type="button"
                   onClick={() => setIntakeMode(m)}
+                  aria-pressed={intakeMode === m}
                   className={cn(
-                    "rounded-full border px-3 py-1.5 text-xs transition-colors",
+                    "rounded-full border px-3 py-1.5 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                     intakeMode === m
                       ? "border-primary bg-primary/10 text-foreground font-medium"
                       : "border-border bg-background text-muted-foreground hover:text-foreground",
@@ -2505,7 +2505,7 @@ function OpeningPanel({ onStarted }: { onStarted: (threadId: number) => void }) 
             </div>
           </div>
           <div className="flex-1" />
-          <Button onClick={() => void submit()} disabled={!canAsk}>
+          <Button onClick={() => void submit()} disabled={!canAsk} className="min-w-24">
             {busy ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <Send className="w-4 h-4 mr-1.5" />}
             {src.uploading ? "Uploading\u2026" : poller.running ? (poller.stage ? STAGE_LABELS[poller.stage] : "Asking\u2026") : "Ask"}
           </Button>
@@ -2597,13 +2597,12 @@ function ThreadHistory({ onOpen }: { onOpen: (threadId: number) => void }) {
 /* ── Page ──────────────────────────────────────────────────────────────────── */
 
 export default function AskAI({ embedded = false }: { embedded?: boolean } = {}) {
-  void embedded;
   const [activeThreadId, setActiveThreadId] = useState<number | null>(null);
   const [showHistory, setShowHistory] = useState(false);
 
   return (
     <div className="space-y-6">
-      <AiPrincipleBanner />
+      {!embedded && <AiPrincipleBanner />}
 
       {activeThreadId != null ? (
         <Conversation threadId={activeThreadId} onExit={() => setActiveThreadId(null)} />

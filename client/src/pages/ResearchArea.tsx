@@ -103,14 +103,14 @@ const TABS: AreaTab[] = [
     id: "research-desk",
     label: "Research Desk",
     icon: Inbox,
-    hint: "Research reference data, review drafts, and manage approved catalogue updates.",
+    hint: "Create and review proposed catalogue updates. AI findings remain drafts until approved.",
     render: () => <ResearchDesk embedded />,
   },
   {
     id: "reference-catalogues",
     label: "Reference Catalogues",
     icon: Library,
-    hint: "Browse the approved reference universe across every approved catalogue row.",
+    hint: "Browse approved reference facts. Approved reference data does not change holdings or portfolio calculations by itself.",
     render: () => <ReferenceCatalogues />,
   },
 ];
@@ -119,7 +119,7 @@ export default function ResearchArea() {
   return (
     <TabbedArea
       title="Research"
-      subtitle="Research and govern the reference data behind your investment records."
+      subtitle="Research approved market reference data and manage proposed catalogue updates."
       tabs={TABS}
       defaultTab="research-desk"
     />

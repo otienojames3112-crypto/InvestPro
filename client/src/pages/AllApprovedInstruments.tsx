@@ -40,11 +40,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { InfoHint } from "@/components/InfoHint";
 import { CatalogueRowControls, type CatalogueKind } from "@/components/CatalogueRowControls";
 import {
-  Search,
-  Info,
-  ShieldAlert,
   Clock,
-  FlaskConical,
   ExternalLink,
   ShieldCheck,
   Wrench,
@@ -127,6 +123,15 @@ function fmtFigure(r: ApprovedRow): string {
     : `${r.headlineFigure.toFixed(2)}%`;
 }
 
+function fmtAsOf(value: string | number | Date | null): string {
+  if (!value) return "As-of date not recorded";
+  return `As of ${new Date(value).toLocaleDateString("en-KE", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  })}`;
+}
+
 export default function AllApprovedInstruments({ embedded = false }: { embedded?: boolean } = {}) {
   const { user } = useAuth();
   const isManager = user?.role === "admin";
@@ -156,8 +161,6 @@ export default function AllApprovedInstruments({ embedded = false }: { embedded?
   const [search, setSearch] = useState("");
   const [catFilter, setCatFilter] = useState<string>("all");
   const [currencyFilter, setCurrencyFilter] = useState<string>("all");
-  const [minFigure, setMinFigure] = useState<string>("");
-  const [maxFigure, setMaxFigure] = useState<string>("");
 
   const currencies = useMemo(
     () => Array.from(new Set(rows.map((r) => r.currency).filter(Boolean) as string[])).sort(),
@@ -165,16 +168,11 @@ export default function AllApprovedInstruments({ embedded = false }: { embedded?
   );
 
   const filtered = useMemo(() => {
-    const minY = minFigure.trim() === "" ? null : Number(minFigure);
-    const maxY = maxFigure.trim() === "" ? null : Number(maxFigure);
     const q = search.trim().toLowerCase();
     let out = rows.filter((r) => {
       if (catFilter !== "all" && r.catalogue !== catFilter) return false;
       if (currencyFilter !== "all" && (r.currency ?? "") !== currencyFilter) return false;
       if (q && !`${r.name} ${r.issuer ?? ""} ${r.ref}`.toLowerCase().includes(q)) return false;
-      const y = r.headlineFigure;
-      if (minY !== null && !isNaN(minY) && (y === null || y < minY)) return false;
-      if (maxY !== null && !isNaN(maxY) && (y === null || y > maxY)) return false;
       return true;
     });
 
@@ -183,64 +181,42 @@ export default function AllApprovedInstruments({ embedded = false }: { embedded?
       return c !== 0 ? c : a.name.localeCompare(b.name);
     });
     return out;
-  }, [rows, search, catFilter, currencyFilter, minFigure, maxFigure]);
+  }, [rows, search, catFilter, currencyFilter]);
 
   const resetFilters = () => {
     setSearch("");
     setCatFilter("all");
     setCurrencyFilter("all");
-    setMinFigure("");
-    setMaxFigure("");
   };
 
   return (
     <AppShell embedded={embedded}>
       <div className="p-6 lg:p-8 space-y-6 max-w-6xl">
-        {/* Header */}
-        <div className="flex items-start justify-between gap-4 flex-wrap">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight" style={{ fontFamily: "'Playfair Display', serif" }}>
-              All Approved Instruments
-            </h1>
-            <p className="text-muted-foreground text-sm mt-1 max-w-2xl">
-              All instruments shown here have been approved into one of the reference catalogues. Reference data does
-              not affect portfolio math until a holding is recorded.
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            <Badge variant="outline" className="text-xs px-2.5 py-1 gap-1.5">
-              <Info className="w-3 h-3" /> Information only
-            </Badge>
-          </div>
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight" style={{ fontFamily: "'Playfair Display', serif" }}>
+            All Approved Instruments
+          </h1>
+          <p className="text-muted-foreground text-sm mt-1 max-w-3xl">
+            Master index of every approved catalogue row, showing its family, headline fact, source, as-of date, and
+            status. Open the category record for full details.
+          </p>
         </div>
 
-        {/* Persistent disclaimer — always visible, not dismissible */}
-        <Card className="border-amber-500/30 bg-amber-500/5">
-          <CardContent className="py-3 px-4 flex items-start gap-2">
-            <ShieldAlert className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
-            <p className="text-xs text-amber-800 dark:text-amber-300 leading-relaxed">
-              <strong>For information only — this is not advice or a recommendation.</strong>{" "}
-              Figures are gathered from public sources, may be delayed or inaccurate, and can change without notice.
-              Verify every number with the issuer or a licensed adviser before acting. This tool does not sell, broker,
-              or execute any investment.
-            </p>
-          </CardContent>
-        </Card>
+        <div
+          role="note"
+          className="flex items-start gap-2 rounded-lg border border-primary/15 bg-muted/30 px-3 py-2 text-xs text-muted-foreground"
+        >
+          <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" />
+          <span>
+            AI findings remain drafts until approved. This index contains approved reference data only; holdings are
+            recorded separately, and reference data does not change holdings or portfolio calculations by itself.
+          </span>
+        </div>
 
-        {/* Filters — the user narrows the approved instruments */}
+        {/* Compact filter toolbar */}
         <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base flex items-center gap-2">
-              <Search className="w-4 h-4" /> Filter the approved instruments
-            </CardTitle>
-            <CardDescription className="text-xs">
-              The table starts in a neutral order by catalogue, then name. Only approved catalogue rows appear here —
-              unverified AI
-              findings never do. Archived rows are hidden unless you turn on “Include archived rows”.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <CardContent className="p-4 space-y-3">
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-[minmax(220px,1fr)_200px_160px]">
               <div className="space-y-1">
                 <Label className="text-xs">Search</Label>
                 <Input
@@ -275,16 +251,6 @@ export default function AllApprovedInstruments({ embedded = false }: { embedded?
                   </SelectContent>
                 </Select>
               </div>
-              <div className="space-y-1">
-                <Label className="text-xs">Min headline figure</Label>
-                <Input type="number" inputMode="decimal" value={minFigure}
-                  onChange={(e) => setMinFigure(e.target.value)} className="h-9" placeholder="e.g. 8" />
-              </div>
-              <div className="space-y-1">
-                <Label className="text-xs">Max headline figure</Label>
-                <Input type="number" inputMode="decimal" value={maxFigure}
-                  onChange={(e) => setMaxFigure(e.target.value)} className="h-9" placeholder="e.g. 15" />
-              </div>
             </div>
             <div className="flex items-center justify-between gap-3 flex-wrap">
               <p className="text-xs text-muted-foreground">
@@ -302,9 +268,8 @@ export default function AllApprovedInstruments({ embedded = false }: { embedded?
                     <Label htmlFor="include-archived" className="text-xs font-normal cursor-pointer flex items-center gap-1">
                       Include archived rows
                       <InfoHint>
-                        Manager-only. Off by default. When on, archived reference rows are shown with an
-                        “Archived” badge so you can find and reactivate them from here. Archived rows remain audit-only
-                        until they are reactivated and are never hard-deleted.
+                        Manager-only. Off by default. Archived catalogue rows remain available for audit and
+                        reactivation.
                       </InfoHint>
                     </Label>
                   </div>
@@ -323,10 +288,15 @@ export default function AllApprovedInstruments({ embedded = false }: { embedded?
             {isLoading ? (
               <div className="p-8 text-center text-sm text-muted-foreground">Loading approved instruments…</div>
             ) : filtered.length === 0 ? (
-              <div className="p-8 text-center text-sm text-muted-foreground">
-                {rows.length === 0
-                  ? "No instruments have been approved into the reference catalogues yet."
-                  : "No approved instruments match your filters. Try widening them."}
+              <div className="p-10 text-center">
+                <p className="text-sm font-medium text-foreground">
+                  {rows.length === 0 ? "No approved instruments yet." : "No approved instruments match these filters."}
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {rows.length === 0
+                    ? "Approved catalogue rows will appear here after findings are reviewed and approved."
+                    : "Adjust or reset the filters to view more catalogue rows."}
+                </p>
               </div>
             ) : (
               <div className="overflow-x-auto">
@@ -336,24 +306,24 @@ export default function AllApprovedInstruments({ embedded = false }: { embedded?
                       <TableHead>Instrument</TableHead>
                       <TableHead>
                         <span className="inline-flex items-center gap-1">
-                          Catalogue
+                          Catalogue family
                           <InfoHint>Which of the four reference catalogues this approved entry lives in — Money-market funds, Bank products, CBK securities, or Market assets.</InfoHint>
                         </span>
                       </TableHead>
                       <TableHead>Ccy</TableHead>
                       <TableHead className="text-right">
                         <span className="inline-flex items-center justify-end gap-1 w-full">
-                          Headline figure
+                          Headline fact
                           <InfoHint side="left">Each catalogue's own headline number: effective annual rate for funds, indicative rate for bank products, and yield or last price for securities. They are not directly comparable — this view lists, it never ranks.</InfoHint>
                         </span>
                       </TableHead>
                       <TableHead>
                         <span className="inline-flex items-center gap-1">
-                          Source &amp; freshness
+                          Source / as-of
                           <InfoHint>Where each figure came from and how recently it was updated. "May be stale" means the data is older than expected and should be re-checked before relying on it.</InfoHint>
                         </span>
                       </TableHead>
-                      <TableHead className="w-10"></TableHead>
+                      <TableHead className="w-10"><span className="sr-only">Open record</span></TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -374,12 +344,6 @@ export default function AllApprovedInstruments({ embedded = false }: { embedded?
         {/* Manager-only reference-data maintenance (governed cleanup) */}
         {isManager && <ReferenceDataMaintenance />}
 
-        {/* Mode note */}
-        <p className="text-xs text-muted-foreground flex items-center gap-1.5">
-          <FlaskConical className="w-3.5 h-3.5" />
-          This approved instruments table is the same in Live and Test. Reference data does not move real money — it
-          only becomes part of your plan when you record a holding under Holdings.
-        </p>
       </div>
     </AppShell>
   );
@@ -627,7 +591,7 @@ function ApprovedInstrumentRow({
         <div className="text-xs text-muted-foreground max-w-[220px]">{r.source ?? "Source not recorded"}</div>
         <div className="mt-0.5 flex items-center gap-1.5 flex-wrap">
           <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground">
-            <Clock className="w-2.5 h-2.5" /> {stale.label}
+            <Clock className="w-2.5 h-2.5" /> {fmtAsOf(r.dataAsOf)} · {stale.label}
           </span>
           {(r.stale || stale.isStale) && (
             <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-amber-500/30 text-amber-600 dark:text-amber-400">
@@ -643,12 +607,12 @@ function ApprovedInstrumentRow({
               <Link
                 href={catalogueHref(r)}
                 className="inline-flex items-center justify-center h-8 w-8 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-                aria-label="Open in catalogue"
+                aria-label="Open record"
               >
                 <ExternalLink className="w-4 h-4" />
               </Link>
             </TooltipTrigger>
-            <TooltipContent side="left" className="text-xs">Open in catalogue</TooltipContent>
+            <TooltipContent side="left" className="text-xs">Open record</TooltipContent>
           </Tooltip>
           {isManager && (
             <CatalogueRowControls

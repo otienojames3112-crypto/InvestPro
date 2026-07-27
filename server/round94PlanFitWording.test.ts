@@ -38,19 +38,19 @@ function stripComments(src: string): string {
 }
 
 describe("Stage 10b-5 — approved reference universe wording", () => {
-  it("ResearchArea reference-catalogues hint uses the approved reference universe phrasing", () => {
+  it("ResearchArea reference-catalogues hint identifies approved reference facts", () => {
     expect(research).toContain(
-      "approved reference universe across every approved catalogue row",
+      "Browse approved reference facts.",
     );
     // The old screener phrasing must be gone from the hint.
     expect(research).not.toContain("read-only screener across every approved row");
   });
 
-  it("All Approved Instruments shows the exact approved intro sentence", () => {
+  it("All Approved Instruments identifies itself as the approved master index", () => {
     // The JSX wraps this sentence across lines; collapse whitespace before matching.
     const collapsed = allApproved.replace(/\s+/g, " ");
     expect(collapsed).toContain(
-      "All instruments shown here have been approved into one of the reference catalogues. Reference data does not affect portfolio math until a holding is recorded.",
+      "Master index of every approved catalogue row, showing its family, headline fact, source, as-of date, and status.",
     );
   });
 

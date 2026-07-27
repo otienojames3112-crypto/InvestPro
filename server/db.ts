@@ -4485,9 +4485,10 @@ export async function getSource(key: string): Promise<SourceRegistryRow | null> 
  *   - Reference catalogues (mmf/bank/opportunities) are NEVER hard-deleted by the
  *     Live-safe path: `archiveAllReferenceRows` deactivates + archives every row,
  *     preserving history exactly like a per-row deactivate does.
- *   - `resetReferenceCataloguesToSeed` is the ONLY path that hard-deletes catalogue
- *     rows, and it is gated to Test Mode at the router. It truncates the three
- *     catalogue tables + their lifecycle meta and re-seeds the opportunity catalog.
+ *   - `resetReferenceCataloguesToSeed` is the legacy path that hard-deletes catalogue
+ *     rows. It is intentionally unreachable from the router while reference
+ *     catalogues are shared across Live and Test; do not expose it until catalogue
+ *     reset is sandbox-isolated and transactional.
  *   - The pending research queue and the catalogue audit log are working/audit
  *     tables (not tracked money), so clearing them is a plain delete.
  */
@@ -4542,10 +4543,10 @@ export async function clearCatalogueAuditLog(): Promise<{ deleted: number }> {
 }
 
 /**
- * HARD reset the three reference catalogues to their seed state. TEST-MODE ONLY —
- * the router gates this. Truncates catalogue tables + their rate history + lifecycle
- * meta, then re-seeds the opportunity catalog. MMF/bank are left empty (they have no
- * code seed; a manager re-adds curated rows or approves them via the pipeline).
+ * Legacy hard reset helper retained for a future safe-reset redesign. No router calls
+ * this while reference catalogues are global across Live and Test. It truncates
+ * catalogue tables + their rate history + lifecycle meta, then re-seeds only the
+ * opportunity catalog; MMF/bank are left empty because they have no code seed.
  */
 export async function resetReferenceCataloguesToSeed(
   seed: InsertOpportunity[],

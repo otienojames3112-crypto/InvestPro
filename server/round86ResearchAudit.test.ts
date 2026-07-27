@@ -143,20 +143,20 @@ describe("Round 86 · D — researchAdmin cleanup is governed", () => {
   });
 
   it("archive-all is soft (deactivate + archive, history preserved)", () => {
-    const archive = db.slice(db.indexOf("export async function archiveAllReferenceRows"));
-    const body = archive.slice(0, archive.indexOf("\n}\n"));
+    const start = db.indexOf("export async function archiveAllReferenceRows");
+    const end = db.indexOf("export async function clearPendingResearchQueue", start);
+    const body = db.slice(start, end);
     // It sets active=false + archives via lifecycle helpers, never db.delete on catalogues.
     expect(body).not.toContain("db.delete(mmfFunds)");
     expect(body).not.toContain("db.delete(bankInstruments)");
   });
 
-  it("hides the destructive reset outside Test mode in the UI", () => {
-    expect(allApproved).toContain('mode === "sandbox"');
-    expect(allApproved).toContain("isTestMode");
-    // The reset action is only rendered when isTestMode is true.
+  it("shows reset as unavailable and exposes no frontend mutation trigger", () => {
     const maint = allApproved.slice(allApproved.indexOf("function ReferenceDataMaintenance"));
-    expect(maint).toContain("isTestMode ? (");
-    expect(maint).toContain("resetToSeed.mutate({ confirm: true })");
+    expect(maint).toContain("Disabled until safe sandbox reset is implemented.");
+    expect(maint).toContain("Reference catalogues are currently shared across Live and Test.");
+    expect(maint).not.toContain("researchAdmin.resetToSeed.useMutation");
+    expect(maint).not.toContain("resetToSeed.mutate");
   });
 });
 

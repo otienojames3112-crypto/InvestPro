@@ -154,7 +154,6 @@ import {
   archiveAllReferenceRows,
   clearPendingResearchQueue,
   clearCatalogueAuditLog,
-  resetReferenceCataloguesToSeed,
 } from "./db";
 import { OPPORTUNITY_SEED } from "./opportunitySeed";
 import {
@@ -9412,11 +9411,9 @@ export const appRouter = router({
   }),
 
   // ─── Round 86: Test-Mode reference-data cleanup (manager-only) ─────────────
-  // Lets a manager reset the workspace's REFERENCE data after exercising the
-  // research pipeline with test rows. Every mutation is admin-only and every
-  // destructive path is explicit. The Live-safe default (archiveAll) NEVER hard-
-  // deletes catalogue rows; only `resetToSeed` truncates, and it requires an
-  // explicit confirm flag so it can't fire by accident.
+  // Manager-only reference maintenance. Archive/queue/audit actions retain their
+  // existing behavior. The legacy reset procedure remains exposed only to fail
+  // closed with a clear error while catalogues are global across Live and Test.
   researchAdmin: router({
     // Live-safe: deactivate + archive every active reference row across all four
     // catalogues. History is preserved (rows can be reactivated from the catalogue).
@@ -9438,12 +9435,17 @@ export const appRouter = router({
       return clearCatalogueAuditLog();
     }),
 
-    // HARD reset the three reference catalogues to their seed state. Destructive:
-    // requires an explicit confirm flag. Re-seeds the opportunity catalog from code.
+    // Safety stopgap (Stage 10b-5c): reference catalogues are global across Live
+    // and Test, so no client-selected mode can isolate this destructive reset.
+    // Keep the procedure fail-closed for existing callers until a genuinely
+    // sandbox-isolated, transactional reset is implemented.
     resetToSeed: adminProcedure
       .input(z.object({ confirm: z.literal(true) }))
       .mutation(async () => {
-        return resetReferenceCataloguesToSeed(OPPORTUNITY_SEED);
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Catalogue reset is disabled until sandbox-isolated catalogue reset is implemented.",
+        });
       }),
   }),
 });

@@ -2,7 +2,6 @@ import { useMemo, useState } from "react";
 import { Link } from "wouter";
 import { toast } from "sonner";
 import { useAuth } from "@/_core/hooks/useAuth";
-import { usePortfolio } from "@/contexts/PortfolioContext";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -389,21 +388,14 @@ export default function AllApprovedInstruments({ embedded = false }: { embedded?
 /**
  * ReferenceDataMaintenance — manager-only governed cleanup for the reference layer.
  *
- * Two safety tiers:
- *  - Always available (Live-safe): ARCHIVE all reference rows (soft — deactivates
- *    + archives, history preserved, reversible from each catalogue), CLEAR the
- *    pending research queue, and CLEAR the approval audit log. None of these hard-
- *    delete a live catalogue row.
- *  - Test mode only: a HARD reset-to-seed that truncates the three catalogues and
- *    their rate history, then re-seeds from code. Hidden entirely in Live so it can
- *    never be reached against real tracking data, and still gated behind a typed
- *    confirm dialog.
+ * Archive-all, clear-pending and clear-audit remain available to managers with
+ * their existing confirmation dialogs. Reset-to-seed is deliberately unavailable:
+ * reference catalogues are global across Live and Test, so a client-side Test-mode
+ * selection cannot safely isolate a destructive reset.
  *
  * Every action goes through an AlertDialog confirm and reports what it changed.
  */
 function ReferenceDataMaintenance() {
-  const { mode } = usePortfolio();
-  const isTestMode = mode === "sandbox";
   const utils = trpc.useUtils();
   const [open, setOpen] = useState(false);
 
@@ -442,18 +434,7 @@ function ReferenceDataMaintenance() {
     },
     onError: (e) => toast.error("Could not clear the approval log", { description: e.message }),
   });
-  const resetToSeed = trpc.researchAdmin.resetToSeed.useMutation({
-    onSuccess: async (r) => {
-      await invalidateAll();
-      toast.success("Reference catalogues reset to seed", {
-        description: `Re-seeded ${r.opportunitiesSeeded} opportunity row${r.opportunitiesSeeded === 1 ? "" : "s"}. MMF & bank catalogues are now empty until re-approved.`,
-      });
-    },
-    onError: (e) => toast.error("Could not reset to seed", { description: e.message }),
-  });
-
-  const busy =
-    archiveAll.isPending || clearPending.isPending || clearAudit.isPending || resetToSeed.isPending;
+  const busy = archiveAll.isPending || clearPending.isPending || clearAudit.isPending;
 
   return (
     <Card className="border-dashed">
@@ -473,8 +454,8 @@ function ReferenceDataMaintenance() {
           <ChevronDown className={`w-4 h-4 text-muted-foreground transition-transform duration-150 ${open ? "rotate-180" : ""}`} />
         </button>
         <CardDescription className="text-xs">
-          Governed cleanup for the reference layer. Live-safe actions only archive or clear working data; the
-          destructive reset-to-seed is available in Test mode only.
+          Governed cleanup for the reference layer. Archive and queue/audit cleanup remain available; catalogue reset
+          is disabled until it can be isolated safely from shared approved data.
         </CardDescription>
       </CardHeader>
       {open && (
@@ -515,36 +496,25 @@ function ReferenceDataMaintenance() {
             />
           </div>
 
-          {isTestMode ? (
-            <div className="rounded-md border border-destructive/30 bg-destructive/5 p-3">
-              <div className="flex items-center gap-2 text-xs font-medium text-destructive mb-1">
-                <FlaskConical className="w-3.5 h-3.5" /> Test mode only — destructive
-              </div>
-              <p className="text-xs text-muted-foreground mb-2">
-                Hard-reset the three reference catalogues to their seed state. This truncates every MMF, bank, CBK and
-                market-asset row plus their rate history, then re-seeds the opportunity catalogue from code. There is no
-                undo.
-              </p>
-              <MaintenanceAction
-                icon={<RotateCcw className="w-4 h-4" />}
-                label="Reset catalogues to seed"
-                description=""
-                inline
-                destructive
-                confirmTitle="Reset all reference catalogues to seed?"
-                confirmBody="This permanently deletes ALL reference rows (MMF, bank, CBK, market assets) and their rate history, then re-seeds the opportunity catalogue from code. It cannot be undone. Only proceed in Test mode."
-                actionLabel="Reset to seed"
-                pending={resetToSeed.isPending}
-                disabled={busy}
-                onConfirm={() => resetToSeed.mutate({ confirm: true })}
-              />
+          <div
+            role="status"
+            className="rounded-md border border-border bg-muted/30 p-3"
+          >
+            <div className="flex items-center gap-2 text-sm font-medium">
+              <RotateCcw className="w-4 h-4 text-muted-foreground" />
+              Reset catalogues to seed
+              <Badge variant="outline" className="text-[10px] font-normal">
+                Unavailable
+              </Badge>
             </div>
-          ) : (
-            <p className="text-xs text-muted-foreground flex items-center gap-1.5">
-              <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
-              You are in Live mode — the destructive reset-to-seed is hidden. Switch to Test mode to reset seeded data.
+            <p className="mt-1 text-xs font-medium text-muted-foreground">
+              Disabled until safe sandbox reset is implemented.
             </p>
-          )}
+            <p className="mt-1 text-xs text-muted-foreground">
+              Reference catalogues are currently shared across Live and Test. Reset is disabled to protect approved
+              reference data; a safe reset-all workflow will be added only after catalogue data can be isolated.
+            </p>
+          </div>
         </CardContent>
       )}
     </Card>

@@ -13,7 +13,7 @@
  *   3. No user-facing copy (JSX text or hint/label string literals) in these
  *      files uses "screener" or a standalone "Score"/"scored" label. Internal
  *      variable access like `fit.score` and sort keys are allowed.
- *   4. Plan Fit is never presented as a recommendation.
+ *   4. The retired Plan Fit surface is absent from user-facing catalogue code.
  */
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
@@ -37,7 +37,7 @@ function stripComments(src: string): string {
     .replace(/^\s*\/\/.*$/gm, "");
 }
 
-describe("Round 94 — Plan Fit wording on the approved reference universe", () => {
+describe("Stage 10b-5 — approved reference universe wording", () => {
   it("ResearchArea reference-catalogues hint uses the approved reference universe phrasing", () => {
     expect(research).toContain(
       "approved reference universe across every approved catalogue row",
@@ -74,13 +74,10 @@ describe("Round 94 — Plan Fit wording on the approved reference universe", () 
     expect(code).not.toMatch(/\bscored\b/);
   });
 
-  it("labels the Plan Fit column and its tooltip, and never calls it a recommendation", () => {
-    // The column + tooltip use Plan Fit language.
-    expect(allApproved).toContain("Plan Fit");
-    expect(allApproved).toContain("Plan Fit diagnostic");
-    // Plan Fit is explicitly framed as NOT a recommendation.
-    expect(allApproved).toMatch(/not a recommendation/);
-    // The referenceCatalogueTabs sub-hint uses "Plan Fit diagnostics".
-    expect(catalogueTabs).toContain("Plan Fit diagnostics");
+  it("removes the retired Plan Fit surface from user-facing reference catalogue code", () => {
+    expect(stripComments(allApproved)).not.toMatch(/plan[ _-]?fit/i);
+    expect(stripComments(catalogueTabs)).not.toMatch(/plan[ _-]?fit/i);
+    expect(allApproved).not.toContain("Calculator");
+    expect(allApproved).not.toContain("Popover");
   });
 });

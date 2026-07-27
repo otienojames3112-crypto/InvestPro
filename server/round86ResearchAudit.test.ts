@@ -94,9 +94,10 @@ describe("Round 86 · B — All Approved Instruments is a dedicated page", () =>
     expect(allApproved).not.toContain("scopeView");
   });
 
-  it("keeps Plan Fit OFF by default (neutral order)", () => {
-    expect(allApproved).toContain("useState(false)"); // showPlanFit default off
-    expect(allApproved).toMatch(/Plan Fit is OFF by default/i);
+  it("keeps a neutral catalogue-then-name order without a visible ranking mode", () => {
+    expect(allApproved).toContain("CAT_ORDER[a.catalogue]");
+    expect(allApproved).toContain("a.name.localeCompare(b.name)");
+    expect(allApproved).not.toMatch(/plan[ _-]?fit/i);
   });
 });
 

@@ -38,7 +38,6 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { InfoHint } from "@/components/InfoHint";
 import { CatalogueRowControls, type CatalogueKind } from "@/components/CatalogueRowControls";
 import {
@@ -46,11 +45,7 @@ import {
   Info,
   ShieldAlert,
   Clock,
-  ArrowUpDown,
-  ArrowUp,
-  ArrowDown,
   FlaskConical,
-  Calculator,
   ExternalLink,
   ShieldCheck,
   Wrench,
@@ -79,12 +74,6 @@ import type { AppRouter } from "../../../server/routers";
  *    that were never approved (e.g. an unverified NSE:EABL) DO NOT appear here.
  *    Every row here passed the governed review path (Research → Review Queue →
  *    manager approval).
- *  - "Plan Fit" is a transparent, auditable diagnostic composed of the published
- *    facts (net yield after tax, liquidity, fees, issuer concentration, freshness,
- *    verification). It is OFF by default, it never reorders the table unless the
- *    user explicitly clicks the column, and it is labelled a calculation / Plan
- *    Fit diagnostic — never a recommendation. There is no "best/top/buy" or
- *    ranking / "score" language anywhere in the user-facing copy.
  *  - Reference data shown here does not affect portfolio math until a holding is
  *    actually recorded — stated plainly in the header so it is never mistaken for
  *    the user's own positions.
@@ -97,7 +86,6 @@ type ApprovedResult = inferRouterOutputs<AppRouter>["explore"]["approvedList"];
 /** A table row: an approved instrument, plus a Round-90 archived flag for the
  *  manager-only "Include archived rows" merge (false for the normal active universe). */
 type ApprovedRow = ApprovedResult["instruments"][number] & { archived: boolean };
-type PlanFitEntry = ApprovedResult["planFit"][string];
 
 const CAT_ORDER: Record<string, number> = { mmf: 0, bank: 1, cbk: 2, market_asset: 3 };
 
@@ -109,8 +97,6 @@ const CAT_BADGE: Record<ReferenceCatalogue, string> = {
   market_asset: "border-amber-500/30 text-amber-600 dark:text-amber-400",
 };
 
-type SortKey = "planFit" | null;
-type SortDir = "asc" | "desc";
 
 function catParamFor(cat: ReferenceCatalogue): string {
   return cat === "mmf"
@@ -152,8 +138,7 @@ export default function AllApprovedInstruments({ embedded = false }: { embedded?
 
   // Round 90 — manager-only "Include archived rows" toggle (OFF by default). When
   // on, archived reference rows are merged into the table with an "Archived" badge
-  // so managers can find and recover them without leaving the approved view. They
-  // never carry a Plan Fit (they are shown for recovery/audit, never included in Plan Fit).
+  // so managers can find and recover them without leaving the approved view.
   const [includeArchived, setIncludeArchived] = useState(false);
   const { data: archivedData } = trpc.explore.approvedArchived.useQuery(undefined, {
     enabled: isManager && includeArchived,
@@ -167,8 +152,6 @@ export default function AllApprovedInstruments({ embedded = false }: { embedded?
     const archived = (archivedData?.instruments ?? []).map((r) => ({ ...r, archived: true }));
     return [...active, ...archived];
   }, [data, archivedData, includeArchived, isManager]);
-  const planFit = data?.planFit ?? {};
-  const weights = data?.weights;
 
   // User-controlled filters — the user narrows the universe; the tool never pre-filters.
   const [search, setSearch] = useState("");
@@ -176,11 +159,6 @@ export default function AllApprovedInstruments({ embedded = false }: { embedded?
   const [currencyFilter, setCurrencyFilter] = useState<string>("all");
   const [minFigure, setMinFigure] = useState<string>("");
   const [maxFigure, setMaxFigure] = useState<string>("");
-
-  // Plan Fit is OFF by default so the list opens in its neutral order.
-  const [showPlanFit, setShowPlanFit] = useState(false);
-  const [sortKey, setSortKey] = useState<SortKey>(null);
-  const [sortDir, setSortDir] = useState<SortDir>("desc");
 
   const currencies = useMemo(
     () => Array.from(new Set(rows.map((r) => r.currency).filter(Boolean) as string[])).sort(),
@@ -201,39 +179,12 @@ export default function AllApprovedInstruments({ embedded = false }: { embedded?
       return true;
     });
 
-    // Neutral default order: catalogue, then name. A Plan-Fit sort applies ONLY on
-    // an explicit user click; ineligible/absent rows always sort last regardless of
-    // direction (so a missing score never reads as "avoid").
-    if (sortKey === "planFit") {
-      const dir = sortDir === "asc" ? 1 : -1;
-      out = [...out].sort((a, b) => {
-        // Archived rows never carry a Plan Fit (shown for recovery/audit, not included in Plan Fit).
-        const sa = a.archived ? undefined : planFit[a.ref];
-        const sb = b.archived ? undefined : planFit[b.ref];
-        const av = sa && sa.eligible && Number.isFinite(sa.score) ? sa.score : null;
-        const bv = sb && sb.eligible && Number.isFinite(sb.score) ? sb.score : null;
-        if (av === null && bv === null) return 0;
-        if (av === null) return 1;
-        if (bv === null) return -1;
-        return (av - bv) * dir;
-      });
-    } else {
-      out = [...out].sort((a, b) => {
-        const c = (CAT_ORDER[a.catalogue] ?? 9) - (CAT_ORDER[b.catalogue] ?? 9);
-        return c !== 0 ? c : a.name.localeCompare(b.name);
-      });
-    }
+    out = [...out].sort((a, b) => {
+      const c = (CAT_ORDER[a.catalogue] ?? 9) - (CAT_ORDER[b.catalogue] ?? 9);
+      return c !== 0 ? c : a.name.localeCompare(b.name);
+    });
     return out;
-  }, [rows, search, catFilter, currencyFilter, minFigure, maxFigure, sortKey, sortDir, planFit]);
-
-  function togglePlanFitSort() {
-    if (sortKey === "planFit") {
-      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
-    } else {
-      setSortKey("planFit");
-      setSortDir("desc");
-    }
-  }
+  }, [rows, search, catFilter, currencyFilter, minFigure, maxFigure]);
 
   const resetFilters = () => {
     setSearch("");
@@ -241,8 +192,6 @@ export default function AllApprovedInstruments({ embedded = false }: { embedded?
     setCurrencyFilter("all");
     setMinFigure("");
     setMaxFigure("");
-    setSortKey(null);
-    setSortDir("desc");
   };
 
   return (
@@ -260,24 +209,6 @@ export default function AllApprovedInstruments({ embedded = false }: { embedded?
             </p>
           </div>
           <div className="flex items-center gap-2">
-            <Button
-              size="sm"
-              variant={showPlanFit ? "default" : "outline"}
-              onClick={() => {
-                const next = !showPlanFit;
-                setShowPlanFit(next);
-                // Turning Plan Fit off also drops a Plan-Fit sort so the list returns
-                // to its neutral order; turning it on never auto-sorts.
-                if (!next && sortKey === "planFit") {
-                  setSortKey(null);
-                  setSortDir("desc");
-                }
-              }}
-              className="active:scale-[0.97] transition-transform"
-              aria-pressed={showPlanFit}
-            >
-              <Calculator className="w-4 h-4 mr-1.5" /> {showPlanFit ? "Hide Plan Fit" : "Show Plan Fit"}
-            </Button>
             <Badge variant="outline" className="text-xs px-2.5 py-1 gap-1.5">
               <Info className="w-3 h-3" /> Information only
             </Badge>
@@ -304,8 +235,8 @@ export default function AllApprovedInstruments({ embedded = false }: { embedded?
               <Search className="w-4 h-4" /> Filter the approved instruments
             </CardTitle>
             <CardDescription className="text-xs">
-              All facets are yours to set. The table starts in a neutral order (by catalogue, then name) and only
-              re-sorts when you click the Plan Fit column. Only approved catalogue rows appear here — unverified AI
+              The table starts in a neutral order by catalogue, then name. Only approved catalogue rows appear here —
+              unverified AI
               findings never do. Archived rows are hidden unless you turn on “Include archived rows”.
             </CardDescription>
           </CardHeader>
@@ -373,14 +304,14 @@ export default function AllApprovedInstruments({ embedded = false }: { embedded?
                       Include archived rows
                       <InfoHint>
                         Manager-only. Off by default. When on, archived reference rows are shown with an
-                        “Archived” badge so you can find and reactivate them from here. Archived rows are never
-                        included in Plan Fit and are never hard-deleted.
+                        “Archived” badge so you can find and reactivate them from here. Archived rows remain audit-only
+                        until they are reactivated and are never hard-deleted.
                       </InfoHint>
                     </Label>
                   </div>
                 )}
                 <Button variant="outline" size="sm" onClick={resetFilters} className="h-8 text-xs">
-                  Reset filters &amp; sort
+                  Reset filters
                 </Button>
               </div>
             </div>
@@ -417,24 +348,6 @@ export default function AllApprovedInstruments({ embedded = false }: { embedded?
                           <InfoHint side="left">Each catalogue's own headline number: effective annual rate for funds, indicative rate for bank products, and yield or last price for securities. They are not directly comparable — this view lists, it never ranks.</InfoHint>
                         </span>
                       </TableHead>
-                      {showPlanFit && (
-                        <TableHead className="text-right">
-                          <span className="inline-flex items-center justify-end gap-1 w-full">
-                            <button
-                              onClick={togglePlanFitSort}
-                              className={`inline-flex items-center gap-1 font-semibold transition-colors hover:text-foreground ${sortKey === "planFit" ? "text-foreground" : "text-muted-foreground"}`}
-                            >
-                              Plan Fit
-                              {sortKey === "planFit" ? (
-                                sortDir === "asc" ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />
-                              ) : (
-                                <ArrowUpDown className="w-3 h-3 opacity-50" />
-                              )}
-                            </button>
-                            <InfoHint side="left">A transparent Plan Fit diagnostic: net yield (after tax) minus point penalties for term lock-ups, issuer concentration, stale or unverified figures, and fees. Click any value to audit the exact points — it is a calculation / diagnostic, not a recommendation. Rows missing a usable figure show no Plan Fit.</InfoHint>
-                          </span>
-                        </TableHead>
-                      )}
                       <TableHead>
                         <span className="inline-flex items-center gap-1">
                           Source &amp; freshness
@@ -449,9 +362,6 @@ export default function AllApprovedInstruments({ embedded = false }: { embedded?
                       <ApprovedInstrumentRow
                         key={`${r.catalogue}:${r.ref}`}
                         r={r}
-                        showPlanFit={showPlanFit}
-                        fit={r.archived ? undefined : planFit[r.ref]}
-                        weights={weights}
                         isManager={isManager}
                       />
                     ))}
@@ -703,90 +613,12 @@ function MaintenanceAction({
   );
 }
 
-/** The Plan-Fit cell — plain number with a click-to-open, itemised breakdown. */
-function PlanFitCell({
-  fit,
-  weights,
-}: {
-  fit?: PlanFitEntry;
-  weights?: ApprovedResult["weights"];
-}) {
-  if (!fit) return <span className="text-muted-foreground">—</span>;
-  if (!fit.eligible) {
-    return (
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <span className="text-muted-foreground cursor-help underline decoration-dotted underline-offset-2">—</span>
-        </TooltipTrigger>
-        <TooltipContent side="left" className="max-w-xs text-xs leading-relaxed">
-          No Plan Fit: {fit.ineligibleReasons.join(", ") || "excluded from the calculation"}. This is an exclusion from
-          the calculation, not a low rating.
-        </TooltipContent>
-      </Tooltip>
-    );
-  }
-  return (
-    <Popover>
-      <PopoverTrigger asChild>
-        <button className="inline-flex items-center gap-1 font-semibold text-foreground hover:text-primary underline decoration-dotted underline-offset-2 active:scale-[0.97] transition-transform">
-          {fit.score.toFixed(1)}
-        </button>
-      </PopoverTrigger>
-      <PopoverContent side="left" align="start" className="w-80 text-left">
-        <div className="space-y-2">
-          <div className="flex items-baseline justify-between">
-            <p className="text-sm font-semibold">Plan Fit breakdown</p>
-            <span className="text-lg font-bold tabular-nums">{fit.score.toFixed(1)}</span>
-          </div>
-          <p className="text-[11px] text-muted-foreground leading-relaxed">
-            A transparent sum of the facts below. Positive points come from net yield; negative points are penalties for
-            risk/quality factors. This is a calculation you can audit — it is not a recommendation.
-          </p>
-          <div className="divide-y divide-border rounded-md border">
-            {fit.components.map((c) => (
-              <div key={c.key} className="flex items-start justify-between gap-3 px-2.5 py-1.5">
-                <div className="min-w-0">
-                  <p className="text-xs font-medium">{c.label}</p>
-                  <p className="text-[10px] text-muted-foreground leading-snug">{c.detail}</p>
-                </div>
-                <span
-                  className={`text-xs font-semibold tabular-nums shrink-0 ${
-                    c.points > 0
-                      ? "text-emerald-600 dark:text-emerald-400"
-                      : c.points < 0
-                        ? "text-red-600 dark:text-red-400"
-                        : "text-muted-foreground"
-                  }`}
-                >
-                  {c.points > 0 ? "+" : ""}{c.points.toFixed(1)}
-                </span>
-              </div>
-            ))}
-          </div>
-          {weights && (
-            <p className="text-[10px] text-muted-foreground">
-              Net yield contributes {weights.netYieldPerPct} point(s) per percentage point to the Plan Fit diagnostic.
-              The same weights apply to every instrument.
-            </p>
-          )}
-        </div>
-      </PopoverContent>
-    </Popover>
-  );
-}
-
 /** One approved-universe row: facts + provenance + governed lifecycle + catalogue link. */
 function ApprovedInstrumentRow({
   r,
-  showPlanFit,
-  fit,
-  weights,
   isManager,
 }: {
   r: ApprovedRow;
-  showPlanFit: boolean;
-  fit?: PlanFitEntry;
-  weights?: ApprovedResult["weights"];
   isManager: boolean;
 }) {
   const cat = r.catalogue as ReferenceCatalogue;
@@ -821,11 +653,6 @@ function ApprovedInstrumentRow({
         <div>{fmtFigure(r)}</div>
         <div className="text-[10px] text-muted-foreground">{r.headlineLabel}</div>
       </TableCell>
-      {showPlanFit && (
-        <TableCell className="text-right">
-          <PlanFitCell fit={fit} weights={weights} />
-        </TableCell>
-      )}
       <TableCell>
         <div className="text-xs text-muted-foreground max-w-[220px]">{r.source ?? "Source not recorded"}</div>
         <div className="mt-0.5 flex items-center gap-1.5 flex-wrap">

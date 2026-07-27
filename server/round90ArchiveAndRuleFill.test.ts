@@ -15,7 +15,7 @@
  *   C. PURE — `assetClassForCatalogue` is total and round-trips each catalogue.
  *   D. STATIC — All Approved's manager-only "Include archived rows" toggle is OFF by
  *      default, gated on `isManager`, merges rows with an `archived` flag, never scores
- *      archived rows (Plan Fit passed `undefined`), and shows a Reactivate control
+ *      archived rows as audit-only recovery records, and shows a Reactivate control
  *      (CatalogueRowControls `isActive={!r.archived}`). The tab is FIRST.
  *   E. RUNTIME — `explore.approvedArchived` is manager-only and returns rows in the
  *      SAME shape as `approvedList.instruments`; the public `approvedList` never
@@ -231,13 +231,10 @@ describe("Round 90 · D — All Approved 'Include archived rows' is manager-only
     expect(page).toContain("Include archived rows");
   });
 
-  it("merges archived rows with an `archived` flag and never scores them", () => {
+  it("merges archived rows with an `archived` flag for recovery", () => {
     expect(page).toMatch(/\.\.\.r,\s*archived:\s*false/);
     expect(page).toMatch(/\.\.\.r,\s*archived:\s*true/);
-    // Plan Fit is explicitly withheld for archived rows.
-    expect(page).toContain("fit={r.archived ? undefined : planFit[r.ref]}");
-    // A Plan-Fit sort treats an archived row as unscored.
-    expect(page).toContain("const sa = a.archived ? undefined : planFit[a.ref]");
+    expect(page).not.toMatch(/plan[ _-]?fit/i);
     // The lifecycle control shows Reactivate for an archived row.
     expect(page).toContain("isActive={!r.archived}");
     // The row carries a visible Archived badge.

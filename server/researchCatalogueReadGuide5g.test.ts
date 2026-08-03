@@ -43,10 +43,11 @@ describe("Stage 10b-5g - How to read this catalogue", () => {
     }
   });
 
-  it("keeps the action secondary to source review and manual manager actions", () => {
+  it("keeps the read-guide action secondary to manual manager actions without source-review duplication", () => {
     for (const page of [frontend.mmf, frontend.bank, frontend.cbk, frontend.market]) {
-      expect(page.indexOf("<CatalogueSourceReviewButton")).toBeGreaterThan(-1);
-      expect(page.indexOf("{HOW_TO_READ_CATALOGUE_LABEL}")).toBeGreaterThan(page.indexOf("<CatalogueSourceReviewButton"));
+      expect(page).not.toContain("<CatalogueSourceReviewButton");
+      expect(page).toContain("{HOW_TO_READ_CATALOGUE_LABEL}");
+      expect(page).toContain("Research Desk → Ask AI");
     }
     expect(frontend.mmf.indexOf("{HOW_TO_READ_CATALOGUE_LABEL}")).toBeGreaterThan(frontend.mmf.indexOf("Add / correct fund"));
     expect(frontend.bank.indexOf("{HOW_TO_READ_CATALOGUE_LABEL}")).toBeGreaterThan(frontend.bank.indexOf("Add / correct product"));
@@ -119,7 +120,7 @@ describe("Stage 10b-5g - How to read this catalogue", () => {
     expect(guides).not.toMatch(/\bbest\b|\brecommended\b|\bprofit\b|choose this/i);
   });
 
-  it("keeps the source-review workflow intact alongside the read guide", () => {
+  it("keeps the source-review workflow available outside catalogue page headers", () => {
     expect(sourceReview).toContain("export function CatalogueSourceReviewButton");
     expect(sourceReview).toContain('SOURCE_REVIEW_BUTTON_LABEL = "Review a source with AI"');
     expect(sourceReview).toContain("Nothing here changes a catalogue");

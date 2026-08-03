@@ -19,15 +19,20 @@ const categoryPages = {
 };
 
 describe("Stage 10b-5h - Review a source with AI clarification", () => {
-  it("standardizes the visible source-review action label", () => {
+  it("keeps the source-review component for non-catalogue row-level workflows", () => {
     expect(sourceReview).toContain('SOURCE_REVIEW_BUTTON_LABEL = "Review a source with AI"');
-    for (const src of Object.values(categoryPages)) {
-      expect(src).toContain("<CatalogueSourceReviewButton");
-    }
     expect(sourceReview).not.toContain("Review MMF source with AI");
     expect(sourceReview).not.toContain("Review bank source with AI");
     expect(sourceReview).not.toContain("Review CBK source with AI");
     expect(sourceReview).not.toContain("Review market source with AI");
+  });
+
+  it("removes Review a source with AI from Reference Catalogue page UI", () => {
+    for (const src of Object.values(categoryPages)) {
+      expect(src).not.toContain("CatalogueSourceReviewButton");
+      expect(src).not.toContain("SOURCE_REVIEW_BUTTON_LABEL");
+      expect(src).toContain("Research Desk → Ask AI");
+    }
   });
 
   it("does not introduce labels that imply automatic source refresh or catalogue updates", () => {

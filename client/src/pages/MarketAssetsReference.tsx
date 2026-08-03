@@ -34,7 +34,6 @@ import {
 } from "lucide-react";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { CatalogueRowControls } from "@/components/CatalogueRowControls";
-import { CatalogueSourceReviewButton } from "@/components/CatalogueSourceReview";
 import { AiExplainDialog } from "@/components/AiExplainDialog";
 import { Sparkles } from "lucide-react";
 import { usePortfolio } from "@/contexts/PortfolioContext";
@@ -298,11 +297,10 @@ export default function MarketAssetsReference({ embedded = false }: { embedded?:
               separately under{" "}
               <Link href={dashboardHref.other} className="text-primary underline underline-offset-2">
                 Holdings → Other
-              </Link>. This is not advice or a recommendation.
+              </Link>. To propose new or updated catalogue facts, use Research Desk → Ask AI. This is not advice or a recommendation.
             </p>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
-            <CatalogueSourceReviewButton catalogue="market_asset" isManager={isManager} />
             <Button
               variant="outline"
               size="sm"

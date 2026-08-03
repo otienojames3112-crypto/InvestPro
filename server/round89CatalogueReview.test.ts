@@ -1,8 +1,8 @@
 /**
  * Round 89 — Per-catalogue "Review a source with AI" regression matrix.
  *
- * The four Reference Catalogue pages gain a manager-only "Review a source with AI"
- * action that reuses the EXISTING Research Desk pipeline. This suite locks the
+ * The guarded "Review a source with AI" workflow reuses the EXISTING Research Desk
+ * pipeline. This suite locks the
  * invariants the feature promises:
  *
  *   A. PURE PROMPT BUILDERS — catalogueReviewInstruction / summariseCatalogueRows /
@@ -26,9 +26,9 @@
  *   F. UNAPPROVED CHANGES ARE INERT — a pending research_update never reaches a
  *      catalogue (live row stays absent) so Dashboard/Ledger/Accrual/Tax/Reconciliation,
  *      which read only published catalogues + recorded holdings, cannot see it.
- *   G. UI ROUTES TO THE QUEUE — the shared dialog drafts via research.draftFromFinding,
- *      shows the "nothing changes a catalogue / approvals never rewrite past actuals"
- *      guardrail, and the button is wired (manager-only) into all four catalogue pages.
+ *   G. UI ROUTES TO THE QUEUE — the shared dialog drafts via research.draftFromFinding
+ *      and shows the "nothing changes a catalogue / approvals never rewrite past actuals"
+ *      guardrail. Catalogue pages no longer duplicate this source-intake action.
  *
  * Mix of pure tests (A), LLM-mock runtime tests via the tRPC caller (B, C, D), a real
  * approval-path DB test (E, F) mirroring opportunityMaintainer.test.ts, and static
@@ -398,12 +398,13 @@ describe("Round 89 · G — the catalogue-review UI routes to the queue and show
     expect(dialog).toMatch(/91 \/ 182 \/ 364-day/);
   });
 
-  it("the manager-only button is wired into all four catalogue pages", () => {
+  it("the manager-only source-review button is not duplicated in catalogue page headers", () => {
     const pages = ["MmfFunds", "BankInstruments", "CbkSecuritiesReference", "MarketAssetsReference"];
     for (const p of pages) {
       const src = read(`client/src/pages/${p}.tsx`);
-      expect(src).toContain("CatalogueSourceReviewButton");
-      expect(src).toMatch(/isManager=\{isManager\}/);
+      expect(src).not.toContain("CatalogueSourceReviewButton");
+      expect(src).toContain("Research Desk → Ask AI");
+      expect(src).toContain("HOW_TO_READ_CATALOGUE_LABEL");
     }
   });
 

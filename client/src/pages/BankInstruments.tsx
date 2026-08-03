@@ -61,7 +61,6 @@ import {
 } from "lucide-react";
 import { useDepositDrawer } from "@/contexts/DepositDrawerContext";
 import { CatalogueRowControls } from "@/components/CatalogueRowControls";
-import { CatalogueSourceReviewButton } from "@/components/CatalogueSourceReview";
 import { AiExplainDialog } from "@/components/AiExplainDialog";
 import { Sparkles } from "lucide-react";
 import { usePortfolio } from "@/contexts/PortfolioContext";
@@ -332,17 +331,14 @@ export default function BankInstruments({ embedded = false }: { embedded?: boole
             <p className="text-muted-foreground text-sm max-w-3xl">
               A neutral reference of Kenyan bank deposit and savings products. Posted rates are indicative and almost
               always <strong>negotiable</strong> for larger balances. Approved reference data only; real deposits and
-              balances are recorded separately in Holdings.
+              balances are recorded separately in Holdings. To propose new or updated catalogue facts, use Research Desk → Ask AI.
             </p>
           </div>
           <div className="flex items-center gap-2 flex-wrap shrink-0">
             {isManager && (
-              <>
-                <CatalogueSourceReviewButton catalogue="bank" isManager={isManager} size="default" />
-                <Button onClick={openAdd}>
-                  <Plus className="w-4 h-4 mr-2" /> Add / correct product
-                </Button>
-              </>
+              <Button onClick={openAdd}>
+                <Plus className="w-4 h-4 mr-2" /> Add / correct product
+              </Button>
             )}
             <Button
               variant="outline"

@@ -395,7 +395,7 @@ describe("Round 90 · G — the one governed path (source → findings → queue
     expect(reviewDialog).toContain("if (!isManager) return null");
   });
 
-  it("all four catalogue pages wire the manager-only review + archive controls", () => {
+  it("all four catalogue pages keep archive controls without duplicating source-review intake", () => {
     const pages = {
       mmf: read("client/src/pages/MmfFunds.tsx"),
       bank: read("client/src/pages/BankInstruments.tsx"),
@@ -404,8 +404,8 @@ describe("Round 90 · G — the one governed path (source → findings → queue
     };
     for (const [key, src] of Object.entries(pages)) {
       const cat = key === "market" ? "market_asset" : key;
-      expect(src).toContain(`CatalogueSourceReviewButton catalogue="${cat}"`);
-      expect(src).toContain("isManager={isManager}");
+      expect(src).not.toContain(`CatalogueSourceReviewButton catalogue="${cat}"`);
+      expect(src).toContain("Research Desk → Ask AI");
       expect(src).toContain(`ArchivedRowsPanel catalogue="${cat}"`);
     }
   });

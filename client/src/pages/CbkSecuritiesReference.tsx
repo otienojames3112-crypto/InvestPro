@@ -51,7 +51,6 @@ import {
 import { profileFor, type AssetClass } from "@shared/assetModel";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { CatalogueRowControls } from "@/components/CatalogueRowControls";
-import { CatalogueSourceReviewButton } from "@/components/CatalogueSourceReview";
 import { AiExplainDialog } from "@/components/AiExplainDialog";
 import { Sparkles } from "lucide-react";
 import { usePortfolio } from "@/contexts/PortfolioContext";
@@ -314,11 +313,10 @@ export default function CbkSecuritiesReference({ embedded = false }: { embedded?
               actually hold are recorded separately under{" "}
               <Link href={dashboardHref.gov} className="text-primary underline underline-offset-2">
                 Holdings → Government
-              </Link>. This is not advice or a recommendation.
+              </Link>. To propose new or updated catalogue facts, use Research Desk → Ask AI. This is not advice or a recommendation.
             </p>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
-            <CatalogueSourceReviewButton catalogue="cbk" isManager={isManager} />
             <Button
               variant="outline"
               size="sm"

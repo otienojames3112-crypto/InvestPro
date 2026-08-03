@@ -13,7 +13,6 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import { useRefFocus } from "@/hooks/useRefFocus";
 import { CatalogueRowControls } from "@/components/CatalogueRowControls";
 import { resolveCatalogueSource, type CatalogueSourceExtendedFields } from "@/lib/format";
-import { CatalogueSourceReviewButton } from "@/components/CatalogueSourceReview";
 import { ArchivedRowsPanel, CatalogueScopeFilter, type CatalogueRowScope } from "@/components/ArchivedRowsPanel";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -504,24 +503,21 @@ export default function MmfFunds({ embedded = false }: { embedded?: boolean } = 
               <>
                 {stats.count} CMA-regulated Kenyan money market fund{stats.count === 1 ? "" : "s"} currently in the
                 catalogue, sourced from {providerPhrase}. Approved reference data only; MMF accounts and balances are
-                recorded separately in Holdings.
+                recorded separately in Holdings. To propose new or updated catalogue facts, use Research Desk → Ask AI.
               </>
             ) : (
               <>
                 No funds in the catalogue yet. Approved research proposals appear here once published; MMF accounts and
-                balances are recorded separately in Holdings.
+                balances are recorded separately in Holdings. To propose new or updated catalogue facts, use Research Desk → Ask AI.
               </>
             )}
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           {isManager && (
-            <>
-              <CatalogueSourceReviewButton catalogue="mmf" isManager={isManager} />
-              <Button onClick={() => setAddOpen(true)} size="sm">
-                <Plus className="w-4 h-4 mr-1" /> Add / correct fund
-              </Button>
-            </>
+            <Button onClick={() => setAddOpen(true)} size="sm">
+              <Plus className="w-4 h-4 mr-1" /> Add / correct fund
+            </Button>
           )}
           <Button
             variant="outline"

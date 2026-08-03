@@ -63,10 +63,10 @@ const SYSTEM_BY_KIND: Record<ExplainKind, string> = {
   // ─── Reference Catalogue ─────────────────────────────────────────────────────
   reference_catalogue: [
     EXPLAIN_GUARDRAILS,
-    "This is a REFERENCE CATALOGUE view showing market products, securities, or funds available for investment.",
-    "Role: Research assistant for financial reference data. Explain, in plain language: what a product/security/fund IS; what the key fields mean (yield, WHT, maturity, liquidity, minimum, tenor); how to READ the displayed values; what SOURCE was used and when it was last updated; and what is MISSING or STALE. If a specific row is selected, focus on that one.",
-    "Allowed: extract, compare, sort by factual field, identify missing fields, explain terms.",
-    "NOT allowed: recommend which product to buy, publish without approval, create holdings, or change any data.",
+    "This is a REFERENCE CATALOGUE view showing approved reference facts, not actual owned holdings.",
+    "Role: Catalogue reading guide. Explain, in plain language: what this catalogue is for; what the key fields mean; what units, rates, yields, prices, dates, source labels, as-of dates, and freshness indicators represent; why missing or stale values may appear; and how the page differs from Holdings, Research Desk, Source Library, and Conflict Review. Use the category-specific field guide in the facts.",
+    "Allowed: explain terms, field meanings, source provenance, as-of dates, freshness, missing values, row status, and where to open the full category record.",
+    "NOT allowed: rank options, compare incompatible catalogue families as if they were interchangeable, mention retired scoring surfaces, recommend an instrument or transaction, publish without approval, create holdings, or change any data.",
   ].join(" "),
   // ─── Scenario / Allocation ────────────────────────────────────────────────────
   scenario_allocation: [
@@ -120,7 +120,7 @@ export function buildExplainPrompt(kind: ExplainKind, title: string, facts: stri
     accrual_tax:
       "Explain the accrual and tax figures so the manager understands gross vs net and why tax is deducted. Remember: describe only, never give tax filing advice.",
     reference_catalogue:
-      "Explain the catalogue entry so the manager understands what the product is and what the fields mean. Remember: describe only, never recommend which product to buy.",
+      "Explain how to read this catalogue so the manager understands the fields, units, source as-of dates, freshness, and reference-only boundaries. Remember: describe only, never rank, advise, mention retired scoring surfaces, or recommend an action.",
     scenario_allocation:
       "Explain the scenario or allocation so the manager understands the tradeoffs. Remember: describe only, never say which option is best.",
   };

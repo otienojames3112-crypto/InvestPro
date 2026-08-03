@@ -4792,7 +4792,7 @@ export const appRouter = router({
           facts: input.accrualSummary,
         });
       }),
-    // "Explain this catalogue" on Reference Catalogue pages.
+    // "How to read this catalogue" on Reference Catalogue pages.
     referenceCatalogue: protectedProcedure
       .input(
         z.object({
@@ -4804,7 +4804,7 @@ export const appRouter = router({
         await requirePortfolio(input.portfolioId, ctx.user.id);
         return aiExplain({
           kind: "reference_catalogue",
-          title: "Explain the reference catalogue entries the manager is viewing.",
+          title: "How to read the reference catalogue entries the manager is viewing.",
           facts: input.catalogueSummary,
         });
       }),

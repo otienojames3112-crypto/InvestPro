@@ -50,10 +50,10 @@ describe("Stage 10b-5f - category catalogue headers and action hierarchy", () =>
     }
   });
 
-  it("puts manager catalogue review before the secondary Explain action", () => {
+  it("puts manager catalogue review before the secondary catalogue-reading action", () => {
     for (const key of Object.keys(pages) as Array<keyof typeof pages>) {
       const header = headerBlock(key);
-      expectOrder(header, "CatalogueSourceReviewButton", "Explain catalogue");
+      expectOrder(header, "CatalogueSourceReviewButton", "HOW_TO_READ_CATALOGUE_LABEL");
     }
   });
 
@@ -64,9 +64,9 @@ describe("Stage 10b-5f - category catalogue headers and action hierarchy", () =>
     const market = headerBlock("market");
 
     expectOrder(mmf, "CatalogueSourceReviewButton", "Add / correct fund");
-    expectOrder(mmf, "Add / correct fund", "Explain catalogue");
+    expectOrder(mmf, "Add / correct fund", "HOW_TO_READ_CATALOGUE_LABEL");
     expectOrder(bank, "CatalogueSourceReviewButton", "Add / correct product");
-    expectOrder(bank, "Add / correct product", "Explain catalogue");
+    expectOrder(bank, "Add / correct product", "HOW_TO_READ_CATALOGUE_LABEL");
 
     expect(cbk).not.toContain("Add / correct");
     expect(market).not.toContain("Add / correct");

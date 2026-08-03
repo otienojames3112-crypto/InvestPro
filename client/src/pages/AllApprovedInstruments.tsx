@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { Link } from "wouter";
 import { toast } from "sonner";
 import { useAuth } from "@/_core/hooks/useAuth";
+import { usePortfolio } from "@/contexts/PortfolioContext";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -14,7 +15,9 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { AppShell } from "@/components/AppShell";
+import { AiExplainDialog } from "@/components/AiExplainDialog";
 import { trpc } from "@/lib/trpc";
+import { ALL_APPROVED_CATALOGUE_FIELD_GUIDE, HOW_TO_READ_CATALOGUE_LABEL, catalogueReadGuide } from "@/lib/catalogueReadGuides";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -49,6 +52,7 @@ import {
   Archive,
   Loader2,
   ChevronDown,
+  Sparkles,
 } from "lucide-react";
 import { rateStaleness } from "@/lib/rateStaleness";
 import { catalogueLabel, type ReferenceCatalogue } from "@shared/researchPipeline";
@@ -134,6 +138,7 @@ function fmtAsOf(value: string | number | Date | null): string {
 
 export default function AllApprovedInstruments({ embedded = false }: { embedded?: boolean } = {}) {
   const { user } = useAuth();
+  const { portfolioId } = usePortfolio();
   const isManager = user?.role === "admin";
   const { data, isLoading } = trpc.explore.approvedList.useQuery(undefined, {
     staleTime: 60_000,
@@ -189,17 +194,47 @@ export default function AllApprovedInstruments({ embedded = false }: { embedded?
     setCurrencyFilter("all");
   };
 
+  const [catExplainOpen, setCatExplainOpen] = useState(false);
+  const catFacts = useMemo(() => {
+    const counts = rows.reduce<Record<string, number>>((acc, r) => {
+      acc[r.catalogue] = (acc[r.catalogue] ?? 0) + 1;
+      return acc;
+    }, {});
+    const l: string[] = [
+      `Catalogue: All Approved Instruments. ${filtered.length} rows visible out of ${rows.length}.`,
+      "Purpose: master index for approved reference facts across catalogue families.",
+      `Families visible: MMF ${counts.mmf ?? 0}, Bank ${counts.bank ?? 0}, CBK ${counts.cbk ?? 0}, Market Assets ${counts.market_asset ?? 0}.`,
+      "Open record links to the detailed category catalogue tab for full fields.",
+    ];
+    return catalogueReadGuide("All Approved Instruments", ALL_APPROVED_CATALOGUE_FIELD_GUIDE, l.join("\n"));
+  }, [filtered.length, rows]);
+  const catExplainQuery = trpc.aiExplain.referenceCatalogue.useQuery(
+    { portfolioId: portfolioId!, catalogueSummary: catFacts },
+    { enabled: catExplainOpen && !!portfolioId, refetchOnWindowFocus: false, retry: false },
+  );
+
   return (
     <AppShell embedded={embedded}>
       <div className="p-6 lg:p-8 space-y-6 max-w-6xl">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight" style={{ fontFamily: "'Playfair Display', serif" }}>
-            All Approved Instruments
-          </h1>
-          <p className="text-muted-foreground text-sm mt-1 max-w-3xl">
-            Master index of every approved catalogue row, showing its family, headline fact, source, as-of date, and
-            status. Open the category record for full details.
-          </p>
+        <div className="flex items-start justify-between gap-4 flex-wrap">
+          <div>
+            <h1 className="text-2xl font-bold tracking-tight" style={{ fontFamily: "'Playfair Display', serif" }}>
+              All Approved Instruments
+            </h1>
+            <p className="text-muted-foreground text-sm mt-1 max-w-3xl">
+              Master index of every approved catalogue row, showing its family, headline fact, source, as-of date, and
+              status. Open the category record for full details.
+            </p>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setCatExplainOpen(true)}
+            className="h-7 gap-1.5 text-xs font-medium hover:text-violet-500 hover:border-violet-500/40 active:scale-[0.97] transition-transform"
+          >
+            <Sparkles className="w-3.5 h-3.5" />
+            {HOW_TO_READ_CATALOGUE_LABEL}
+          </Button>
         </div>
 
         <div
@@ -345,6 +380,17 @@ export default function AllApprovedInstruments({ embedded = false }: { embedded?
         {isManager && <ReferenceDataMaintenance />}
 
       </div>
+      <AiExplainDialog
+        open={catExplainOpen}
+        onOpenChange={setCatExplainOpen}
+        title="How to read All Approved Instruments"
+        description="Educational guide to the approved master index, source as-of dates, row status, and links to full category records."
+        answer={catExplainQuery.data?.answer}
+        isLoading={catExplainQuery.isLoading || catExplainQuery.isFetching}
+        isError={catExplainQuery.isError}
+        errorMessage={catExplainQuery.error?.message}
+        onRetry={() => catExplainQuery.refetch()}
+      />
     </AppShell>
   );
 }

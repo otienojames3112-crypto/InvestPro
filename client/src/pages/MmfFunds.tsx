@@ -6,6 +6,7 @@ import { dashboardHref } from "@shared/navigation";
 import { useDepositDrawer } from "@/contexts/DepositDrawerContext";
 import { AppShell } from "@/components/AppShell";
 import { trpc } from "@/lib/trpc";
+import { HOW_TO_READ_CATALOGUE_LABEL, MMF_CATALOGUE_FIELD_GUIDE, catalogueReadGuide } from "@/lib/catalogueReadGuides";
 import { invalidatePortfolioMoney } from "@/lib/invalidatePortfolioMoney";
 import { usePortfolio } from "@/contexts/PortfolioContext";
 import { useAuth } from "@/_core/hooks/useAuth";
@@ -468,10 +469,12 @@ export default function MmfFunds({ embedded = false }: { embedded?: boolean } = 
   const [catExplainOpen, setCatExplainOpen] = useState(false);
   const catFacts = useMemo(() => {
     const l: string[] = [`Catalogue: MMF Market. ${stats.count} funds tracked.`];
-    if (stats.avgEar) l.push(`Average EAR: ${stats.avgEar.toFixed(2)}%.`);
-    if (selectedFund) l.push(`Selected primary fund: ${selectedFund.fundName}, EAR ${selectedFund.ear}%.`);
-    return l.join("\n");
-  }, [stats, selectedFund]);
+    l.push("Purpose: approved reference data for money market funds.");
+    if (stats.avgEar) l.push(`Average EAR visible on this page: ${stats.avgEar.toFixed(2)}%.`);
+    if (stats.latestAsOf) l.push(`Most recent source as-of date visible on this page: ${stats.latestAsOf}.`);
+    l.push(`Rows with both source and as-of date: ${stats.complete}/${stats.count}.`);
+    return catalogueReadGuide("MMF Market", MMF_CATALOGUE_FIELD_GUIDE, l.join("\n"));
+  }, [stats]);
   const catExplainQuery = trpc.aiExplain.referenceCatalogue.useQuery(
     { portfolioId: portfolioId!, catalogueSummary: catFacts },
     { enabled: catExplainOpen && !!portfolioId, refetchOnWindowFocus: false, retry: false },
@@ -527,7 +530,7 @@ export default function MmfFunds({ embedded = false }: { embedded?: boolean } = 
             className="h-7 gap-1.5 text-xs font-medium hover:text-violet-500 hover:border-violet-500/40 active:scale-[0.97] transition-transform"
           >
             <Sparkles className="w-3.5 h-3.5" />
-            Explain catalogue
+            {HOW_TO_READ_CATALOGUE_LABEL}
           </Button>
         </div>
       </div>
@@ -979,8 +982,8 @@ export default function MmfFunds({ embedded = false }: { embedded?: boolean } = 
       <AiExplainDialog
         open={catExplainOpen}
         onOpenChange={setCatExplainOpen}
-        title="Explain MMF Market catalogue"
-        description="A plain-language explanation of how the MMF Market catalogue works, what the key metrics mean (EAR, gross yield, management fee, day-count), and how to choose a fund for your plan."
+        title="How to read MMF Market"
+        description="Educational guide to the MMF reference fields, source as-of dates, and the boundary between approved reference data and Holdings."
         answer={catExplainQuery.data?.answer}
         isLoading={catExplainQuery.isLoading || catExplainQuery.isFetching}
         isError={catExplainQuery.isError}

@@ -4,6 +4,7 @@ import { AppShell } from "@/components/AppShell";
 import { useRefFocus } from "@/hooks/useRefFocus";
 import type { RefFocus } from "@/hooks/useRefFocus";
 import { trpc } from "@/lib/trpc";
+import { HOW_TO_READ_CATALOGUE_LABEL, MARKET_ASSETS_CATALOGUE_FIELD_GUIDE, catalogueReadGuide } from "@/lib/catalogueReadGuides";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -273,8 +274,9 @@ export default function MarketAssetsReference({ embedded = false }: { embedded?:
   const [catExplainOpen, setCatExplainOpen] = useState(false);
   const catFacts = useMemo(() => {
     const l: string[] = [`Catalogue: Market Assets Reference. ${marketRows.length} assets shown.`];
+    l.push("Purpose: approved reference data for market assets by subtype.");
     l.push(`Equity: ${bySubtype.equity.length}. REIT: ${bySubtype.reit.length}. Offshore funds: ${bySubtype.offshore_fund.length}. SACCO: ${bySubtype.sacco.length}.`);
-    return l.join("\n");
+    return catalogueReadGuide("Market Assets Reference", MARKET_ASSETS_CATALOGUE_FIELD_GUIDE, l.join("\n"));
   }, [marketRows, bySubtype]);
   const catExplainQuery = trpc.aiExplain.referenceCatalogue.useQuery(
     { portfolioId: portfolioId!, catalogueSummary: catFacts },
@@ -296,8 +298,7 @@ export default function MarketAssetsReference({ embedded = false }: { embedded?:
               separately under{" "}
               <Link href={dashboardHref.other} className="text-primary underline underline-offset-2">
                 Holdings → Other
-              </Link>
-              .
+              </Link>. This is not advice or a recommendation.
             </p>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
@@ -309,7 +310,7 @@ export default function MarketAssetsReference({ embedded = false }: { embedded?:
               className="h-7 gap-1.5 text-xs font-medium hover:text-violet-500 hover:border-violet-500/40 active:scale-[0.97] transition-transform"
             >
               <Sparkles className="w-3.5 h-3.5" />
-              Explain catalogue
+              {HOW_TO_READ_CATALOGUE_LABEL}
             </Button>
           </div>
         </div>
@@ -396,8 +397,8 @@ export default function MarketAssetsReference({ embedded = false }: { embedded?:
       <AiExplainDialog
         open={catExplainOpen}
         onOpenChange={setCatExplainOpen}
-        title="Explain Market Assets Reference"
-        description="A plain-language explanation of how the Market Assets Reference catalogue works, what price/NAV, distribution yield, trailing return, and fees mean, and how to evaluate market assets for your plan."
+        title="How to read Market Assets Reference"
+        description="Educational guide to market-asset subtype fields, source as-of dates, freshness, and the boundary between reference data and Holdings."
         answer={catExplainQuery.data?.answer}
         isLoading={catExplainQuery.isLoading || catExplainQuery.isFetching}
         isError={catExplainQuery.isError}

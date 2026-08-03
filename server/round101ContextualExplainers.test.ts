@@ -87,9 +87,10 @@ describe("Round 101: Page-specific system prompts", () => {
   });
 
   it("reference_catalogue prompt contains required role and guardrails", () => {
-    expect(source).toContain("Role: Research assistant for financial reference data");
-    expect(source).toContain("Allowed: extract, compare, sort by factual field, identify missing fields");
-    expect(source).toContain("NOT allowed: recommend which product to buy");
+    expect(source).toContain("Role: Catalogue reading guide");
+    expect(source).toContain("Allowed: explain terms, field meanings, source provenance");
+    expect(source).toContain("NOT allowed: rank options");
+    expect(source).toContain("mention retired scoring surfaces");
   });
 
   it("scenario_allocation prompt contains required role and guardrails", () => {
@@ -137,9 +138,11 @@ describe("Round 101: buildExplainPrompt output structure", () => {
     expect(prompt).toContain("never give tax filing advice");
   });
 
-  it("reference_catalogue prompt closing references describe-only, never recommend which product", () => {
+  it("reference_catalogue prompt closing references how to read fields and never ranks or mentions retired scoring surfaces", () => {
     const prompt = buildExplainPrompt("reference_catalogue", "MMF Market", "Cytonn EAR: 14.5%");
-    expect(prompt).toContain("never recommend which product to buy");
+    expect(prompt).toContain("understands the fields, units, source as-of dates, freshness");
+    expect(prompt).toContain("never rank, advise, mention retired scoring surfaces");
+    expect(prompt).not.toContain("Plan Fit");
   });
 
   it("scenario_allocation prompt closing references describe-only, never say which option is best", () => {

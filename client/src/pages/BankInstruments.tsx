@@ -3,6 +3,7 @@ import { AppShell } from "@/components/AppShell";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { useRefFocus } from "@/hooks/useRefFocus";
+import { BANK_CATALOGUE_FIELD_GUIDE, HOW_TO_READ_CATALOGUE_LABEL, catalogueReadGuide } from "@/lib/catalogueReadGuides";
 import {
   Card,
   CardContent,
@@ -254,9 +255,11 @@ export default function BankInstruments({ embedded = false }: { embedded?: boole
 
   const catFacts = useMemo(() => {
     const l: string[] = [`Catalogue: Bank Product Catalogue. ${filtered.length} products shown (${(rows ?? []).length} total).`];
+    l.push("Purpose: approved reference data for bank deposit and savings products.");
     const bankNames = banks.slice(0, 5).join(", ");
     if (bankNames) l.push(`Banks represented: ${bankNames}${banks.length > 5 ? ` and ${banks.length - 5} more` : ""}.`);
-    return l.join("\n");
+    l.push(`Product types visible: ${Array.from(new Set(filtered.map((r) => TYPE_LABEL[r.instrumentType]))).join(", ") || "none"}.`);
+    return catalogueReadGuide("Bank Product Catalogue", BANK_CATALOGUE_FIELD_GUIDE, l.join("\n"));
   }, [filtered, rows, banks]);
   const catExplainQuery = trpc.aiExplain.referenceCatalogue.useQuery(
     { portfolioId: portfolioId!, catalogueSummary: catFacts },
@@ -348,7 +351,7 @@ export default function BankInstruments({ embedded = false }: { embedded?: boole
               className="h-7 gap-1.5 text-xs font-medium hover:text-violet-500 hover:border-violet-500/40 active:scale-[0.97] transition-transform"
             >
               <Sparkles className="w-3.5 h-3.5" />
-              Explain catalogue
+              {HOW_TO_READ_CATALOGUE_LABEL}
             </Button>
           </div>
         </div>
@@ -814,8 +817,8 @@ export default function BankInstruments({ embedded = false }: { embedded?: boole
       <AiExplainDialog
         open={catExplainOpen}
         onOpenChange={setCatExplainOpen}
-        title="Explain Bank Product Catalogue"
-        description="A plain-language explanation of how the Bank Product Catalogue works, what the key terms mean (indicative rate, tenor, notice period, negotiability, early-withdrawal penalty), and how to evaluate bank deposit products for your plan."
+        title="How to read Bank Product Catalogue"
+        description="Educational guide to bank product fields, source as-of dates, and the boundary between approved reference data and recorded deposits."
         answer={catExplainQuery.data?.answer}
         isLoading={catExplainQuery.isLoading || catExplainQuery.isFetching}
         isError={catExplainQuery.isError}

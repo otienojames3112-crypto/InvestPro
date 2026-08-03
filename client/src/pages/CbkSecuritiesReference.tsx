@@ -5,6 +5,7 @@ import { useRefFocus } from "@/hooks/useRefFocus";
 import type { RefFocus } from "@/hooks/useRefFocus";
 import { trpc } from "@/lib/trpc";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { CBK_CATALOGUE_FIELD_GUIDE, HOW_TO_READ_CATALOGUE_LABEL, catalogueReadGuide } from "@/lib/catalogueReadGuides";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -286,11 +287,12 @@ export default function CbkSecuritiesReference({ embedded = false }: { embedded?
   const [catExplainOpen, setCatExplainOpen] = useState(false);
   const catFacts = useMemo(() => {
     const l: string[] = [`Catalogue: CBK Securities Reference. ${filtered.length} securities shown.`];
+    l.push("Purpose: approved reference data for Government of Kenya securities.");
     const tbills = filtered.filter(r => (r.assetClass as string) === "tbill").length;
     const bonds = filtered.filter(r => (r.assetClass as string) !== "tbill").length;
     if (tbills) l.push(`T-bills: ${tbills}.`);
     if (bonds) l.push(`Bonds/IFBs: ${bonds}.`);
-    return l.join("\n");
+    return catalogueReadGuide("CBK Securities Reference", CBK_CATALOGUE_FIELD_GUIDE, l.join("\n"));
   }, [filtered]);
   const catExplainQuery = trpc.aiExplain.referenceCatalogue.useQuery(
     { portfolioId: portfolioId!, catalogueSummary: catFacts },
@@ -312,8 +314,7 @@ export default function CbkSecuritiesReference({ embedded = false }: { embedded?
               actually hold are recorded separately under{" "}
               <Link href={dashboardHref.gov} className="text-primary underline underline-offset-2">
                 Holdings → Government
-              </Link>
-              .
+              </Link>. This is not advice or a recommendation.
             </p>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
@@ -325,7 +326,7 @@ export default function CbkSecuritiesReference({ embedded = false }: { embedded?
               className="h-7 gap-1.5 text-xs font-medium hover:text-violet-500 hover:border-violet-500/40 active:scale-[0.97] transition-transform"
             >
               <Sparkles className="w-3.5 h-3.5" />
-              Explain catalogue
+              {HOW_TO_READ_CATALOGUE_LABEL}
             </Button>
           </div>
         </div>
@@ -463,8 +464,8 @@ export default function CbkSecuritiesReference({ embedded = false }: { embedded?
       <AiExplainDialog
         open={catExplainOpen}
         onOpenChange={setCatExplainOpen}
-        title="Explain CBK Securities Reference"
-        description="A plain-language explanation of how the CBK Securities Reference catalogue works, what T-bills and bonds are, how auctions work, and what coupon, tenor, ISIN, and WHT mean in this context."
+        title="How to read CBK Securities Reference"
+        description="Educational guide to CBK security fields, source as-of dates, tax treatment, and where recorded Government holdings live."
         answer={catExplainQuery.data?.answer}
         isLoading={catExplainQuery.isLoading || catExplainQuery.isFetching}
         isError={catExplainQuery.isError}

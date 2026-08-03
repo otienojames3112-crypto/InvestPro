@@ -32,7 +32,7 @@ import {
 } from "@/pages/AskAI";
 
 /**
- * Round 89 — the per-catalogue "Review source with AI" workflow, mounted INSIDE each
+ * Round 89 — the per-catalogue "Review a source with AI" workflow, mounted INSIDE each
  * reference-catalogue page (no new page). A manager attaches a source (URL / pasted
  * text / PDF / screenshot) from the catalogue they are looking at; the AI compares it
  * against that catalogue's CURRENT rows and proposes create/edit/stale FINDINGS.
@@ -48,30 +48,47 @@ import {
 
 export type CatalogueKind = "mmf" | "bank" | "cbk" | "market_asset";
 
-const COPY: Record<CatalogueKind, { button: string; title: string; blurb: string }> = {
+export const SOURCE_REVIEW_BUTTON_LABEL = "Review a source with AI";
+
+const SOURCE_REVIEW_WORKFLOW_STEPS = [
+  "Attach source",
+  "AI extracts facts",
+  "Draft findings",
+  "Review Queue approval",
+  "Catalogue updates only after approval",
+] as const;
+
+const ATTACHED_SOURCE_HELPER =
+  "Attach a URL, pasted text, PDF, or image. AI will extract reference facts and prepare findings for review. Approved catalogue rows change only after manager approval.";
+
+const SOURCE_LIBRARY_NOTE =
+  "Approved source decisions help Source Library learn reusable patterns for future refresh workflows. Today, attach the source you want AI to review.";
+
+const COPY: Record<CatalogueKind, { title: string; categoryHelp: string; blurb: string }> = {
   mmf: {
-    button: "Review MMF source with AI",
-    title: "Review an MMF source with AI",
+    title: "Review a source for MMF Market",
+    categoryHelp: "Use this for factsheets, fund pages, or official rate publications.",
     blurb:
-      "Attach a Serrari benchmark, a fund fact sheet, a screenshot, a PDF, or a URL. The assistant compares it against your current MMF Market rows and proposes new funds, EAR / gross-yield / fee / minimum / AUM changes, and source or as-of updates.",
+      "AI compares the attached source against your current MMF Market rows and prepares findings for new funds, EAR, gross yield, fee, minimum, AUM, source, or as-of updates.",
   },
   bank: {
-    button: "Review bank source with AI",
-    title: "Review a bank source with AI",
+    title: "Review a source for Bank Product Catalogue",
+    categoryHelp: "Use this for official product pages, tariff sheets, or rate sheets.",
     blurb:
-      "Attach a rate sheet, a term-deposit schedule, a screenshot, a PDF, or a URL. The assistant compares it against your current Bank Product rows and proposes new products, rate / minimum / tenor / negotiable-flag / liquidity-term changes.",
+      "AI compares the attached source against your current Bank Product rows and prepares findings for new products, indicative rate, minimum, tenor, negotiable flag, or liquidity-term updates.",
   },
   cbk: {
-    button: "Review CBK source with AI",
-    title: "Review a CBK source with AI",
+    title: "Review a source for CBK Securities Reference",
+    categoryHelp: "Use this for CBK notices, auction results, DhowCSD references, or official security details.",
     blurb:
-      "Attach Treasury bills on offer, weekly auction results, or a bond auction / re-opening notice. The assistant extracts the 91 / 182 / 364-day bills (rate, issue number, auction & value dates) and proposes updates to your CBK Securities Reference.",
+      "AI compares the attached source against your current CBK Securities Reference rows and prepares findings for 91 / 182 / 364-day Treasury bill tenors, bond notices, yields, issue numbers, auction dates, value dates, or official security details.",
   },
   market_asset: {
-    button: "Review market source with AI",
-    title: "Review a market source with AI",
+    title: "Review a source for Market Assets Reference",
+    categoryHelp:
+      "Use this for issuer, exchange, fund manager, REIT, offshore fund, or SACCO source documents.",
     blurb:
-      "Attach an NSE price board, a REIT fact sheet, an ETF fact sheet, or an offshore-fund fact sheet. The assistant proposes price / NAV, yield, and trailing-return changes, source / as-of updates, and new reference rows.",
+      "AI compares the attached source against your current Equity, REIT, Offshore fund, and SACCO reference rows and prepares findings for price, NAV, yield, trailing return, subtype, source, or as-of updates.",
   },
 };
 
@@ -180,14 +197,36 @@ function ReviewDialog({
             <Sparkles className="w-4 h-4 text-violet-500" />
             {copy.title}
           </DialogTitle>
-          <DialogDescription>{copy.blurb}</DialogDescription>
+          <DialogDescription>
+            {ATTACHED_SOURCE_HELPER} {copy.categoryHelp}
+          </DialogDescription>
         </DialogHeader>
+
+        <div className="space-y-2 rounded-md border border-border bg-muted/30 px-3 py-3">
+          <p className="text-xs font-medium text-foreground">Current workflow</p>
+          <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+            {SOURCE_REVIEW_WORKFLOW_STEPS.map((step, index) => (
+              <div key={step} className="flex items-center gap-2">
+                <span className="rounded-full border border-border bg-background px-2 py-0.5 font-medium text-foreground">
+                  {index + 1}. {step}
+                </span>
+                {index < SOURCE_REVIEW_WORKFLOW_STEPS.length - 1 && (
+                  <ArrowRight className="h-3 w-3 text-muted-foreground/70" />
+                )}
+              </div>
+            ))}
+          </div>
+          <p className="text-[11px] leading-relaxed text-muted-foreground">
+            {copy.blurb} {SOURCE_LIBRARY_NOTE}
+          </p>
+        </div>
 
         <div className="flex items-start gap-2 rounded-md border border-primary/25 bg-primary/[0.05] px-3 py-2 text-xs text-foreground">
           <ShieldCheck className="w-3.5 h-3.5 mt-0.5 shrink-0 text-primary" />
           <span>
             Nothing here changes a catalogue. Every proposal is a draft you send to the Review Queue, where it only
-            publishes when you approve it — and approvals never rewrite past actuals.
+            publishes when you approve it — and approvals never rewrite past actuals. AI does not find the source for
+            you, refresh rows by itself, or approve changes automatically.
           </span>
         </div>
 
@@ -205,7 +244,7 @@ function ReviewDialog({
                 ) : (
                   <Bot className="w-4 h-4 mr-2" />
                 )}
-                {attach.uploading ? "Uploading…" : poller.running ? runningLabel : "Review source"}
+                {attach.uploading ? "Uploading…" : poller.running ? runningLabel : "Review attached source"}
               </Button>
             </DialogFooter>
           </div>
@@ -263,7 +302,7 @@ function ReviewDialog({
               <p className="text-sm text-muted-foreground">Loading proposals…</p>
             ) : findings.length === 0 ? (
               <p className="text-sm text-muted-foreground italic">
-                The source didn&rsquo;t surface any changes against your current rows.
+                The attached source did not produce any draft findings against your current catalogue rows.
               </p>
             ) : (
               <div className="space-y-3">
@@ -312,7 +351,7 @@ export function CatalogueSourceReviewButton({
   size?: "sm" | "default";
   /** Seed the URL picker (e.g. a Rate Settings source URL or a Source Registry row). */
   initialUrl?: string;
-  /** Override the button label (row-level actions read “Review source with AI”). */
+  /** Override the button label for row-level actions that seed a specific source URL. */
   label?: string;
   variant?: "outline" | "ghost";
   className?: string;
@@ -328,7 +367,7 @@ export function CatalogueSourceReviewButton({
         onClick={() => setOpen(true)}
       >
         <Sparkles className="w-4 h-4 mr-2 text-violet-500" />
-        {label ?? COPY[catalogue].button}
+        {label ?? SOURCE_REVIEW_BUTTON_LABEL}
       </Button>
       {/* Remount the dialog per-open so the seeded URL is re-applied each time. */}
       {open && (

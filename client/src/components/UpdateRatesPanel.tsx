@@ -211,7 +211,7 @@ export function UpdateRatesPanel({ portfolioId }: Props) {
                       catalogue={catalogue}
                       isManager={isManager}
                       initialUrl={url}
-                      label="Review source with AI"
+                      label="Review a source with AI"
                     />
                     <a href={url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
                       <Button variant="outline" size="sm" className="h-8 gap-1 text-xs">Open <ExternalLink className="h-3 w-3" /></Button>

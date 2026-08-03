@@ -1337,7 +1337,7 @@ function SourceEditor({
 }
 
 /** A registry source's `feeds` tag maps onto exactly one review catalogue so the
- *  row-level "Review source with AI" opens the right governed comparison. A
+ *  row-level "Review a source with AI" opens the right governed comparison. A
  *  "mixed" source has no single catalogue, so we omit the shortcut there (the
  *  manager still uses the per-catalogue buttons on each catalogue page). */
 function catalogueForFeed(feeds: string): CatalogueKind | null {
@@ -1478,7 +1478,7 @@ function RegisteredSourcePatterns() {
                       catalogue={cat}
                       isManager={isManager}
                       initialUrl={s.url ?? undefined}
-                      label="Review source with AI"
+                      label="Review a source with AI"
                     />
                   );
                 })()}

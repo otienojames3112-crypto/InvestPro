@@ -8859,7 +8859,7 @@ export const appRouter = router({
         const threadId = await createResearchThread({
           createdByOpenId: openId,
           createdByName: ctx.user.name ?? null,
-          title: `Review ${scopeLabel[catalogue]} source with AI`,
+          title: `Review a source for ${scopeLabel[catalogue]} with AI`,
           scope: catalogue,
         });
         let pending: PendingResearchSource =
@@ -9114,7 +9114,7 @@ export const appRouter = router({
         return { newFindingId: result.newFindingId, pendingUpdateId: result.updateId };
       }),
 
-    // Round 89 — per-catalogue "Review source with AI". A manager attaches a source
+    // Round 89 — per-catalogue "Review a source with AI". A manager attaches a source
     // (Serrari benchmark / factsheet / screenshot / PDF / URL) FROM a specific
     // catalogue page; the engine compares it against that catalogue's CURRENT rows
     // and proposes create/edit/stale FINDINGS. It reuses the exact same ask engine +
@@ -9158,7 +9158,7 @@ export const appRouter = router({
         const threadId = await createResearchThread({
           createdByOpenId: openId,
           createdByName: ctx.user.name ?? null,
-          title: `Review ${scopeLabel[catalogue]} source with AI`,
+          title: `Review a source for ${scopeLabel[catalogue]} with AI`,
           scope: catalogue,
         });
         const pending: PendingResearchSource =

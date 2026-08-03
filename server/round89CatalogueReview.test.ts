@@ -1,8 +1,8 @@
 /**
- * Round 89 — Per-catalogue "Review source with AI" regression matrix.
+ * Round 89 — Per-catalogue "Review a source with AI" regression matrix.
  *
- * The four Reference Catalogue pages gain a manager-only "Review <X> source with
- * AI" action that reuses the EXISTING Research Desk pipeline. This suite locks the
+ * The four Reference Catalogue pages gain a manager-only "Review a source with AI"
+ * action that reuses the EXISTING Research Desk pipeline. This suite locks the
  * invariants the feature promises:
  *
  *   A. PURE PROMPT BUILDERS — catalogueReviewInstruction / summariseCatalogueRows /
@@ -389,10 +389,11 @@ describe("Round 89 · G — the catalogue-review UI routes to the queue and show
   });
 
   it("offers the four per-catalogue review actions with the right copy", () => {
-    expect(dialog).toContain("Review MMF source with AI");
-    expect(dialog).toContain("Review bank source with AI");
-    expect(dialog).toContain("Review CBK source with AI");
-    expect(dialog).toContain("Review market source with AI");
+    expect(dialog).toContain('SOURCE_REVIEW_BUTTON_LABEL = "Review a source with AI"');
+    expect(dialog).toContain("Review a source for MMF Market");
+    expect(dialog).toContain("Review a source for Bank Product Catalogue");
+    expect(dialog).toContain("Review a source for CBK Securities Reference");
+    expect(dialog).toContain("Review a source for Market Assets Reference");
     // CBK blurb advertises the 91/182/364 extraction.
     expect(dialog).toMatch(/91 \/ 182 \/ 364-day/);
   });

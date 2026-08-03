@@ -629,13 +629,15 @@ export function findingsToRows(taskId: number, drafts: ResearchFindingDraft[], t
   }));
 }
 
-/* ── Round 89: per-catalogue "Review source with AI" prompt builders ─────────
+/* ── Round 89: per-catalogue "Review a source with AI" prompt builders ───────
  *
  * These are PURE (network-free) and unit-tested. The per-catalogue review reuses
  * the SAME engine (`runResearchQuestion`) and the SAME findings output — the only
- * difference is (a) the question text tells the model to COMPARE the attached
- * source against the manager's CURRENT rows and (b) which figures matter for that
- * catalogue. Nothing here writes anything: findings still go to the review queue.
+ * difference is (a) the question text tells the model to COMPARE the manager's
+ * attached source against the CURRENT rows and (b) which figures matter for that
+ * catalogue. It does not search for a newer source, refresh rows by itself, or
+ * approve anything. Nothing here writes anything: findings still go to the review
+ * queue.
  */
 
 /** A minimal shape of a current catalogue row, for the comparison snapshot. */
@@ -651,28 +653,28 @@ export function catalogueReviewInstruction(catalogue: ReferenceCatalogue): strin
   switch (catalogue) {
     case "mmf":
       return [
-        "You are reviewing a source (a Serrari-style benchmark table, a fund factsheet, a screenshot, a PDF or a URL) for the manager's MONEY MARKET FUND catalogue.",
+        "You are reviewing the manager's ATTACHED source (URL, pasted text, PDF, or image: e.g. a Serrari-style benchmark table, fund page, official rate publication, fund factsheet, screenshot, or PDF) for the MONEY MARKET FUND catalogue. Do not search for a newer source.",
         "For every MMF the source mentions, extract, verbatim with units: the published EAR (effective annual rate, net of fee) as `ear`; the gross/quoted yield as `grossYield`; the annual management fee as `managementFee`; the minimum investment (KES) as `minInvestment`; and AUM in KES millions as `aumMillions`. Keep `ear` and `grossYield` as the DIFFERENT numbers the source prints — never convert one into the other.",
         "Compare each against the CURRENT catalogue rows below and propose findings for ALL of: (a) NEW funds not in the current rows; (b) EAR/gross-yield RATE changes; (c) management-FEE changes; (d) MINIMUM-investment changes; (e) AUM changes; and (f) STALE rows. When a current fund is clearly absent from a comprehensive benchmark (e.g. delisted or no longer quoted), emit a finding with proposalType='stale'. Only emit a finding when something is new or actually changed versus the current row, or the source/as-of date is newer.",
         "For EVERY finding, set proposalType to 'create' (new fund), 'update' (existing row changed), or 'stale' (current row absent from source). For 'update' and 'stale', set matchedCurrentRow to the exact fund name from the CURRENT CATALOGUE ROWS list, list the changedFields, and provide currentValues (the OLD values from the current row). For 'create', set matchedCurrentRow to null and changedFields/currentValues to empty arrays.",
       ].join("\n");
     case "bank":
       return [
-        "You are reviewing a source for the manager's BANK PRODUCT catalogue (call/fixed/savings deposits).",
+        "You are reviewing the manager's ATTACHED source (URL, pasted text, PDF, or image: e.g. an official product page, tariff sheet, rate sheet, or term-deposit schedule) for the BANK PRODUCT catalogue (call/fixed/savings deposits). Do not search for a newer source.",
         "For every bank product the source mentions, extract, verbatim with units: the indicative rate (% p.a.) as `indicativeRate`; the minimum amount (KES) as `minAmount`; the typical tenor / notice period as `typicalTenor`; and whether the rate is negotiable as `isNegotiable` (\"true\"/\"false\"). Capture any early-break / liquidity terms in the finding's rawExcerpt. Bank rates are INDICATIVE and usually quoted GROSS of the 15% WHT — say so in warnings when the source does.",
         "Compare each against the CURRENT catalogue rows below and propose findings for ALL of: NEW products; indicative-RATE changes; TENOR / notice-period changes; and NEGOTIABLE-flag changes (plus minimum-amount or liquidity-term changes). Emit a finding only when a product is new or a value actually CHANGED versus the current row, or the as-of date is newer.",
         "For EVERY finding, set proposalType to 'create' (new product), 'update' (existing row changed), or 'stale' (current row absent from source). For 'update' and 'stale', set matchedCurrentRow to the exact product name from the CURRENT CATALOGUE ROWS list, list the changedFields, and provide currentValues (the OLD values from the current row). For 'create', set matchedCurrentRow to null and changedFields/currentValues to empty arrays.",
       ].join("\n");
     case "cbk":
       return [
-        "You are reviewing a CBK / Treasury source: Treasury bills on offer, weekly auction results, or a bond auction/re-opening notice.",
+        "You are reviewing the manager's ATTACHED CBK / Treasury source (URL, pasted text, PDF, or image): CBK notices, Treasury bills on offer, weekly auction results, DhowCSD references, official security details, or a bond auction/re-opening notice. Do not search for a newer source.",
         "For Treasury BILLS, emit ONE finding per tenor actually present — the 91-day, 182-day and 364-day bills are SEPARATE instruments. For each, extract verbatim: the annualised rate as `yieldPct`; the previous auction average rate as `prevAvgRate` when shown; the tenor in days as `tenorDays` (91/182/364); the issue number as `issueNumber`; the auction date as `auctionDate` and the value/settlement date as `valueDate`. For BONDS, extract the coupon as `coupon`, the yield-to-maturity as `yieldPct`, and the tenor.",
         "Name each bill finding clearly by tenor (e.g. \"91-Day Treasury Bill\"). Compare against the CURRENT rows below and propose findings for ALL of: 91/182/364-day bill RATE updates; new ISSUE NUMBERS; AUCTION-date and VALUE-date updates; and any bond RE-OPENING. Emit a finding when a tenor's rate/issue/dates changed or a new issue is on offer.",
         "For EVERY finding, set proposalType to 'create' (new issue), 'update' (existing row changed), or 'stale' (current row absent from source). For 'update' and 'stale', set matchedCurrentRow to the exact name from the CURRENT CATALOGUE ROWS list, list the changedFields, and provide currentValues (the OLD values from the current row). For 'create', set matchedCurrentRow to null and changedFields/currentValues to empty arrays.",
       ].join("\n");
     case "market_asset":
       return [
-        "You are reviewing a market source for the manager's MARKET ASSETS catalogue: an NSE price board, a REIT factsheet, an ETF factsheet, or an offshore-fund factsheet.",
+        "You are reviewing the manager's ATTACHED market source (URL, pasted text, PDF, or image) for the MARKET ASSETS catalogue: Equity, REIT, Offshore fund, and SACCO source documents such as issuer pages, exchange notices, fund manager factsheets, NSE price boards, REIT factsheets, ETF factsheets, offshore-fund factsheets, or SACCO disclosures. Do not search for a newer source.",
         "For every instrument the source mentions, extract, verbatim with units: the last price / NAV as `lastPrice`; the headline yield or distribution as `yieldPct` (and what it represents as `yieldKind`); the trailing 12-month return as `trailingReturnPct`; and the expense ratio as `expenseRatioPct` where shown. Trailing returns are PAST performance — say so in warnings.",
         "Compare each against the CURRENT rows below and propose findings for ALL of: NEW instruments; PRICE / NAV changes; YIELD changes; and TRAILING-RETURN changes (plus expense-ratio updates). Emit a finding only when an instrument is new or a value actually CHANGED versus the current row, or the as-of date is newer.",
         "For EVERY finding, set proposalType to 'create' (new instrument), 'update' (existing row changed), or 'stale' (current row absent from source). For 'update' and 'stale', set matchedCurrentRow to the exact name from the CURRENT CATALOGUE ROWS list, list the changedFields, and provide currentValues (the OLD values from the current row). For 'create', set matchedCurrentRow to null and changedFields/currentValues to empty arrays.",
@@ -724,7 +726,7 @@ export function buildCatalogueReviewQuestion(
     "CURRENT CATALOGUE ROWS (compare the attached source against these — do NOT restate a row that is unchanged):",
     summariseCatalogueRows(catalogue, rows),
     "",
-    "Return a concise briefing of what the source says versus the current rows, plus one structured FINDING per proposed change (new row, changed figure, or newer source/as-of). Every finding is a PROPOSAL the manager will review and approve — never a catalogue write, never a recommendation.",
+    "Return a concise briefing of what the attached source says versus the current rows, plus one structured FINDING per proposed change (new row, changed figure, or newer source/as-of). Every finding is a PROPOSAL the manager will review and approve in the Review Queue — never a catalogue write, never an automatic refresh, never a source search, never an automatic approval, and never a recommendation. In short: never a catalogue write, never a recommendation.",
   ].join("\n");
 }
 

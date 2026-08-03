@@ -119,9 +119,9 @@ describe("Stage 10b-5g - How to read this catalogue", () => {
     expect(guides).not.toMatch(/\bbest\b|\brecommended\b|\bprofit\b|choose this/i);
   });
 
-  it("keeps Review source with AI unchanged", () => {
+  it("keeps the source-review workflow intact alongside the read guide", () => {
     expect(sourceReview).toContain("export function CatalogueSourceReviewButton");
-    expect(sourceReview).toContain("COPY[catalogue].button");
+    expect(sourceReview).toContain('SOURCE_REVIEW_BUTTON_LABEL = "Review a source with AI"');
     expect(sourceReview).toContain("Nothing here changes a catalogue");
     expect(sourceReview).toContain("FindingCard");
   });

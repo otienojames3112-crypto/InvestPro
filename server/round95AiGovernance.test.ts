@@ -21,7 +21,7 @@
  *      is an admin-gated mutation keyed on an explicit `approve` flag.
  *   5. The client explanation surfaces call `aiExplain.*` via useQuery (never a
  *      mutation) and only fire on demand (enabled-gated), and the Rate Settings /
- *      Source Registry rows expose the governed "Review source with AI" button.
+ *      Source Registry rows expose the governed "Review a source with AI" button.
  */
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
@@ -184,7 +184,7 @@ describe("Round 95 · client surfaces are read-only and on-demand", () => {
   });
 
   it("Rate Settings and Source Registry rows expose the governed review button", () => {
-    expect(updateRates).toContain('label="Review source with AI"');
-    expect(researchDesk).toContain('label="Review source with AI"');
+    expect(updateRates).toContain('label="Review a source with AI"');
+    expect(researchDesk).toContain('label="Review a source with AI"');
   });
 });

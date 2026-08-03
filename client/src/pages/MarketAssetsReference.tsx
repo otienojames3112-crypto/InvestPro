@@ -81,7 +81,7 @@ import { toast } from "sonner";
  */
 
 type Opportunity = inferRouterOutputs<AppRouter>["opportunities"]["list"][number];
-type HoldingsDialogSubtype = "equity" | "reit";
+type HoldingsDialogSubtype = "equity" | "reit" | "offshore_fund";
 type HoldingsDialogTarget = {
   row: Opportunity;
   subtype: HoldingsDialogSubtype;
@@ -471,7 +471,7 @@ export default function MarketAssetsReference({ embedded = false }: { embedded?:
 
         <p className="text-xs text-muted-foreground flex items-center gap-1.5">
           <Info className="w-3.5 h-3.5" />
-          Equity and REIT rows now use a confirm-first Add to holdings dialog. Offshore fund and
+          Equity, REIT and Offshore fund rows now use a confirm-first Add to holdings dialog.
           SACCO rows keep the existing Track holding deep-link for now.
         </p>
       </div>
@@ -524,6 +524,7 @@ function MarketAssetHoldingDialog({
   const [units, setUnits] = useState("");
   const [purchasePrice, setPurchasePrice] = useState("");
   const [purchaseDate, setPurchaseDate] = useState("");
+  const [fxRateToKes, setFxRateToKes] = useState("");
   const [notes, setNotes] = useState("");
 
   useEffect(() => {
@@ -531,13 +532,17 @@ function MarketAssetHoldingDialog({
     setUnits("");
     setPurchasePrice("");
     setPurchaseDate(toIsoDate(new Date()) ?? "");
+    setFxRateToKes("");
     setNotes("");
   }, [target]);
+
+  const isOffshore = target?.subtype === "offshore_fund";
 
   const commit = trpc.modeling.commit.useMutation({
     onSuccess: async () => {
       await onCreated();
-      toast.success(`${target?.subtype === "reit" ? "REIT" : "Equity"} holding added.`);
+      const label = target?.subtype === "reit" ? "REIT" : target?.subtype === "offshore_fund" ? "Offshore fund" : "Equity";
+      toast.success(`${label} holding added.`);
       onOpenChange(false);
     },
     onError: (e) => toast.error("Could not add holding", { description: e.message }),
@@ -567,17 +572,26 @@ function MarketAssetHoldingDialog({
     if (!row || !portfolioId) return;
     const unitsNum = Number(units);
     const priceNum = Number(purchasePrice);
+    const unitWord = target?.subtype === "reit" ? "unit" : target?.subtype === "offshore_fund" ? "unit" : "share";
     if (!Number.isFinite(unitsNum) || unitsNum <= 0) {
-      toast.error(`Enter a valid number of ${target?.subtype === "reit" ? "units" : "shares"}.`);
+      toast.error(`Enter a valid number of ${unitWord}s.`);
       return;
     }
     if (!Number.isFinite(priceNum) || priceNum <= 0) {
-      toast.error(`Enter a valid purchase price per ${target?.subtype === "reit" ? "unit" : "share"}.`);
+      toast.error(`Enter a valid purchase price per ${unitWord}.`);
       return;
     }
     if (!purchaseDate) {
       toast.error("Enter the purchase date.");
       return;
+    }
+    let fxRateNum: number | null = null;
+    if (isOffshore) {
+      fxRateNum = Number(fxRateToKes);
+      if (!Number.isFinite(fxRateNum) || fxRateNum <= 0) {
+        toast.error("Enter a valid FX rate to KES.");
+        return;
+      }
     }
     if (!snapshotSource || !snapshotAsOf) {
       toast.error("This reference row is missing source provenance, so it cannot be added through this governed flow yet.");
@@ -585,11 +599,12 @@ function MarketAssetHoldingDialog({
     }
     commit.mutate({
       portfolioId,
-      assetClass: row.assetClass as "equity" | "reit",
+      assetClass: row.assetClass as "equity" | "reit" | "offshore_fund",
       name: row.name,
       units: unitsNum,
       unitPrice: priceNum,
       currency: (row.currency ?? "KES").toUpperCase(),
+      fxRateToKes: fxRateNum ?? undefined,
       entryDate: purchaseDate,
       catalogRef: row.ref,
       dataSource: snapshotSource,
@@ -604,7 +619,13 @@ function MarketAssetHoldingDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl">
         <DialogHeader>
-          <DialogTitle>{target?.subtype === "reit" ? "Add REIT to holdings" : "Add equity to holdings"}</DialogTitle>
+          <DialogTitle>
+            {target?.subtype === "reit"
+              ? "Add REIT to holdings"
+              : target?.subtype === "offshore_fund"
+                ? "Add offshore fund to holdings"
+                : "Add equity to holdings"}
+          </DialogTitle>
           <DialogDescription>
             Approved reference facts are shown separately from your own holding details. Nothing is
             saved until you confirm.
@@ -640,7 +661,7 @@ function MarketAssetHoldingDialog({
                   <ReferenceFact label="Sector" value={readField("marketSector") ?? "—"} />
                   <ReferenceFact label="Source as-of date" value={formatAsOf(sourceMeta?.asOf)} />
                 </>
-              ) : (
+              ) : target?.subtype === "reit" ? (
                 <>
                   <ReferenceFact label="REIT" value={row.name} />
                   <ReferenceFact label="REIT type" value={readField("reitType") ?? "—"} />
@@ -649,6 +670,20 @@ function MarketAssetHoldingDialog({
                   <ReferenceFact label="Recent distribution" value={readField("recentDistribution") ?? "—"} />
                   <ReferenceFact label="NAV" value={readField("nav") ? fmtPlainNumber(readField("nav")) : "—"} />
                   <ReferenceFact label="Occupancy" value={readField("occupancyRate") ?? "—"} />
+                  <ReferenceFact label="Source as-of date" value={formatAsOf(sourceMeta?.asOf)} />
+                </>
+              ) : (
+                <>
+                  <ReferenceFact label="Fund name" value={row.name} />
+                  <ReferenceFact label="Manager / provider" value={row.issuer ?? "—"} />
+                  <ReferenceFact label="Currency" value={(row.currency ?? "—").toUpperCase()} />
+                  <ReferenceFact label="Fund type" value={readField("fundType") ?? "—"} />
+                  <ReferenceFact label="Trailing return (reference performance, not owned value)" value={fmtPct(row.trailingReturnPct)} />
+                  <ReferenceFact label="Minimum investment" value={readField("minInvestment") ?? "—"} />
+                  <ReferenceFact label="Fees / expense ratio" value={fmtPct(row.expenseRatioPct)} />
+                  <ReferenceFact label="Withdrawal period" value={readField("withdrawalPeriod") ?? "—"} />
+                  <ReferenceFact label="FX risk note" value={readField("fxRiskNote") ?? "—"} />
+                  <ReferenceFact label="Risk note" value={readField("riskLevel") ?? "—"} />
                   <ReferenceFact label="Source as-of date" value={formatAsOf(sourceMeta?.asOf)} />
                 </>
               )}
@@ -693,7 +728,7 @@ function MarketAssetHoldingDialog({
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <div className="space-y-1.5">
-                  <Label>{target?.subtype === "reit" ? "Units held" : "Shares held"}</Label>
+                  <Label>{target?.subtype === "equity" ? "Shares held" : "Units held"}</Label>
                   <Input
                     type="number"
                     inputMode="decimal"
@@ -701,11 +736,14 @@ function MarketAssetHoldingDialog({
                     step="0.0001"
                     value={units}
                     onChange={(e) => setUnits(e.target.value)}
-                    placeholder={target?.subtype === "reit" ? "e.g. 100.0" : "e.g. 250"}
+                    placeholder={target?.subtype === "equity" ? "e.g. 250" : "e.g. 100.0"}
                   />
                 </div>
                 <div className="space-y-1.5">
-                  <Label>{target?.subtype === "reit" ? "Purchase price per unit" : "Purchase price per share"} ({(row.currency ?? "KES").toUpperCase()})</Label>
+                  <Label>
+                    {target?.subtype === "equity" ? "Purchase price per share" : "Purchase price per unit"}
+                    {isOffshore ? " (fund currency)" : ""} ({(row.currency ?? "KES").toUpperCase()})
+                  </Label>
                   <Input
                     type="number"
                     inputMode="decimal"
@@ -713,9 +751,23 @@ function MarketAssetHoldingDialog({
                     step="0.0001"
                     value={purchasePrice}
                     onChange={(e) => setPurchasePrice(e.target.value)}
-                    placeholder={target?.subtype === "reit" ? "Enter your actual unit price" : "Enter your actual share price"}
+                    placeholder={target?.subtype === "equity" ? "Enter your actual share price" : "Enter your actual unit price"}
                   />
                 </div>
+                {isOffshore && (
+                  <div className="space-y-1.5">
+                    <Label>FX rate to KES</Label>
+                    <Input
+                      type="number"
+                      inputMode="decimal"
+                      min="0"
+                      step="0.0001"
+                      value={fxRateToKes}
+                      onChange={(e) => setFxRateToKes(e.target.value)}
+                      placeholder={`e.g. 130.50 KES per ${(row.currency ?? "").toUpperCase()}`}
+                    />
+                  </div>
+                )}
                 <div className="space-y-1.5">
                   <Label>Purchase date</Label>
                   <Input type="date" value={purchaseDate} onChange={(e) => setPurchaseDate(e.target.value)} />
@@ -729,6 +781,13 @@ function MarketAssetHoldingDialog({
                   />
                 </div>
               </div>
+              {isOffshore && (
+                <p className="text-xs text-muted-foreground">
+                  Your holding's KES value is calculated only from the units, purchase price, and FX rate you
+                  enter here — never from the reference catalogue's trailing return, fees, or any other
+                  percentage figure.
+                </p>
+              )}
               <p className="text-xs text-muted-foreground">
                 Current value is not seeded from yield, return, dividend, distribution, or NAV figures in
                 the reference catalogue.
@@ -829,7 +888,7 @@ function SubtypeTable({
                   r={r}
                   contract={contract}
                   onTrack={() => {
-                    if (subtype === "equity" || subtype === "reit") {
+                    if (subtype === "equity" || subtype === "reit" || subtype === "offshore_fund") {
                       onOpenHoldingsDialog(subtype, r, contract);
                       return;
                     }
@@ -1158,7 +1217,7 @@ function SubtypeRow({
         <TableCell className="text-sm max-w-[180px] truncate">{fxRiskNote ?? "—"}</TableCell>
         <TableCell className="text-sm whitespace-nowrap">{riskLevel ?? "—"}</TableCell>
         <TableCell><SourceCell r={r} /></TableCell>
-        <ActionsCells r={r} onTrack={onTrack} isManager={isManager} staleByRef={staleByRef} refFocus={refFocus} actionLabel="Track holding" actionTooltip="Opens the Holdings → Other add form seeded to this instrument. You confirm the amount and figures before anything is saved — nothing is bought or moved automatically." />
+        <ActionsCells r={r} onTrack={onTrack} isManager={isManager} staleByRef={staleByRef} refFocus={refFocus} actionLabel="Add to holdings" actionTooltip="Opens a confirm-first holdings form with approved reference facts shown separately from your own units, purchase price, currency, FX rate, date, and notes. Nothing is saved until you confirm." />
       </TableRow>
     );
   }

@@ -19,7 +19,7 @@ describe("Stage Holdings Sync 1 · Market Assets Equity/REIT holdings flow", () 
     expect(marketPage).toContain("Add REIT to holdings");
     expect(marketPage).toContain("Add to holdings");
     expect(marketPage).toContain("Track holding");
-    expect(marketPage).toContain("Offshore fund and");
+    expect(marketPage).toContain("Equity, REIT and Offshore fund rows now use a confirm-first Add to holdings dialog.");
     expect(marketPage).toContain("SACCO rows keep the existing Track holding deep-link for now.");
   });
 

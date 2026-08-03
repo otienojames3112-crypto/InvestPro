@@ -7,9 +7,15 @@
  * row for the action to render on, so this locks in the empty-state copy that
  * explains that instead of leaving the tab looking silently broken — while
  * confirming no global "Add to holdings" button was introduced, the existing
- * row-level confirm-first behavior for populated tabs is unchanged, Offshore
- * fund/SACCO are not upgraded in this slice, and none of the retired surfaces
- * (Plan Fit, Explain catalogue, Review a source with AI, reset) return.
+ * row-level confirm-first behavior for populated tabs is unchanged, and none
+ * of the retired surfaces (Plan Fit, Explain catalogue, Review a source with
+ * AI, reset) return.
+ *
+ * Note: this test originally asserted Offshore fund also stayed on the older
+ * Track holding fallback — that changed under Stage Holdings Sync 2, which
+ * gave Offshore fund the same confirm-first Add to holdings flow (see
+ * server/marketAssetOffshoreHoldingsSync2.test.ts). Only SACCO remains on
+ * the fallback here.
  */
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
@@ -65,19 +71,19 @@ describe("Market Assets empty-state — Add to holdings row-level explanation", 
     expect(reitRowBranch).toContain("onClick={onTrack}");
   });
 
-  it("6. Offshore fund and SACCO are not upgraded in this slice", () => {
-    expect(marketPage).toContain("No approved Offshore fund records yet.");
+  it("6. SACCO is not upgraded — its simple empty copy and Track holding action are unchanged", () => {
     expect(marketPage).toContain("No approved SACCO records yet.");
-    // Their simple empty copy must not mention Add to holdings.
-    expect(marketPage).not.toContain("No approved Offshore fund records yet. Add to holdings");
+    // Its simple empty copy must not mention Add to holdings.
     expect(marketPage).not.toContain("No approved SACCO records yet. Add to holdings");
-    // Their row-level action stays "Track holding", not "Add to holdings".
-    const offshoreRowBranch = sliceBetween(marketPage, 'if (subtype === "offshore_fund") {', "// sacco");
-    expect(offshoreRowBranch).toContain('actionLabel="Track holding"');
-    expect(offshoreRowBranch).not.toContain("Add to holdings");
+    // SACCO's row-level action stays "Track holding", not "Add to holdings".
     const saccoRowBranch = marketPage.slice(marketPage.indexOf("// sacco"));
     expect(saccoRowBranch).toContain('actionLabel="Track holding"');
     expect(saccoRowBranch).not.toContain("Add to holdings");
+  });
+
+  it("6b. Offshore fund's empty-state copy from this slice is still present (its row-level action was upgraded separately under Stage Holdings Sync 2)", () => {
+    expect(marketPage).toContain("No approved Offshore fund records yet.");
+    expect(marketPage).not.toContain("No approved Offshore fund records yet. Add to holdings");
   });
 
   it("7. no holding is created without confirmation", () => {

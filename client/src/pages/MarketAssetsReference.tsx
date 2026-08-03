@@ -314,6 +314,19 @@ export default function MarketAssetsReference({ embedded = false }: { embedded?:
     };
   }, [marketRows, search]);
 
+  // Unfiltered per-subtype counts (ignores search) — lets the empty state tell
+  // "the catalogue has no approved rows of this subtype" apart from "your
+  // search matched nothing", which are different situations for the user.
+  const subtypeTotals = useMemo(
+    () => ({
+      equity: marketRows.filter((r) => r.assetClass === "equity").length,
+      reit: marketRows.filter((r) => r.assetClass === "reit").length,
+      offshore_fund: marketRows.filter((r) => r.assetClass === "offshore_fund").length,
+      sacco: marketRows.filter((r) => isSaccoRow(r)).length,
+    }),
+    [marketRows],
+  );
+
   const resetFilters = () => setSearch("");
 
   const { portfolioId } = usePortfolio();
@@ -441,16 +454,16 @@ export default function MarketAssetsReference({ embedded = false }: { embedded?:
                 <TabsTrigger value="sacco">SACCO ({bySubtype.sacco.length})</TabsTrigger>
               </TabsList>
               <TabsContent value="equity" className="mt-4">
-                <SubtypeTable subtype="equity" rows={bySubtype.equity} isManager={isManager} staleByRef={staleByRef} refFocus={refFocus} onOpenHoldingsDialog={openHoldingsDialog} />
+                <SubtypeTable subtype="equity" rows={bySubtype.equity} hasApprovedRows={subtypeTotals.equity > 0} isManager={isManager} staleByRef={staleByRef} refFocus={refFocus} onOpenHoldingsDialog={openHoldingsDialog} />
               </TabsContent>
               <TabsContent value="reit" className="mt-4">
-                <SubtypeTable subtype="reit" rows={bySubtype.reit} isManager={isManager} staleByRef={staleByRef} refFocus={refFocus} onOpenHoldingsDialog={openHoldingsDialog} />
+                <SubtypeTable subtype="reit" rows={bySubtype.reit} hasApprovedRows={subtypeTotals.reit > 0} isManager={isManager} staleByRef={staleByRef} refFocus={refFocus} onOpenHoldingsDialog={openHoldingsDialog} />
               </TabsContent>
               <TabsContent value="offshore_fund" className="mt-4">
-                <SubtypeTable subtype="offshore_fund" rows={bySubtype.offshore_fund} isManager={isManager} staleByRef={staleByRef} refFocus={refFocus} onOpenHoldingsDialog={openHoldingsDialog} />
+                <SubtypeTable subtype="offshore_fund" rows={bySubtype.offshore_fund} hasApprovedRows={subtypeTotals.offshore_fund > 0} isManager={isManager} staleByRef={staleByRef} refFocus={refFocus} onOpenHoldingsDialog={openHoldingsDialog} />
               </TabsContent>
               <TabsContent value="sacco" className="mt-4">
-                <SubtypeTable subtype="sacco" rows={bySubtype.sacco} isManager={isManager} staleByRef={staleByRef} refFocus={refFocus} onOpenHoldingsDialog={openHoldingsDialog} />
+                <SubtypeTable subtype="sacco" rows={bySubtype.sacco} hasApprovedRows={subtypeTotals.sacco > 0} isManager={isManager} staleByRef={staleByRef} refFocus={refFocus} onOpenHoldingsDialog={openHoldingsDialog} />
               </TabsContent>
             </Tabs>
           )
@@ -739,11 +752,25 @@ function MarketAssetHoldingDialog({
 
 type Subtype = "equity" | "reit" | "offshore_fund" | "sacco";
 
-const EMPTY_LABEL: Record<Subtype, string> = {
+// Shown when a search query filters an otherwise non-empty tab down to zero rows.
+const EMPTY_SEARCH_LABEL: Record<Subtype, string> = {
   equity: "No equities match your search.",
   reit: "No REITs match your search.",
   offshore_fund: "No offshore funds match your search.",
   sacco: "No SACCOs match your search.",
+};
+
+// Shown when the catalogue itself has no approved rows of this subtype yet
+// (search is irrelevant). Add to holdings is row-level and tied to an approved
+// Equity/REIT reference row, so it explains why the action isn't visible
+// instead of leaving the tab looking silently broken.
+const EMPTY_CATALOGUE_LABEL: Record<Subtype, string> = {
+  equity:
+    "No approved Equity records yet. Add to holdings appears after an approved Equity reference row exists. To propose new Equity facts, use Research Desk → Ask AI.",
+  reit:
+    "No approved REIT records yet. Add to holdings appears after an approved REIT reference row exists. To propose new REIT facts, use Research Desk → Ask AI.",
+  offshore_fund: "No approved Offshore fund records yet.",
+  sacco: "No approved SACCO records yet.",
 };
 
 /**
@@ -758,6 +785,7 @@ const EMPTY_LABEL: Record<Subtype, string> = {
 function SubtypeTable({
   subtype,
   rows,
+  hasApprovedRows,
   isManager,
   staleByRef,
   refFocus,
@@ -765,6 +793,7 @@ function SubtypeTable({
 }: {
   subtype: Subtype;
   rows: Opportunity[];
+  hasApprovedRows: boolean;
   isManager: boolean;
   staleByRef: Map<string, boolean>;
   refFocus: RefFocus;
@@ -774,10 +803,11 @@ function SubtypeTable({
   const trackHolding = useTrackHolding();
 
   if (rows.length === 0) {
+    const message = hasApprovedRows ? EMPTY_SEARCH_LABEL[subtype] : EMPTY_CATALOGUE_LABEL[subtype];
     return (
       <Card>
         <CardContent className="p-0">
-          <div className="p-8 text-center text-sm text-muted-foreground">{EMPTY_LABEL[subtype]}</div>
+          <div className="p-8 text-center text-sm text-muted-foreground">{message}</div>
         </CardContent>
       </Card>
     );

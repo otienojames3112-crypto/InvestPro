@@ -19,7 +19,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
@@ -161,7 +161,13 @@ function FundFormDialog({
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
       <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>{isEdit ? "Edit Fund" : "Add MMF Fund"}</DialogTitle>
+          <DialogTitle>Maintain MMF records</DialogTitle>
+          <DialogDescription>
+            Use this for manager-only manual maintenance when the approved facts are already known and can be
+            supported by a source. Add a missing MMF fund record or correct fields on an existing one. For AI
+            extraction from a URL, pasted text, PDF, or image, use Research Desk → Ask AI. Holdings are recorded
+            separately.
+          </DialogDescription>
         </DialogHeader>
         <div className="grid grid-cols-2 gap-3 py-2">
           <div className="col-span-2">
@@ -516,7 +522,7 @@ export default function MmfFunds({ embedded = false }: { embedded?: boolean } = 
         <div className="flex items-center gap-2 flex-wrap">
           {isManager && (
             <Button onClick={() => setAddOpen(true)} size="sm">
-              <Plus className="w-4 h-4 mr-1" /> Add / correct fund
+              <Plus className="w-4 h-4 mr-1" /> Maintain records
             </Button>
           )}
           <Button
@@ -906,7 +912,7 @@ export default function MmfFunds({ embedded = false }: { embedded?: boolean } = 
       <p className="text-xs text-muted-foreground">
         EAR = Effective Annual Rate net of management fee, before 15% WHT. WHT is applied by the projection engine.
         Every figure above (fund count, average and top-5 EAR, freshness) is computed from the live catalogue rows —
-        each fund carries its own source and as-of date. Managers correct a figure via Edit; each correction is
+        each fund carries its own source and as-of date. Managers maintain source-supported records from the Maintain records action; each correction is
         recorded in the audit trail with its source and reason.
       </p>
 

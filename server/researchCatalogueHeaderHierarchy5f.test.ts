@@ -64,11 +64,11 @@ describe("Stage 10b-5f - category catalogue headers and action hierarchy", () =>
     const cbk = headerBlock("cbk");
     const market = headerBlock("market");
 
-    expectOrder(mmf, "Add / correct fund", "HOW_TO_READ_CATALOGUE_LABEL");
-    expectOrder(bank, "Add / correct product", "HOW_TO_READ_CATALOGUE_LABEL");
+    expectOrder(mmf, "Maintain records", "HOW_TO_READ_CATALOGUE_LABEL");
+    expectOrder(bank, "Maintain records", "HOW_TO_READ_CATALOGUE_LABEL");
 
-    expect(cbk).not.toContain("Add / correct");
-    expect(market).not.toContain("Add / correct");
+    expectOrder(cbk, "Maintain records", "HOW_TO_READ_CATALOGUE_LABEL");
+    expectOrder(market, "Maintain records", "HOW_TO_READ_CATALOGUE_LABEL");
   });
 
   it("does not keep duplicated disclaimer cards on CBK or Market Assets", () => {

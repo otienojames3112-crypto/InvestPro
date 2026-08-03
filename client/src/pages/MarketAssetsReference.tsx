@@ -301,6 +301,24 @@ export default function MarketAssetsReference({ embedded = false }: { embedded?:
             </p>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
+            {isManager && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="inline-flex">
+                    <Button size="sm" disabled className="h-7 gap-1.5 text-xs font-medium">
+                      <ShieldCheck className="w-3.5 h-3.5" />
+                      Maintain records
+                    </Button>
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" className="max-w-xs text-xs">
+                  Maintain market asset records is not enabled here yet. Manual maintenance must create a
+                  source-supported pending update that preserves Equity, REIT, Offshore fund, and SACCO subtype
+                  contracts before manager approval. For now, use Research Desk → Ask AI for source extraction;
+                  holdings are recorded separately.
+                </TooltipContent>
+              </Tooltip>
+            )}
             <Button
               variant="outline"
               size="sm"

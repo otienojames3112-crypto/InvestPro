@@ -49,8 +49,8 @@ describe("Stage 10b-5g - How to read this catalogue", () => {
       expect(page).toContain("{HOW_TO_READ_CATALOGUE_LABEL}");
       expect(page).toContain("Research Desk → Ask AI");
     }
-    expect(frontend.mmf.indexOf("{HOW_TO_READ_CATALOGUE_LABEL}")).toBeGreaterThan(frontend.mmf.indexOf("Add / correct fund"));
-    expect(frontend.bank.indexOf("{HOW_TO_READ_CATALOGUE_LABEL}")).toBeGreaterThan(frontend.bank.indexOf("Add / correct product"));
+    expect(frontend.mmf.indexOf("{HOW_TO_READ_CATALOGUE_LABEL}")).toBeGreaterThan(frontend.mmf.indexOf("Maintain records"));
+    expect(frontend.bank.indexOf("{HOW_TO_READ_CATALOGUE_LABEL}")).toBeGreaterThan(frontend.bank.indexOf("Maintain records"));
   });
 
   it("passes category-specific read guides into the existing read-only AI explanation query", () => {

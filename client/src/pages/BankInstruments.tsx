@@ -152,6 +152,7 @@ const EMPTY = {
   indicativeRate: "",
   isNegotiable: true,
   notes: "",
+  asOfDate: "",
   source: "",
   reason: "",
 };
@@ -287,6 +288,7 @@ export default function BankInstruments({ embedded = false }: { embedded?: boole
       indicativeRate: r.indicativeRate === null ? "" : String(r.indicativeRate),
       isNegotiable: r.isNegotiable,
       notes: r.notes ?? "",
+      asOfDate: typeof r.asOfDate === "string" ? r.asOfDate : r.asOfDate ? r.asOfDate.toISOString().slice(0, 10) : "",
       source: r.source ?? "",
       reason: "",
     });
@@ -310,9 +312,10 @@ export default function BankInstruments({ embedded = false }: { embedded?: boole
       indicativeRate: form.indicativeRate === "" ? undefined : Number(form.indicativeRate),
       isNegotiable: form.isNegotiable,
       notes: form.notes || undefined,
+      asOfDate: form.asOfDate || undefined,
       source: form.source.trim(),
     };
-    if (form.id) update.mutate({ id: form.id, ...payload });
+    if (form.id) update.mutate({ id: form.id, ...payload, reason: form.reason.trim() || undefined });
     else add.mutate(payload);
   }
 
@@ -337,7 +340,7 @@ export default function BankInstruments({ embedded = false }: { embedded?: boole
           <div className="flex items-center gap-2 flex-wrap shrink-0">
             {isManager && (
               <Button onClick={openAdd}>
-                <Plus className="w-4 h-4 mr-2" /> Add / correct product
+                <Plus className="w-4 h-4 mr-2" /> Maintain records
               </Button>
             )}
             <Button
@@ -725,7 +728,7 @@ export default function BankInstruments({ embedded = false }: { embedded?: boole
                     </p>
                     <div className="flex items-center gap-2">
                       <Button size="sm" variant="outline" className="bg-background" onClick={() => { const r = drawerRow; setDrawerRow(null); openEdit(r); }}>
-                        Edit / correct
+                        Correct record
                       </Button>
                       <CatalogueRowControls
                         catalogue="bank"
@@ -744,17 +747,19 @@ export default function BankInstruments({ embedded = false }: { embedded?: boole
         </SheetContent>
       </Sheet>
 
-      {/* Governed add / correct dialog (manager-only, source required) */}
+      {/* Governed manual maintenance dialog (manager-only, source required) */}
       <Dialog open={editOpen} onOpenChange={setEditOpen}>
         <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <ShieldCheck className="w-4 h-4 text-primary" />
-              {form.id ? "Correct bank product" : "Add bank product"}
+              Maintain bank product records
             </DialogTitle>
             <DialogDescription>
-              A source-backed manager correction to global reference data. It is recorded with your name; a source is
-              required.
+              Use this for manager-only manual maintenance when the approved facts are already known and can be
+              supported by a source. Add a missing bank product record or correct fields on an existing one. For AI
+              extraction from a URL, pasted text, PDF, or image, use Research Desk → Ask AI. Deposits and holdings are
+              recorded separately.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
@@ -798,14 +803,29 @@ export default function BankInstruments({ embedded = false }: { embedded?: boole
               <Input value={form.source} onChange={(e) => setForm((f) => ({ ...f, source: e.target.value }))} placeholder="e.g. bank product page URL, factsheet date" />
             </div>
             <div className="space-y-1.5">
+              <Label className="text-xs">Source as-of date</Label>
+              <Input type="date" value={form.asOfDate} onChange={(e) => setForm((f) => ({ ...f, asOfDate: e.target.value }))} />
+            </div>
+            <div className="space-y-1.5">
               <Label className="text-xs">Notes</Label>
               <Textarea value={form.notes} rows={2} onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))} />
             </div>
+            {form.id ? (
+              <div className="space-y-1.5">
+                <Label className="text-xs">Reason for correction (optional)</Label>
+                <Textarea
+                  value={form.reason}
+                  rows={2}
+                  onChange={(e) => setForm((f) => ({ ...f, reason: e.target.value }))}
+                  placeholder="e.g. Corrected indicative rate after the bank republished its rate sheet."
+                />
+              </div>
+            ) : null}
           </div>
           <DialogFooter>
             <Button variant="outline" className="bg-background" onClick={() => setEditOpen(false)}>Cancel</Button>
             <Button onClick={save} disabled={add.isPending || update.isPending}>
-              {add.isPending || update.isPending ? "Saving…" : "Save correction"}
+              {add.isPending || update.isPending ? "Saving…" : "Save record"}
             </Button>
           </DialogFooter>
         </DialogContent>

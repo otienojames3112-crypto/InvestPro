@@ -7252,9 +7252,10 @@ export const appRouter = router({
         notes: z.string().max(2000).optional(),
         asOfDate: z.string().optional(),
         source: z.string().min(1).max(500),
+        reason: z.string().max(300).optional(),
       }))
       .mutation(async ({ ctx, input }) => {
-        const { id, ...rest } = input;
+        const { id, reason, ...rest } = input;
         await updateBankInstrument(id, {
           ...(rest.bankName !== undefined && { bankName: rest.bankName }),
           ...(rest.instrumentType !== undefined && { instrumentType: rest.instrumentType }),
@@ -7274,6 +7275,7 @@ export const appRouter = router({
           field: rest.indicativeRate !== undefined ? "indicativeRate" : undefined,
           newValue: rest.indicativeRate != null ? String(rest.indicativeRate) : undefined,
           source: rest.source,
+          reason: reason ?? null,
           by: ctx.user.name ?? ctx.user.email ?? "Manager",
         });
         return { success: true };

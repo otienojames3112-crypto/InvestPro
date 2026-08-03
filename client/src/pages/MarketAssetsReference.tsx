@@ -23,7 +23,6 @@ import { InfoHint } from "@/components/InfoHint";
 import {
   Search,
   Info,
-  ShieldAlert,
   Clock,
   ChevronRight,
   LineChart,
@@ -293,8 +292,8 @@ export default function MarketAssetsReference({ embedded = false }: { embedded?:
             </h1>
             <p className="text-muted-foreground text-sm mt-1 max-w-2xl">
               Listed equities, REITs, offshore funds and SACCOs, each with the established fields for
-              that instrument type. Reference only — nothing is ranked or recommended. The assets you
-              actually hold live under{" "}
+              that instrument type. Approved reference data only; assets you actually hold are recorded
+              separately under{" "}
               <Link href={dashboardHref.other} className="text-primary underline underline-offset-2">
                 Holdings → Other
               </Link>
@@ -302,6 +301,7 @@ export default function MarketAssetsReference({ embedded = false }: { embedded?:
             </p>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
+            <CatalogueSourceReviewButton catalogue="market_asset" isManager={isManager} />
             <Button
               variant="outline"
               size="sm"
@@ -311,25 +311,8 @@ export default function MarketAssetsReference({ embedded = false }: { embedded?:
               <Sparkles className="w-3.5 h-3.5" />
               Explain catalogue
             </Button>
-            <CatalogueSourceReviewButton catalogue="market_asset" isManager={isManager} />
-            <Badge variant="outline" className="text-xs px-2.5 py-1 gap-1.5">
-              <Info className="w-3 h-3" /> Information only
-            </Badge>
           </div>
         </div>
-
-        {/* Persistent disclaimer */}
-        <Card className="border-amber-500/30 bg-amber-500/5">
-          <CardContent className="py-3 px-4 flex items-start gap-2">
-            <ShieldAlert className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
-            <p className="text-xs text-amber-800 dark:text-amber-300 leading-relaxed">
-              <strong>For information only — this is not advice or a recommendation.</strong>{" "}
-              Market prices and returns are historical, may be delayed, and can fall as well as rise.
-              Past performance does not predict the future. Verify every figure before acting. This
-              tool does not sell, broker, or execute any investment.
-            </p>
-          </CardContent>
-        </Card>
 
         {/* Search + scope */}
         <Card>

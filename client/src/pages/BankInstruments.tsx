@@ -328,11 +328,19 @@ export default function BankInstruments({ embedded = false }: { embedded?: boole
             </div>
             <p className="text-muted-foreground text-sm max-w-3xl">
               A neutral reference of Kenyan bank deposit and savings products. Posted rates are indicative and almost
-              always <strong>negotiable</strong> for larger balances — a starting point for your own rate conversation,
-              not a recommendation. Recording a real deposit happens in Holdings.
+              always <strong>negotiable</strong> for larger balances. Approved reference data only; real deposits and
+              balances are recorded separately in Holdings.
             </p>
           </div>
           <div className="flex items-center gap-2 flex-wrap shrink-0">
+            {isManager && (
+              <>
+                <CatalogueSourceReviewButton catalogue="bank" isManager={isManager} size="default" />
+                <Button onClick={openAdd}>
+                  <Plus className="w-4 h-4 mr-2" /> Add / correct product
+                </Button>
+              </>
+            )}
             <Button
               variant="outline"
               size="sm"
@@ -342,14 +350,6 @@ export default function BankInstruments({ embedded = false }: { embedded?: boole
               <Sparkles className="w-3.5 h-3.5" />
               Explain catalogue
             </Button>
-            {isManager && (
-              <>
-                <CatalogueSourceReviewButton catalogue="bank" isManager={isManager} size="default" />
-                <Button onClick={openAdd}>
-                  <Plus className="w-4 h-4 mr-2" /> Add / correct product
-                </Button>
-              </>
-            )}
           </div>
         </div>
 

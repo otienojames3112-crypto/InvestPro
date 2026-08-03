@@ -500,14 +500,26 @@ export default function MmfFunds({ embedded = false }: { embedded?: boolean } = 
             {stats.count > 0 ? (
               <>
                 {stats.count} CMA-regulated Kenyan money market fund{stats.count === 1 ? "" : "s"} currently in the
-                catalogue, sourced from {providerPhrase}. Select one to use its published EAR in your projection.
+                catalogue, sourced from {providerPhrase}. Approved reference data only; MMF accounts and balances are
+                recorded separately in Holdings.
               </>
             ) : (
-              <>No funds in the catalogue yet. Approved research proposals appear here once published.</>
+              <>
+                No funds in the catalogue yet. Approved research proposals appear here once published; MMF accounts and
+                balances are recorded separately in Holdings.
+              </>
             )}
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
+          {isManager && (
+            <>
+              <CatalogueSourceReviewButton catalogue="mmf" isManager={isManager} />
+              <Button onClick={() => setAddOpen(true)} size="sm">
+                <Plus className="w-4 h-4 mr-1" /> Add / correct fund
+              </Button>
+            </>
+          )}
           <Button
             variant="outline"
             size="sm"
@@ -517,14 +529,6 @@ export default function MmfFunds({ embedded = false }: { embedded?: boolean } = 
             <Sparkles className="w-3.5 h-3.5" />
             Explain catalogue
           </Button>
-          {isManager && (
-            <>
-              <CatalogueSourceReviewButton catalogue="mmf" isManager={isManager} />
-              <Button onClick={() => setAddOpen(true)} size="sm">
-                <Plus className="w-4 h-4 mr-1" /> Add Fund
-              </Button>
-            </>
-          )}
         </div>
       </div>
 

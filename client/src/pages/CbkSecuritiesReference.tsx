@@ -36,7 +36,6 @@ import { InfoHint } from "@/components/InfoHint";
 import {
   Search,
   Info,
-  ShieldAlert,
   Clock,
   ArrowUpDown,
   ArrowUp,
@@ -309,8 +308,8 @@ export default function CbkSecuritiesReference({ embedded = false }: { embedded?
             </h1>
             <p className="text-muted-foreground text-sm mt-1 max-w-2xl">
               Government of Kenya Treasury bills and bonds, with tenors, coupons and indicative
-              yields sourced from CBK auction data. Reference only — nothing is ranked or
-              recommended. The securities you actually hold live under{" "}
+              yields sourced from CBK auction data. Approved reference data only; securities you
+              actually hold are recorded separately under{" "}
               <Link href={dashboardHref.gov} className="text-primary underline underline-offset-2">
                 Holdings → Government
               </Link>
@@ -318,6 +317,7 @@ export default function CbkSecuritiesReference({ embedded = false }: { embedded?
             </p>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
+            <CatalogueSourceReviewButton catalogue="cbk" isManager={isManager} />
             <Button
               variant="outline"
               size="sm"
@@ -327,25 +327,8 @@ export default function CbkSecuritiesReference({ embedded = false }: { embedded?
               <Sparkles className="w-3.5 h-3.5" />
               Explain catalogue
             </Button>
-            <CatalogueSourceReviewButton catalogue="cbk" isManager={isManager} />
-            <Badge variant="outline" className="text-xs px-2.5 py-1 gap-1.5">
-              <Info className="w-3 h-3" /> Information only
-            </Badge>
           </div>
         </div>
-
-        {/* Persistent disclaimer */}
-        <Card className="border-amber-500/30 bg-amber-500/5">
-          <CardContent className="py-3 px-4 flex items-start gap-2">
-            <ShieldAlert className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
-            <p className="text-xs text-amber-800 dark:text-amber-300 leading-relaxed">
-              <strong>For information only — this is not advice or a recommendation.</strong>{" "}
-              Auction figures are indicative, may be delayed, and change at each auction. Verify the
-              current tender and cut-off with CBK / DhowCSD before acting. This tool does not sell or
-              broker securities.
-            </p>
-          </CardContent>
-        </Card>
 
         {/* Filters */}
         <Card>

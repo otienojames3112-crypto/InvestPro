@@ -113,6 +113,8 @@ interface BankRow {
   extendedFields: Record<string, unknown> | null; // widened from InstrumentProfile for rendering
 }
 
+type BankMaintenanceMode = "add" | "correct";
+
 function kes(n: number): string {
   return n.toLocaleString("en-KE", {
     style: "currency",
@@ -156,6 +158,139 @@ const EMPTY = {
   source: "",
   reason: "",
 };
+
+function MaintainBankRecordsDialog({
+  open,
+  onOpenChange,
+  rows,
+  onAdd,
+  onCorrect,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  rows: BankRow[];
+  onAdd: () => void;
+  onCorrect: (row: BankRow) => void;
+}) {
+  const [mode, setMode] = useState<BankMaintenanceMode | null>(null);
+  const [query, setQuery] = useState("");
+
+  useEffect(() => {
+    if (!open) {
+      setMode(null);
+      setQuery("");
+    }
+  }, [open]);
+
+  const activeRows = useMemo(() => rows.filter((r) => r.isActive !== false), [rows]);
+  const matches = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return activeRows
+      .filter((r) => {
+        const productName = readContractFieldValue(r.extendedFields, bankFieldByKey("productName")!);
+        return !q || `${r.bankName} ${TYPE_LABEL[r.instrumentType]} ${productName ?? ""}`.toLowerCase().includes(q);
+      })
+      .slice(0, 25);
+  }, [activeRows, query]);
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-xl">
+        <DialogHeader>
+          <DialogTitle>Maintain bank product records</DialogTitle>
+          <DialogDescription>
+            Use this for manager-only manual maintenance when the approved bank product facts are already known and can
+            be supported by a source. For AI extraction from a URL, pasted text, PDF, or image, use Research Desk → Ask
+            AI. Deposits and holdings are recorded separately.
+          </DialogDescription>
+        </DialogHeader>
+
+        {mode === null && (
+          <div className="grid gap-3 py-2">
+            <button
+              type="button"
+              className="rounded-lg border p-4 text-left hover:bg-muted/40 transition-colors"
+              onClick={() => {
+                onOpenChange(false);
+                onAdd();
+              }}
+            >
+              <div className="font-medium">Add a missing bank product record</div>
+              <p className="text-sm text-muted-foreground mt-1">
+                Create a new approved bank product reference record from source-supported facts.
+              </p>
+            </button>
+            <button
+              type="button"
+              className="rounded-lg border p-4 text-left hover:bg-muted/40 transition-colors"
+              onClick={() => setMode("correct")}
+            >
+              <div className="font-medium">Correct an existing bank product record</div>
+              <p className="text-sm text-muted-foreground mt-1">
+                Choose an existing bank product, review the current values, and save a source-supported correction.
+              </p>
+            </button>
+          </div>
+        )}
+
+        {mode === "correct" && (
+          <div className="space-y-3 py-2">
+            <div className="flex items-center gap-2">
+              <Button variant="outline" size="sm" onClick={() => setMode(null)}>Back</Button>
+              <div>
+                <div className="text-sm font-medium">Select an existing bank product record</div>
+                <p className="text-xs text-muted-foreground">The correction form opens pre-filled from the approved row.</p>
+              </div>
+            </div>
+            {activeRows.length === 0 ? (
+              <p className="rounded-md border bg-muted/30 p-3 text-sm text-muted-foreground">
+                No bank product records are available to correct yet. Add a missing record first or use Research Desk →
+                Ask AI to create draft findings.
+              </p>
+            ) : (
+              <>
+                <Input
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder="Search by bank, product, or type…"
+                />
+                <div className="max-h-72 overflow-y-auto rounded-md border divide-y">
+                  {matches.length === 0 ? (
+                    <p className="p-3 text-sm text-muted-foreground">No matching bank product records.</p>
+                  ) : (
+                    matches.map((row) => {
+                      const productName = readContractFieldValue(row.extendedFields, bankFieldByKey("productName")!);
+                      return (
+                        <button
+                          key={row.id}
+                          type="button"
+                          className="w-full p-3 text-left hover:bg-muted/40 transition-colors"
+                          onClick={() => {
+                            onOpenChange(false);
+                            onCorrect(row);
+                          }}
+                        >
+                          <div className="font-medium">{row.bankName}</div>
+                          <p className="text-xs text-muted-foreground">
+                            {productName ? `${productName} · ` : ""}{TYPE_LABEL[row.instrumentType]} · source as of {asOfLabel(row.asOfDate)}
+                          </p>
+                        </button>
+                      );
+                    })
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
+        <DialogFooter>
+          <Button variant="outline" className="bg-background" onClick={() => onOpenChange(false)}>Close</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
 
 export default function BankInstruments({ embedded = false }: { embedded?: boolean } = {}) {
   const utils = trpc.useUtils();
@@ -204,6 +339,7 @@ export default function BankInstruments({ embedded = false }: { embedded?: boole
 
   // Detail drawer + governed edit dialog
   const [drawerRow, setDrawerRow] = useState<BankRow | null>(null);
+  const [maintainOpen, setMaintainOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [form, setForm] = useState({ ...EMPTY });
   const [catExplainOpen, setCatExplainOpen] = useState(false);
@@ -304,6 +440,10 @@ export default function BankInstruments({ embedded = false }: { embedded?: boole
       toast.error("A source is required for a governed reference correction.");
       return;
     }
+    if (form.id && !form.reason.trim()) {
+      toast.error("A correction reason is required for existing bank product records.");
+      return;
+    }
     const payload = {
       bankName: form.bankName.trim(),
       instrumentType: form.instrumentType,
@@ -339,7 +479,7 @@ export default function BankInstruments({ embedded = false }: { embedded?: boole
           </div>
           <div className="flex items-center gap-2 flex-wrap shrink-0">
             {isManager && (
-              <Button onClick={openAdd}>
+              <Button onClick={() => setMaintainOpen(true)}>
                 <Plus className="w-4 h-4 mr-2" /> Maintain records
               </Button>
             )}
@@ -585,6 +725,14 @@ export default function BankInstruments({ embedded = false }: { embedded?: boole
         </p>
       </div>
 
+      <MaintainBankRecordsDialog
+        open={maintainOpen}
+        onOpenChange={setMaintainOpen}
+        rows={(rows ?? []).map((r) => ({ ...r, extendedFields: r.extendedFields as Record<string, unknown> | null }))}
+        onAdd={openAdd}
+        onCorrect={openEdit}
+      />
+
       {/* Detail drawer */}
       <Sheet open={drawerRow !== null} onOpenChange={(o) => !o && setDrawerRow(null)}>
         <SheetContent className="w-full sm:max-w-md overflow-y-auto">
@@ -763,6 +911,11 @@ export default function BankInstruments({ embedded = false }: { embedded?: boole
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
+            {form.id ? (
+              <div className="rounded-md border bg-muted/30 px-3 py-2 text-sm">
+                Correcting existing bank product record: <strong>{form.bankName}</strong>
+              </div>
+            ) : null}
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label className="text-xs">Bank name</Label>
@@ -812,7 +965,7 @@ export default function BankInstruments({ embedded = false }: { embedded?: boole
             </div>
             {form.id ? (
               <div className="space-y-1.5">
-                <Label className="text-xs">Reason for correction (optional)</Label>
+                <Label className="text-xs">Reason for correction *</Label>
                 <Textarea
                   value={form.reason}
                   rows={2}

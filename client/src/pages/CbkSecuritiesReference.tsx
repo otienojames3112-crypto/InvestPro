@@ -328,10 +328,12 @@ export default function CbkSecuritiesReference({ embedded = false }: { embedded?
                   </span>
                 </TooltipTrigger>
                 <TooltipContent side="bottom" className="max-w-xs text-xs">
-                  Maintain CBK security records is not enabled here yet. CBK manual maintenance must create a
-                  source-supported pending update that preserves T-bill, FXD, and IFB subtype validation before manager
-                  approval. For now, use Research Desk → Ask AI for source extraction; purchases and holdings are
-                  recorded separately.
+                  Maintain CBK security records is not enabled here yet. The future governed flow must support adding a
+                  missing T-bill, FXD, or IFB record, or correcting an existing security after selecting it, while
+                  preserving subtype validation: T-bill tenor, yield/rate, auction date, and value date; FXD issue
+                  number, coupon, and maturity; IFB issue number, coupon, maturity, and tax-exempt true. Source-supported
+                  manual proposals must go through governed review before catalogue changes. For now, use Research Desk
+                  → Ask AI for source extraction; purchases and holdings are recorded separately.
                 </TooltipContent>
               </Tooltip>
             )}

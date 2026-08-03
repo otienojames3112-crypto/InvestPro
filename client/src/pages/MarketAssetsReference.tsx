@@ -312,10 +312,11 @@ export default function MarketAssetsReference({ embedded = false }: { embedded?:
                   </span>
                 </TooltipTrigger>
                 <TooltipContent side="bottom" className="max-w-xs text-xs">
-                  Maintain market asset records is not enabled here yet. Manual maintenance must create a
-                  source-supported pending update that preserves Equity, REIT, Offshore fund, and SACCO subtype
-                  contracts before manager approval. For now, use Research Desk → Ask AI for source extraction;
-                  holdings are recorded separately.
+                  Maintain market asset records is not enabled here yet. The future governed flow must support adding a
+                  missing Equity, REIT, Offshore fund, or SACCO record, or correcting an existing market asset after
+                  selecting it, while using subtype-specific fields and contracts. Source-supported manual proposals
+                  must go through governed review before catalogue changes. For now, use Research Desk → Ask AI for
+                  source extraction; holdings are recorded separately.
                 </TooltipContent>
               </Tooltip>
             )}

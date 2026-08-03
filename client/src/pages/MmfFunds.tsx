@@ -73,6 +73,7 @@ function DrawerFact({ label, value }: { label: string; value: string }) {
 
 type SortKey = "fundName" | "ear" | "grossYield" | "managementFee" | "minInvestment" | "aumMillions";
 type SortDir = "asc" | "desc";
+type MmfMaintenanceMode = "add" | "correct";
 
 /** Shorten a source string/URL into a readable label (host, or the raw text). */
 function sourceLabel(source: string | null): string | null {
@@ -143,6 +144,7 @@ function FundFormDialog({
     if (isNaN(ear) || ear <= 0) { toast.error("EAR must be a positive number."); return; }
     if (isNaN(grossYield) || grossYield <= 0) { toast.error("Gross yield must be a positive number."); return; }
     if (!form.source.trim()) { toast.error("A source URL / reference is required for governed catalogue edits."); return; }
+    if (isEdit && !form.reason.trim()) { toast.error("A correction reason is required for existing MMF records."); return; }
     onSave({
       fundName: form.fundName.trim(),
       company: form.company.trim(),
@@ -169,6 +171,11 @@ function FundFormDialog({
             separately.
           </DialogDescription>
         </DialogHeader>
+        {isEdit && (
+          <div className="rounded-md border bg-muted/30 px-3 py-2 text-sm">
+            Correcting existing MMF record: <strong>{initial?.fundName}</strong>
+          </div>
+        )}
         <div className="grid grid-cols-2 gap-3 py-2">
           <div className="col-span-2">
             <Label>Fund Name *</Label>
@@ -228,7 +235,7 @@ function FundFormDialog({
           </div>
           {isEdit && (
             <div className="col-span-2">
-              <Label>Reason for correction (optional)</Label>
+              <Label>Reason for correction *</Label>
               <Textarea
                 value={form.reason}
                 onChange={set("reason")}
@@ -244,6 +251,132 @@ function FundFormDialog({
         <DialogFooter>
           <Button variant="outline" onClick={onClose} disabled={saving}>Cancel</Button>
           <Button onClick={handleSave} disabled={saving}>{saving ? "Saving…" : "Save"}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function MaintainMmfRecordsDialog({
+  open,
+  onOpenChange,
+  funds,
+  onAdd,
+  onCorrect,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  funds: Fund[];
+  onAdd: () => void;
+  onCorrect: (fund: Fund) => void;
+}) {
+  const [mode, setMode] = useState<MmfMaintenanceMode | null>(null);
+  const [query, setQuery] = useState("");
+
+  useEffect(() => {
+    if (!open) {
+      setMode(null);
+      setQuery("");
+    }
+  }, [open]);
+
+  const matches = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return funds
+      .filter((f) => f.isActive !== false)
+      .filter((f) => !q || `${f.fundName} ${f.company}`.toLowerCase().includes(q))
+      .slice(0, 25);
+  }, [funds, query]);
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-xl">
+        <DialogHeader>
+          <DialogTitle>Maintain MMF records</DialogTitle>
+          <DialogDescription>
+            Use this for manager-only manual maintenance when the approved MMF facts are already known and can be
+            supported by a source. For AI extraction from a URL, pasted text, PDF, or image, use Research Desk → Ask AI.
+          </DialogDescription>
+        </DialogHeader>
+
+        {mode === null && (
+          <div className="grid gap-3 py-2">
+            <button
+              type="button"
+              className="rounded-lg border p-4 text-left hover:bg-muted/40 transition-colors"
+              onClick={() => {
+                onOpenChange(false);
+                onAdd();
+              }}
+            >
+              <div className="font-medium">Add a missing MMF record</div>
+              <p className="text-sm text-muted-foreground mt-1">
+                Create a new approved MMF reference record from source-supported facts.
+              </p>
+            </button>
+            <button
+              type="button"
+              className="rounded-lg border p-4 text-left hover:bg-muted/40 transition-colors"
+              onClick={() => setMode("correct")}
+            >
+              <div className="font-medium">Correct an existing MMF record</div>
+              <p className="text-sm text-muted-foreground mt-1">
+                Choose an existing fund, review the current values, and save a source-supported correction.
+              </p>
+            </button>
+          </div>
+        )}
+
+        {mode === "correct" && (
+          <div className="space-y-3 py-2">
+            <div className="flex items-center gap-2">
+              <Button variant="outline" size="sm" onClick={() => setMode(null)}>Back</Button>
+              <div>
+                <div className="text-sm font-medium">Select an existing MMF record</div>
+                <p className="text-xs text-muted-foreground">The correction form opens pre-filled from the approved row.</p>
+              </div>
+            </div>
+            {funds.filter((f) => f.isActive !== false).length === 0 ? (
+              <p className="rounded-md border bg-muted/30 p-3 text-sm text-muted-foreground">
+                No MMF records are available to correct yet. Add a missing record first or use Research Desk → Ask AI to
+                create draft findings.
+              </p>
+            ) : (
+              <>
+                <Input
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder="Search by fund or manager…"
+                />
+                <div className="max-h-72 overflow-y-auto rounded-md border divide-y">
+                  {matches.length === 0 ? (
+                    <p className="p-3 text-sm text-muted-foreground">No matching MMF records.</p>
+                  ) : (
+                    matches.map((fund) => (
+                      <button
+                        key={fund.id}
+                        type="button"
+                        className="w-full p-3 text-left hover:bg-muted/40 transition-colors"
+                        onClick={() => {
+                          onOpenChange(false);
+                          onCorrect(fund);
+                        }}
+                      >
+                        <div className="font-medium">{fund.fundName}</div>
+                        <p className="text-xs text-muted-foreground">
+                          {fund.company} · EAR {fund.ear.toFixed(2)}% · source as of {fund.asOfDate ?? "not recorded"}
+                        </p>
+                      </button>
+                    ))
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>Close</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -383,6 +516,7 @@ export default function MmfFunds({ embedded = false }: { embedded?: boolean } = 
   }, [isLoading, funds, refFocus]);
   const [sortKey, setSortKey] = useState<SortKey>("ear");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
+  const [maintainOpen, setMaintainOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [editFund, setEditFund] = useState<Fund | null>(null);
   // Stage 10a — the full-field detail drawer.
@@ -521,7 +655,7 @@ export default function MmfFunds({ embedded = false }: { embedded?: boolean } = 
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           {isManager && (
-            <Button onClick={() => setAddOpen(true)} size="sm">
+            <Button onClick={() => setMaintainOpen(true)} size="sm">
               <Plus className="w-4 h-4 mr-1" /> Maintain records
             </Button>
           )}
@@ -915,6 +1049,14 @@ export default function MmfFunds({ embedded = false }: { embedded?: boolean } = 
         each fund carries its own source and as-of date. Managers maintain source-supported records from the Maintain records action; each correction is
         recorded in the audit trail with its source and reason.
       </p>
+
+      <MaintainMmfRecordsDialog
+        open={maintainOpen}
+        onOpenChange={setMaintainOpen}
+        funds={funds}
+        onAdd={() => setAddOpen(true)}
+        onCorrect={(fund) => setEditFund(fund)}
+      />
 
       {/* Add dialog */}
       {addOpen && (

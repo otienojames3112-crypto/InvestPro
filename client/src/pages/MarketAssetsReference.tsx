@@ -11,6 +11,14 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
   Table,
   TableBody,
   TableCell,
@@ -42,11 +50,13 @@ import { humanCheckedCount, figureCount, type FieldProvenanceMap } from "@shared
 import { rateStaleness } from "@/lib/rateStaleness";
 import { resolveCatalogueSource, firstFieldProvenanceSourceUrl } from "@/lib/format";
 import { readContractFieldValue } from "@/lib/format";
+import { invalidatePortfolioMoney } from "@/lib/invalidatePortfolioMoney";
 import { getCatalogueFieldContract, type CatalogueFieldContract } from "@shared/catalogueFieldContracts";
 import { detectMarketAssetSacco } from "@shared/researchPipeline";
 import { dashboardHref } from "@shared/navigation";
 import type { inferRouterOutputs } from "@trpc/server";
 import type { AppRouter } from "../../../server/routers";
+import { toast } from "sonner";
 
 /**
  * Market Assets Reference — the listed/market instrument catalogue.
@@ -71,6 +81,12 @@ import type { AppRouter } from "../../../server/routers";
  */
 
 type Opportunity = inferRouterOutputs<AppRouter>["opportunities"]["list"][number];
+type HoldingsDialogSubtype = "equity" | "reit";
+type HoldingsDialogTarget = {
+  row: Opportunity;
+  subtype: HoldingsDialogSubtype;
+  contract: CatalogueFieldContract | null;
+};
 
 // Map catalog asset class → the Other-holdings asset-class enum used by the
 // Holdings → Other Add-asset form. Anything unmapped falls back to "other".
@@ -93,6 +109,21 @@ function fmtPct(v: string | null): string {
 function fmtPrice(v: string | null, currency: string): string {
   const n = num(v);
   return n === null ? "—" : `${currency} ${n.toLocaleString("en-KE", { maximumFractionDigits: 2 })}`;
+}
+function fmtPlainNumber(v: string | null): string {
+  const n = num(v);
+  return n === null ? "—" : n.toLocaleString("en-KE", { maximumFractionDigits: 2 });
+}
+function toIsoDate(value: string | number | Date | null | undefined): string | null {
+  if (!value) return null;
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
+}
+function formatAsOf(value: string | number | Date | null | undefined): string {
+  if (!value) return "Not recorded";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return "Not recorded";
+  return d.toLocaleDateString("en-KE", { day: "numeric", month: "short", year: "numeric" });
 }
 
 /**
@@ -163,7 +194,23 @@ function SourceCell({ r }: { r: Opportunity }) {
 }
 
 /** The trailing Actions cells (track holding + manager controls + explore link) every subtype table shares. */
-function ActionsCells({ r, onTrack, isManager, staleByRef, refFocus }: { r: Opportunity; onTrack: () => void; isManager: boolean; staleByRef: Map<string, boolean>; refFocus: RefFocus }) {
+function ActionsCells({
+  r,
+  onTrack,
+  isManager,
+  staleByRef,
+  refFocus,
+  actionLabel,
+  actionTooltip,
+}: {
+  r: Opportunity;
+  onTrack: () => void;
+  isManager: boolean;
+  staleByRef: Map<string, boolean>;
+  refFocus: RefFocus;
+  actionLabel: string;
+  actionTooltip: string;
+}) {
   const markedStale = staleByRef.get(r.ref);
   return (
     <>
@@ -171,12 +218,11 @@ function ActionsCells({ r, onTrack, isManager, staleByRef, refFocus }: { r: Oppo
         <Tooltip>
           <TooltipTrigger asChild>
             <Button variant="outline" size="sm" onClick={onTrack} className="h-8 gap-1.5 active:scale-[0.97] transition-transform">
-              <PlusCircle className="w-3.5 h-3.5" /> Track holding
+              <PlusCircle className="w-3.5 h-3.5" /> {actionLabel}
             </Button>
           </TooltipTrigger>
           <TooltipContent side="left" className="max-w-xs text-xs">
-            Opens the Holdings → Other add form seeded to this instrument. You confirm the amount and
-            figures before anything is saved — nothing is bought or moved automatically.
+            {actionTooltip}
           </TooltipContent>
         </Tooltip>
       </TableCell>
@@ -222,6 +268,7 @@ function useTrackHolding() {
 export default function MarketAssetsReference({ embedded = false }: { embedded?: boolean } = {}) {
   const { data: rows = [], isLoading } = trpc.opportunities.list.useQuery();
   const { user } = useAuth();
+  const utils = trpc.useUtils();
   const isManager = user?.role === "admin";
   const { data: metaData } = trpc.catalogue.rowMeta.useQuery(
     { catalogue: "market_asset" },
@@ -270,6 +317,7 @@ export default function MarketAssetsReference({ embedded = false }: { embedded?:
   const resetFilters = () => setSearch("");
 
   const { portfolioId } = usePortfolio();
+  const [holdingDialog, setHoldingDialog] = useState<HoldingsDialogTarget | null>(null);
   const [catExplainOpen, setCatExplainOpen] = useState(false);
   const catFacts = useMemo(() => {
     const l: string[] = [`Catalogue: Market Assets Reference. ${marketRows.length} assets shown.`];
@@ -281,6 +329,9 @@ export default function MarketAssetsReference({ embedded = false }: { embedded?:
     { portfolioId: portfolioId!, catalogueSummary: catFacts },
     { enabled: catExplainOpen && !!portfolioId, refetchOnWindowFocus: false, retry: false },
   );
+  const openHoldingsDialog = (subtype: HoldingsDialogSubtype, row: Opportunity, contract: CatalogueFieldContract | null) => {
+    setHoldingDialog({ subtype, row, contract });
+  };
 
   return (
     <AppShell embedded={embedded}>
@@ -390,16 +441,16 @@ export default function MarketAssetsReference({ embedded = false }: { embedded?:
                 <TabsTrigger value="sacco">SACCO ({bySubtype.sacco.length})</TabsTrigger>
               </TabsList>
               <TabsContent value="equity" className="mt-4">
-                <SubtypeTable subtype="equity" rows={bySubtype.equity} isManager={isManager} staleByRef={staleByRef} refFocus={refFocus} />
+                <SubtypeTable subtype="equity" rows={bySubtype.equity} isManager={isManager} staleByRef={staleByRef} refFocus={refFocus} onOpenHoldingsDialog={openHoldingsDialog} />
               </TabsContent>
               <TabsContent value="reit" className="mt-4">
-                <SubtypeTable subtype="reit" rows={bySubtype.reit} isManager={isManager} staleByRef={staleByRef} refFocus={refFocus} />
+                <SubtypeTable subtype="reit" rows={bySubtype.reit} isManager={isManager} staleByRef={staleByRef} refFocus={refFocus} onOpenHoldingsDialog={openHoldingsDialog} />
               </TabsContent>
               <TabsContent value="offshore_fund" className="mt-4">
-                <SubtypeTable subtype="offshore_fund" rows={bySubtype.offshore_fund} isManager={isManager} staleByRef={staleByRef} refFocus={refFocus} />
+                <SubtypeTable subtype="offshore_fund" rows={bySubtype.offshore_fund} isManager={isManager} staleByRef={staleByRef} refFocus={refFocus} onOpenHoldingsDialog={openHoldingsDialog} />
               </TabsContent>
               <TabsContent value="sacco" className="mt-4">
-                <SubtypeTable subtype="sacco" rows={bySubtype.sacco} isManager={isManager} staleByRef={staleByRef} refFocus={refFocus} />
+                <SubtypeTable subtype="sacco" rows={bySubtype.sacco} isManager={isManager} staleByRef={staleByRef} refFocus={refFocus} onOpenHoldingsDialog={openHoldingsDialog} />
               </TabsContent>
             </Tabs>
           )
@@ -407,10 +458,21 @@ export default function MarketAssetsReference({ embedded = false }: { embedded?:
 
         <p className="text-xs text-muted-foreground flex items-center gap-1.5">
           <Info className="w-3.5 h-3.5" />
-          "Track holding" opens the Holdings → Other add form pre-set to this instrument — you
-          confirm the amount held and figures there before anything is saved.
+          Equity and REIT rows now use a confirm-first Add to holdings dialog. Offshore fund and
+          SACCO rows keep the existing Track holding deep-link for now.
         </p>
       </div>
+      <MarketAssetHoldingDialog
+        target={holdingDialog}
+        portfolioId={portfolioId}
+        onOpenChange={(open) => {
+          if (!open) setHoldingDialog(null);
+        }}
+        onCreated={async () => {
+          if (!portfolioId) return;
+          await invalidatePortfolioMoney(utils, portfolioId);
+        }}
+      />
       <AiExplainDialog
         open={catExplainOpen}
         onOpenChange={setCatExplainOpen}
@@ -423,6 +485,255 @@ export default function MarketAssetsReference({ embedded = false }: { embedded?:
         onRetry={() => catExplainQuery.refetch()}
       />
     </AppShell>
+  );
+}
+
+function ReferenceFact({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="space-y-0.5">
+      <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{label}</p>
+      <p className="text-sm text-foreground break-words">{value}</p>
+    </div>
+  );
+}
+
+function MarketAssetHoldingDialog({
+  target,
+  portfolioId,
+  onOpenChange,
+  onCreated,
+}: {
+  target: HoldingsDialogTarget | null;
+  portfolioId: number | null | undefined;
+  onOpenChange: (open: boolean) => void;
+  onCreated: () => Promise<void>;
+}) {
+  const [units, setUnits] = useState("");
+  const [purchasePrice, setPurchasePrice] = useState("");
+  const [purchaseDate, setPurchaseDate] = useState("");
+  const [notes, setNotes] = useState("");
+
+  useEffect(() => {
+    if (!target) return;
+    setUnits("");
+    setPurchasePrice("");
+    setPurchaseDate(toIsoDate(new Date()) ?? "");
+    setNotes("");
+  }, [target]);
+
+  const commit = trpc.modeling.commit.useMutation({
+    onSuccess: async () => {
+      await onCreated();
+      toast.success(`${target?.subtype === "reit" ? "REIT" : "Equity"} holding added.`);
+      onOpenChange(false);
+    },
+    onError: (e) => toast.error("Could not add holding", { description: e.message }),
+  });
+
+  const open = target !== null;
+  const subtypeLabel = target?.subtype === "reit" ? "REIT" : "equity";
+  const row = target?.row ?? null;
+  const extendedFields = row?.extendedFields as Record<string, unknown> | null;
+  const readField = (key: string) => {
+    const field = target?.contract?.fields.find((f) => f.key === key);
+    return field ? readContractFieldValue(extendedFields, field) : null;
+  };
+  const sourceMeta = row
+    ? resolveCatalogueSource(
+        row.dataSource,
+        row.extendedFields,
+        row.dataAsOf,
+        firstFieldProvenanceSourceUrl((row.fieldProvenance ?? {}) as FieldProvenanceMap),
+      )
+    : null;
+  const snapshotSource = row?.dataSource ?? sourceMeta?.url ?? sourceMeta?.label ?? null;
+  const snapshotAsOf = toIsoDate(row?.dataAsOf) ?? toIsoDate(sourceMeta?.asOf);
+  const canConfirm = !!portfolioId && !!row && !!snapshotSource && !!snapshotAsOf;
+
+  const handleConfirm = () => {
+    if (!row || !portfolioId) return;
+    const unitsNum = Number(units);
+    const priceNum = Number(purchasePrice);
+    if (!Number.isFinite(unitsNum) || unitsNum <= 0) {
+      toast.error(`Enter a valid number of ${target?.subtype === "reit" ? "units" : "shares"}.`);
+      return;
+    }
+    if (!Number.isFinite(priceNum) || priceNum <= 0) {
+      toast.error(`Enter a valid purchase price per ${target?.subtype === "reit" ? "unit" : "share"}.`);
+      return;
+    }
+    if (!purchaseDate) {
+      toast.error("Enter the purchase date.");
+      return;
+    }
+    if (!snapshotSource || !snapshotAsOf) {
+      toast.error("This reference row is missing source provenance, so it cannot be added through this governed flow yet.");
+      return;
+    }
+    commit.mutate({
+      portfolioId,
+      assetClass: row.assetClass as "equity" | "reit",
+      name: row.name,
+      units: unitsNum,
+      unitPrice: priceNum,
+      currency: (row.currency ?? "KES").toUpperCase(),
+      entryDate: purchaseDate,
+      catalogRef: row.ref,
+      dataSource: snapshotSource,
+      dataAsOf: snapshotAsOf,
+      opportunityId: row.id,
+      holdingSourceContext: "Market Assets Reference",
+      userNotes: notes.trim() || null,
+    });
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>{target?.subtype === "reit" ? "Add REIT to holdings" : "Add equity to holdings"}</DialogTitle>
+          <DialogDescription>
+            Approved reference facts are shown separately from your own holding details. Nothing is
+            saved until you confirm.
+          </DialogDescription>
+        </DialogHeader>
+
+        {row && (
+          <div className="space-y-4 py-1">
+            <div className="rounded-lg border border-white/10 bg-muted/20 p-3 space-y-1.5">
+              <div className="flex items-center gap-2 flex-wrap">
+                <Badge variant="outline" className="text-[10px] uppercase tracking-wide">
+                  Approved reference facts
+                </Badge>
+                <Badge variant="outline" className="text-[10px] font-mono">
+                  {row.ref}
+                </Badge>
+              </div>
+              <p className="text-sm text-muted-foreground">
+                Holdings are recorded separately. Later catalogue changes will not automatically
+                rewrite this holding.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 rounded-lg border border-white/10 bg-white/5 p-4">
+              {target?.subtype === "equity" ? (
+                <>
+                  <ReferenceFact label="Company" value={row.name} />
+                  <ReferenceFact label="Ticker" value={readField("ticker") ?? "—"} />
+                  <ReferenceFact label="Exchange" value={row.market ?? readField("market") ?? "—"} />
+                  <ReferenceFact label="Latest / reference price" value={fmtPrice(row.lastPrice, row.currency)} />
+                  <ReferenceFact label="Dividend yield" value={fmtPct(row.yieldPct)} />
+                  <ReferenceFact label="Recent dividend" value={readField("recentDividend") ?? "—"} />
+                  <ReferenceFact label="Sector" value={readField("marketSector") ?? "—"} />
+                  <ReferenceFact label="Source as-of date" value={formatAsOf(sourceMeta?.asOf)} />
+                </>
+              ) : (
+                <>
+                  <ReferenceFact label="REIT" value={row.name} />
+                  <ReferenceFact label="REIT type" value={readField("reitType") ?? "—"} />
+                  <ReferenceFact label="Unit price" value={fmtPrice(row.lastPrice, row.currency)} />
+                  <ReferenceFact label="Distribution yield" value={fmtPct(row.yieldPct)} />
+                  <ReferenceFact label="Recent distribution" value={readField("recentDistribution") ?? "—"} />
+                  <ReferenceFact label="NAV" value={readField("nav") ? fmtPlainNumber(readField("nav")) : "—"} />
+                  <ReferenceFact label="Occupancy" value={readField("occupancyRate") ?? "—"} />
+                  <ReferenceFact label="Source as-of date" value={formatAsOf(sourceMeta?.asOf)} />
+                </>
+              )}
+            </div>
+
+            <div className="rounded-lg border border-white/10 bg-white/5 p-4 space-y-3">
+              <div className="space-y-1">
+                <p className="text-sm font-medium">Source and provenance</p>
+                <p className="text-xs text-muted-foreground">
+                  This holding will preserve the reference row identity, source, and as-of date in its
+                  snapshot terms at purchase.
+                </p>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <ReferenceFact label="Source" value={sourceMeta?.label ?? snapshotSource ?? "Not recorded"} />
+                <ReferenceFact label="As-of" value={formatAsOf(sourceMeta?.asOf ?? row.dataAsOf)} />
+              </div>
+              {sourceMeta?.url && (
+                <a
+                  href={sourceMeta.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 text-xs text-primary underline underline-offset-2"
+                >
+                  Open source <ExternalLink className="w-3 h-3" />
+                </a>
+              )}
+              {!canConfirm && (
+                <p className="text-xs text-amber-600 dark:text-amber-400">
+                  This row is missing a usable source or source as-of date, so it cannot be added through
+                  this governed flow yet.
+                </p>
+              )}
+            </div>
+
+            <div className="rounded-lg border border-white/10 bg-white/5 p-4 space-y-3">
+              <div className="space-y-1">
+                <p className="text-sm font-medium">Your holding details</p>
+                <p className="text-xs text-muted-foreground">
+                  Enter the figures you actually own. This is not investment advice.
+                </p>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <Label>{target?.subtype === "reit" ? "Units held" : "Shares held"}</Label>
+                  <Input
+                    type="number"
+                    inputMode="decimal"
+                    min="0"
+                    step="0.0001"
+                    value={units}
+                    onChange={(e) => setUnits(e.target.value)}
+                    placeholder={target?.subtype === "reit" ? "e.g. 100.0" : "e.g. 250"}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>{target?.subtype === "reit" ? "Purchase price per unit" : "Purchase price per share"} ({(row.currency ?? "KES").toUpperCase()})</Label>
+                  <Input
+                    type="number"
+                    inputMode="decimal"
+                    min="0"
+                    step="0.0001"
+                    value={purchasePrice}
+                    onChange={(e) => setPurchasePrice(e.target.value)}
+                    placeholder={target?.subtype === "reit" ? "Enter your actual unit price" : "Enter your actual share price"}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Purchase date</Label>
+                  <Input type="date" value={purchaseDate} onChange={(e) => setPurchaseDate(e.target.value)} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Notes (optional)</Label>
+                  <Input
+                    value={notes}
+                    onChange={(e) => setNotes(e.target.value)}
+                    placeholder="Broker, fees, account nickname, or other ownership notes"
+                  />
+                </div>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Current value is not seeded from yield, return, dividend, distribution, or NAV figures in
+                the reference catalogue.
+              </p>
+            </div>
+          </div>
+        )}
+
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={commit.isPending}>
+            Cancel
+          </Button>
+          <Button onClick={handleConfirm} disabled={!canConfirm || commit.isPending}>
+            {commit.isPending ? "Adding…" : "Add to holdings"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -450,12 +761,14 @@ function SubtypeTable({
   isManager,
   staleByRef,
   refFocus,
+  onOpenHoldingsDialog,
 }: {
   subtype: Subtype;
   rows: Opportunity[];
   isManager: boolean;
   staleByRef: Map<string, boolean>;
   refFocus: RefFocus;
+  onOpenHoldingsDialog: (subtype: HoldingsDialogSubtype, row: Opportunity, contract: CatalogueFieldContract | null) => void;
 }) {
   const contract = getCatalogueFieldContract("market_asset", subtype);
   const trackHolding = useTrackHolding();
@@ -485,7 +798,13 @@ function SubtypeTable({
                   subtype={subtype}
                   r={r}
                   contract={contract}
-                  onTrack={() => trackHolding(r, priceFieldFor(subtype, r, contract))}
+                  onTrack={() => {
+                    if (subtype === "equity" || subtype === "reit") {
+                      onOpenHoldingsDialog(subtype, r, contract);
+                      return;
+                    }
+                    trackHolding(r, priceFieldFor(subtype, r, contract));
+                  }}
                   isManager={isManager}
                   staleByRef={staleByRef}
                   refFocus={refFocus}
@@ -673,7 +992,38 @@ function SubtypeRow({
         <TableCell className="text-sm whitespace-nowrap">{liquidity ? liquidity.replace(/_/g, " ") : "—"}</TableCell>
         <TableCell className="text-sm whitespace-nowrap">{riskLevel ?? "—"}</TableCell>
         <TableCell><SourceCell r={r} /></TableCell>
-        <ActionsCells r={r} onTrack={onTrack} isManager={isManager} staleByRef={staleByRef} refFocus={refFocus} />
+        <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button variant="outline" size="sm" onClick={onTrack} className="h-8 gap-1.5 active:scale-[0.97] transition-transform">
+                <PlusCircle className="w-3.5 h-3.5" /> Add to holdings
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="left" className="max-w-xs text-xs">
+              Opens a confirm-first holdings form with approved reference facts shown separately from your
+              own share count, purchase price, date, and notes. Nothing is saved until you confirm.
+            </TooltipContent>
+          </Tooltip>
+        </TableCell>
+        <TableCell onClick={(e) => e.stopPropagation()}>
+          <div className="flex items-center justify-end gap-1">
+            {isManager && (
+              <CatalogueRowControls
+                catalogue="market_asset"
+                targetRef={r.ref}
+                instrumentName={r.name}
+                isActive={r.active ?? true}
+                isStale={markedStale}
+                showRateHistory={false}
+              />
+            )}
+            <Link href={`/explore/${encodeURIComponent(r.ref)}`}>
+              <Button variant="ghost" size="icon" className="h-8 w-8" aria-label={`View ${r.name}`}>
+                <ChevronRight className="w-4 h-4" />
+              </Button>
+            </Link>
+          </div>
+        </TableCell>
       </TableRow>
     );
   }
@@ -699,7 +1049,38 @@ function SubtypeRow({
         <TableCell className="text-sm whitespace-nowrap">{liquidity ? liquidity.replace(/_/g, " ") : "—"}</TableCell>
         <TableCell className="text-sm whitespace-nowrap">{riskLevel ?? "—"}</TableCell>
         <TableCell><SourceCell r={r} /></TableCell>
-        <ActionsCells r={r} onTrack={onTrack} isManager={isManager} staleByRef={staleByRef} refFocus={refFocus} />
+        <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button variant="outline" size="sm" onClick={onTrack} className="h-8 gap-1.5 active:scale-[0.97] transition-transform">
+                <PlusCircle className="w-3.5 h-3.5" /> Add to holdings
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="left" className="max-w-xs text-xs">
+              Opens a confirm-first holdings form with approved reference facts shown separately from your
+              own unit count, purchase price, date, and notes. Nothing is saved until you confirm.
+            </TooltipContent>
+          </Tooltip>
+        </TableCell>
+        <TableCell onClick={(e) => e.stopPropagation()}>
+          <div className="flex items-center justify-end gap-1">
+            {isManager && (
+              <CatalogueRowControls
+                catalogue="market_asset"
+                targetRef={r.ref}
+                instrumentName={r.name}
+                isActive={r.active ?? true}
+                isStale={markedStale}
+                showRateHistory={false}
+              />
+            )}
+            <Link href={`/explore/${encodeURIComponent(r.ref)}`}>
+              <Button variant="ghost" size="icon" className="h-8 w-8" aria-label={`View ${r.name}`}>
+                <ChevronRight className="w-4 h-4" />
+              </Button>
+            </Link>
+          </div>
+        </TableCell>
       </TableRow>
     );
   }
@@ -747,7 +1128,7 @@ function SubtypeRow({
         <TableCell className="text-sm max-w-[180px] truncate">{fxRiskNote ?? "—"}</TableCell>
         <TableCell className="text-sm whitespace-nowrap">{riskLevel ?? "—"}</TableCell>
         <TableCell><SourceCell r={r} /></TableCell>
-        <ActionsCells r={r} onTrack={onTrack} isManager={isManager} staleByRef={staleByRef} refFocus={refFocus} />
+        <ActionsCells r={r} onTrack={onTrack} isManager={isManager} staleByRef={staleByRef} refFocus={refFocus} actionLabel="Track holding" actionTooltip="Opens the Holdings → Other add form seeded to this instrument. You confirm the amount and figures before anything is saved — nothing is bought or moved automatically." />
       </TableRow>
     );
   }
@@ -775,7 +1156,7 @@ function SubtypeRow({
       <TableCell className="text-sm whitespace-nowrap">{liquidity ? liquidity.replace(/_/g, " ") : "—"}</TableCell>
       <TableCell className="text-sm max-w-[160px] truncate">{regulatoryStatus ?? "—"}</TableCell>
       <TableCell><SourceCell r={r} /></TableCell>
-      <ActionsCells r={r} onTrack={onTrack} isManager={isManager} staleByRef={staleByRef} refFocus={refFocus} />
+      <ActionsCells r={r} onTrack={onTrack} isManager={isManager} staleByRef={staleByRef} refFocus={refFocus} actionLabel="Track holding" actionTooltip="Opens the Holdings → Other add form seeded to this instrument. You confirm the amount and figures before anything is saved — nothing is bought or moved automatically." />
     </TableRow>
   );
 }

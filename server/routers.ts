@@ -6272,6 +6272,8 @@ export const appRouter = router({
         catalogRef: z.string().max(120).nullable().optional(),
         dataSource: z.string().max(200).nullable().optional(),
         dataAsOf: z.string().max(40).nullable().optional(),
+        userNotes: z.string().max(1000).nullable().optional(),
+        holdingSourceContext: z.string().max(120).nullable().optional(),
         // Round 99: optional link to Market Assets catalogue row for snapshot
         opportunityId: z.number().int().positive().optional(),
       }))
@@ -6311,6 +6313,7 @@ export const appRouter = router({
           catalogRef: input.catalogRef ?? null,
           dataSource: input.dataSource ?? null,
           dataAsOf: input.dataAsOf ?? null,
+          holdingSourceContext: input.holdingSourceContext ?? null,
         };
         const issues = modelingIssues(modelingInput);
         if (issues.length > 0) {
@@ -6324,14 +6327,19 @@ export const appRouter = router({
         if (input.opportunityId) {
           const catRow = await getOpportunityById(input.opportunityId);
           if (catRow) {
+            const snapshotSourceUrl = catRow.dataSource ?? input.dataSource ?? null;
+            const snapshotSourceAsOfDate =
+              catRow.dataAsOf
+                ? new Date(catRow.dataAsOf).toISOString().slice(0, 10)
+                : input.dataAsOf ?? null;
             holdingSnapshot = {
               referenceCatalogueType: "market_asset",
               referenceInstrumentId: catRow.id,
               copiedTerms: (catRow.extendedFields as InstrumentProfile | null) ?? {
                 catalogueType: "market_asset",
                 assetType: input.assetClass as any,
-                sourceUrl: catRow.dataSource ?? null,
-                sourceAsOfDate: catRow.dataAsOf ? new Date(catRow.dataAsOf).toISOString().slice(0, 10) : null,
+                sourceUrl: snapshotSourceUrl,
+                sourceAsOfDate: snapshotSourceAsOfDate,
               },
               purchaseTerms: {
                 units: input.units ?? null,
@@ -6340,8 +6348,8 @@ export const appRouter = router({
                 entryDate: entryIso,
               },
               snapshotAt: Date.now(),
-              sourceUrl: catRow.dataSource ?? null,
-              sourceAsOfDate: catRow.dataAsOf ? new Date(catRow.dataAsOf).toISOString().slice(0, 10) : null,
+              sourceUrl: snapshotSourceUrl,
+              sourceAsOfDate: snapshotSourceAsOfDate,
             };
           }
         }
@@ -6353,7 +6361,7 @@ export const appRouter = router({
           purchaseValue: String(draft.purchaseValue),
           currentValue: String(draft.currentValue),
           purchaseDate: draft.purchaseDate ? new Date(draft.purchaseDate) : undefined,
-          notes: draft.notes,
+          notes: input.userNotes?.trim() ? `${draft.notes} · Notes: ${input.userNotes.trim()}` : draft.notes,
           assumedReturnConservative: draft.assumedReturnConservative != null ? String(draft.assumedReturnConservative) : undefined,
           assumedReturnBase: draft.assumedReturnBase != null ? String(draft.assumedReturnBase) : undefined,
           assumedReturnOptimistic: draft.assumedReturnOptimistic != null ? String(draft.assumedReturnOptimistic) : undefined,
@@ -6371,6 +6379,7 @@ export const appRouter = router({
         });
         const newId = (res as { insertId?: number } | null)?.insertId ?? null;
 
+        const sourceContext = input.holdingSourceContext?.trim() || "Explore";
         await addAuditLog({
           portfolioId: input.portfolioId,
           entity: "other_holding",
@@ -6380,7 +6389,10 @@ export const appRouter = router({
           newValue: String(draft.currentValue),
           changedByOpenId: ctx.user.openId,
           changedByName: ctx.user.name ?? null,
-          summary: `Modeled "${draft.name}" from Explore (${profileFor(input.assetClass as AssetClass).label}) — KES ${amountKes.toLocaleString()} tracked as a holding`,
+          summary:
+            sourceContext === "Explore"
+              ? `Modeled "${draft.name}" from Explore (${profileFor(input.assetClass as AssetClass).label}) — KES ${amountKes.toLocaleString()} tracked as a holding`
+              : `Added "${draft.name}" from ${sourceContext} (${profileFor(input.assetClass as AssetClass).label}) — KES ${amountKes.toLocaleString()} tracked as a holding`,
         });
 
         return { success: true, id: newId, amountKes };

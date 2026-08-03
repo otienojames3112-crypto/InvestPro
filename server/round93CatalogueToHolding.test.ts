@@ -91,10 +91,17 @@ describe("reference rows are confirm-first, never write on click", () => {
     expect(cbk).toMatch(/openDrawer\(govPrefill\(/);
   });
 
-  it("Market Assets Reference tracks a holding via a deep-link (no direct write)", () => {
+  it("Market Assets Reference gives Equity and REIT a confirm-first Add to holdings dialog", () => {
+    const market = read("client/src/pages/MarketAssetsReference.tsx");
+    expect(market).toContain("Add equity to holdings");
+    expect(market).toContain("Add REIT to holdings");
+    expect(market).toContain("Approved reference facts");
+    expect(market).toContain("Your holding details");
+  });
+
+  it("Market Assets Reference keeps the older deep-link only for Offshore fund and SACCO for now", () => {
     const market = read("client/src/pages/MarketAssetsReference.tsx");
     expect(market).toMatch(/navigate\(`?\$\{dashboardHref\.other\}/);
-    // The deep-link builds params via URLSearchParams, so the flag appears as track: "1".
     expect(market).toMatch(/track:\s*"1"/);
   });
 });

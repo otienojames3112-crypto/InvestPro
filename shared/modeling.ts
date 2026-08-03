@@ -138,6 +138,12 @@ export interface ModelingInputs {
   catalogRef?: string | null;
   dataSource?: string | null;
   dataAsOf?: string | null;
+  /**
+   * Optional label for the surface that initiated the write. Omitted keeps the
+   * existing Explore wording; a caller can set a more accurate holdings-first
+   * origin such as "Market Assets Reference".
+   */
+  holdingSourceContext?: string | null;
 }
 
 /** Derived KES amount for a holding, resolving the amount<->units<->price link. */
@@ -232,7 +238,12 @@ export function buildHoldingDraft(inp: ModelingInputs): HoldingDraft {
   const profile = profileFor(inp.assetClass);
 
   // Provenance line — always attached so a modeled holding is attributable.
-  const provBits: string[] = [`Modeled from Explore (${profile.label})`];
+  const sourceContext = inp.holdingSourceContext?.trim() || "Explore";
+  const originPrefix =
+    sourceContext === "Explore"
+      ? "Modeled from Explore"
+      : `Added from ${sourceContext}`;
+  const provBits: string[] = [`${originPrefix} (${profile.label})`];
   if (inp.catalogRef) provBits.push(`ref: ${inp.catalogRef}`);
   if (typeof inp.units === "number" && inp.units > 0 && typeof inp.unitPrice === "number") {
     const cur = (inp.currency ?? "KES").toUpperCase();

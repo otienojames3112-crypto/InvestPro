@@ -305,18 +305,18 @@ export default function MarketAssetsReference({ embedded = false }: { embedded?:
               <Tooltip>
                 <TooltipTrigger asChild>
                   <span className="inline-flex">
-                    <Button size="sm" disabled className="h-7 gap-1.5 text-xs font-medium">
+                    <Badge
+                      variant="outline"
+                      className="h-7 gap-1.5 rounded-full border-border bg-muted/40 px-2.5 text-xs font-medium text-muted-foreground"
+                    >
                       <ShieldCheck className="w-3.5 h-3.5" />
-                      Maintain records
-                    </Button>
+                      Maintain records unavailable
+                    </Badge>
                   </span>
                 </TooltipTrigger>
                 <TooltipContent side="bottom" className="max-w-xs text-xs">
-                  Maintain market asset records is not enabled here yet. The future governed flow must support adding a
-                  missing Equity, REIT, Offshore fund, or SACCO record, or correcting an existing market asset after
-                  selecting it, while using subtype-specific fields and contracts. Source-supported manual proposals
-                  must go through governed review before catalogue changes. For now, use Research Desk → Ask AI for
-                  source extraction; holdings are recorded separately.
+                  Manual market-asset maintenance needs governed review so Equity, REIT, Offshore fund, and SACCO field
+                  contracts are preserved. Use Research Desk → Ask AI to propose updates for now.
                 </TooltipContent>
               </Tooltip>
             )}

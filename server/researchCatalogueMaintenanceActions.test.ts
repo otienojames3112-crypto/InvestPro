@@ -107,31 +107,22 @@ describe("Catalogue maintenance actions", () => {
   });
 
   it("uses honest disabled placeholders for CBK and Market Assets until safe governed maintenance exists", () => {
-    expect(pages.cbk).toContain("Maintain CBK security records is not enabled here yet.");
-    expect(pages.cbk).toContain("missing T-bill, FXD, or IFB record");
-    expect(pages.cbk).toContain("correcting an existing security after selecting it");
-    expect(pages.cbk).toContain("T-bill tenor, yield/rate, auction date, and value date");
-    expect(pages.cbk).toContain("FXD issue");
-    expect(pages.cbk).toContain("number, coupon, and maturity");
-    expect(pages.cbk).toContain("IFB issue number, coupon, maturity, and tax-exempt true");
-    expect(pages.cbk).toContain("Source-supported");
-    expect(pages.cbk).toContain("manual proposals must go through governed review before catalogue changes.");
+    expect(pages.cbk).toContain("Maintain records unavailable");
+    expect(pages.cbk).toContain("Manual CBK maintenance needs governed review");
+    expect(pages.cbk).toContain("T-bills, FXD, and IFB");
     expect(pages.cbk).toContain("Research Desk");
     expect(pages.cbk).toContain("Ask AI");
-    expect(pages.cbk).toContain("purchases and holdings are");
-    expect(pages.cbk).toContain("<Button size=\"sm\" disabled");
+    expect(pages.cbk).not.toContain("<Button size=\"sm\" disabled");
+    expect(pages.cbk).toContain("<Badge");
 
-    expect(pages.market).toContain("Maintain market asset records is not enabled here yet.");
-    expect(pages.market).toContain("missing Equity, REIT, Offshore fund, or SACCO record");
-    expect(pages.market).toContain("correcting an existing market asset after");
-    expect(pages.market).toContain("selecting it");
-    expect(pages.market).toContain("subtype-specific fields and contracts");
-    expect(pages.market).toContain("Source-supported manual proposals");
-    expect(pages.market).toContain("go through governed review before catalogue changes");
+    expect(pages.market).toContain("Maintain records unavailable");
+    expect(pages.market).toContain("Manual market-asset maintenance needs governed review");
+    expect(pages.market).toContain("Equity, REIT, Offshore fund, and SACCO field");
+    expect(pages.market).toContain("contracts are preserved");
     expect(pages.market).toContain("Research Desk");
     expect(pages.market).toContain("Ask AI");
-    expect(pages.market).toContain("holdings are recorded separately");
-    expect(pages.market).toContain("<Button size=\"sm\" disabled");
+    expect(pages.market).not.toContain("<Button size=\"sm\" disabled");
+    expect(pages.market).toContain("<Badge");
   });
 
   it("does not bring source-review, Explain catalogue, Plan Fit, or reset into catalogue headers", () => {

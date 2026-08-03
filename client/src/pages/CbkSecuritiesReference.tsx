@@ -321,19 +321,18 @@ export default function CbkSecuritiesReference({ embedded = false }: { embedded?
               <Tooltip>
                 <TooltipTrigger asChild>
                   <span className="inline-flex">
-                    <Button size="sm" disabled className="h-7 gap-1.5 text-xs font-medium">
+                    <Badge
+                      variant="outline"
+                      className="h-7 gap-1.5 rounded-full border-border bg-muted/40 px-2.5 text-xs font-medium text-muted-foreground"
+                    >
                       <ShieldCheck className="w-3.5 h-3.5" />
-                      Maintain records
-                    </Button>
+                      Maintain records unavailable
+                    </Badge>
                   </span>
                 </TooltipTrigger>
                 <TooltipContent side="bottom" className="max-w-xs text-xs">
-                  Maintain CBK security records is not enabled here yet. The future governed flow must support adding a
-                  missing T-bill, FXD, or IFB record, or correcting an existing security after selecting it, while
-                  preserving subtype validation: T-bill tenor, yield/rate, auction date, and value date; FXD issue
-                  number, coupon, and maturity; IFB issue number, coupon, maturity, and tax-exempt true. Source-supported
-                  manual proposals must go through governed review before catalogue changes. For now, use Research Desk
-                  → Ask AI for source extraction; purchases and holdings are recorded separately.
+                  Manual CBK maintenance needs governed review so subtype rules for T-bills, FXD, and IFB are
+                  preserved. Use Research Desk → Ask AI to propose updates for now.
                 </TooltipContent>
               </Tooltip>
             )}
